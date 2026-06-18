@@ -22,7 +22,10 @@
 pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
-use ast::{BinOp, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern};
+use ast::{
+    BinOp, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr,
+    VariantDecl,
+};
 
 /// An error produced during parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,10 +130,84 @@ impl Parser {
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        if matches!(self.peek(), Tok::Let) {
-            Ok(Item::Let(self.parse_let_binding()?))
+        match self.peek() {
+            Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
+            Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
+            _ => Ok(Item::Expr(self.parse_expr()?)),
+        }
+    }
+
+    fn parse_type_decl(&mut self) -> Result<TypeDecl, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Type, "`type`")?;
+        let name = self.parse_upper_ident("type name")?;
+        let mut params = Vec::new();
+        while let Tok::Ident(_) = self.peek() {
+            params.push(self.parse_ident("type parameter")?);
+        }
+        self.expect(&Tok::Eq, "`=`")?;
+        self.eat(&Tok::Bar); // optional leading bar
+        let mut variants = vec![self.parse_variant()?];
+        while self.eat(&Tok::Bar) {
+            variants.push(self.parse_variant()?);
+        }
+        let span = crate::parser::ast::NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(TypeDecl {
+            name,
+            params,
+            variants,
+            span,
+        })
+    }
+
+    fn parse_variant(&mut self) -> Result<VariantDecl, ParseError> {
+        let name = self.parse_upper_ident("constructor name")?;
+        let mut fields = Vec::new();
+        while starts_type_atom(self.peek()) {
+            fields.push(self.parse_type_atom()?);
+        }
+        Ok(VariantDecl { name, fields })
+    }
+
+    /// A type expression: an application optionally followed by `-> result`.
+    fn parse_type(&mut self) -> Result<TypeExpr, ParseError> {
+        let head = self.parse_type_app()?;
+        if self.eat(&Tok::Arrow) {
+            let result = self.parse_type()?;
+            Ok(TypeExpr::Fun(Box::new(head), Box::new(result)))
         } else {
-            Ok(Item::Expr(self.parse_expr()?))
+            Ok(head)
+        }
+    }
+
+    fn parse_type_app(&mut self) -> Result<TypeExpr, ParseError> {
+        // A capitalized head may be applied to argument atoms (`List a`).
+        if let Tok::Ident(name) = self.peek().clone()
+            && is_upper(&name)
+        {
+            self.bump();
+            let mut args = Vec::new();
+            while starts_type_atom(self.peek()) {
+                args.push(self.parse_type_atom()?);
+            }
+            return Ok(TypeExpr::Con(name, args));
+        }
+        self.parse_type_atom()
+    }
+
+    fn parse_type_atom(&mut self) -> Result<TypeExpr, ParseError> {
+        match self.peek().clone() {
+            Tok::Ident(name) => {
+                self.bump();
+                Ok(TypeExpr::Con(name, Vec::new()))
+            }
+            Tok::LParen => {
+                self.bump();
+                let inner = self.parse_type()?;
+                self.expect(&Tok::RParen, "`)`")?;
+                Ok(inner)
+            }
+            _ => Err(self.error("expected a type")),
         }
     }
 
@@ -383,6 +460,16 @@ impl Parser {
             _ => Err(self.error(&format!("expected {what}"))),
         }
     }
+
+    fn parse_upper_ident(&mut self, what: &str) -> Result<String, ParseError> {
+        match self.peek().clone() {
+            Tok::Ident(name) if is_upper(&name) => {
+                self.bump();
+                Ok(name)
+            }
+            _ => Err(self.error(&format!("expected {what}"))),
+        }
+    }
 }
 
 fn starts_atom(tok: &Tok) -> bool {
@@ -403,6 +490,10 @@ fn starts_atom_pattern(tok: &Tok) -> bool {
         tok,
         Tok::Underscore | Tok::Ident(_) | Tok::Int(_) | Tok::True | Tok::False | Tok::LParen
     )
+}
+
+fn starts_type_atom(tok: &Tok) -> bool {
+    matches!(tok, Tok::Ident(_) | Tok::LParen)
 }
 
 fn is_upper(name: &str) -> bool {
@@ -431,6 +522,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Match => "match",
         Tok::With => "with",
         Tok::Fun => "fun",
+        Tok::Type => "type",
         Tok::True => "true",
         Tok::False => "false",
         Tok::Eq => "=",

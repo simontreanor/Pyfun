@@ -1,7 +1,10 @@
 // A taste of the type-checked Phase 3 subset that compiles to runnable Python.
 //   pyfun check   examples/hello.pyfun   # type-check
 //   pyfun compile examples/hello.pyfun   # emit Python
-// (Constructor patterns like `Some x` need ADTs — a later phase.)
+
+// Algebraic data types: a parameterized sum and a plain enum.
+type Option a = None | Some a
+type Color = Red | Green | Blue
 
 // Curried function: inferred type int -> int -> int.
 let add a b = a + b
@@ -16,12 +19,19 @@ let id x = x
 // Expression-oriented `if`; the condition must be a bool.
 let pick b = if b then 1 else 0
 
-// `match` over integer literal patterns.
-let classify n =
-  match n with
-  | 0 -> "zero"
-  | 1 -> "one"
-  | _ -> "many"
+// Exhaustive pattern matching over an ADT (checked at compile time).
+let unwrap o =
+  match o with
+  | Some v -> v
+  | None -> 0
+
+let answer = unwrap (Some 42)
+
+let rank c =
+  match c with
+  | Red -> 1
+  | Green -> 2
+  | Blue -> 3
 
 // Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
 let compose = fun f g x -> f (g x)

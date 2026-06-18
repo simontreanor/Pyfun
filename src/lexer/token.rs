@@ -34,6 +34,7 @@ pub enum Tok {
     Match,
     With,
     Fun,
+    Type,
     True,
     False,
 
@@ -67,6 +68,7 @@ impl Tok {
             "match" => Tok::Match,
             "with" => Tok::With,
             "fun" => Tok::Fun,
+            "type" => Tok::Type,
             "true" => Tok::True,
             "false" => Tok::False,
             _ => return None,

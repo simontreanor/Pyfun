@@ -14,12 +14,13 @@
 //!    partial application becomes `functools.partial`; over-application applies
 //!    the remainder one argument at a time.
 //!
-//! Phase 2 has no type checker, so arity is taken from a module-level table of
-//! top-level function definitions (and from `fun` literals applied in place).
-//! When the callee's arity is unknown (a parameter, or an imported Python name)
-//! the call is emitted n-ary as-is — correct for full application and for Python
-//! interop, but it cannot synthesize a partial application for an unknown callee.
-//! The type checker (Phase 3) will make arity precise.
+//! Lowering runs after type-checking but doesn't yet consume inferred types, so
+//! arity is taken from a syntactic module-level table of top-level functions and
+//! data constructors (plus `fun` literals applied in place). When the callee's
+//! arity is unknown (a parameter, or an imported Python name) the call is emitted
+//! n-ary as-is — correct for full application and for Python interop, but it can't
+//! synthesize a partial application for an unknown callee. Feeding the type
+//! checker's results in here would make arity fully precise.
 
 use std::collections::HashSet;
 
@@ -48,6 +49,10 @@ struct Lowerer {
     /// Arity of each top-level function (params > 0), used to decide full vs
     /// partial application.
     arities: std::collections::HashMap<String, usize>,
+    /// Field count of each data constructor, used both to drive constructor
+    /// application and to know which bare references are nullary (and so must be
+    /// emitted as `Ctor()`).
+    ctor_arity: std::collections::HashMap<String, usize>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -58,26 +63,36 @@ type Lowered = Result<(Vec<PyStmt>, PyExpr), LowerError>;
 impl Lowerer {
     fn new(module: &Module) -> Self {
         let mut arities = std::collections::HashMap::new();
+        let mut ctor_arity = std::collections::HashMap::new();
         for item in &module.items {
-            if let Item::Let(binding) = item {
-                // A binding's callable arity is the number of parameters of the
-                // Python def/lambda it lowers to: its own `let` parameters, or —
-                // if it's a bare `let name = fun ... -> ...` — the lambda's. Extra
-                // arguments are handled as over-application at the call site.
-                let arity = if !binding.params.is_empty() {
-                    Some(binding.params.len())
-                } else if let ExprKind::Fn { params, .. } = &binding.value.kind {
-                    Some(params.len())
-                } else {
-                    None
-                };
-                if let Some(k) = arity {
-                    arities.insert(binding.name.clone(), k);
+            match item {
+                Item::Let(binding) => {
+                    // A binding's callable arity is the number of parameters of the
+                    // Python def/lambda it lowers to: its own `let` parameters, or —
+                    // if it's a bare `let name = fun ... -> ...` — the lambda's. Extra
+                    // arguments are handled as over-application at the call site.
+                    let arity = if !binding.params.is_empty() {
+                        Some(binding.params.len())
+                    } else if let ExprKind::Fn { params, .. } = &binding.value.kind {
+                        Some(params.len())
+                    } else {
+                        None
+                    };
+                    if let Some(k) = arity {
+                        arities.insert(binding.name.clone(), k);
+                    }
                 }
+                Item::Type(decl) => {
+                    for variant in &decl.variants {
+                        ctor_arity.insert(variant.name.clone(), variant.fields.len());
+                    }
+                }
+                Item::Expr(_) => {}
             }
         }
         Lowerer {
             arities,
+            ctor_arity,
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -86,8 +101,21 @@ impl Lowerer {
 
     fn lower_module(&mut self, module: &Module) -> Result<PyModule, LowerError> {
         let mut body = Vec::new();
+        // Emit constructor classes first so later code can reference them.
+        for item in &module.items {
+            if let Item::Type(decl) = item {
+                for variant in &decl.variants {
+                    let fields = (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
+                    body.push(PyStmt::ClassDef {
+                        name: py_ctor_name(&variant.name),
+                        fields,
+                    });
+                }
+            }
+        }
         for item in &module.items {
             match item {
+                Item::Type(_) => {} // classes already emitted
                 Item::Let(binding) => self.lower_let(binding, &mut body)?,
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
@@ -141,7 +169,7 @@ impl Lowerer {
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
-                    let pattern = lower_pattern(&arm.pattern)?;
+                    let pattern = lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
                     let body = self.lower_return(&arm.body, &arm_locals)?;
                     cases.push(PyCase { pattern, body });
@@ -168,7 +196,7 @@ impl Lowerer {
             ExprKind::Float(f) => Ok((vec![], PyExpr::Float(*f))),
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
-            ExprKind::Var(name) => Ok((vec![], PyExpr::Name(name.clone()))),
+            ExprKind::Var(name) => Ok((vec![], self.lower_var(name))),
 
             ExprKind::Binary { op, lhs, rhs } => {
                 let (mut stmts, left) = self.lower_value(lhs, locals)?;
@@ -214,7 +242,7 @@ impl Lowerer {
                 let tmp = self.fresh_tmp();
                 let mut cases = Vec::new();
                 for arm in arms {
-                    let pattern = lower_pattern(&arm.pattern)?;
+                    let pattern = lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
                     let (arm_stmts, arm_val) = self.lower_value(&arm.body, &arm_locals)?;
                     cases.push(PyCase {
@@ -262,7 +290,11 @@ impl Lowerer {
         let head = flatten_app(expr, &mut args_ast);
 
         let arity = match &head.kind {
-            ExprKind::Var(name) if !locals.contains(name) => self.arities.get(name).copied(),
+            ExprKind::Var(name) if !locals.contains(name) => self
+                .arities
+                .get(name)
+                .or_else(|| self.ctor_arity.get(name))
+                .copied(),
             ExprKind::Fn { params, .. } => Some(params.len()),
             _ => None,
         };
@@ -276,6 +308,20 @@ impl Lowerer {
         }
 
         Ok((stmts, self.build_call(head_val, arity, arg_vals)))
+    }
+
+    /// Lower a variable reference, special-casing data constructors: a nullary
+    /// constructor used as a value becomes an instance (`Ctor()`), and any
+    /// constructor name is mangled to dodge Python keywords (`None` → `None_`).
+    fn lower_var(&self, name: &str) -> PyExpr {
+        match self.ctor_arity.get(name) {
+            Some(0) => PyExpr::Call {
+                func: Box::new(PyExpr::Name(py_ctor_name(name))),
+                args: vec![],
+            },
+            Some(_) => PyExpr::Name(py_ctor_name(name)),
+            None => PyExpr::Name(name.to_string()),
+        }
     }
 
     /// Apply currying policy (`DESIGN.md` §5) given the callee's known arity.
@@ -361,18 +407,25 @@ fn lower_binop(op: BinOp) -> PyBinOp {
     }
 }
 
-fn lower_pattern(pattern: &Pattern) -> Result<PyPattern, LowerError> {
+fn lower_pattern(pattern: &Pattern) -> PyPattern {
     match pattern {
-        Pattern::Wildcard => Ok(PyPattern::Wildcard),
-        Pattern::Var(name) => Ok(PyPattern::Capture(name.clone())),
-        Pattern::Int(n) => Ok(PyPattern::Literal(PyExpr::Int(*n))),
-        Pattern::Bool(b) => Ok(PyPattern::Literal(PyExpr::Bool(*b))),
-        Pattern::Ctor { .. } => Err(LowerError {
-            message:
-                "constructor patterns require ADT declarations, which are not implemented yet \
-                      (planned for a later phase)"
-                    .to_string(),
-        }),
+        Pattern::Wildcard => PyPattern::Wildcard,
+        Pattern::Var(name) => PyPattern::Capture(name.clone()),
+        Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
+        Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
+        Pattern::Ctor { name, args } => PyPattern::Class {
+            name: py_ctor_name(name),
+            args: args.iter().map(lower_pattern).collect(),
+        },
+    }
+}
+
+/// Mangle a constructor name to a valid, non-keyword Python identifier.
+fn py_ctor_name(name: &str) -> String {
+    if matches!(name, "None" | "True" | "False") {
+        format!("{name}_")
+    } else {
+        name.to_string()
     }
 }
 

@@ -6,7 +6,9 @@
 //! roundtrip tests rely on. A formatting-quality printer (`pyfun fmt`) is a
 //! later phase (`DESIGN.md` §10).
 
-use crate::parser::ast::{Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern};
+use crate::parser::ast::{
+    Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr, VariantDecl,
+};
 
 /// Render a whole module, one item per line.
 pub fn print_module(module: &Module) -> String {
@@ -21,8 +23,52 @@ pub fn print_module(module: &Module) -> String {
 /// Render a single top-level item.
 pub fn print_item(item: &Item) -> String {
     match item {
+        Item::Type(decl) => print_type_decl(decl),
         Item::Let(binding) => print_let(binding),
         Item::Expr(expr) => print_expr(expr),
+    }
+}
+
+fn print_type_decl(decl: &TypeDecl) -> String {
+    let mut s = String::from("type ");
+    s.push_str(&decl.name);
+    for param in &decl.params {
+        s.push(' ');
+        s.push_str(param);
+    }
+    s.push_str(" = ");
+    let variants: Vec<String> = decl.variants.iter().map(print_variant).collect();
+    s.push_str(&variants.join(" | "));
+    s
+}
+
+fn print_variant(variant: &VariantDecl) -> String {
+    let mut s = variant.name.clone();
+    for field in &variant.fields {
+        s.push(' ');
+        s.push_str(&print_type_atom(field));
+    }
+    s
+}
+
+/// Print a full type expression (may contain `->`).
+fn print_type(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Fun(a, b) => format!("{} -> {}", print_type_atom(a), print_type(b)),
+        TypeExpr::Con(name, args) if args.is_empty() => name.clone(),
+        TypeExpr::Con(name, args) => {
+            let args: Vec<String> = args.iter().map(print_type_atom).collect();
+            format!("{name} {}", args.join(" "))
+        }
+    }
+}
+
+/// Print a type expression as an atom, parenthesizing anything compound so it can
+/// sit as a single constructor field and reparse identically.
+fn print_type_atom(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Con(name, args) if args.is_empty() => name.clone(),
+        _ => format!("({})", print_type(ty)),
     }
 }
 

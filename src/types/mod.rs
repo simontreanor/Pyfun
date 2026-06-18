@@ -1,20 +1,22 @@
-//! Hindley–Milner type inference (`DESIGN.md` §3, §10).
+//! Hindley–Milner type inference with algebraic data types (`DESIGN.md` §3, §10).
 //!
 //! Algorithm W with a substitution map and let-generalization, so top-level
 //! bindings are polymorphic (`let id x = x` has type `'a -> 'a` and each use is
-//! instantiated). Functions are curried, matching the rest of the language: a
-//! definition `let f a b = ...` has type `ta -> tb -> tbody`.
+//! instantiated). Functions are curried, matching the rest of the language.
 //!
-//! Phase 3 scope: types only. Effect, unit, and exhaustiveness checking arrive
-//! with the language features they need (effects/units have no surface syntax
-//! yet; exhaustiveness is bound up with ADTs). Arithmetic is integer-only for now
-//! — there is no numeric type-class machinery, so `+ - * /` are `int -> int ->
-//! int` and `/` is integer division (it lowers to Python `//`).
+//! `type` declarations introduce ADTs: a pre-pass registers each type's arity and
+//! gives every constructor a polymorphic scheme (`Some : 'a -> Option 'a`), which
+//! is added to the initial environment. Constructor patterns are checked against
+//! those schemes, and `match` is checked for **exhaustiveness** (shallow: only the
+//! head constructor set is considered; nested patterns rely on the runtime guard).
+//!
+//! Still deferred until their syntax exists: effect and unit inference. Arithmetic
+//! is integer-only (no numeric type classes); `/` is integer division.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::lexer::Span;
-use crate::parser::ast::{Expr, ExprKind, Item, LetBinding, Module, Pattern};
+use crate::parser::ast::{Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeExpr};
 
 /// A monomorphic type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +29,8 @@ pub enum Ty {
     Var(u32),
     /// A function `arg -> result` (curried).
     Fun(Box<Ty>, Box<Ty>),
+    /// An applied type constructor, e.g. `Option int` = `Con("Option", [Int])`.
+    Con(String, Vec<Ty>),
 }
 
 /// A type scheme: a type generalized over zero or more variables.
@@ -37,6 +41,8 @@ struct Scheme {
 }
 
 type Env = HashMap<String, Scheme>;
+
+const BUILTIN_TYPES: [&str; 4] = ["int", "float", "bool", "string"];
 
 /// A type error, with the source span it should be reported against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,23 +57,45 @@ impl std::fmt::Display for TypeError {
     }
 }
 
+/// Information about one data constructor.
+#[derive(Debug, Clone)]
+struct CtorInfo {
+    scheme: Scheme,
+    arity: usize,
+}
+
+/// The result of the type-declaration pre-pass.
+#[derive(Default)]
+struct Decls {
+    /// Type constructor → number of type parameters (`Option` → 1).
+    type_arity: HashMap<String, usize>,
+    /// Data constructor → its scheme and field count (`Some` → `'a -> Option 'a`).
+    ctors: HashMap<String, CtorInfo>,
+    /// Type name → its constructor names, in declaration order.
+    type_ctors: HashMap<String, Vec<String>>,
+}
+
 /// Type-check a whole module. Returns every independent error found, so a single
 /// bad binding doesn't hide the rest.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let mut inf = Infer::default();
-    let mut env: Env = Env::new();
     let mut errors = Vec::new();
+    let (decls, ctor_env) = build_decls(module, &mut errors);
+
+    let mut inf = Infer {
+        decls,
+        ..Infer::default()
+    };
+    let mut env = ctor_env;
 
     for item in &module.items {
         match item {
+            Item::Type(_) => {} // handled by the pre-pass
             Item::Let(binding) => match inf.infer_binding(binding, &env) {
                 Ok(scheme) => {
                     env.insert(binding.name.clone(), scheme);
                 }
                 Err(e) => {
                     errors.push(e);
-                    // Bind the name to a fresh type so later references don't
-                    // cascade into spurious "unbound" errors.
                     let ty = inf.fresh();
                     env.insert(binding.name.clone(), Scheme { vars: vec![], ty });
                 }
@@ -87,10 +115,159 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
     }
 }
 
+/// Register every `type` declaration and build the constructor environment.
+fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
+    let mut decls = Decls::default();
+
+    // Pass 1: type names and arities (so fields can reference any type, including
+    // self/forward references).
+    for item in &module.items {
+        if let Item::Type(decl) = item {
+            let span = decl.span.span();
+            if BUILTIN_TYPES.contains(&decl.name.as_str()) {
+                errors.push(TypeError {
+                    message: format!("cannot redefine builtin type `{}`", decl.name),
+                    span,
+                });
+            } else if decls.type_arity.contains_key(&decl.name) {
+                errors.push(TypeError {
+                    message: format!("type `{}` is already defined", decl.name),
+                    span,
+                });
+            } else {
+                decls
+                    .type_arity
+                    .insert(decl.name.clone(), decl.params.len());
+                decls.type_ctors.insert(decl.name.clone(), Vec::new());
+            }
+        }
+    }
+
+    // Pass 2: constructor schemes.
+    let mut env = Env::new();
+    for item in &module.items {
+        let Item::Type(decl) = item else { continue };
+        let span = decl.span.span();
+        let param_map: HashMap<String, u32> = decl
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.clone(), i as u32))
+            .collect();
+        let result_ty = Ty::Con(
+            decl.name.clone(),
+            (0..decl.params.len() as u32).map(Ty::Var).collect(),
+        );
+
+        for variant in &decl.variants {
+            if decls.ctors.contains_key(&variant.name) {
+                errors.push(TypeError {
+                    message: format!("constructor `{}` is already defined", variant.name),
+                    span,
+                });
+                continue;
+            }
+            let mut field_tys = Vec::with_capacity(variant.fields.len());
+            let mut ok = true;
+            for field in &variant.fields {
+                match resolve(field, &param_map, &decls.type_arity, span) {
+                    Ok(t) => field_tys.push(t),
+                    Err(e) => {
+                        errors.push(e);
+                        ok = false;
+                    }
+                }
+            }
+            if !ok {
+                continue;
+            }
+            let arity = field_tys.len();
+            let ctor_ty = field_tys
+                .into_iter()
+                .rev()
+                .fold(result_ty.clone(), |acc, f| {
+                    Ty::Fun(Box::new(f), Box::new(acc))
+                });
+            let scheme = Scheme {
+                vars: (0..decl.params.len() as u32).collect(),
+                ty: ctor_ty,
+            };
+            env.insert(variant.name.clone(), scheme.clone());
+            decls
+                .ctors
+                .insert(variant.name.clone(), CtorInfo { scheme, arity });
+            if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
+                list.push(variant.name.clone());
+            }
+        }
+    }
+
+    (decls, env)
+}
+
+/// Resolve a surface type expression into a [`Ty`], given the declaration's type
+/// parameters and the set of known type constructors.
+fn resolve(
+    ty: &TypeExpr,
+    params: &HashMap<String, u32>,
+    type_arity: &HashMap<String, usize>,
+    span: Span,
+) -> Result<Ty, TypeError> {
+    match ty {
+        TypeExpr::Fun(a, b) => Ok(Ty::Fun(
+            Box::new(resolve(a, params, type_arity, span)?),
+            Box::new(resolve(b, params, type_arity, span)?),
+        )),
+        TypeExpr::Con(name, args) => {
+            let no_args = |t: Ty| -> Result<Ty, TypeError> {
+                if args.is_empty() {
+                    Ok(t)
+                } else {
+                    Err(TypeError {
+                        message: format!("type `{name}` does not take arguments"),
+                        span,
+                    })
+                }
+            };
+            if let Some(&v) = params.get(name) {
+                return no_args(Ty::Var(v));
+            }
+            match name.as_str() {
+                "int" => return no_args(Ty::Int),
+                "float" => return no_args(Ty::Float),
+                "bool" => return no_args(Ty::Bool),
+                "string" => return no_args(Ty::Str),
+                _ => {}
+            }
+            match type_arity.get(name) {
+                Some(&arity) if arity == args.len() => {
+                    let resolved: Result<Vec<Ty>, TypeError> = args
+                        .iter()
+                        .map(|a| resolve(a, params, type_arity, span))
+                        .collect();
+                    Ok(Ty::Con(name.clone(), resolved?))
+                }
+                Some(&arity) => Err(TypeError {
+                    message: format!(
+                        "type `{name}` expects {arity} argument(s), found {}",
+                        args.len()
+                    ),
+                    span,
+                }),
+                None => Err(TypeError {
+                    message: format!("unknown type `{name}`"),
+                    span,
+                }),
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct Infer {
     subst: HashMap<u32, Ty>,
     next: u32,
+    decls: Decls,
 }
 
 impl Infer {
@@ -108,6 +285,9 @@ impl Infer {
                 None => Ty::Var(*n),
             },
             Ty::Fun(a, b) => Ty::Fun(Box::new(self.apply(a)), Box::new(self.apply(b))),
+            Ty::Con(name, args) => {
+                Ty::Con(name.clone(), args.iter().map(|a| self.apply(a)).collect())
+            }
             other => other.clone(),
         }
     }
@@ -116,8 +296,6 @@ impl Infer {
         let ty = if binding.params.is_empty() {
             self.infer_expr(&binding.value, env)?
         } else {
-            // Parameters are monomorphic inside the body; the function type is
-            // the curried arrow over them.
             let mut body_env = env.clone();
             let mut param_tys = Vec::with_capacity(binding.params.len());
             for param in &binding.params {
@@ -157,8 +335,8 @@ impl Infer {
             },
 
             ExprKind::Binary { lhs, rhs, .. } => {
-                // Integer arithmetic only (see module docs). Expected type first
-                // so diagnostics read "expected int, found <actual>".
+                // Integer arithmetic only. Expected type first so diagnostics read
+                // "expected int, found <actual>".
                 let lt = self.infer_expr(lhs, env)?;
                 self.unify(&Ty::Int, &lt, lhs.span())?;
                 let rt = self.infer_expr(rhs, env)?;
@@ -171,7 +349,6 @@ impl Infer {
                 self.unify(&Ty::Bool, &ct, cond.span())?;
                 let tt = self.infer_expr(then, env)?;
                 let et = self.infer_expr(else_, env)?;
-                // The `then` branch sets the expectation for `else`.
                 self.unify(&tt, &et, else_.span())?;
                 Ok(self.apply(&tt))
             }
@@ -211,6 +388,7 @@ impl Infer {
                     let body_ty = self.infer_expr(&arm.body, &arm_env)?;
                     self.unify(&result, &body_ty, arm.body.span())?;
                 }
+                self.check_exhaustive(&scrut_ty, arms, span)?;
                 Ok(self.apply(&result))
             }
         }
@@ -231,8 +409,7 @@ impl Infer {
         Ok(self.apply(&result))
     }
 
-    /// Check a pattern against the scrutinee type and record any bindings it
-    /// introduces (monomorphic) into `env`.
+    /// Check a pattern against the scrutinee type, recording bindings into `env`.
     fn bind_pattern(
         &mut self,
         pattern: &Pattern,
@@ -254,13 +431,105 @@ impl Infer {
             }
             Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int, span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
-            Pattern::Ctor { .. } => Err(TypeError {
-                message:
-                    "constructor patterns require ADT declarations, which are not implemented \
-                          yet (planned for a later phase)"
-                        .to_string(),
+            Pattern::Ctor { name, args } => {
+                let Some(info) = self.decls.ctors.get(name).cloned() else {
+                    return Err(TypeError {
+                        message: format!("unknown constructor `{name}`"),
+                        span,
+                    });
+                };
+                if args.len() != info.arity {
+                    return Err(TypeError {
+                        message: format!(
+                            "constructor `{name}` expects {} argument(s), found {}",
+                            info.arity,
+                            args.len()
+                        ),
+                        span,
+                    });
+                }
+                let cty = self.instantiate(&info.scheme);
+                let (field_tys, result_ty) = split_fun(&cty, info.arity);
+                self.unify(&result_ty, scrut_ty, span)?;
+                for (sub, field_ty) in args.iter().zip(field_tys) {
+                    self.bind_pattern(sub, &field_ty, span, env)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Shallow exhaustiveness: an irrefutable arm covers everything; otherwise the
+    /// head constructor set must be complete for the scrutinee's type.
+    fn check_exhaustive(
+        &self,
+        scrut_ty: &Ty,
+        arms: &[MatchArm],
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if arms
+            .iter()
+            .any(|a| matches!(a.pattern, Pattern::Wildcard | Pattern::Var(_)))
+        {
+            return Ok(());
+        }
+        let missing = match self.apply(scrut_ty) {
+            Ty::Bool => {
+                let mut has_true = false;
+                let mut has_false = false;
+                for arm in arms {
+                    if let Pattern::Bool(b) = arm.pattern {
+                        if b {
+                            has_true = true;
+                        } else {
+                            has_false = true;
+                        }
+                    }
+                }
+                let mut miss = Vec::new();
+                if !has_true {
+                    miss.push("true".to_string());
+                }
+                if !has_false {
+                    miss.push("false".to_string());
+                }
+                miss
+            }
+            Ty::Con(name, _) if self.decls.type_ctors.contains_key(&name) => {
+                let covered: HashSet<&str> = arms
+                    .iter()
+                    .filter_map(|a| match &a.pattern {
+                        Pattern::Ctor { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                self.decls.type_ctors[&name]
+                    .iter()
+                    .filter(|c| !covered.contains(c.as_str()))
+                    .cloned()
+                    .collect()
+            }
+            // int/float/string/function/type-variable scrutinees can't be
+            // enumerated — they need a wildcard.
+            _ => {
+                return Err(TypeError {
+                    message: "non-exhaustive match: add a wildcard `_` arm".to_string(),
+                    span,
+                });
+            }
+        };
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            let names = missing
+                .iter()
+                .map(|m| format!("`{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(TypeError {
+                message: format!("non-exhaustive match: missing {names}"),
                 span,
-            }),
+            })
         }
     }
 
@@ -290,6 +559,12 @@ impl Infer {
             (Ty::Fun(a1, a2), Ty::Fun(b1, b2)) => {
                 self.unify(a1, b1, span)?;
                 self.unify(a2, b2, span)
+            }
+            (Ty::Con(n1, a1), Ty::Con(n2, a2)) if n1 == n2 && a1.len() == a2.len() => {
+                for (x, y) in a1.iter().zip(a2) {
+                    self.unify(x, y, span)?;
+                }
+                Ok(())
             }
             _ => Err(TypeError {
                 message: format!("type mismatch: expected {}, found {}", show(&a), show(&b)),
@@ -330,10 +605,30 @@ impl Infer {
     }
 }
 
+/// Split a constructor type into its `n` field types and its result type.
+fn split_fun(ty: &Ty, n: usize) -> (Vec<Ty>, Ty) {
+    let mut fields = Vec::with_capacity(n);
+    let mut cur = ty.clone();
+    for _ in 0..n {
+        match cur {
+            Ty::Fun(a, b) => {
+                fields.push(*a);
+                cur = *b;
+            }
+            other => {
+                cur = other;
+                break;
+            }
+        }
+    }
+    (fields, cur)
+}
+
 fn occurs(var: u32, ty: &Ty) -> bool {
     match ty {
         Ty::Var(n) => *n == var,
         Ty::Fun(a, b) => occurs(var, a) || occurs(var, b),
+        Ty::Con(_, args) => args.iter().any(|a| occurs(var, a)),
         _ => false,
     }
 }
@@ -345,6 +640,7 @@ fn free_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
             free_vars(a, f);
             free_vars(b, f);
         }
+        Ty::Con(_, args) => args.iter().for_each(|a| free_vars(a, f)),
         _ => {}
     }
 }
@@ -355,6 +651,10 @@ fn subst_vars(ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
         Ty::Fun(a, b) => Ty::Fun(
             Box::new(subst_vars(a, mapping)),
             Box::new(subst_vars(b, mapping)),
+        ),
+        Ty::Con(name, args) => Ty::Con(
+            name.clone(),
+            args.iter().map(|a| subst_vars(a, mapping)).collect(),
         ),
         other => other.clone(),
     }
@@ -368,7 +668,9 @@ fn show(ty: &Ty) -> String {
     buf
 }
 
-fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, paren_fun: bool) {
+/// `atom` requests a form that can sit as a single argument — compound types
+/// (functions, applied constructors) get parenthesized.
+fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, atom: bool) {
     match ty {
         Ty::Int => out.push_str("int"),
         Ty::Float => out.push_str("float"),
@@ -379,14 +681,28 @@ fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, paren_
             let name = names.entry(*n).or_insert_with(|| var_name(next));
             out.push_str(name);
         }
+        Ty::Con(name, args) if args.is_empty() => out.push_str(name),
+        Ty::Con(name, args) => {
+            if atom {
+                out.push('(');
+            }
+            out.push_str(name);
+            for arg in args {
+                out.push(' ');
+                show_into(arg, names, out, true);
+            }
+            if atom {
+                out.push(')');
+            }
+        }
         Ty::Fun(a, b) => {
-            if paren_fun {
+            if atom {
                 out.push('(');
             }
             show_into(a, names, out, true);
             out.push_str(" -> ");
             show_into(b, names, out, false);
-            if paren_fun {
+            if atom {
                 out.push(')');
             }
         }

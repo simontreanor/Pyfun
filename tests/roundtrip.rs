@@ -26,6 +26,12 @@ const PROGRAMS: &[&str] = &[
     "let nested = match p with | Pair (Some a) b -> a | _ -> b",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
+    // Type declarations: nullary, parameterized, and recursive.
+    "type Color = Red | Green | Blue",
+    "type Option a = None | Some a",
+    "type Result a b = Ok a | Err b",
+    "type List a = Nil | Cons a (List a)",
+    "type Option a = None | Some a\nlet unwrap o = match o with | Some v -> v | None -> 0",
 ];
 
 #[test]

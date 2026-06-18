@@ -37,11 +37,42 @@ pub struct Module {
     pub items: Vec<Item>,
 }
 
-/// A top-level item: either a binding or a bare expression.
+/// A top-level item: a type declaration, a binding, or a bare expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
+    Type(TypeDecl),
     Let(LetBinding),
     Expr(Expr),
+}
+
+/// `type Name params... = V1 fields | V2 fields | ...`
+///
+/// An algebraic data type: a named, possibly parameterized sum of constructors.
+/// Type names and constructor names are capitalized; type parameters are
+/// lowercase (`DESIGN.md` §7 convention).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDecl {
+    pub name: String,
+    pub params: Vec<String>,
+    pub variants: Vec<VariantDecl>,
+    pub span: NodeSpan,
+}
+
+/// One constructor of a [`TypeDecl`], e.g. `Cons a (List a)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VariantDecl {
+    pub name: String,
+    pub fields: Vec<TypeExpr>,
+}
+
+/// A type expression appearing in a constructor field.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeExpr {
+    /// A named type — variable, builtin, or type constructor — applied to zero or
+    /// more arguments. `a`, `int`, `List a`, `Option int` are all `Con`.
+    Con(String, Vec<TypeExpr>),
+    /// A function type `arg -> result`.
+    Fun(Box<TypeExpr>, Box<TypeExpr>),
 }
 
 /// `let [mut] name params... = value`.

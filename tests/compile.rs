@@ -49,8 +49,9 @@ fn if_in_value_position_is_a_conditional_expression() {
 }
 
 #[test]
-fn match_without_catch_all_gets_an_exhaustiveness_guard() {
-    let py = pyfun::compile("let f n = match n with | 0 -> 1").unwrap();
+fn exhaustive_match_without_wildcard_keeps_a_runtime_guard() {
+    // Even a statically exhaustive ADT match emits a defensive `case _: raise`.
+    let py = pyfun::compile("type Color = Red | Green | Blue\nlet f c = match c with | Red -> 1 | Green -> 2 | Blue -> 3").unwrap();
     assert!(py.contains("case _:"), "{py}");
     assert!(
         py.contains("raise RuntimeError(\"non-exhaustive match\")"),
@@ -59,9 +60,19 @@ fn match_without_catch_all_gets_an_exhaustiveness_guard() {
 }
 
 #[test]
-fn constructor_patterns_are_a_clear_error() {
+fn adt_lowers_to_classes_with_match_args() {
+    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
+    assert!(py.contains("class Some:"), "{py}");
+    assert!(py.contains("__match_args__ = ('_0',)"), "{py}");
+    // `None` is mangled to dodge the Python keyword, and is a nullary instance.
+    assert!(py.contains("class None_:"), "{py}");
+    assert!(py.contains("x = Some(1)"), "{py}");
+}
+
+#[test]
+fn unknown_constructor_is_rejected() {
     let err = pyfun::compile("let f o = match o with | Some v -> v | None -> 0").unwrap_err();
-    assert!(err.to_string().contains("constructor patterns"), "{err}");
+    assert!(err.to_string().contains("unknown constructor"), "{err}");
 }
 
 // ---------- end-to-end execution ----------
@@ -128,13 +139,33 @@ fn e2e_match_in_value_position_is_hoisted() {
 }
 
 #[test]
-fn e2e_non_exhaustive_match_raises_at_runtime() {
-    let Some(python) = python_cmd() else { return };
-    let mut program = pyfun::compile("let f n = match n with | 0 -> 1").unwrap();
-    program.push_str(
-        "\ntry:\n    f(5)\n    print('no-error')\nexcept RuntimeError:\n    print('raised')\n",
+fn e2e_adt_construction_and_match() {
+    run_and_check(
+        "
+        type Option a = None | Some a
+        type Color = Red | Green | Blue
+        let unwrap o = match o with | Some v -> v | None -> 0
+        let r1 = unwrap (Some 5)
+        let r2 = unwrap None
+        let rank c = match c with | Red -> 1 | Green -> 2 | Blue -> 3
+        let r3 = rank Green
+        ",
+        &[("r1", "5"), ("r2", "0"), ("r3", "2")],
     );
-    assert_eq!(run_python(&python, &program).trim(), "raised");
+}
+
+#[test]
+fn e2e_recursive_adt() {
+    // A cons-list: length via recursion-free folding isn't available, but nested
+    // construction and matching exercise recursive types end to end.
+    run_and_check(
+        "
+        type List a = Nil | Cons a (List a)
+        let head d xs = match xs with | Nil -> d | Cons h t -> h
+        let r = head 0 (Cons 7 (Cons 8 Nil))
+        ",
+        &[("r", "7")],
+    );
 }
 
 // ---------- helpers ----------

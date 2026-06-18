@@ -36,6 +36,8 @@ pub enum PyStmt {
     Match { subject: PyExpr, cases: Vec<PyCase> },
     /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
     RaiseRuntimeError(String),
+    /// A data-constructor class with positional fields and `__match_args__`.
+    ClassDef { name: String, fields: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +54,8 @@ pub enum PyPattern {
     Capture(String),
     /// `case <literal>`
     Literal(PyExpr),
+    /// `case Name(arg, ...)` — a class pattern with positional sub-patterns.
+    Class { name: String, args: Vec<PyPattern> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,14 +177,45 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
                 &format!("raise RuntimeError({})", string_literal(message)),
             );
         }
+        PyStmt::ClassDef { name, fields } => emit_class(name, fields, depth, out),
     }
 }
 
-fn pattern(pattern: &PyPattern) -> String {
-    match pattern {
+fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
+    line(out, depth, &format!("class {name}:"));
+    // `__match_args__` is a tuple of the positional field names; a single-element
+    // tuple needs a trailing comma.
+    let names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
+    let trailing = if fields.len() == 1 { "," } else { "" };
+    line(
+        out,
+        depth + 1,
+        &format!("__match_args__ = ({}{trailing})", names.join(", ")),
+    );
+
+    let params = std::iter::once("self".to_string())
+        .chain(fields.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    line(out, depth + 1, &format!("def __init__({params}):"));
+    if fields.is_empty() {
+        line(out, depth + 2, "pass");
+    } else {
+        for f in fields {
+            line(out, depth + 2, &format!("self.{f} = {f}"));
+        }
+    }
+}
+
+fn pattern(pat: &PyPattern) -> String {
+    match pat {
         PyPattern::Wildcard => "_".to_string(),
         PyPattern::Capture(name) => name.clone(),
         PyPattern::Literal(value) => expr(value),
+        PyPattern::Class { name, args } => {
+            let args: Vec<String> = args.iter().map(pattern).collect();
+            format!("{name}({})", args.join(", "))
+        }
     }
 }
 

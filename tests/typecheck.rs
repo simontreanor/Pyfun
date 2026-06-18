@@ -46,6 +46,23 @@ fn accepts_match_over_int_literals() {
     assert!(pyfun::check("let f n = match n with | 0 -> \"zero\" | _ -> \"many\"").is_ok());
 }
 
+#[test]
+fn accepts_user_defined_adt() {
+    let src = "type Option a = None | Some a\n\
+               let unwrap o = match o with | Some v -> v | None -> 0\n\
+               let r = unwrap (Some 5)";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_parameterized_and_recursive_adts() {
+    let src = "type Result a b = Ok a | Err b\n\
+               type List a = Nil | Cons a (List a)\n\
+               let xs = Cons 1 (Cons 2 Nil)\n\
+               let ok = Ok 1";
+    assert!(pyfun::check(src).is_ok());
+}
+
 // ---------- ill-typed programs ----------
 
 #[test]
@@ -89,11 +106,34 @@ fn rejects_match_arm_result_mismatch() {
 }
 
 #[test]
-fn constructor_patterns_are_rejected_until_adts() {
+fn rejects_unknown_constructor() {
     assert_error_contains(
         "let f o = match o with | Some v -> v | None -> 0",
-        "constructor patterns",
+        "unknown constructor `Some`",
     );
+}
+
+#[test]
+fn rejects_non_exhaustive_adt_match() {
+    let src = "type Option a = None | Some a\nlet f o = match o with | Some v -> v";
+    assert_error_contains(src, "non-exhaustive match: missing `None`");
+}
+
+#[test]
+fn rejects_non_exhaustive_int_match() {
+    assert_error_contains("let f n = match n with | 0 -> 1", "add a wildcard");
+}
+
+#[test]
+fn rejects_constructor_used_at_wrong_type() {
+    // `Some` produces an `Option`, not an `int`.
+    let src = "type Option a = None | Some a\nlet r = (Some 1) + 1";
+    assert_error_contains(src, "expected int, found Option");
+}
+
+#[test]
+fn rejects_unknown_type_in_field() {
+    assert_error_contains("type Bad = Mk Nope", "unknown type `Nope`");
 }
 
 // ---------- the compiler is the gatekeeper ----------
