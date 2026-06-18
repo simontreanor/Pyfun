@@ -2,6 +2,7 @@
 name = "pyfun"
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.96"
 description = "An FP-first language that compiles to Python (Pyfun is to Python as F# is to C#)."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/simontreanor/Pyfun"

@@ -1,0 +1,5 @@
+# Pin the repo to a specific Rust toolchain so builds are reproducible regardless
+# of the machine's global default. rustup auto-selects this when run in the repo.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]
