@@ -6,7 +6,7 @@
 //! roundtrip tests rely on. A formatting-quality printer (`pyfun fmt`) is a
 //! later phase (`DESIGN.md` §10).
 
-use crate::parser::ast::{Expr, Item, LetBinding, MatchArm, Module, Pattern};
+use crate::parser::ast::{Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern};
 
 /// Render a whole module, one item per line.
 pub fn print_module(module: &Module) -> String {
@@ -44,22 +44,22 @@ fn print_let(binding: &LetBinding) -> String {
 /// Render an expression. Atoms print bare; everything compound is wrapped in
 /// parentheses so it can sit in any position and still reparse identically.
 pub fn print_expr(expr: &Expr) -> String {
-    match expr {
-        Expr::Int(n) => n.to_string(),
+    match &expr.kind {
+        ExprKind::Int(n) => n.to_string(),
         // `{:?}` guarantees a decimal point (e.g. `1.0`), so floats never
         // reparse as integers.
-        Expr::Float(f) => format!("{f:?}"),
-        Expr::Str(s) => print_string(s),
-        Expr::Bool(b) => b.to_string(),
-        Expr::Var(name) => name.clone(),
+        ExprKind::Float(f) => format!("{f:?}"),
+        ExprKind::Str(s) => print_string(s),
+        ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Var(name) => name.clone(),
 
-        Expr::Fn { params, body } => {
+        ExprKind::Fn { params, body } => {
             format!("(fun {} -> {})", params.join(" "), print_expr(body))
         }
-        Expr::App { func, arg } => {
+        ExprKind::App { func, arg } => {
             format!("({} {})", print_expr(func), print_expr(arg))
         }
-        Expr::If { cond, then, else_ } => {
+        ExprKind::If { cond, then, else_ } => {
             format!(
                 "(if {} then {} else {})",
                 print_expr(cond),
@@ -67,14 +67,14 @@ pub fn print_expr(expr: &Expr) -> String {
                 print_expr(else_)
             )
         }
-        Expr::Match { scrutinee, arms } => {
+        ExprKind::Match { scrutinee, arms } => {
             let arms: Vec<String> = arms.iter().map(print_arm).collect();
             format!("(match {} with {})", print_expr(scrutinee), arms.join(" "))
         }
-        Expr::Binary { op, lhs, rhs } => {
+        ExprKind::Binary { op, lhs, rhs } => {
             format!("({} {} {})", print_expr(lhs), op.symbol(), print_expr(rhs))
         }
-        Expr::Pipe { lhs, rhs } => {
+        ExprKind::Pipe { lhs, rhs } => {
             format!("({} |> {})", print_expr(lhs), print_expr(rhs))
         }
     }

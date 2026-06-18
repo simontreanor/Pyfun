@@ -1,10 +1,12 @@
 # Pyfun — Design
 
 The language/semantics design spec. `GUIDE.md` is the lean operational pointer for working in
-this repo; this file is the detailed reference. **Status: Phases 1–2 implemented** (lexer, parser,
-AST, pretty-printer, plus lowering to a Python-AST IR and runnable Python emission over the
-`let`/`if`/`match`/`fun` subset with curried application and `|>`; see §10). Phase 3+ (type/effect/
-unit checking, ADTs, computation expressions, units) is not yet built.
+this repo; this file is the detailed reference. **Status: Phases 1–3 (type inference) implemented** —
+lexer, parser, span-carrying AST, pretty-printer, Hindley–Milner type inference with rustc-style
+diagnostics (`pyfun check`), and lowering to a Python-AST IR + runnable Python emission gated on
+type-checking, over the `let`/`if`/`match`/`fun` subset with curried application and `|>` (see §10).
+Still deferred until their enabling syntax exists: effect inference, units-of-measure, ADTs +
+constructor patterns + exhaustiveness, and computation expressions.
 
 ## 1. Identity
 

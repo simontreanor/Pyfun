@@ -23,7 +23,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{BinOp, Expr, Item, LetBinding, Module, Pattern};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Item, LetBinding, Module, Pattern};
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
 /// An error raised while lowering (e.g. a construct not yet supported).
@@ -66,7 +66,7 @@ impl Lowerer {
                 // arguments are handled as over-application at the call site.
                 let arity = if !binding.params.is_empty() {
                     Some(binding.params.len())
-                } else if let Expr::Fn { params, .. } = &binding.value {
+                } else if let ExprKind::Fn { params, .. } = &binding.value.kind {
                     Some(params.len())
                 } else {
                     None
@@ -129,15 +129,15 @@ impl Lowerer {
         expr: &Expr,
         locals: &HashSet<String>,
     ) -> Result<Vec<PyStmt>, LowerError> {
-        match expr {
-            Expr::If { cond, then, else_ } => {
+        match &expr.kind {
+            ExprKind::If { cond, then, else_ } => {
                 let (mut stmts, test) = self.lower_value(cond, locals)?;
                 let body = self.lower_return(then, locals)?;
                 let orelse = self.lower_return(else_, locals)?;
                 stmts.push(PyStmt::If { test, body, orelse });
                 Ok(stmts)
             }
-            Expr::Match { scrutinee, arms } => {
+            ExprKind::Match { scrutinee, arms } => {
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
@@ -163,14 +163,14 @@ impl Lowerer {
     /// Lower `expr` in value position: a list of statements to run first, plus a
     /// Python expression denoting the value.
     fn lower_value(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
-        match expr {
-            Expr::Int(n) => Ok((vec![], PyExpr::Int(*n))),
-            Expr::Float(f) => Ok((vec![], PyExpr::Float(*f))),
-            Expr::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
-            Expr::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
-            Expr::Var(name) => Ok((vec![], PyExpr::Name(name.clone()))),
+        match &expr.kind {
+            ExprKind::Int(n) => Ok((vec![], PyExpr::Int(*n))),
+            ExprKind::Float(f) => Ok((vec![], PyExpr::Float(*f))),
+            ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
+            ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
+            ExprKind::Var(name) => Ok((vec![], PyExpr::Name(name.clone()))),
 
-            Expr::Binary { op, lhs, rhs } => {
+            ExprKind::Binary { op, lhs, rhs } => {
                 let (mut stmts, left) = self.lower_value(lhs, locals)?;
                 let (right_stmts, right) = self.lower_value(rhs, locals)?;
                 stmts.extend(right_stmts);
@@ -184,7 +184,7 @@ impl Lowerer {
                 ))
             }
 
-            Expr::If { cond, then, else_ } => {
+            ExprKind::If { cond, then, else_ } => {
                 let (mut stmts, test) = self.lower_value(cond, locals)?;
                 let (then_stmts, then_val) = self.lower_value(then, locals)?;
                 let (else_stmts, else_val) = self.lower_value(else_, locals)?;
@@ -208,7 +208,7 @@ impl Lowerer {
                 }
             }
 
-            Expr::Match { scrutinee, arms } => {
+            ExprKind::Match { scrutinee, arms } => {
                 // Python `match` is a statement, so always hoist into a temp.
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let tmp = self.fresh_tmp();
@@ -229,7 +229,7 @@ impl Lowerer {
                 Ok((stmts, PyExpr::Name(tmp)))
             }
 
-            Expr::Fn { params, body } => {
+            ExprKind::Fn { params, body } => {
                 let inner = extend(locals, params);
                 let (body_stmts, body_val) = self.lower_value(body, &inner)?;
                 if body_stmts.is_empty() {
@@ -253,7 +253,7 @@ impl Lowerer {
                 }
             }
 
-            Expr::App { .. } | Expr::Pipe { .. } => self.lower_application(expr, locals),
+            ExprKind::App { .. } | ExprKind::Pipe { .. } => self.lower_application(expr, locals),
         }
     }
 
@@ -261,9 +261,9 @@ impl Lowerer {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
 
-        let arity = match head {
-            Expr::Var(name) if !locals.contains(name) => self.arities.get(name).copied(),
-            Expr::Fn { params, .. } => Some(params.len()),
+        let arity = match &head.kind {
+            ExprKind::Var(name) if !locals.contains(name) => self.arities.get(name).copied(),
+            ExprKind::Fn { params, .. } => Some(params.len()),
             _ => None,
         };
 
@@ -336,19 +336,19 @@ impl Lowerer {
 /// Flatten an application/pipe spine into `(head, args)` in left-to-right order.
 /// `x |> f` is treated as `f x`, so pipes flatten alongside ordinary calls.
 fn flatten_app<'a>(expr: &'a Expr, args: &mut Vec<&'a Expr>) -> &'a Expr {
-    match expr {
-        Expr::App { func, arg } => {
+    match &expr.kind {
+        ExprKind::App { func, arg } => {
             let head = flatten_app(func, args);
             args.push(arg);
             head
         }
-        Expr::Pipe { lhs, rhs } => {
+        ExprKind::Pipe { lhs, rhs } => {
             // `lhs |> rhs` == `rhs lhs`: flatten the callee spine, then the value.
             let head = flatten_app(rhs, args);
             args.push(lhs);
             head
         }
-        other => other,
+        _ => expr,
     }
 }
 

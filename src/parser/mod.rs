@@ -22,7 +22,7 @@
 pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
-use ast::{BinOp, Expr, Item, LetBinding, MatchArm, Module, Pattern};
+use ast::{BinOp, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern};
 
 /// An error produced during parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +97,25 @@ impl Parser {
         }
     }
 
+    /// Start offset of the current (next-to-consume) token.
+    fn cur_start(&self) -> usize {
+        self.tokens[self.pos].span.start
+    }
+
+    /// End offset of the most recently consumed token.
+    fn prev_end(&self) -> usize {
+        if self.pos == 0 {
+            0
+        } else {
+            self.tokens[self.pos - 1].span.end
+        }
+    }
+
+    /// Build an expression spanning from `start` to the end of the last token.
+    fn mk(&self, start: usize, kind: ExprKind) -> Expr {
+        Expr::new(kind, Span::new(start, self.prev_end()))
+    }
+
     // ----- grammar -----
 
     fn parse_module(&mut self) -> Result<Module, ParseError> {
@@ -143,6 +162,7 @@ impl Parser {
     }
 
     fn parse_fun(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         self.expect(&Tok::Fun, "`fun`")?;
         let mut params = vec![self.parse_ident("parameter name")?];
         while let Tok::Ident(_) = self.peek() {
@@ -150,20 +170,22 @@ impl Parser {
         }
         self.expect(&Tok::Arrow, "`->`")?;
         let body = Box::new(self.parse_expr()?);
-        Ok(Expr::Fn { params, body })
+        Ok(self.mk(start, ExprKind::Fn { params, body }))
     }
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         self.expect(&Tok::If, "`if`")?;
         let cond = Box::new(self.parse_expr()?);
         self.expect(&Tok::Then, "`then`")?;
         let then = Box::new(self.parse_expr()?);
         self.expect(&Tok::Else, "`else`")?;
         let else_ = Box::new(self.parse_expr()?);
-        Ok(Expr::If { cond, then, else_ })
+        Ok(self.mk(start, ExprKind::If { cond, then, else_ }))
     }
 
     fn parse_match(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         self.expect(&Tok::Match, "`match`")?;
         let scrutinee = Box::new(self.parse_expr()?);
         self.expect(&Tok::With, "`with`")?;
@@ -177,22 +199,27 @@ impl Parser {
         if arms.is_empty() {
             return Err(self.error("expected at least one `| pattern -> expr` arm"));
         }
-        Ok(Expr::Match { scrutinee, arms })
+        Ok(self.mk(start, ExprKind::Match { scrutinee, arms }))
     }
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         let mut lhs = self.parse_additive()?;
         while self.eat(&Tok::PipeOp) {
             let rhs = self.parse_additive()?;
-            lhs = Expr::Pipe {
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+            lhs = self.mk(
+                start,
+                ExprKind::Pipe {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
         }
         Ok(lhs)
     }
 
     fn parse_additive(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         let mut lhs = self.parse_multiplicative()?;
         loop {
             let op = match self.peek() {
@@ -202,16 +229,20 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_multiplicative()?;
-            lhs = Expr::Binary {
-                op,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+            lhs = self.mk(
+                start,
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
         }
         Ok(lhs)
     }
 
     fn parse_multiplicative(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         let mut lhs = self.parse_application()?;
         loop {
             let op = match self.peek() {
@@ -221,61 +252,71 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_application()?;
-            lhs = Expr::Binary {
-                op,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            };
+            lhs = self.mk(
+                start,
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
         }
         Ok(lhs)
     }
 
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
         let mut func = self.parse_atom()?;
         while starts_atom(self.peek()) {
             let arg = self.parse_atom()?;
-            func = Expr::App {
-                func: Box::new(func),
-                arg: Box::new(arg),
-            };
+            func = self.mk(
+                start,
+                ExprKind::App {
+                    func: Box::new(func),
+                    arg: Box::new(arg),
+                },
+            );
         }
         Ok(func)
     }
 
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
-        match self.peek().clone() {
+        let start = self.cur_start();
+        let kind = match self.peek().clone() {
             Tok::Int(n) => {
                 self.bump();
-                Ok(Expr::Int(n))
+                ExprKind::Int(n)
             }
             Tok::Float(f) => {
                 self.bump();
-                Ok(Expr::Float(f))
+                ExprKind::Float(f)
             }
             Tok::Str(s) => {
                 self.bump();
-                Ok(Expr::Str(s))
+                ExprKind::Str(s)
             }
             Tok::True => {
                 self.bump();
-                Ok(Expr::Bool(true))
+                ExprKind::Bool(true)
             }
             Tok::False => {
                 self.bump();
-                Ok(Expr::Bool(false))
+                ExprKind::Bool(false)
             }
             Tok::Ident(name) => {
                 self.bump();
-                Ok(Expr::Var(name))
+                ExprKind::Var(name)
             }
             Tok::LParen => {
                 self.bump();
                 let inner = self.parse_expr()?;
                 self.expect(&Tok::RParen, "`)`")?;
-                Ok(inner)
+                // Keep the inner node's own (paren-free) span.
+                return Ok(inner);
             }
-            _ => Err(self.error("expected an expression")),
-        }
+            _ => return Err(self.error("expected an expression")),
+        };
+        Ok(self.mk(start, kind))
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {

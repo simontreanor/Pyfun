@@ -6,7 +6,7 @@
 //! operator precedence.
 
 use pyfun::parse;
-use pyfun::syntax::{BinOp, Expr, Item};
+use pyfun::syntax::{BinOp, ExprKind, Item};
 
 /// Programs exercising every Phase 1 construct.
 const PROGRAMS: &[&str] = &[
@@ -50,19 +50,19 @@ fn application_is_left_associative_and_curried() {
     let Item::Let(binding) = &module.items[0] else {
         panic!("expected a let binding")
     };
-    let Expr::App { func, arg } = &binding.value else {
+    let ExprKind::App { func, arg } = &binding.value.kind else {
         panic!("expected an application")
     };
-    assert_eq!(**arg, Expr::Var("b".to_string()));
-    let Expr::App {
+    assert_eq!(arg.kind, ExprKind::Var("b".to_string()));
+    let ExprKind::App {
         func: inner_func,
         arg: inner_arg,
-    } = &**func
+    } = &func.kind
     else {
         panic!("expected a nested application")
     };
-    assert_eq!(**inner_func, Expr::Var("f".to_string()));
-    assert_eq!(**inner_arg, Expr::Var("a".to_string()));
+    assert_eq!(inner_func.kind, ExprKind::Var("f".to_string()));
+    assert_eq!(inner_arg.kind, ExprKind::Var("a".to_string()));
 }
 
 #[test]
@@ -72,12 +72,12 @@ fn pipe_binds_looser_than_application() {
     let Item::Let(binding) = &module.items[0] else {
         panic!("expected a let binding")
     };
-    let Expr::Pipe { lhs, rhs } = &binding.value else {
+    let ExprKind::Pipe { lhs, rhs } = &binding.value.kind else {
         panic!("expected a pipe")
     };
-    assert_eq!(**lhs, Expr::Var("x".to_string()));
+    assert_eq!(lhs.kind, ExprKind::Var("x".to_string()));
     assert!(
-        matches!(**rhs, Expr::App { .. }),
+        matches!(rhs.kind, ExprKind::App { .. }),
         "rhs of pipe should be an application"
     );
 }
@@ -89,16 +89,16 @@ fn arithmetic_precedence() {
     let Item::Let(binding) = &module.items[0] else {
         panic!("expected a let binding")
     };
-    let Expr::Binary {
+    let ExprKind::Binary {
         op: BinOp::Add,
         rhs,
         ..
-    } = &binding.value
+    } = &binding.value.kind
     else {
         panic!("expected an addition at the root")
     };
     assert!(
-        matches!(**rhs, Expr::Binary { op: BinOp::Mul, .. }),
+        matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }),
         "right operand of + should be the multiplication"
     );
 }

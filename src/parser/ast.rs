@@ -1,9 +1,35 @@
-//! Pyfun abstract syntax for the Phase 1 subset.
+//! Pyfun abstract syntax.
 //!
-//! Per `DESIGN.md` §9 the AST lives under `parser/`. Nodes are deliberately
-//! span-free in Phase 1 so that `PartialEq` gives us structural equality for the
-//! parse→print→parse roundtrip tests. Spans move onto the AST when diagnostics
-//! land in Phase 3.
+//! Per `DESIGN.md` §9 the AST lives under `parser/`. Every [`Expr`] carries a
+//! source [`NodeSpan`] so the type checker can point diagnostics at the offending
+//! code (Phase 3). Spans compare *equal to each other unconditionally*
+//! ([`NodeSpan`]'s `PartialEq`), so derived structural equality on the AST ignores
+//! them — which is what keeps the parse→print→parse roundtrip tests meaningful.
+
+use crate::lexer::Span;
+
+/// A source span attached to an AST node. Two `NodeSpan`s are always considered
+/// equal, so `#[derive(PartialEq)]` on the AST compares structure only.
+#[derive(Debug, Clone, Copy)]
+pub struct NodeSpan(pub Span);
+
+impl NodeSpan {
+    pub fn new(span: Span) -> Self {
+        NodeSpan(span)
+    }
+
+    pub fn span(self) -> Span {
+        self.0
+    }
+}
+
+impl PartialEq for NodeSpan {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for NodeSpan {}
 
 /// A whole compilation unit: a sequence of top-level items.
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +48,7 @@ pub enum Item {
 ///
 /// Parameters make this a (curried) function definition; with no parameters it
 /// is a value binding. `mutable` records the `let mut` opt-in (§3); the
-/// immutability *check* itself is Phase 3.
+/// immutability *check* itself is a later phase.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetBinding {
     pub mutable: bool,
@@ -31,10 +57,31 @@ pub struct LetBinding {
     pub value: Expr,
 }
 
-/// Expressions. Application is single-argument so currying is structural:
+/// An expression node: its [`ExprKind`] plus the source span it came from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expr {
+    pub kind: ExprKind,
+    pub span: NodeSpan,
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, span: Span) -> Self {
+        Expr {
+            kind,
+            span: NodeSpan::new(span),
+        }
+    }
+
+    /// The underlying source span.
+    pub fn span(&self) -> Span {
+        self.span.span()
+    }
+}
+
+/// Expression shapes. Application is single-argument so currying is structural:
 /// `f a b` parses to `App(App(f, a), b)` (see `DESIGN.md` §7).
 #[derive(Debug, Clone, PartialEq)]
-pub enum Expr {
+pub enum ExprKind {
     Int(i64),
     Float(f64),
     Str(String),

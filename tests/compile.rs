@@ -113,6 +113,12 @@ fn e2e_if_and_match() {
 }
 
 #[test]
+fn e2e_integer_division_uses_floor_division() {
+    // Pyfun `/` is integer division, lowered to Python `//`.
+    run_and_check("let d = 7 / 2", &[("d", "3")]);
+}
+
+#[test]
 fn e2e_match_in_value_position_is_hoisted() {
     // The match must be evaluated into a temp, then added to 5.
     run_and_check(

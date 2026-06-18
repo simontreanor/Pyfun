@@ -104,7 +104,9 @@ impl PyBinOp {
             PyBinOp::Add => "+",
             PyBinOp::Sub => "-",
             PyBinOp::Mul => "*",
-            PyBinOp::Div => "/",
+            // Pyfun `/` is integer division (operands are int), so emit Python
+            // floor division to keep int-in / int-out semantics.
+            PyBinOp::Div => "//",
         }
     }
 
