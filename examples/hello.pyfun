@@ -1,21 +1,25 @@
-// A taste of the Phase 1 subset. None of this is type-checked or compiled yet —
-// `pyfun examples/hello.pyfun` just parses it and echoes the canonical form.
+// A taste of the Phase 2 subset that compiles to runnable Python.
+// `pyfun compile examples/hello.pyfun` prints the emitted Python.
+// (Constructor patterns like `Some x` need ADTs — a later phase.)
 
 // Curried function definition.
 let add a b = a + b
 
-// Partial application + pipe.
+// Partial application lowers to functools.partial; full application to add(1, 4).
 let inc = add 1
 let five = 4 |> inc
 
-// Expression-oriented `if`.
-let sign n = if n then 1 else 0
+// Expression-oriented `if` lowers to a Python conditional expression.
+let abs n = if n then n else 0 - n
 
-// Pattern matching over a constructor (ADTs proper arrive later).
-let unwrap o =
-  match o with
-  | Some v -> v
-  | None -> 0
+// `match` over literal patterns lowers to a Python match statement.
+let classify n =
+  match n with
+  | 0 -> "zero"
+  | 1 -> "one"
+  | _ -> "many"
 
-// Higher-order function via `fun`.
+// Higher-order function via `fun` lowers to a lambda.
 let compose = fun f g x -> f (g x)
+let inc2 = compose inc inc
+let seven = inc2 five

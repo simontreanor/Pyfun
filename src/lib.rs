@@ -3,12 +3,15 @@
 //! Phase 1 scaffolding: the front-end pipeline entry points wired together.
 //! See `DESIGN.md` for the full architecture and roadmap.
 //!
-//! Pipeline implemented so far: source → [`lexer`] → tokens → [`parser`] → AST,
-//! plus a pretty-printer ([`ast`]) used for the parse→print→parse roundtrip tests.
+//! Pipeline implemented so far: source → [`lexer`] → tokens → [`parser`] → AST
+//! → [`lowering`] → Python IR → [`python_emitter`] → Python source. The
+//! pretty-printer ([`ast`]) drives the parse→print→parse roundtrip tests.
 
 pub mod ast;
 pub mod lexer;
+pub mod lowering;
 pub mod parser;
+pub mod python_emitter;
 
 pub use parser::ast as syntax;
 
@@ -29,11 +32,19 @@ pub fn format(source: &str) -> Result<String, CompileError> {
     Ok(ast::print_module(&parse(source)?))
 }
 
-/// A front-end error, from either the lexer or the parser.
+/// Compile `source` all the way to Python source text.
+pub fn compile(source: &str) -> Result<String, CompileError> {
+    let module = parse(source)?;
+    let py = lowering::lower(&module).map_err(CompileError::Lower)?;
+    Ok(python_emitter::emit(&py))
+}
+
+/// A front-end error, from any stage of the pipeline.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CompileError {
     Lex(lexer::LexError),
     Parse(parser::ParseError),
+    Lower(lowering::LowerError),
 }
 
 impl std::fmt::Display for CompileError {
@@ -41,6 +52,7 @@ impl std::fmt::Display for CompileError {
         match self {
             CompileError::Lex(e) => write!(f, "lex error: {e}"),
             CompileError::Parse(e) => write!(f, "parse error: {e}"),
+            CompileError::Lower(e) => write!(f, "lowering error: {e}"),
         }
     }
 }

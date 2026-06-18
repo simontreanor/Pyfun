@@ -1,0 +1,264 @@
+//! Python abstract syntax (a small IR) plus a readable source emitter.
+//!
+//! Per `DESIGN.md` §5, lowering targets this structured IR rather than splicing
+//! strings, and the emitter turns it into human-readable Python. The IR covers
+//! only what Phase 2 lowering produces; it grows as the language does.
+
+/// A Python module: a flat list of top-level statements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PyModule {
+    pub body: Vec<PyStmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyStmt {
+    /// `import <module>`
+    Import(String),
+    /// `target = value`
+    Assign { target: String, value: PyExpr },
+    /// `return value`
+    Return(PyExpr),
+    /// A bare expression evaluated for its (side) effect.
+    Expr(PyExpr),
+    /// `def name(params): body`
+    FuncDef {
+        name: String,
+        params: Vec<String>,
+        body: Vec<PyStmt>,
+    },
+    /// `if test: body [else: orelse]`
+    If {
+        test: PyExpr,
+        body: Vec<PyStmt>,
+        orelse: Vec<PyStmt>,
+    },
+    /// `match subject: cases`
+    Match { subject: PyExpr, cases: Vec<PyCase> },
+    /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
+    RaiseRuntimeError(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PyCase {
+    pub pattern: PyPattern,
+    pub body: Vec<PyStmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyPattern {
+    /// `case _`
+    Wildcard,
+    /// `case name`
+    Capture(String),
+    /// `case <literal>`
+    Literal(PyExpr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyExpr {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    Name(String),
+    /// `left <op> right` — arithmetic only in Phase 2.
+    BinOp {
+        op: PyBinOp,
+        left: Box<PyExpr>,
+        right: Box<PyExpr>,
+    },
+    /// `func(args...)`
+    Call {
+        func: Box<PyExpr>,
+        args: Vec<PyExpr>,
+    },
+    /// `body if test else orelse`
+    IfExp {
+        body: Box<PyExpr>,
+        test: Box<PyExpr>,
+        orelse: Box<PyExpr>,
+    },
+    /// `lambda params: body`
+    Lambda {
+        params: Vec<String>,
+        body: Box<PyExpr>,
+    },
+    /// `value.attr`
+    Attribute {
+        value: Box<PyExpr>,
+        attr: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyBinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl PyBinOp {
+    fn symbol(self) -> &'static str {
+        match self {
+            PyBinOp::Add => "+",
+            PyBinOp::Sub => "-",
+            PyBinOp::Mul => "*",
+            PyBinOp::Div => "/",
+        }
+    }
+
+    /// Binding power, higher = tighter. `* /` bind tighter than `+ -`.
+    fn precedence(self) -> u8 {
+        match self {
+            PyBinOp::Add | PyBinOp::Sub => 10,
+            PyBinOp::Mul | PyBinOp::Div => 20,
+        }
+    }
+}
+
+/// Render a module to Python source text.
+pub fn emit(module: &PyModule) -> String {
+    let mut out = String::new();
+    emit_block(&module.body, 0, &mut out);
+    out
+}
+
+const INDENT: &str = "    ";
+
+fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
+    if stmts.is_empty() {
+        // An empty suite still needs a body in Python.
+        line(out, depth, "pass");
+        return;
+    }
+    for stmt in stmts {
+        emit_stmt(stmt, depth, out);
+    }
+}
+
+fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
+    match stmt {
+        PyStmt::Import(module) => line(out, depth, &format!("import {module}")),
+        PyStmt::Assign { target, value } => {
+            line(out, depth, &format!("{target} = {}", expr(value)));
+        }
+        PyStmt::Return(value) => line(out, depth, &format!("return {}", expr(value))),
+        PyStmt::Expr(value) => line(out, depth, &expr(value)),
+        PyStmt::FuncDef { name, params, body } => {
+            line(out, depth, &format!("def {name}({}):", params.join(", ")));
+            emit_block(body, depth + 1, out);
+        }
+        PyStmt::If { test, body, orelse } => {
+            line(out, depth, &format!("if {}:", expr(test)));
+            emit_block(body, depth + 1, out);
+            if !orelse.is_empty() {
+                line(out, depth, "else:");
+                emit_block(orelse, depth + 1, out);
+            }
+        }
+        PyStmt::Match { subject, cases } => {
+            line(out, depth, &format!("match {}:", expr(subject)));
+            for case in cases {
+                line(out, depth + 1, &format!("case {}:", pattern(&case.pattern)));
+                emit_block(&case.body, depth + 2, out);
+            }
+        }
+        PyStmt::RaiseRuntimeError(message) => {
+            line(
+                out,
+                depth,
+                &format!("raise RuntimeError({})", string_literal(message)),
+            );
+        }
+    }
+}
+
+fn pattern(pattern: &PyPattern) -> String {
+    match pattern {
+        PyPattern::Wildcard => "_".to_string(),
+        PyPattern::Capture(name) => name.clone(),
+        PyPattern::Literal(value) => expr(value),
+    }
+}
+
+fn line(out: &mut String, depth: usize, text: &str) {
+    for _ in 0..depth {
+        out.push_str(INDENT);
+    }
+    out.push_str(text);
+    out.push('\n');
+}
+
+/// Render an expression at the top precedence level.
+fn expr(e: &PyExpr) -> String {
+    emit_expr(e, 0)
+}
+
+/// Precedence of an expression for deciding when to parenthesize.
+fn prec(e: &PyExpr) -> u8 {
+    match e {
+        PyExpr::IfExp { .. } => 1,
+        PyExpr::Lambda { .. } => 2,
+        PyExpr::BinOp { op, .. } => op.precedence(),
+        // Atoms / calls / attributes never need wrapping.
+        _ => 100,
+    }
+}
+
+fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
+    let text = match e {
+        PyExpr::Int(n) => n.to_string(),
+        PyExpr::Float(f) => format!("{f:?}"),
+        PyExpr::Str(s) => string_literal(s),
+        PyExpr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+        PyExpr::Name(name) => name.clone(),
+        PyExpr::BinOp { op, left, right } => {
+            let p = op.precedence();
+            // Left-associative: left child at same precedence is fine; right
+            // child must bind strictly tighter to avoid reassociation.
+            format!(
+                "{} {} {}",
+                emit_expr(left, p),
+                op.symbol(),
+                emit_expr(right, p + 1)
+            )
+        }
+        PyExpr::Call { func, args } => {
+            let args: Vec<String> = args.iter().map(expr).collect();
+            format!("{}({})", emit_expr(func, 100), args.join(", "))
+        }
+        PyExpr::IfExp { body, test, orelse } => {
+            format!(
+                "{} if {} else {}",
+                emit_expr(body, 2),
+                emit_expr(test, 2),
+                emit_expr(orelse, 1)
+            )
+        }
+        PyExpr::Lambda { params, body } => {
+            format!("lambda {}: {}", params.join(", "), emit_expr(body, 2))
+        }
+        PyExpr::Attribute { value, attr } => format!("{}.{attr}", emit_expr(value, 100)),
+    };
+    if prec(e) < parent_prec {
+        format!("({text})")
+    } else {
+        text
+    }
+}
+
+fn string_literal(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
