@@ -60,3 +60,16 @@ let computed =
     let! x = async { return 20 }
     return x + 1
   }
+
+// Units of measure: dimensional analysis at compile time, erased at runtime.
+measure m
+measure s
+
+let distance = 100<m>
+let elapsed = 10<s>
+let speed = distance / elapsed       // inferred int<m/s>
+
+// `area` is unit-polymorphic: int<'u> -> int<'v> -> int<'u 'v>.
+let area w h = w * h
+let floor = area 4<m> 5<m>            // int<m^2>
+// `distance + elapsed` would be a compile error: int<m> vs int<s>.

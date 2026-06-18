@@ -8,7 +8,7 @@
 
 use crate::parser::ast::{
     CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr,
-    VariantDecl,
+    UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -24,9 +24,46 @@ pub fn print_module(module: &Module) -> String {
 /// Render a single top-level item.
 pub fn print_item(item: &Item) -> String {
     match item {
+        Item::Measure { name, .. } => format!("measure {name}"),
         Item::Type(decl) => print_type_decl(decl),
         Item::Let(binding) => print_let(binding),
         Item::Expr(expr) => print_expr(expr),
+    }
+}
+
+/// Render a unit expression as it appears inside `<...>`.
+fn print_unit(unit: &UnitExpr) -> String {
+    if unit.factors.is_empty() {
+        return "1".to_string();
+    }
+    let factor = |name: &str, exp: i32| {
+        if exp.abs() == 1 {
+            name.to_string()
+        } else {
+            format!("{name}^{}", exp.abs())
+        }
+    };
+    let numer: Vec<String> = unit
+        .factors
+        .iter()
+        .filter(|(_, e)| *e > 0)
+        .map(|(n, e)| factor(n, *e))
+        .collect();
+    let denom: Vec<String> = unit
+        .factors
+        .iter()
+        .filter(|(_, e)| *e < 0)
+        .map(|(n, e)| factor(n, *e))
+        .collect();
+    let numer = if numer.is_empty() {
+        "1".to_string()
+    } else {
+        numer.join(" ")
+    };
+    if denom.is_empty() {
+        numer
+    } else {
+        format!("{numer}/{}", denom.join(" "))
     }
 }
 
@@ -127,6 +164,9 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Ce { builder, items } => {
             let items: Vec<String> = items.iter().map(print_ce_item).collect();
             format!("{} {{ {} }}", builder.name(), items.join(" "))
+        }
+        ExprKind::Annot { value, unit } => {
+            format!("{}<{}>", print_expr(value), print_unit(unit))
         }
     }
 }

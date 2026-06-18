@@ -92,7 +92,7 @@ impl Lowerer {
                         ctor_arity.insert(variant.name.clone(), variant.fields.len());
                     }
                 }
-                Item::Expr(_) => {}
+                Item::Measure { .. } | Item::Expr(_) => {}
             }
         }
         // Built-in Result constructors (see the `result {}` computation expression).
@@ -127,7 +127,8 @@ impl Lowerer {
         let mut code = Vec::new();
         for item in &module.items {
             match item {
-                Item::Type(_) => {} // classes handled above
+                // Measures and type declarations have no runtime code.
+                Item::Measure { .. } | Item::Type(_) => {}
                 Item::Let(binding) => self.lower_let(binding, &mut code)?,
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
@@ -307,6 +308,9 @@ impl Lowerer {
             ExprKind::App { .. } | ExprKind::Pipe { .. } => self.lower_application(expr, locals),
 
             ExprKind::Ce { builder, items } => self.lower_ce(*builder, items, locals),
+
+            // Units are compile-time only: erase the annotation, keep the value.
+            ExprKind::Annot { value, .. } => self.lower_value(value, locals),
         }
     }
 

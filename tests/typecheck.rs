@@ -198,6 +198,50 @@ fn rejects_binding_wrong_monad() {
     assert_error_contains(src, "expected Async");
 }
 
+// ---------- units of measure ----------
+
+#[test]
+fn accepts_dimensional_arithmetic() {
+    let src = "measure m\nmeasure s\nlet dist = 100<m>\nlet time = 10<s>\nlet speed = dist / time";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_unit_polymorphic_function() {
+    // `area` works at different unit combinations.
+    let src = "measure m\nmeasure s\n\
+               let area w h = w * h\n\
+               let rect = area 2<m> 3<m>\n\
+               let flow = area 2<m> 3<s>";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_adding_different_units() {
+    assert_error_contains(
+        "measure m\nmeasure s\nlet bad = 1<m> + 1<s>",
+        "expected int<m>, found int<s>",
+    );
+}
+
+#[test]
+fn rejects_unit_result_used_at_wrong_unit() {
+    // speed is m/s, so adding metres is a dimension error.
+    let src = "measure m\nmeasure s\nlet speed = 100<m> / 10<s>\nlet bad = speed + 1<m>";
+    assert_error_contains(src, "expected int<m/s>, found int<m>");
+}
+
+#[test]
+fn rejects_unknown_measure() {
+    assert_error_contains("let x = 5<furlong>", "unknown measure `furlong`");
+}
+
+#[test]
+fn dimensionless_units_unify_with_plain_ints() {
+    // An explicit `<1>` is dimensionless and interoperates with bare literals.
+    assert!(pyfun::check("let x = 5<1> + 3").is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

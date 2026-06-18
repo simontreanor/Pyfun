@@ -169,6 +169,27 @@ fn e2e_recursive_adt() {
 }
 
 #[test]
+fn units_are_erased_in_emitted_python() {
+    let py = pyfun::compile("measure m\nmeasure s\nlet speed = 100<m> / 10<s>").unwrap();
+    assert!(!py.contains('<'), "units should be erased: {py}");
+    assert!(py.contains("speed = 100 // 10"), "{py}");
+}
+
+#[test]
+fn e2e_units_compute_after_erasure() {
+    run_and_check(
+        "
+        measure m
+        measure s
+        let dist = 100<m>
+        let time = 10<s>
+        let speed = dist / time
+        ",
+        &[("speed", "10")],
+    );
+}
+
+#[test]
 fn e2e_result_ce_binds_and_short_circuits() {
     // Extract the result via a match so the assertions compare plain ints.
     run_and_check(

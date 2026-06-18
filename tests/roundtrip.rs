@@ -36,6 +36,14 @@ const PROGRAMS: &[&str] = &[
     "let a = seq { yield 1 yield! xs }",
     "let a = result { let! x = m return x }",
     "let a = async { let! x = m do! n return! r }",
+    // Units of measure.
+    "measure m",
+    "measure m\nmeasure s\nlet speed = 100<m> / 10<s>",
+    "let a = 5<m>",
+    "let a = 3<m/s>",
+    "let a = 2<m^2>",
+    "let a = 9<kg m / s^2>",
+    "let a = 7<1>",
 ];
 
 #[test]

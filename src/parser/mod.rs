@@ -23,8 +23,8 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeDecl, TypeExpr, VariantDecl,
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, NodeSpan,
+    Pattern, TypeDecl, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -135,10 +135,19 @@ impl Parser {
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
         match self.peek() {
+            Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
             Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
             _ => Ok(Item::Expr(self.parse_expr()?)),
         }
+    }
+
+    fn parse_measure(&mut self) -> Result<Item, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Measure, "`measure`")?;
+        let name = self.parse_ident("measure name")?;
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(Item::Measure { name, span })
     }
 
     fn parse_type_decl(&mut self) -> Result<TypeDecl, ParseError> {
@@ -366,11 +375,11 @@ impl Parser {
         let kind = match self.peek().clone() {
             Tok::Int(n) => {
                 self.bump();
-                ExprKind::Int(n)
+                return self.maybe_unit(start, ExprKind::Int(n));
             }
             Tok::Float(f) => {
                 self.bump();
-                ExprKind::Float(f)
+                return self.maybe_unit(start, ExprKind::Float(f));
             }
             Tok::Str(s) => {
                 self.bump();
@@ -407,6 +416,65 @@ impl Parser {
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
+    }
+
+    /// Wrap a freshly-parsed numeric literal in a unit annotation if one follows.
+    fn maybe_unit(&mut self, start: usize, kind: ExprKind) -> Result<Expr, ParseError> {
+        let literal = self.mk(start, kind);
+        if matches!(self.peek(), Tok::Lt) {
+            let unit = self.parse_unit_annotation()?;
+            Ok(self.mk(
+                start,
+                ExprKind::Annot {
+                    value: Box::new(literal),
+                    unit,
+                },
+            ))
+        } else {
+            Ok(literal)
+        }
+    }
+
+    /// Parse `<unit>`, e.g. `<m>`, `<m s>`, `<m/s^2>`, or `<1>` (dimensionless).
+    fn parse_unit_annotation(&mut self) -> Result<UnitExpr, ParseError> {
+        self.expect(&Tok::Lt, "`<`")?;
+        if matches!(self.peek(), Tok::Int(1)) {
+            self.bump();
+            self.expect(&Tok::Gt, "`>`")?;
+            return Ok(UnitExpr {
+                factors: Vec::new(),
+            });
+        }
+        let mut factors = Vec::new();
+        while matches!(self.peek(), Tok::Ident(_)) {
+            factors.push(self.parse_unit_factor(1)?);
+        }
+        if self.eat(&Tok::Slash) {
+            while matches!(self.peek(), Tok::Ident(_)) {
+                factors.push(self.parse_unit_factor(-1)?);
+            }
+        }
+        self.expect(&Tok::Gt, "`>`")?;
+        if factors.is_empty() {
+            return Err(self.error("expected a unit (e.g. `m`, `m/s`, or `1`)"));
+        }
+        Ok(UnitExpr { factors })
+    }
+
+    fn parse_unit_factor(&mut self, sign: i32) -> Result<(String, i32), ParseError> {
+        let name = self.parse_ident("measure name")?;
+        let exp = if self.eat(&Tok::Caret) {
+            match self.peek().clone() {
+                Tok::Int(n) => {
+                    self.bump();
+                    n as i32
+                }
+                _ => return Err(self.error("expected an integer exponent after `^`")),
+            }
+        } else {
+            1
+        };
+        Ok((name, sign * exp))
     }
 
     /// Parse `builder { items }`. Items are delimited by their leading keyword
@@ -597,7 +665,11 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Return => "return",
         Tok::Yield => "yield",
         Tok::Do => "do",
+        Tok::Measure => "measure",
         Tok::Bang => "!",
+        Tok::Caret => "^",
+        Tok::Lt => "<",
+        Tok::Gt => ">",
         Tok::LBrace => "{",
         Tok::RBrace => "}",
         Tok::True => "true",

@@ -37,12 +37,24 @@ pub struct Module {
     pub items: Vec<Item>,
 }
 
-/// A top-level item: a type declaration, a binding, or a bare expression.
+/// A top-level item: a measure/type declaration, a binding, or a bare expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
+    /// `measure name` — declares a base unit of measure (`DESIGN.md` §8.2).
+    Measure {
+        name: String,
+        span: NodeSpan,
+    },
     Type(TypeDecl),
     Let(LetBinding),
     Expr(Expr),
+}
+
+/// A surface unit expression, e.g. `<m/s^2>`, stored as `(measure, exponent)`
+/// factors (denominator factors carry negative exponents; dimensionless is empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitExpr {
+    pub factors: Vec<(String, i32)>,
 }
 
 /// `type Name params... = V1 fields | V2 fields | ...`
@@ -161,6 +173,12 @@ pub enum ExprKind {
     Ce {
         builder: CeBuilder,
         items: Vec<CeItem>,
+    },
+
+    /// A unit-annotated numeric literal: `value<unit>` (`DESIGN.md` §8.2).
+    Annot {
+        value: Box<Expr>,
+        unit: UnitExpr,
     },
 }
 

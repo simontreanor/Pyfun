@@ -38,6 +38,7 @@ pub enum Tok {
     Return,
     Yield,
     Do,
+    Measure,
     True,
     False,
 
@@ -51,6 +52,9 @@ pub enum Tok {
     Bar,        // |
     Arrow,      // ->
     Bang,       // !
+    Caret,      // ^
+    Lt,         // <
+    Gt,         // >
     LParen,     // (
     RParen,     // )
     LBrace,     // {
@@ -78,6 +82,7 @@ impl Tok {
             "return" => Tok::Return,
             "yield" => Tok::Yield,
             "do" => Tok::Do,
+            "measure" => Tok::Measure,
             "true" => Tok::True,
             "false" => Tok::False,
             _ => return None,

@@ -1,45 +1,163 @@
-//! Hindley–Milner type inference with algebraic data types (`DESIGN.md` §3, §10).
+//! Hindley–Milner type inference with algebraic data types and units of measure
+//! (`DESIGN.md` §3, §8.2, §10).
 //!
 //! Algorithm W with a substitution map and let-generalization, so top-level
-//! bindings are polymorphic (`let id x = x` has type `'a -> 'a` and each use is
-//! instantiated). Functions are curried, matching the rest of the language.
+//! bindings are polymorphic. Functions are curried.
 //!
-//! `type` declarations introduce ADTs: a pre-pass registers each type's arity and
-//! gives every constructor a polymorphic scheme (`Some : 'a -> Option 'a`), which
-//! is added to the initial environment. Constructor patterns are checked against
-//! those schemes, and `match` is checked for **exhaustiveness** (shallow: only the
-//! head constructor set is considered; nested patterns rely on the runtime guard).
+//! `type` declarations introduce ADTs (constructor schemes + exhaustiveness).
 //!
-//! Still deferred until their syntax exists: effect and unit inference. Arithmetic
-//! is integer-only (no numeric type classes); `/` is integer division.
+//! **Units of measure.** Numeric types carry a [`Unit`] — an element of the free
+//! abelian group over base measures and *unit variables*. Unit equality is solved
+//! by abelian-group unification (Knuth/Kennedy: pick the smallest-exponent
+//! variable, eliminate, recurse), and unit variables are generalized just like
+//! type variables, giving unit-polymorphic functions (`let area w h = w * h` infers
+//! `int<'u> -> int<'v> -> int<'u 'v>`). Units are erased at lowering.
+//!
+//! Still deferred until its syntax exists: effect inference. Arithmetic is
+//! integer-only (no numeric type classes); `/` is integer division.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::lexer::Span;
 use crate::parser::ast::{
-    CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeExpr,
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
+    TypeExpr, UnitExpr,
 };
+
+/// A factor in a unit term: a base measure or a unit variable.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Atom {
+    Base(String),
+    Var(u32),
+}
+
+/// A unit of measure: a free abelian group element, i.e. a product of atoms
+/// raised to integer powers. The empty product is dimensionless. The map never
+/// stores zero exponents, so equality is structural.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Unit {
+    factors: BTreeMap<Atom, i32>,
+}
+
+impl Unit {
+    fn dimensionless() -> Unit {
+        Unit::default()
+    }
+
+    fn base(name: &str) -> Unit {
+        let mut u = Unit::default();
+        u.insert(Atom::Base(name.to_string()), 1);
+        u
+    }
+
+    fn var(id: u32) -> Unit {
+        let mut u = Unit::default();
+        u.insert(Atom::Var(id), 1);
+        u
+    }
+
+    fn is_dimensionless(&self) -> bool {
+        self.factors.is_empty()
+    }
+
+    /// Multiply in `atom^exp`, dropping the atom if its exponent reaches zero.
+    fn insert(&mut self, atom: Atom, exp: i32) {
+        if exp == 0 {
+            return;
+        }
+        let new = self.factors.get(&atom).copied().unwrap_or(0) + exp;
+        if new == 0 {
+            self.factors.remove(&atom);
+        } else {
+            self.factors.insert(atom, new);
+        }
+    }
+
+    fn mul(&self, other: &Unit) -> Unit {
+        let mut r = self.clone();
+        for (a, e) in &other.factors {
+            r.insert(a.clone(), *e);
+        }
+        r
+    }
+
+    fn inv(&self) -> Unit {
+        Unit {
+            factors: self.factors.iter().map(|(a, e)| (a.clone(), -e)).collect(),
+        }
+    }
+
+    fn div(&self, other: &Unit) -> Unit {
+        self.mul(&other.inv())
+    }
+
+    fn pow(&self, k: i32) -> Unit {
+        if k == 0 {
+            return Unit::dimensionless();
+        }
+        Unit {
+            factors: self
+                .factors
+                .iter()
+                .map(|(a, e)| (a.clone(), e * k))
+                .collect(),
+        }
+    }
+
+    /// The unit variables occurring in this term.
+    fn var_ids(&self) -> Vec<u32> {
+        self.factors
+            .keys()
+            .filter_map(|a| if let Atom::Var(v) = a { Some(*v) } else { None })
+            .collect()
+    }
+
+    /// Substitute unit variables according to `map` (used by instantiation).
+    fn subst(&self, map: &HashMap<u32, Unit>) -> Unit {
+        let mut r = Unit::dimensionless();
+        for (a, e) in &self.factors {
+            match a {
+                Atom::Var(v) if map.contains_key(v) => r = r.mul(&map[v].pow(*e)),
+                _ => r.insert(a.clone(), *e),
+            }
+        }
+        r
+    }
+}
 
 /// A monomorphic type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
-    Int,
-    Float,
+    /// `int<unit>` (dimensionless when the unit is empty).
+    Int(Unit),
+    /// `float<unit>`.
+    Float(Unit),
     Bool,
     Str,
     /// A unification variable.
     Var(u32),
     /// A function `arg -> result` (curried).
     Fun(Box<Ty>, Box<Ty>),
-    /// An applied type constructor, e.g. `Option int` = `Con("Option", [Int])`.
+    /// An applied type constructor, e.g. `Option int`.
     Con(String, Vec<Ty>),
 }
 
-/// A type scheme: a type generalized over zero or more variables.
+/// A type scheme, generalized over type variables and unit variables.
 #[derive(Debug, Clone)]
 struct Scheme {
     vars: Vec<u32>,
+    uvars: Vec<u32>,
     ty: Ty,
+}
+
+impl Scheme {
+    fn mono(ty: Ty) -> Scheme {
+        Scheme {
+            vars: vec![],
+            uvars: vec![],
+            ty,
+        }
+    }
 }
 
 type Env = HashMap<String, Scheme>;
@@ -66,32 +184,33 @@ struct CtorInfo {
     arity: usize,
 }
 
-/// The result of the type-declaration pre-pass.
+/// The result of the declaration pre-pass.
 #[derive(Default)]
 struct Decls {
-    /// Type constructor → number of type parameters (`Option` → 1).
     type_arity: HashMap<String, usize>,
-    /// Data constructor → its scheme and field count (`Some` → `'a -> Option 'a`).
     ctors: HashMap<String, CtorInfo>,
-    /// Type name → its constructor names, in declaration order.
     type_ctors: HashMap<String, Vec<String>>,
+    measures: HashSet<String>,
 }
 
-/// Type-check a whole module. Returns every independent error found, so a single
-/// bad binding doesn't hide the rest.
+/// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
     let mut errors = Vec::new();
     let (decls, ctor_env) = build_decls(module, &mut errors);
 
+    // Start fresh ids past the ids reserved for the seeded built-in schemes, so
+    // a freshly allocated (and later bound) variable can't alias a builtin's
+    // bound variable and corrupt it via the substitution.
     let mut inf = Infer {
         decls,
+        next: RESERVED_VARS,
         ..Infer::default()
     };
     let mut env = ctor_env;
 
     for item in &module.items {
         match item {
-            Item::Type(_) => {} // handled by the pre-pass
+            Item::Measure { .. } | Item::Type(_) => {} // handled by the pre-pass
             Item::Let(binding) => match inf.infer_binding(binding, &env) {
                 Ok(scheme) => {
                     env.insert(binding.name.clone(), scheme);
@@ -99,7 +218,7 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
                 Err(e) => {
                     errors.push(e);
                     let ty = inf.fresh();
-                    env.insert(binding.name.clone(), Scheme { vars: vec![], ty });
+                    env.insert(binding.name.clone(), Scheme::mono(ty));
                 }
             },
             Item::Expr(expr) => {
@@ -117,14 +236,24 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
     }
 }
 
-/// Register every `type` declaration and build the constructor environment.
+/// Register measures and `type` declarations; build the constructor environment.
 fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     let mut decls = Decls::default();
     let mut env = Env::new();
     seed_builtin_types(&mut decls, &mut env);
 
-    // Pass 1: type names and arities (so fields can reference any type, including
-    // self/forward references).
+    for item in &module.items {
+        if let Item::Measure { name, span } = item
+            && !decls.measures.insert(name.clone())
+        {
+            errors.push(TypeError {
+                message: format!("measure `{name}` is already defined"),
+                span: span.span(),
+            });
+        }
+    }
+
+    // Pass 1: type names and arities.
     for item in &module.items {
         if let Item::Type(decl) = item {
             let span = decl.span.span();
@@ -193,6 +322,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 });
             let scheme = Scheme {
                 vars: (0..decl.params.len() as u32).collect(),
+                uvars: vec![],
                 ty: ctor_ty,
             };
             env.insert(variant.name.clone(), scheme.clone());
@@ -208,8 +338,12 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     (decls, env)
 }
 
-/// Seed the registry with the built-in computation-expression types: `Async a`,
-/// `Seq a`, and `Result a e` with constructors `Ok`/`Error` (`DESIGN.md` §8.1).
+/// The number of variable ids reserved for built-in schemes (`Ok`/`Error` use
+/// type vars 0 and 1). Inference must start allocating fresh ids past this.
+const RESERVED_VARS: u32 = 2;
+
+/// Seed the built-in computation-expression types `Async a`, `Seq a`, and
+/// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
 fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     decls.type_arity.insert("Async".to_string(), 1);
     decls.type_arity.insert("Seq".to_string(), 1);
@@ -221,14 +355,15 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         vec!["Ok".to_string(), "Error".to_string()],
     );
 
-    // Ok : 'a -> Result 'a 'e   and   Error : 'e -> Result 'a 'e
     let result_ty = Ty::Con("Result".to_string(), vec![Ty::Var(0), Ty::Var(1)]);
     let ok = Scheme {
         vars: vec![0, 1],
+        uvars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
     };
     let err = Scheme {
         vars: vec![0, 1],
+        uvars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -249,8 +384,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     );
 }
 
-/// Resolve a surface type expression into a [`Ty`], given the declaration's type
-/// parameters and the set of known type constructors.
+/// Resolve a surface type expression into a [`Ty`].
 fn resolve(
     ty: &TypeExpr,
     params: &HashMap<String, u32>,
@@ -277,8 +411,8 @@ fn resolve(
                 return no_args(Ty::Var(v));
             }
             match name.as_str() {
-                "int" => return no_args(Ty::Int),
-                "float" => return no_args(Ty::Float),
+                "int" => return no_args(Ty::Int(Unit::dimensionless())),
+                "float" => return no_args(Ty::Float(Unit::dimensionless())),
                 "bool" => return no_args(Ty::Bool),
                 "string" => return no_args(Ty::Str),
                 _ => {}
@@ -310,6 +444,7 @@ fn resolve(
 #[derive(Default)]
 struct Infer {
     subst: HashMap<u32, Ty>,
+    unit_subst: HashMap<u32, Unit>,
     next: u32,
     decls: Decls,
 }
@@ -321,19 +456,44 @@ impl Infer {
         Ty::Var(id)
     }
 
-    /// Resolve a type through the current substitution.
+    fn fresh_unit(&mut self) -> Unit {
+        let id = self.next;
+        self.next += 1;
+        Unit::var(id)
+    }
+
+    /// Resolve a type through the type and unit substitutions.
     fn apply(&self, ty: &Ty) -> Ty {
         match ty {
             Ty::Var(n) => match self.subst.get(n) {
                 Some(t) => self.apply(&t.clone()),
                 None => Ty::Var(*n),
             },
+            Ty::Int(u) => Ty::Int(self.apply_unit(u)),
+            Ty::Float(u) => Ty::Float(self.apply_unit(u)),
             Ty::Fun(a, b) => Ty::Fun(Box::new(self.apply(a)), Box::new(self.apply(b))),
             Ty::Con(name, args) => {
                 Ty::Con(name.clone(), args.iter().map(|a| self.apply(a)).collect())
             }
             other => other.clone(),
         }
+    }
+
+    fn apply_unit(&self, u: &Unit) -> Unit {
+        let mut r = Unit::dimensionless();
+        for (a, e) in &u.factors {
+            match a {
+                Atom::Var(v) => match self.unit_subst.get(v) {
+                    Some(bound) => {
+                        let resolved = self.apply_unit(&bound.clone());
+                        r = r.mul(&resolved.pow(*e));
+                    }
+                    None => r.insert(a.clone(), *e),
+                },
+                Atom::Base(_) => r.insert(a.clone(), *e),
+            }
+        }
+        r
     }
 
     fn infer_binding(&mut self, binding: &LetBinding, env: &Env) -> Result<Scheme, TypeError> {
@@ -345,13 +505,7 @@ impl Infer {
             for param in &binding.params {
                 let pty = self.fresh();
                 param_tys.push(pty.clone());
-                body_env.insert(
-                    param.clone(),
-                    Scheme {
-                        vars: vec![],
-                        ty: pty,
-                    },
-                );
+                body_env.insert(param.clone(), Scheme::mono(pty));
             }
             let body_ty = self.infer_expr(&binding.value, &body_env)?;
             param_tys
@@ -365,8 +519,8 @@ impl Infer {
     fn infer_expr(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
         let span = expr.span();
         match &expr.kind {
-            ExprKind::Int(_) => Ok(Ty::Int),
-            ExprKind::Float(_) => Ok(Ty::Float),
+            ExprKind::Int(_) => Ok(Ty::Int(Unit::dimensionless())),
+            ExprKind::Float(_) => Ok(Ty::Float(Unit::dimensionless())),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Bool(_) => Ok(Ty::Bool),
 
@@ -378,14 +532,41 @@ impl Infer {
                 }),
             },
 
-            ExprKind::Binary { lhs, rhs, .. } => {
-                // Integer arithmetic only. Expected type first so diagnostics read
-                // "expected int, found <actual>".
+            ExprKind::Annot { value, unit } => {
+                let vt = self.infer_expr(value, env)?;
+                let u = self.resolve_unit_expr(unit, span)?;
+                match self.apply(&vt) {
+                    Ty::Int(_) => Ok(Ty::Int(u)),
+                    Ty::Float(_) => Ok(Ty::Float(u)),
+                    other => Err(TypeError {
+                        message: format!(
+                            "unit annotations apply only to numeric values, not {}",
+                            show(&other)
+                        ),
+                        span,
+                    }),
+                }
+            }
+
+            ExprKind::Binary { op, lhs, rhs } => {
                 let lt = self.infer_expr(lhs, env)?;
-                self.unify(&Ty::Int, &lt, lhs.span())?;
+                let u1 = self.expect_int(&lt, lhs.span())?;
                 let rt = self.infer_expr(rhs, env)?;
-                self.unify(&Ty::Int, &rt, rhs.span())?;
-                Ok(Ty::Int)
+                let u2 = self.expect_int(&rt, rhs.span())?;
+                match op {
+                    BinOp::Add | BinOp::Sub => {
+                        if !self.unify_unit(&u1, &u2) {
+                            return Err(mismatch(
+                                &Ty::Int(self.apply_unit(&u1)),
+                                &Ty::Int(self.apply_unit(&u2)),
+                                span,
+                            ));
+                        }
+                        Ok(Ty::Int(self.apply_unit(&u1)))
+                    }
+                    BinOp::Mul => Ok(Ty::Int(self.apply_unit(&u1).mul(&self.apply_unit(&u2)))),
+                    BinOp::Div => Ok(Ty::Int(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
+                }
             }
 
             ExprKind::If { cond, then, else_ } => {
@@ -403,13 +584,7 @@ impl Infer {
                 for param in params {
                     let pty = self.fresh();
                     param_tys.push(pty.clone());
-                    body_env.insert(
-                        param.clone(),
-                        Scheme {
-                            vars: vec![],
-                            ty: pty,
-                        },
-                    );
+                    body_env.insert(param.clone(), Scheme::mono(pty));
                 }
                 let body_ty = self.infer_expr(body, &body_env)?;
                 Ok(param_tys
@@ -419,8 +594,6 @@ impl Infer {
             }
 
             ExprKind::App { func, arg } => self.infer_apply(func, arg, span, env),
-
-            // `lhs |> rhs` == `rhs lhs`.
             ExprKind::Pipe { lhs, rhs } => self.infer_apply(rhs, lhs, span, env),
 
             ExprKind::Match { scrutinee, arms } => {
@@ -440,6 +613,37 @@ impl Infer {
         }
     }
 
+    /// Require `ty` to be an integer (binding a type variable if needed) and
+    /// return its unit. Keeps arithmetic diagnostics reading "expected int, …".
+    fn expect_int(&mut self, ty: &Ty, span: Span) -> Result<Unit, TypeError> {
+        match self.apply(ty) {
+            Ty::Int(u) => Ok(u),
+            Ty::Var(_) => {
+                let u = self.fresh_unit();
+                let _ = self.unify(&Ty::Int(u.clone()), ty, span);
+                Ok(self.apply_unit(&u))
+            }
+            other => Err(TypeError {
+                message: format!("expected int, found {}", show(&other)),
+                span,
+            }),
+        }
+    }
+
+    fn resolve_unit_expr(&self, unit: &UnitExpr, span: Span) -> Result<Unit, TypeError> {
+        let mut u = Unit::dimensionless();
+        for (name, exp) in &unit.factors {
+            if !self.decls.measures.contains(name) {
+                return Err(TypeError {
+                    message: format!("unknown measure `{name}`"),
+                    span,
+                });
+            }
+            u = u.mul(&Unit::base(name).pow(*exp));
+        }
+        Ok(u)
+    }
+
     fn infer_ce(
         &mut self,
         builder: CeBuilder,
@@ -449,12 +653,8 @@ impl Infer {
     ) -> Result<Ty, TypeError> {
         match builder {
             CeBuilder::Seq => self.infer_seq(items, span, env),
-            CeBuilder::Result => {
-                self.infer_monad(items, span, env, "Result", /* binary */ true)
-            }
-            CeBuilder::Async => {
-                self.infer_monad(items, span, env, "Async", /* binary */ false)
-            }
+            CeBuilder::Result => self.infer_monad(items, span, env, "Result", true),
+            CeBuilder::Async => self.infer_monad(items, span, env, "Async", false),
         }
     }
 
@@ -477,13 +677,8 @@ impl Infer {
                 }
                 CeItem::Let { name, value } => {
                     let t = self.infer_expr(value, &env)?;
-                    env.insert(
-                        name.clone(),
-                        Scheme {
-                            vars: vec![],
-                            ty: self.apply(&t),
-                        },
-                    );
+                    let applied = self.apply(&t);
+                    env.insert(name.clone(), Scheme::mono(applied));
                 }
                 _ => {
                     return Err(TypeError {
@@ -497,8 +692,7 @@ impl Infer {
         Ok(Ty::Con("Seq".to_string(), vec![self.apply(&elem)]))
     }
 
-    /// Shared inference for the `result` and `async` monads. `binary` selects the
-    /// two-parameter `Result a e` (with a shared error type) versus `Async a`.
+    /// Shared inference for the `result` and `async` monads.
     fn infer_monad(
         &mut self,
         items: &[CeItem],
@@ -507,7 +701,7 @@ impl Infer {
         con: &str,
         binary: bool,
     ) -> Result<Ty, TypeError> {
-        let err = self.fresh(); // the shared error type (unused for Async)
+        let err = self.fresh();
         let monad = |inner: Ty, this: &Self| {
             if binary {
                 Ty::Con(con.to_string(), vec![inner, this.apply(&err)])
@@ -526,23 +720,13 @@ impl Infer {
                     let inner = self.fresh();
                     let expected = monad(inner.clone(), self);
                     self.unify(&expected, &t, value.span())?;
-                    env.insert(
-                        name.clone(),
-                        Scheme {
-                            vars: vec![],
-                            ty: self.apply(&inner),
-                        },
-                    );
+                    let bound = self.apply(&inner);
+                    env.insert(name.clone(), Scheme::mono(bound));
                 }
                 CeItem::Let { name, value } => {
                     let t = self.infer_expr(value, &env)?;
-                    env.insert(
-                        name.clone(),
-                        Scheme {
-                            vars: vec![],
-                            ty: self.apply(&t),
-                        },
-                    );
+                    let applied = self.apply(&t);
+                    env.insert(name.clone(), Scheme::mono(applied));
                 }
                 CeItem::DoBang(e) => {
                     let t = self.infer_expr(e, &env)?;
@@ -608,7 +792,6 @@ impl Infer {
         Ok(self.apply(&result))
     }
 
-    /// Check a pattern against the scrutinee type, recording bindings into `env`.
     fn bind_pattern(
         &mut self,
         pattern: &Pattern,
@@ -619,16 +802,10 @@ impl Infer {
         match pattern {
             Pattern::Wildcard => Ok(()),
             Pattern::Var(name) => {
-                env.insert(
-                    name.clone(),
-                    Scheme {
-                        vars: vec![],
-                        ty: scrut_ty.clone(),
-                    },
-                );
+                env.insert(name.clone(), Scheme::mono(scrut_ty.clone()));
                 Ok(())
             }
-            Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int, span),
+            Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int(Unit::dimensionless()), span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
             Pattern::Ctor { name, args } => {
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
@@ -708,8 +885,6 @@ impl Infer {
                     .cloned()
                     .collect()
             }
-            // int/float/string/function/type-variable scrutinees can't be
-            // enumerated — they need a wildcard.
             _ => {
                 return Err(TypeError {
                     message: "non-exhaustive match: add a wildcard `_` arm".to_string(),
@@ -736,10 +911,14 @@ impl Infer {
         let a = self.apply(a);
         let b = self.apply(b);
         match (&a, &b) {
-            (Ty::Int, Ty::Int)
-            | (Ty::Float, Ty::Float)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Str, Ty::Str) => Ok(()),
+            (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) => Ok(()),
+            (Ty::Int(u1), Ty::Int(u2)) | (Ty::Float(u1), Ty::Float(u2)) => {
+                if self.unify_unit(u1, u2) {
+                    Ok(())
+                } else {
+                    Err(mismatch(&a, &b, span))
+                }
+            }
             (Ty::Var(x), Ty::Var(y)) if x == y => Ok(()),
             (Ty::Var(x), t) | (t, Ty::Var(x)) => {
                 if occurs(*x, t) {
@@ -765,42 +944,125 @@ impl Infer {
                 }
                 Ok(())
             }
-            _ => Err(TypeError {
-                message: format!("type mismatch: expected {}, found {}", show(&a), show(&b)),
-                span,
-            }),
+            _ => Err(mismatch(&a, &b, span)),
+        }
+    }
+
+    /// Unify two units in the free abelian group. Returns false on a genuine
+    /// dimension mismatch (a ground term that can't be made the identity).
+    fn unify_unit(&mut self, a: &Unit, b: &Unit) -> bool {
+        let eq = self.apply_unit(a).div(&self.apply_unit(b));
+        self.solve_unit(eq)
+    }
+
+    /// Solve `u == 1` for its unit variables (Knuth/Kennedy elimination).
+    fn solve_unit(&mut self, u: Unit) -> bool {
+        if u.is_dimensionless() {
+            return true;
+        }
+        // Pick the unit variable with the smallest absolute exponent.
+        let pivot = u
+            .factors
+            .iter()
+            .filter_map(|(a, e)| {
+                if let Atom::Var(v) = a {
+                    Some((*v, *e))
+                } else {
+                    None
+                }
+            })
+            .min_by_key(|(_, e)| e.abs());
+        let Some((v, e)) = pivot else {
+            // Only base measures remain with nonzero exponents → mismatch.
+            return false;
+        };
+
+        let divides_all = u
+            .factors
+            .iter()
+            .all(|(a, exp)| matches!(a, Atom::Var(x) if *x == v) || exp % e == 0);
+        if divides_all {
+            // v = ∏ (other atoms)^(-exp/e)
+            let mut s = Unit::dimensionless();
+            for (a, exp) in &u.factors {
+                if matches!(a, Atom::Var(x) if *x == v) {
+                    continue;
+                }
+                s.insert(a.clone(), -(exp / e));
+            }
+            self.unit_subst.insert(v, s);
+            true
+        } else {
+            // Introduce a fresh variable and reduce exponents toward zero.
+            let w = self.next;
+            self.next += 1;
+            let mut s = Unit::var(w);
+            for (a, exp) in &u.factors {
+                if matches!(a, Atom::Var(x) if *x == v) {
+                    continue;
+                }
+                s.insert(a.clone(), -exp.div_euclid(e));
+            }
+            self.unit_subst.insert(v, s);
+            let reduced = self.apply_unit(&u);
+            self.solve_unit(reduced)
         }
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
-        let mapping: HashMap<u32, Ty> = scheme.vars.iter().map(|v| (*v, self.fresh())).collect();
-        subst_vars(&scheme.ty, &mapping)
+        let tmap: HashMap<u32, Ty> = scheme.vars.iter().map(|v| (*v, self.fresh())).collect();
+        let umap: HashMap<u32, Unit> = scheme
+            .uvars
+            .iter()
+            .map(|v| (*v, self.fresh_unit()))
+            .collect();
+        subst_all(&scheme.ty, &tmap, &umap)
     }
 
     fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
         let ty = self.apply(ty);
-        let env_free = self.env_free_vars(env);
-        let mut vars: Vec<u32> = Vec::new();
-        free_vars(&ty, &mut |v| {
-            if !env_free.contains(&v) && !vars.contains(&v) {
+        let (env_t, env_u) = self.env_free_vars(env);
+        let mut vars = Vec::new();
+        free_type_vars(&ty, &mut |v| {
+            if !env_t.contains(&v) && !vars.contains(&v) {
                 vars.push(v);
             }
         });
-        Scheme { vars, ty }
+        let mut uvars = Vec::new();
+        free_unit_vars(&ty, &mut |v| {
+            if !env_u.contains(&v) && !uvars.contains(&v) {
+                uvars.push(v);
+            }
+        });
+        Scheme { vars, uvars, ty }
     }
 
-    fn env_free_vars(&self, env: &Env) -> HashSet<u32> {
-        let mut free = HashSet::new();
+    fn env_free_vars(&self, env: &Env) -> (HashSet<u32>, HashSet<u32>) {
+        let mut tys = HashSet::new();
+        let mut units = HashSet::new();
         for scheme in env.values() {
-            let bound: HashSet<u32> = scheme.vars.iter().copied().collect();
+            let bound_t: HashSet<u32> = scheme.vars.iter().copied().collect();
+            let bound_u: HashSet<u32> = scheme.uvars.iter().copied().collect();
             let applied = self.apply(&scheme.ty);
-            free_vars(&applied, &mut |v| {
-                if !bound.contains(&v) {
-                    free.insert(v);
+            free_type_vars(&applied, &mut |v| {
+                if !bound_t.contains(&v) {
+                    tys.insert(v);
+                }
+            });
+            free_unit_vars(&applied, &mut |v| {
+                if !bound_u.contains(&v) {
+                    units.insert(v);
                 }
             });
         }
-        free
+        (tys, units)
+    }
+}
+
+fn mismatch(a: &Ty, b: &Ty, span: Span) -> TypeError {
+    TypeError {
+        message: format!("type mismatch: expected {}, found {}", show(a), show(b)),
+        span,
     }
 }
 
@@ -832,54 +1094,81 @@ fn occurs(var: u32, ty: &Ty) -> bool {
     }
 }
 
-fn free_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
+fn free_type_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
         Ty::Var(n) => f(*n),
         Ty::Fun(a, b) => {
-            free_vars(a, f);
-            free_vars(b, f);
+            free_type_vars(a, f);
+            free_type_vars(b, f);
         }
-        Ty::Con(_, args) => args.iter().for_each(|a| free_vars(a, f)),
+        Ty::Con(_, args) => args.iter().for_each(|a| free_type_vars(a, f)),
         _ => {}
     }
 }
 
-fn subst_vars(ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
+fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
-        Ty::Var(n) => mapping.get(n).cloned().unwrap_or(Ty::Var(*n)),
+        Ty::Int(u) | Ty::Float(u) => u.var_ids().into_iter().for_each(f),
+        Ty::Fun(a, b) => {
+            free_unit_vars(a, f);
+            free_unit_vars(b, f);
+        }
+        Ty::Con(_, args) => args.iter().for_each(|a| free_unit_vars(a, f)),
+        _ => {}
+    }
+}
+
+fn subst_all(ty: &Ty, tmap: &HashMap<u32, Ty>, umap: &HashMap<u32, Unit>) -> Ty {
+    match ty {
+        Ty::Var(n) => tmap.get(n).cloned().unwrap_or(Ty::Var(*n)),
+        Ty::Int(u) => Ty::Int(u.subst(umap)),
+        Ty::Float(u) => Ty::Float(u.subst(umap)),
         Ty::Fun(a, b) => Ty::Fun(
-            Box::new(subst_vars(a, mapping)),
-            Box::new(subst_vars(b, mapping)),
+            Box::new(subst_all(a, tmap, umap)),
+            Box::new(subst_all(b, tmap, umap)),
         ),
         Ty::Con(name, args) => Ty::Con(
             name.clone(),
-            args.iter().map(|a| subst_vars(a, mapping)).collect(),
+            args.iter().map(|a| subst_all(a, tmap, umap)).collect(),
         ),
         other => other.clone(),
     }
 }
 
-/// Render a type for diagnostics, naming variables `'a`, `'b`, … in order.
+/// Names type and unit variables as `'a`, `'b`, … for diagnostics.
+#[derive(Default)]
+struct Namer {
+    tys: HashMap<u32, String>,
+    units: HashMap<u32, String>,
+}
+
+impl Namer {
+    fn ty(&mut self, id: u32) -> String {
+        let n = self.tys.len();
+        self.tys.entry(id).or_insert_with(|| var_name(n)).clone()
+    }
+
+    fn unit(&mut self, id: u32) -> String {
+        let n = self.units.len();
+        self.units.entry(id).or_insert_with(|| var_name(n)).clone()
+    }
+}
+
+/// Render a type for diagnostics.
 fn show(ty: &Ty) -> String {
-    let mut names = HashMap::new();
+    let mut namer = Namer::default();
     let mut buf = String::new();
-    show_into(ty, &mut names, &mut buf, false);
+    show_into(ty, &mut namer, &mut buf, false);
     buf
 }
 
-/// `atom` requests a form that can sit as a single argument — compound types
-/// (functions, applied constructors) get parenthesized.
-fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, atom: bool) {
+fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
     match ty {
-        Ty::Int => out.push_str("int"),
-        Ty::Float => out.push_str("float"),
+        Ty::Int(u) => show_numeric("int", u, namer, out),
+        Ty::Float(u) => show_numeric("float", u, namer, out),
         Ty::Bool => out.push_str("bool"),
         Ty::Str => out.push_str("string"),
-        Ty::Var(n) => {
-            let next = names.len();
-            let name = names.entry(*n).or_insert_with(|| var_name(next));
-            out.push_str(name);
-        }
+        Ty::Var(n) => out.push_str(&namer.ty(*n)),
         Ty::Con(name, args) if args.is_empty() => out.push_str(name),
         Ty::Con(name, args) => {
             if atom {
@@ -888,7 +1177,7 @@ fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, atom: 
             out.push_str(name);
             for arg in args {
                 out.push(' ');
-                show_into(arg, names, out, true);
+                show_into(arg, namer, out, true);
             }
             if atom {
                 out.push(')');
@@ -898,9 +1187,9 @@ fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, atom: 
             if atom {
                 out.push('(');
             }
-            show_into(a, names, out, true);
+            show_into(a, namer, out, true);
             out.push_str(" -> ");
-            show_into(b, names, out, false);
+            show_into(b, namer, out, false);
             if atom {
                 out.push(')');
             }
@@ -908,8 +1197,49 @@ fn show_into(ty: &Ty, names: &mut HashMap<u32, String>, out: &mut String, atom: 
     }
 }
 
+fn show_numeric(base: &str, unit: &Unit, namer: &mut Namer, out: &mut String) {
+    out.push_str(base);
+    if !unit.is_dimensionless() {
+        out.push('<');
+        out.push_str(&show_unit(unit, namer));
+        out.push('>');
+    }
+}
+
+fn show_unit(unit: &Unit, namer: &mut Namer) -> String {
+    let render = |atom: &Atom, exp: i32, namer: &mut Namer| {
+        let name = match atom {
+            Atom::Base(n) => n.clone(),
+            Atom::Var(v) => namer.unit(*v),
+        };
+        if exp.abs() == 1 {
+            name
+        } else {
+            format!("{name}^{}", exp.abs())
+        }
+    };
+    let mut numer = Vec::new();
+    let mut denom = Vec::new();
+    for (atom, exp) in &unit.factors {
+        if *exp > 0 {
+            numer.push(render(atom, *exp, namer));
+        } else {
+            denom.push(render(atom, *exp, namer));
+        }
+    }
+    let numer = if numer.is_empty() {
+        "1".to_string()
+    } else {
+        numer.join(" ")
+    };
+    if denom.is_empty() {
+        numer
+    } else {
+        format!("{numer}/{}", denom.join(" "))
+    }
+}
+
 fn var_name(index: usize) -> String {
-    // 0 -> 'a, 1 -> 'b, … 26 -> 'a1, etc.
     let letter = (b'a' + (index % 26) as u8) as char;
     if index < 26 {
         format!("'{letter}")
