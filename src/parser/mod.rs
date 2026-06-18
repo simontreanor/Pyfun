@@ -281,15 +281,15 @@ impl Parser {
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         // A capitalized identifier at this level is a constructor that may take
         // argument patterns; everything else is a single atom pattern.
-        if let Tok::Ident(name) = self.peek().clone() {
-            if is_upper(&name) {
-                self.bump();
-                let mut args = Vec::new();
-                while starts_atom_pattern(self.peek()) {
-                    args.push(self.parse_atom_pattern()?);
-                }
-                return Ok(Pattern::Ctor { name, args });
+        if let Tok::Ident(name) = self.peek().clone()
+            && is_upper(&name)
+        {
+            self.bump();
+            let mut args = Vec::new();
+            while starts_atom_pattern(self.peek()) {
+                args.push(self.parse_atom_pattern()?);
             }
+            return Ok(Pattern::Ctor { name, args });
         }
         self.parse_atom_pattern()
     }
