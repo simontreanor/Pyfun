@@ -1,0 +1,19 @@
+[package]
+name = "pyfun"
+version = "0.0.1"
+edition = "2021"
+description = "An FP-first language that compiles to Python (Pyfun is to Python as F# is to C#)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/simontreanor/Pyfun"
+
+# Phase 1 is intentionally dependency-free (pure std): lexer + parser + AST + pretty-printer.
+# clap (CLI), an LSP crate, etc. arrive in later phases — see DESIGN.md.
+[dependencies]
+
+[[bin]]
+name = "pyfun"
+path = "src/main.rs"
+
+[lib]
+name = "pyfun"
+path = "src/lib.rs"

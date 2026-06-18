@@ -1,7 +1,9 @@
 # Pyfun — Design
 
 The language/semantics design spec. `GUIDE.md` is the lean operational pointer for working in
-this repo; this file is the detailed reference. **Status: greenfield — design locked, no code yet.**
+this repo; this file is the detailed reference. **Status: Phase 1 implemented** (lexer + parser +
+AST + pretty-printer over the `let`/`if`/`match`/`fun` subset with curried application and `|>`;
+see §10). Phases 2+ (lowering, type/effect/unit checking, Python emission) are not yet built.
 
 ## 1. Identity
 
@@ -151,6 +153,9 @@ boundary stays n-ary (§6).
 MVP language features: immutable bindings by default, expression `if`/`match`, **curried
 functions + partial application**, **pipe `|>`**, ADT declarations, effect-tracked functions, the
 three computation expressions of §8, units of measure (§8), readable Python output.
+
+Lexical conventions (decided in Phase 1): line comments start with `//` (F#-style); identifiers are
+ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position (§ patterns).
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 

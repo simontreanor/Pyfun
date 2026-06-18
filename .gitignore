@@ -1,0 +1,8 @@
+# Rust / Cargo
+/target
+
+# Cargo.lock is committed for binaries (this crate ships a `pyfun` bin).
+
+# Editor / OS
+*.swp
+.DS_Store

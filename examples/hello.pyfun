@@ -1,0 +1,21 @@
+// A taste of the Phase 1 subset. None of this is type-checked or compiled yet —
+// `pyfun examples/hello.pyfun` just parses it and echoes the canonical form.
+
+// Curried function definition.
+let add a b = a + b
+
+// Partial application + pipe.
+let inc = add 1
+let five = 4 |> inc
+
+// Expression-oriented `if`.
+let sign n = if n then 1 else 0
+
+// Pattern matching over a constructor (ADTs proper arrive later).
+let unwrap o =
+  match o with
+  | Some v -> v
+  | None -> 0
+
+// Higher-order function via `fun`.
+let compose = fun f g x -> f (g x)
