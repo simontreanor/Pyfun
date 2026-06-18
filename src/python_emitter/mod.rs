@@ -20,12 +20,17 @@ pub enum PyStmt {
     Return(PyExpr),
     /// A bare expression evaluated for its (side) effect.
     Expr(PyExpr),
-    /// `def name(params): body`
+    /// `def name(params): body` (or `async def` when `is_async`).
     FuncDef {
         name: String,
         params: Vec<String>,
         body: Vec<PyStmt>,
+        is_async: bool,
     },
+    /// `yield value`
+    Yield(PyExpr),
+    /// `yield from value`
+    YieldFrom(PyExpr),
     /// `if test: body [else: orelse]`
     If {
         test: PyExpr,
@@ -92,6 +97,8 @@ pub enum PyExpr {
         value: Box<PyExpr>,
         attr: String,
     },
+    /// `await value`
+    Await(Box<PyExpr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,10 +158,18 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         }
         PyStmt::Return(value) => line(out, depth, &format!("return {}", expr(value))),
         PyStmt::Expr(value) => line(out, depth, &expr(value)),
-        PyStmt::FuncDef { name, params, body } => {
-            line(out, depth, &format!("def {name}({}):", params.join(", ")));
+        PyStmt::FuncDef {
+            name,
+            params,
+            body,
+            is_async,
+        } => {
+            let kw = if *is_async { "async def" } else { "def" };
+            line(out, depth, &format!("{kw} {name}({}):", params.join(", ")));
             emit_block(body, depth + 1, out);
         }
+        PyStmt::Yield(value) => line(out, depth, &format!("yield {}", expr(value))),
+        PyStmt::YieldFrom(value) => line(out, depth, &format!("yield from {}", expr(value))),
         PyStmt::If { test, body, orelse } => {
             line(out, depth, &format!("if {}:", expr(test)));
             emit_block(body, depth + 1, out);
@@ -237,6 +252,7 @@ fn prec(e: &PyExpr) -> u8 {
     match e {
         PyExpr::IfExp { .. } => 1,
         PyExpr::Lambda { .. } => 2,
+        PyExpr::Await(_) => 3,
         PyExpr::BinOp { op, .. } => op.precedence(),
         // Atoms / calls / attributes never need wrapping.
         _ => 100,
@@ -277,6 +293,7 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             format!("lambda {}: {}", params.join(", "), emit_expr(body, 2))
         }
         PyExpr::Attribute { value, attr } => format!("{}.{attr}", emit_expr(value, 100)),
+        PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
     };
     if prec(e) < parent_prec {
         format!("({text})")

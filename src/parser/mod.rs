@@ -23,8 +23,8 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr,
-    VariantDecl,
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
+    TypeDecl, TypeExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -57,6 +57,10 @@ struct Parser {
 impl Parser {
     fn peek(&self) -> &Tok {
         &self.tokens[self.pos].tok
+    }
+
+    fn peek2(&self) -> &Tok {
+        &self.tokens[(self.pos + 1).min(self.tokens.len() - 1)].tok
     }
 
     fn span(&self) -> Span {
@@ -381,6 +385,15 @@ impl Parser {
                 ExprKind::Bool(false)
             }
             Tok::Ident(name) => {
+                // `async`/`seq`/`result` are computation-expression builders only
+                // when immediately followed by `{`; otherwise they are ordinary
+                // identifiers.
+                if let Some(builder) = CeBuilder::from_name(&name)
+                    && *self.peek2() == Tok::LBrace
+                {
+                    self.bump(); // builder name
+                    return self.parse_ce(builder, start);
+                }
                 self.bump();
                 ExprKind::Var(name)
             }
@@ -394,6 +407,64 @@ impl Parser {
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
+    }
+
+    /// Parse `builder { items }`. Items are delimited by their leading keyword
+    /// (`let!`, `let`, `do!`, `return`, `yield`), so no separators are needed.
+    fn parse_ce(&mut self, builder: CeBuilder, start: usize) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LBrace, "`{`")?;
+        let mut items = Vec::new();
+        while !matches!(self.peek(), Tok::RBrace) {
+            if self.at_eof() {
+                return Err(self.error("unterminated computation expression"));
+            }
+            items.push(self.parse_ce_item()?);
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(self.mk(start, ExprKind::Ce { builder, items }))
+    }
+
+    fn parse_ce_item(&mut self) -> Result<CeItem, ParseError> {
+        match self.peek() {
+            Tok::Let => {
+                self.bump();
+                let bang = self.eat(&Tok::Bang);
+                let name = self.parse_ident("binding name")?;
+                self.expect(&Tok::Eq, "`=`")?;
+                let value = self.parse_expr()?;
+                Ok(if bang {
+                    CeItem::LetBang { name, value }
+                } else {
+                    CeItem::Let { name, value }
+                })
+            }
+            Tok::Return => {
+                self.bump();
+                let bang = self.eat(&Tok::Bang);
+                let value = self.parse_expr()?;
+                Ok(if bang {
+                    CeItem::ReturnBang(value)
+                } else {
+                    CeItem::Return(value)
+                })
+            }
+            Tok::Yield => {
+                self.bump();
+                let bang = self.eat(&Tok::Bang);
+                let value = self.parse_expr()?;
+                Ok(if bang {
+                    CeItem::YieldBang(value)
+                } else {
+                    CeItem::Yield(value)
+                })
+            }
+            Tok::Do => {
+                self.bump();
+                self.expect(&Tok::Bang, "`!`")?;
+                Ok(CeItem::DoBang(self.parse_expr()?))
+            }
+            _ => Err(self.error("expected `let!`, `let`, `do!`, `return`, or `yield`")),
+        }
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
@@ -523,6 +594,12 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::With => "with",
         Tok::Fun => "fun",
         Tok::Type => "type",
+        Tok::Return => "return",
+        Tok::Yield => "yield",
+        Tok::Do => "do",
+        Tok::Bang => "!",
+        Tok::LBrace => "{",
+        Tok::RBrace => "}",
         Tok::True => "true",
         Tok::False => "false",
         Tok::Eq => "=",

@@ -24,7 +24,9 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{BinOp, Expr, ExprKind, Item, LetBinding, Module, Pattern};
+use crate::parser::ast::{
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, Module, Pattern,
+};
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
 /// An error raised while lowering (e.g. a construct not yet supported).
@@ -56,6 +58,9 @@ struct Lowerer {
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
+    /// Whether the built-in `Ok`/`Error` classes must be emitted (the `Result`
+    /// prelude), set when a `result {}` block or an `Ok`/`Error` reference is lowered.
+    needs_result: bool,
 }
 
 type Lowered = Result<(Vec<PyStmt>, PyExpr), LowerError>;
@@ -90,43 +95,59 @@ impl Lowerer {
                 Item::Expr(_) => {}
             }
         }
+        // Built-in Result constructors (see the `result {}` computation expression).
+        ctor_arity.insert("Ok".to_string(), 1);
+        ctor_arity.insert("Error".to_string(), 1);
         Lowerer {
             arities,
             ctor_arity,
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
+            needs_result: false,
         }
     }
 
     fn lower_module(&mut self, module: &Module) -> Result<PyModule, LowerError> {
-        let mut body = Vec::new();
-        // Emit constructor classes first so later code can reference them.
+        // User constructor classes.
+        let mut classes = Vec::new();
         for item in &module.items {
             if let Item::Type(decl) = item {
                 for variant in &decl.variants {
                     let fields = (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
-                    body.push(PyStmt::ClassDef {
+                    classes.push(PyStmt::ClassDef {
                         name: py_ctor_name(&variant.name),
                         fields,
                     });
                 }
             }
         }
+
+        // Lower the code; this is what sets needs_functools / needs_result.
+        let mut code = Vec::new();
         for item in &module.items {
             match item {
-                Item::Type(_) => {} // classes already emitted
-                Item::Let(binding) => self.lower_let(binding, &mut body)?,
+                Item::Type(_) => {} // classes handled above
+                Item::Let(binding) => self.lower_let(binding, &mut code)?,
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
-                    body.append(&mut stmts);
-                    body.push(PyStmt::Expr(value));
+                    code.append(&mut stmts);
+                    code.push(PyStmt::Expr(value));
                 }
             }
         }
+
+        // Assemble: imports, then the Result prelude, then classes, then code —
+        // so every definition precedes its use.
+        let mut body = Vec::new();
         if self.needs_functools {
-            body.insert(0, PyStmt::Import("functools".to_string()));
+            body.push(PyStmt::Import("functools".to_string()));
         }
+        if self.needs_result {
+            body.extend(result_prelude());
+        }
+        body.extend(classes);
+        body.extend(code);
         Ok(PyModule { body })
     }
 
@@ -145,6 +166,7 @@ impl Lowerer {
                 name: binding.name.clone(),
                 params: binding.params.clone(),
                 body,
+                is_async: false,
             });
         }
         Ok(())
@@ -169,7 +191,7 @@ impl Lowerer {
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
-                    let pattern = lower_pattern(&arm.pattern);
+                    let pattern = self.lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
                     let body = self.lower_return(&arm.body, &arm_locals)?;
                     cases.push(PyCase { pattern, body });
@@ -242,7 +264,7 @@ impl Lowerer {
                 let tmp = self.fresh_tmp();
                 let mut cases = Vec::new();
                 for arm in arms {
-                    let pattern = lower_pattern(&arm.pattern);
+                    let pattern = self.lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
                     let (arm_stmts, arm_val) = self.lower_value(&arm.body, &arm_locals)?;
                     cases.push(PyCase {
@@ -276,12 +298,15 @@ impl Lowerer {
                         name: name.clone(),
                         params: params.clone(),
                         body: def_body,
+                        is_async: false,
                     };
                     Ok((vec![def], PyExpr::Name(name)))
                 }
             }
 
             ExprKind::App { .. } | ExprKind::Pipe { .. } => self.lower_application(expr, locals),
+
+            ExprKind::Ce { builder, items } => self.lower_ce(*builder, items, locals),
         }
     }
 
@@ -313,7 +338,10 @@ impl Lowerer {
     /// Lower a variable reference, special-casing data constructors: a nullary
     /// constructor used as a value becomes an instance (`Ctor()`), and any
     /// constructor name is mangled to dodge Python keywords (`None` → `None_`).
-    fn lower_var(&self, name: &str) -> PyExpr {
+    fn lower_var(&mut self, name: &str) -> PyExpr {
+        if name == "Ok" || name == "Error" {
+            self.needs_result = true;
+        }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
                 func: Box::new(PyExpr::Name(py_ctor_name(name))),
@@ -322,6 +350,240 @@ impl Lowerer {
             Some(_) => PyExpr::Name(py_ctor_name(name)),
             None => PyExpr::Name(name.to_string()),
         }
+    }
+
+    fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
+        match pattern {
+            Pattern::Wildcard => PyPattern::Wildcard,
+            Pattern::Var(name) => PyPattern::Capture(name.clone()),
+            Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
+            Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
+            Pattern::Ctor { name, args } => {
+                if name == "Ok" || name == "Error" {
+                    self.needs_result = true;
+                }
+                let mut lowered = Vec::with_capacity(args.len());
+                for arg in args {
+                    lowered.push(self.lower_pattern(arg));
+                }
+                PyPattern::Class {
+                    name: py_ctor_name(name),
+                    args: lowered,
+                }
+            }
+        }
+    }
+
+    // ----- computation expressions (`DESIGN.md` §8.1) -----
+
+    fn lower_ce(
+        &mut self,
+        builder: CeBuilder,
+        items: &[CeItem],
+        locals: &HashSet<String>,
+    ) -> Lowered {
+        match builder {
+            CeBuilder::Seq => self.lower_seq(items, locals),
+            CeBuilder::Result => {
+                self.needs_result = true;
+                self.lower_result_ce(items, locals)
+            }
+            CeBuilder::Async => self.lower_async(items, locals),
+        }
+    }
+
+    /// `seq { ... }` → a generator function returning its result.
+    fn lower_seq(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
+        let mut body = Vec::new();
+        let mut locals = locals.clone();
+        let mut has_yield = false;
+        for item in items {
+            match item {
+                CeItem::Yield(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Yield(v));
+                    has_yield = true;
+                }
+                CeItem::YieldBang(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::YieldFrom(v));
+                    has_yield = true;
+                }
+                CeItem::Let { name, value } => {
+                    let (mut s, v) = self.lower_value(value, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Assign {
+                        target: name.clone(),
+                        value: v,
+                    });
+                    locals.insert(name.clone());
+                }
+                _ => return Err(ce_item_error("seq")),
+            }
+        }
+        // A function with no `yield` isn't a generator, so an element-free `seq`
+        // returns an empty iterator instead.
+        if !has_yield {
+            body.push(PyStmt::Return(PyExpr::Call {
+                func: Box::new(PyExpr::Name("iter".to_string())),
+                args: vec![PyExpr::Call {
+                    func: Box::new(PyExpr::Name("tuple".to_string())),
+                    args: vec![],
+                }],
+            }));
+        }
+        let name = self.fresh_fn();
+        let def = PyStmt::FuncDef {
+            name: name.clone(),
+            params: vec![],
+            body,
+            is_async: false,
+        };
+        Ok((vec![def], call0(&name)))
+    }
+
+    /// `result { ... }` → a function that short-circuits on `Error`.
+    fn lower_result_ce(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
+        let body = self.lower_result_items(items, locals)?;
+        let name = self.fresh_fn();
+        let def = PyStmt::FuncDef {
+            name: name.clone(),
+            params: vec![],
+            body,
+            is_async: false,
+        };
+        Ok((vec![def], call0(&name)))
+    }
+
+    fn lower_result_items(
+        &mut self,
+        items: &[CeItem],
+        locals: &HashSet<String>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let Some((first, rest)) = items.split_first() else {
+            return Ok(vec![]);
+        };
+        match first {
+            CeItem::Return(e) => {
+                let (mut s, v) = self.lower_value(e, locals)?;
+                s.push(PyStmt::Return(call1("Ok", v)));
+                Ok(s)
+            }
+            CeItem::ReturnBang(e) => {
+                let (mut s, v) = self.lower_value(e, locals)?;
+                s.push(PyStmt::Return(v));
+                Ok(s)
+            }
+            CeItem::Let { name, value } => {
+                let (mut s, v) = self.lower_value(value, locals)?;
+                s.push(PyStmt::Assign {
+                    target: name.clone(),
+                    value: v,
+                });
+                let mut locals = locals.clone();
+                locals.insert(name.clone());
+                s.extend(self.lower_result_items(rest, &locals)?);
+                Ok(s)
+            }
+            CeItem::LetBang { name, value } => {
+                let (mut s, v) = self.lower_value(value, locals)?;
+                let mut inner_locals = locals.clone();
+                inner_locals.insert(name.clone());
+                let rest_stmts = self.lower_result_items(rest, &inner_locals)?;
+                s.push(self.result_bind_match(v, PyPattern::Capture(name.clone()), rest_stmts));
+                Ok(s)
+            }
+            CeItem::DoBang(e) => {
+                let (mut s, v) = self.lower_value(e, locals)?;
+                let rest_stmts = self.lower_result_items(rest, locals)?;
+                s.push(self.result_bind_match(v, PyPattern::Wildcard, rest_stmts));
+                Ok(s)
+            }
+            _ => Err(ce_item_error("result")),
+        }
+    }
+
+    /// `match <subject>: case Ok(<ok_pat>): <rest>  case Error(e): return Error(e)`
+    fn result_bind_match(
+        &mut self,
+        subject: PyExpr,
+        ok_pat: PyPattern,
+        rest: Vec<PyStmt>,
+    ) -> PyStmt {
+        let e_tmp = self.fresh_tmp();
+        PyStmt::Match {
+            subject,
+            cases: vec![
+                PyCase {
+                    pattern: PyPattern::Class {
+                        name: "Ok".to_string(),
+                        args: vec![ok_pat],
+                    },
+                    body: rest,
+                },
+                PyCase {
+                    pattern: PyPattern::Class {
+                        name: "Error".to_string(),
+                        args: vec![PyPattern::Capture(e_tmp.clone())],
+                    },
+                    body: vec![PyStmt::Return(call1("Error", PyExpr::Name(e_tmp)))],
+                },
+            ],
+        }
+    }
+
+    /// `async { ... }` → an `async def` returning a coroutine.
+    fn lower_async(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
+        let mut body = Vec::new();
+        let mut locals = locals.clone();
+        for item in items {
+            match item {
+                CeItem::LetBang { name, value } => {
+                    let (mut s, v) = self.lower_value(value, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Assign {
+                        target: name.clone(),
+                        value: PyExpr::Await(Box::new(v)),
+                    });
+                    locals.insert(name.clone());
+                }
+                CeItem::Let { name, value } => {
+                    let (mut s, v) = self.lower_value(value, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Assign {
+                        target: name.clone(),
+                        value: v,
+                    });
+                    locals.insert(name.clone());
+                }
+                CeItem::DoBang(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Expr(PyExpr::Await(Box::new(v))));
+                }
+                CeItem::Return(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Return(v));
+                }
+                CeItem::ReturnBang(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Return(PyExpr::Await(Box::new(v))));
+                }
+                _ => return Err(ce_item_error("async")),
+            }
+        }
+        let name = self.fresh_fn();
+        let def = PyStmt::FuncDef {
+            name: name.clone(),
+            params: vec![],
+            body,
+            is_async: true,
+        };
+        Ok((vec![def], call0(&name)))
     }
 
     /// Apply currying policy (`DESIGN.md` §5) given the callee's known arity.
@@ -407,25 +669,49 @@ fn lower_binop(op: BinOp) -> PyBinOp {
     }
 }
 
-fn lower_pattern(pattern: &Pattern) -> PyPattern {
-    match pattern {
-        Pattern::Wildcard => PyPattern::Wildcard,
-        Pattern::Var(name) => PyPattern::Capture(name.clone()),
-        Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
-        Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
-        Pattern::Ctor { name, args } => PyPattern::Class {
-            name: py_ctor_name(name),
-            args: args.iter().map(lower_pattern).collect(),
-        },
-    }
-}
-
 /// Mangle a constructor name to a valid, non-keyword Python identifier.
 fn py_ctor_name(name: &str) -> String {
     if matches!(name, "None" | "True" | "False") {
         format!("{name}_")
     } else {
         name.to_string()
+    }
+}
+
+/// `name()` — a zero-argument call (used to invoke generated CE helper functions).
+fn call0(name: &str) -> PyExpr {
+    PyExpr::Call {
+        func: Box::new(PyExpr::Name(name.to_string())),
+        args: vec![],
+    }
+}
+
+/// `name(arg)` — a one-argument call (used for `Ok`/`Error` construction).
+fn call1(name: &str, arg: PyExpr) -> PyExpr {
+    PyExpr::Call {
+        func: Box::new(PyExpr::Name(name.to_string())),
+        args: vec![arg],
+    }
+}
+
+/// The `Ok`/`Error` classes backing the `result` computation expression.
+fn result_prelude() -> Vec<PyStmt> {
+    vec![
+        PyStmt::ClassDef {
+            name: "Ok".to_string(),
+            fields: vec!["_0".to_string()],
+        },
+        PyStmt::ClassDef {
+            name: "Error".to_string(),
+            fields: vec!["_0".to_string()],
+        },
+    ]
+}
+
+/// A defensive error for a CE item the type checker should already have rejected.
+fn ce_item_error(builder: &str) -> LowerError {
+    LowerError {
+        message: format!("unexpected item in a `{builder}` computation expression"),
     }
 }
 

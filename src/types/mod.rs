@@ -16,7 +16,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::lexer::Span;
-use crate::parser::ast::{Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeExpr};
+use crate::parser::ast::{
+    CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeExpr,
+};
 
 /// A monomorphic type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,6 +120,8 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
 /// Register every `type` declaration and build the constructor environment.
 fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     let mut decls = Decls::default();
+    let mut env = Env::new();
+    seed_builtin_types(&mut decls, &mut env);
 
     // Pass 1: type names and arities (so fields can reference any type, including
     // self/forward references).
@@ -144,7 +148,6 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     }
 
     // Pass 2: constructor schemes.
-    let mut env = Env::new();
     for item in &module.items {
         let Item::Type(decl) = item else { continue };
         let span = decl.span.span();
@@ -203,6 +206,47 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     }
 
     (decls, env)
+}
+
+/// Seed the registry with the built-in computation-expression types: `Async a`,
+/// `Seq a`, and `Result a e` with constructors `Ok`/`Error` (`DESIGN.md` §8.1).
+fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
+    decls.type_arity.insert("Async".to_string(), 1);
+    decls.type_arity.insert("Seq".to_string(), 1);
+    decls.type_arity.insert("Result".to_string(), 2);
+    decls.type_ctors.insert("Async".to_string(), Vec::new());
+    decls.type_ctors.insert("Seq".to_string(), Vec::new());
+    decls.type_ctors.insert(
+        "Result".to_string(),
+        vec!["Ok".to_string(), "Error".to_string()],
+    );
+
+    // Ok : 'a -> Result 'a 'e   and   Error : 'e -> Result 'a 'e
+    let result_ty = Ty::Con("Result".to_string(), vec![Ty::Var(0), Ty::Var(1)]);
+    let ok = Scheme {
+        vars: vec![0, 1],
+        ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
+    };
+    let err = Scheme {
+        vars: vec![0, 1],
+        ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
+    };
+    env.insert("Ok".to_string(), ok.clone());
+    env.insert("Error".to_string(), err.clone());
+    decls.ctors.insert(
+        "Ok".to_string(),
+        CtorInfo {
+            scheme: ok,
+            arity: 1,
+        },
+    );
+    decls.ctors.insert(
+        "Error".to_string(),
+        CtorInfo {
+            scheme: err,
+            arity: 1,
+        },
+    );
 }
 
 /// Resolve a surface type expression into a [`Ty`], given the declaration's type
@@ -391,6 +435,161 @@ impl Infer {
                 self.check_exhaustive(&scrut_ty, arms, span)?;
                 Ok(self.apply(&result))
             }
+
+            ExprKind::Ce { builder, items } => self.infer_ce(*builder, items, span, env),
+        }
+    }
+
+    fn infer_ce(
+        &mut self,
+        builder: CeBuilder,
+        items: &[CeItem],
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        match builder {
+            CeBuilder::Seq => self.infer_seq(items, span, env),
+            CeBuilder::Result => {
+                self.infer_monad(items, span, env, "Result", /* binary */ true)
+            }
+            CeBuilder::Async => {
+                self.infer_monad(items, span, env, "Async", /* binary */ false)
+            }
+        }
+    }
+
+    fn infer_seq(&mut self, items: &[CeItem], span: Span, env: &Env) -> Result<Ty, TypeError> {
+        let elem = self.fresh();
+        let mut env = env.clone();
+        for item in items {
+            match item {
+                CeItem::Yield(e) => {
+                    let t = self.infer_expr(e, &env)?;
+                    self.unify(&elem, &t, e.span())?;
+                }
+                CeItem::YieldBang(e) => {
+                    let t = self.infer_expr(e, &env)?;
+                    self.unify(
+                        &Ty::Con("Seq".to_string(), vec![elem.clone()]),
+                        &t,
+                        e.span(),
+                    )?;
+                }
+                CeItem::Let { name, value } => {
+                    let t = self.infer_expr(value, &env)?;
+                    env.insert(
+                        name.clone(),
+                        Scheme {
+                            vars: vec![],
+                            ty: self.apply(&t),
+                        },
+                    );
+                }
+                _ => {
+                    return Err(TypeError {
+                        message: "only `yield`, `yield!`, and `let` are allowed in a `seq` block"
+                            .to_string(),
+                        span,
+                    });
+                }
+            }
+        }
+        Ok(Ty::Con("Seq".to_string(), vec![self.apply(&elem)]))
+    }
+
+    /// Shared inference for the `result` and `async` monads. `binary` selects the
+    /// two-parameter `Result a e` (with a shared error type) versus `Async a`.
+    fn infer_monad(
+        &mut self,
+        items: &[CeItem],
+        span: Span,
+        env: &Env,
+        con: &str,
+        binary: bool,
+    ) -> Result<Ty, TypeError> {
+        let err = self.fresh(); // the shared error type (unused for Async)
+        let monad = |inner: Ty, this: &Self| {
+            if binary {
+                Ty::Con(con.to_string(), vec![inner, this.apply(&err)])
+            } else {
+                Ty::Con(con.to_string(), vec![inner])
+            }
+        };
+        let mut env = env.clone();
+        let mut result_val: Option<Ty> = None;
+
+        for (i, item) in items.iter().enumerate() {
+            let is_last = i + 1 == items.len();
+            match item {
+                CeItem::LetBang { name, value } => {
+                    let t = self.infer_expr(value, &env)?;
+                    let inner = self.fresh();
+                    let expected = monad(inner.clone(), self);
+                    self.unify(&expected, &t, value.span())?;
+                    env.insert(
+                        name.clone(),
+                        Scheme {
+                            vars: vec![],
+                            ty: self.apply(&inner),
+                        },
+                    );
+                }
+                CeItem::Let { name, value } => {
+                    let t = self.infer_expr(value, &env)?;
+                    env.insert(
+                        name.clone(),
+                        Scheme {
+                            vars: vec![],
+                            ty: self.apply(&t),
+                        },
+                    );
+                }
+                CeItem::DoBang(e) => {
+                    let t = self.infer_expr(e, &env)?;
+                    let inner = self.fresh();
+                    let expected = monad(inner, self);
+                    self.unify(&expected, &t, e.span())?;
+                }
+                CeItem::Return(e) => {
+                    if !is_last {
+                        return Err(TypeError {
+                            message: "`return` must be the final item".to_string(),
+                            span,
+                        });
+                    }
+                    result_val = Some(self.infer_expr(e, &env)?);
+                }
+                CeItem::ReturnBang(e) => {
+                    if !is_last {
+                        return Err(TypeError {
+                            message: "`return!` must be the final item".to_string(),
+                            span,
+                        });
+                    }
+                    let t = self.infer_expr(e, &env)?;
+                    let inner = self.fresh();
+                    let expected = monad(inner.clone(), self);
+                    self.unify(&expected, &t, e.span())?;
+                    result_val = Some(self.apply(&inner));
+                }
+                CeItem::Yield(_) | CeItem::YieldBang(_) => {
+                    return Err(TypeError {
+                        message: format!(
+                            "`yield` is not allowed in a `{}` block",
+                            con.to_lowercase()
+                        ),
+                        span,
+                    });
+                }
+            }
+        }
+
+        match result_val {
+            Some(inner) => Ok(monad(self.apply(&inner), self)),
+            None => Err(TypeError {
+                message: format!("a `{}` block must end with `return`", con.to_lowercase()),
+                span,
+            }),
         }
     }
 

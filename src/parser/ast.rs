@@ -156,6 +156,60 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+
+    /// A computation expression: `builder { items }` (`DESIGN.md` §8.1).
+    Ce {
+        builder: CeBuilder,
+        items: Vec<CeItem>,
+    },
+}
+
+/// The three built-in computation-expression builders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CeBuilder {
+    Async,
+    Seq,
+    Result,
+}
+
+impl CeBuilder {
+    /// The builder keyword, if `name` is one (builder names are contextual, not
+    /// reserved words).
+    pub fn from_name(name: &str) -> Option<CeBuilder> {
+        match name {
+            "async" => Some(CeBuilder::Async),
+            "seq" => Some(CeBuilder::Seq),
+            "result" => Some(CeBuilder::Result),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            CeBuilder::Async => "async",
+            CeBuilder::Seq => "seq",
+            CeBuilder::Result => "result",
+        }
+    }
+}
+
+/// One item inside a computation-expression block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CeItem {
+    /// `let! name = value` — monadic bind.
+    LetBang { name: String, value: Expr },
+    /// `let name = value` — ordinary binding.
+    Let { name: String, value: Expr },
+    /// `do! value` — monadic bind discarding the result.
+    DoBang(Expr),
+    /// `return value` — wrap a value into the monad.
+    Return(Expr),
+    /// `return! value` — yield an already-monadic value.
+    ReturnBang(Expr),
+    /// `yield value` — emit one element (seq).
+    Yield(Expr),
+    /// `yield! value` — splice a sub-sequence (seq).
+    YieldBang(Expr),
 }
 
 /// One arm of a `match` expression.

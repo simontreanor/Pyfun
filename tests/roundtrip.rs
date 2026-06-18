@@ -32,6 +32,10 @@ const PROGRAMS: &[&str] = &[
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
     "type Option a = None | Some a\nlet unwrap o = match o with | Some v -> v | None -> 0",
+    // Computation expressions.
+    "let a = seq { yield 1 yield! xs }",
+    "let a = result { let! x = m return x }",
+    "let a = async { let! x = m do! n return! r }",
 ];
 
 #[test]

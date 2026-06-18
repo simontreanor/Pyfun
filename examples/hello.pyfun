@@ -37,3 +37,26 @@ let rank c =
 let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
 let seven = inc2 five
+
+// Computation expressions (F# showcase features):
+//   result {} — railway-oriented, short-circuits on Error (built-in Ok/Error).
+let checked ok v =
+  result {
+    let! x = if ok then Ok v else Error 0
+    return x + 1
+  }
+
+//   seq {} — a lazy sequence, lowered to a Python generator.
+let small =
+  seq {
+    yield 1
+    yield 2
+    yield 3
+  }
+
+//   async {} — lowered to a Python coroutine (async def / await).
+let computed =
+  async {
+    let! x = async { return 20 }
+    return x + 1
+  }

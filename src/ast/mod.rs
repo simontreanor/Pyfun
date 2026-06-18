@@ -7,7 +7,8 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr, VariantDecl,
+    CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr,
+    VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -123,6 +124,22 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Pipe { lhs, rhs } => {
             format!("({} |> {})", print_expr(lhs), print_expr(rhs))
         }
+        ExprKind::Ce { builder, items } => {
+            let items: Vec<String> = items.iter().map(print_ce_item).collect();
+            format!("{} {{ {} }}", builder.name(), items.join(" "))
+        }
+    }
+}
+
+fn print_ce_item(item: &CeItem) -> String {
+    match item {
+        CeItem::LetBang { name, value } => format!("let! {name} = {}", print_expr(value)),
+        CeItem::Let { name, value } => format!("let {name} = {}", print_expr(value)),
+        CeItem::DoBang(e) => format!("do! {}", print_expr(e)),
+        CeItem::Return(e) => format!("return {}", print_expr(e)),
+        CeItem::ReturnBang(e) => format!("return! {}", print_expr(e)),
+        CeItem::Yield(e) => format!("yield {}", print_expr(e)),
+        CeItem::YieldBang(e) => format!("yield! {}", print_expr(e)),
     }
 }
 

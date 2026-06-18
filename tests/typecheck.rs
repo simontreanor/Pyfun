@@ -56,11 +56,17 @@ fn accepts_user_defined_adt() {
 
 #[test]
 fn accepts_parameterized_and_recursive_adts() {
-    let src = "type Result a b = Ok a | Err b\n\
+    let src = "type Either a b = Left a | Right b\n\
                type List a = Nil | Cons a (List a)\n\
                let xs = Cons 1 (Cons 2 Nil)\n\
-               let ok = Ok 1";
+               let e = Left 1";
     assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_redefining_builtin_result() {
+    // `Result`, `Ok`, and `Error` are reserved by the result computation expression.
+    assert_error_contains("type Result a b = Ok a | Bad b", "already defined");
 }
 
 // ---------- ill-typed programs ----------
@@ -134,6 +140,62 @@ fn rejects_constructor_used_at_wrong_type() {
 #[test]
 fn rejects_unknown_type_in_field() {
     assert_error_contains("type Bad = Mk Nope", "unknown type `Nope`");
+}
+
+// ---------- computation expressions ----------
+
+#[test]
+fn accepts_result_computation_expression() {
+    let src = "let f ok v = result { let! x = if ok then Ok v else Error 0  return (x + 1) }";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_seq_computation_expression() {
+    assert!(pyfun::check("let xs = seq { yield 1  yield 2 }").is_ok());
+    // yield! splices a sub-sequence of the same element type.
+    assert!(pyfun::check("let xs = seq { yield 1  yield! (seq { yield 2 }) }").is_ok());
+}
+
+#[test]
+fn accepts_async_computation_expression() {
+    assert!(pyfun::check("let f = async { let! x = async { return 1 }  return (x + 1) }").is_ok());
+}
+
+#[test]
+fn rejects_yield_in_result_block() {
+    assert_error_contains(
+        "let a = result { yield 1 }",
+        "`yield` is not allowed in a `result` block",
+    );
+}
+
+#[test]
+fn rejects_result_without_return() {
+    assert_error_contains("let a = result { let! x = Ok 1 }", "must end with `return`");
+}
+
+#[test]
+fn rejects_return_before_end() {
+    assert_error_contains(
+        "let a = result { return 1  return 2 }",
+        "must be the final item",
+    );
+}
+
+#[test]
+fn rejects_seq_with_return() {
+    assert_error_contains(
+        "let a = seq { return 5 }",
+        "only `yield`, `yield!`, and `let`",
+    );
+}
+
+#[test]
+fn rejects_binding_wrong_monad() {
+    // `let!` in an async block must bind an Async, not a Seq.
+    let src = "let a = async { let! x = (seq { yield 1 })  return x }";
+    assert_error_contains(src, "expected Async");
 }
 
 // ---------- the compiler is the gatekeeper ----------

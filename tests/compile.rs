@@ -168,6 +168,39 @@ fn e2e_recursive_adt() {
     );
 }
 
+#[test]
+fn e2e_result_ce_binds_and_short_circuits() {
+    // Extract the result via a match so the assertions compare plain ints.
+    run_and_check(
+        "
+        let safe ok v = result { let! x = if ok then Ok v else Error 9  return (x + 1) }
+        let unwrap r = match r with | Ok n -> n | Error e -> e
+        let r1 = unwrap (safe true 10)
+        let r2 = unwrap (safe false 10)
+        ",
+        &[("r1", "11"), ("r2", "9")],
+    );
+}
+
+#[test]
+fn e2e_seq_ce_produces_a_generator() {
+    let Some(python) = python_cmd() else { return };
+    let mut program =
+        pyfun::compile("let xs = seq { yield 1  yield! (seq { yield 2  yield 3 }) }").unwrap();
+    program.push_str("\nprint(list(xs))\n");
+    assert_eq!(run_python(&python, &program).trim(), "[1, 2, 3]");
+}
+
+#[test]
+fn e2e_async_ce_produces_a_coroutine() {
+    let Some(python) = python_cmd() else { return };
+    let mut program =
+        pyfun::compile("let twice = async { let! x = async { return 21 }  return (x + x) }")
+            .unwrap();
+    program.push_str("\nimport asyncio\nprint(asyncio.run(twice))\n");
+    assert_eq!(run_python(&python, &program).trim(), "42");
+}
+
 // ---------- helpers ----------
 
 /// Compile `source`, then run the emitted Python and assert that each named

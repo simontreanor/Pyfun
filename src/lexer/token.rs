@@ -35,6 +35,9 @@ pub enum Tok {
     With,
     Fun,
     Type,
+    Return,
+    Yield,
+    Do,
     True,
     False,
 
@@ -47,8 +50,11 @@ pub enum Tok {
     PipeOp,     // |>
     Bar,        // |
     Arrow,      // ->
+    Bang,       // !
     LParen,     // (
     RParen,     // )
+    LBrace,     // {
+    RBrace,     // }
     Comma,      // ,
     Colon,      // :
     Underscore, // _
@@ -69,6 +75,9 @@ impl Tok {
             "with" => Tok::With,
             "fun" => Tok::Fun,
             "type" => Tok::Type,
+            "return" => Tok::Return,
+            "yield" => Tok::Yield,
+            "do" => Tok::Do,
             "true" => Tok::True,
             "false" => Tok::False,
             _ => return None,
