@@ -73,11 +73,13 @@ This adds measure *expressions* in declarations so compound units can be named.
 
 ## Tooling & consolidation (make it usable, not just correct)
 
-### 8. End-to-end `run` command
-`pyfun compile` emits Python today; you run it yourself. `pyfun run foo.pyfun` would compile to a
-temp module and execute it (a REPL is the natural follow-on). Small, but makes the language feel
-real to use.
-- **Effort/risk:** Low.
+### 8. End-to-end `run` command — ✅ done
+`pyfun run foo.pyfun` compiles (gated on type-checking) then executes the emitted Python by piping
+it to `python`/`python3` via stdin, inheriting the program's stdout/stderr and propagating its exit
+status. A REPL is the natural follow-on. Note: without a prelude (#9) there is still no `print`, so
+a valid program runs silently — `run`'s observable value today is exit status and propagated runtime
+errors (e.g. the non-exhaustive-match guard). Covered by `tests/run.rs`.
+- **Effort/risk:** Low. **Status:** landed.
 
 ### 9. Standard library / prelude
 A set of built-in functions Pyfun programs can call — `print`, list/option/result helpers, math.
@@ -98,8 +100,8 @@ infrastructure already exist as the foundation.
 
 The project is *correct* but not yet *usable* — you can't print or call a library. Highest leverage:
 
-1. **#9 (prelude + interop)** or the quick **#8 (`run`)** — together make Pyfun something you can
-   actually write programs in.
+1. **#9 (prelude + interop)** — with **#8 (`run`)** now landed, a prelude (`print`, collections) is
+   the remaining half of making Pyfun something you can actually write and observe programs in.
 2. **#1 (effects)** — the most intellectually significant remaining feature, but large; bundles
    naturally with adding IO.
 3. **#2 (records)** and **#4 (floats)** — the biggest everyday-ergonomics wins.

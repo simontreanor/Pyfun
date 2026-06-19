@@ -6,10 +6,12 @@
 //! Usage:
 //!   pyfun check   <file.pyfun>                  # type-check, report diagnostics
 //!   pyfun compile <file.pyfun> [-o <out.py>]    # type-check then lower to Python
+//!   pyfun run     <file.pyfun>                  # compile then execute with Python
 //!   pyfun parse   <file.pyfun>                  # canonical pretty-print
 //!   pyfun <file.pyfun>                          # shorthand for `compile`
 
-use std::process::ExitCode;
+use std::io::Write;
+use std::process::{Command, ExitCode, Stdio};
 
 use pyfun::diagnostics::{self, Level};
 
@@ -28,6 +30,10 @@ fn main() -> ExitCode {
             Ok((path, out)) => compile(path, out.as_deref()),
             Err(msg) => fail(&msg),
         },
+        Some("run") => match args.get(1) {
+            Some(path) => run(path),
+            None => fail("`run` needs a file path"),
+        },
         Some("parse") => match args.get(1) {
             Some(path) => parse_only(path),
             None => fail("`parse` needs a file path"),
@@ -43,6 +49,7 @@ fn help() {
     eprintln!("usage:");
     eprintln!("  pyfun check   <file.pyfun>                type-check, report diagnostics");
     eprintln!("  pyfun compile <file.pyfun> [-o <out.py>]  type-check then lower to Python");
+    eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun <file.pyfun>                        shorthand for `compile`");
 }
@@ -110,6 +117,59 @@ fn compile(path: &str, out: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+/// Compile `path` to Python (gated on type-checking), then execute it by piping
+/// the emitted source to the interpreter's stdin (`python -`). The program's
+/// stdout/stderr are inherited so its output appears directly; piping via stdin
+/// sidesteps temp-file cleanup and Windows path-translation pitfalls.
+fn run(path: &str) -> ExitCode {
+    let Some(source) = read(path) else {
+        return ExitCode::FAILURE;
+    };
+    let python = match pyfun::compile(&source) {
+        Ok(py) => py,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                diagnostics::render(&source, Level::Error, &e.message(), e.span())
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(interp) = python_cmd() else {
+        return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
+    };
+    let mut child = match Command::new(&interp).arg("-").stdin(Stdio::piped()).spawn() {
+        Ok(c) => c,
+        Err(e) => return fail(&format!("cannot start `{interp}`: {e}")),
+    };
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(python.as_bytes())
+    {
+        return fail(&format!("cannot send program to `{interp}`: {e}"));
+    }
+    match child.wait() {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(e) => fail(&format!("`{interp}` did not finish: {e}")),
+    }
+}
+
+/// The first available Python interpreter command, if any.
+fn python_cmd() -> Option<String> {
+    for candidate in ["python", "python3"] {
+        if Command::new(candidate)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok()
+        {
+            return Some(candidate.to_string());
+        }
+    }
+    None
 }
 
 fn parse_only(path: &str) -> ExitCode {
