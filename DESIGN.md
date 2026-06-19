@@ -8,7 +8,10 @@ expressions** (`async`/`seq`/`result`) with monadic typing, and **units of measu
 unit unification with unit polymorphism, erased at lowering), rustc-style diagnostics (`pyfun
 check`), and lowering to a Python-AST IR + runnable Python emission gated on type-checking, over the
 `measure`/`type`/`let`/`if`/`match`/`fun` subset with curried application and `|>` (see §8, §10).
-Still deferred until its enabling syntax exists: effect inference.
+Programs are now executable: a small **prelude** of Python-builtin-backed functions
+(`print`/`abs`/`min`/`max`, plus a `unit` type) makes output observable, `pyfun run` compiles-and-
+runs, and a **lightweight offside rule** separates top-level statements. Still deferred until its
+enabling syntax exists: effect inference (and a general offside rule for nested blocks).
 
 ## 1. Identity
 
@@ -132,6 +135,17 @@ emits ordinary `def`s.)
 
 Treat interop type-mapping and FFI surfaces as load-bearing architecture.
 
+**The prelude (first realized interop surface).** A small set of built-in functions gives programs
+something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorphic numerics
+`abs`/`min`/`max : int<'u> -> …`, plus a `unit` type (one value, lowers to Python `None` — the
+honest result of an effectful call). Each is a *typed view over a Python builtin*: the single
+source of truth is `types::PRELUDE` (names + arities, read by lowering so a partial application like
+`max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun
+names equal their Python names, so there is no call-site renaming — the simplest honest interop
+mapping. User definitions shadow prelude names. This is deliberately tiny; collections/option/
+result helpers and name-aliased imports (`show` → Python `str`) are the obvious next increments and
+are where the general "import and type an arbitrary Python function" story gets built out.
+
 ## 7. Surface language (MVP)
 
 Differences from Python that the MVP commits to:
@@ -161,6 +175,16 @@ three computation expressions of §8, units of measure (§8), readable Python ou
 
 Lexical conventions (decided in Phase 1): line comments start with `//` (F#-style); identifiers are
 ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position (§ patterns).
+
+**Statement separation (lightweight offside rule).** Top-level items are separated by a layout rule,
+not by semicolons or braces: at lexing time, a line break that returns to (or below) the first
+item's indentation column — while outside any `()`/`{}` brackets — emits a separator token. Lines
+indented *past* that column, and any line break inside brackets, are continuations. So consecutive
+statements (`print a` then `print b`) are distinct items rather than one juxtaposed application,
+while multi-line `match`/`if` and CE blocks stay together. This is intentionally just *item*
+separation; a **general offside rule for nested blocks** (local `let`-sequencing, indentation-
+delimited bodies) is deferred to a later phase, and pairs naturally with mutability/`let mut`
+sequencing (§3). It is orthogonal to the brace-delimited CEs and records (§8.1).
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
@@ -196,6 +220,26 @@ Notes:
   desugaring as separate concerns that compose.
 - Lowered output must stay readable (§5): `seq {}` should produce idiomatic generators, `async {}`
   idiomatic `async`/`await`.
+
+**Why braces, not indentation (a deliberate choice).** F# is offside-sensitive yet still delimits
+CEs with `{ }` — because braces and the offside rule solve *different* problems. The offside rule
+delimits *declarations* (where a `let`/`match` body ends); the braces delimit a **builder applied
+to a block** (in F#, `async`/`seq` are ordinary values, not keywords, and the braces tie the value
+to the block; indentation still structures the items *inside* the braces). The deciding factor is
+that a CE is an **expression in arbitrary position** — a function argument, a `let` RHS, nested in
+another CE — and the offside rule is awkward at delimiting an expression embedded mid-expression.
+Braces are a context-free delimiter that works identically everywhere. Python is the cautionary
+case: being indentation-sensitive, it *forbids* blocks in expression position (hence the
+single-expression `lambda`); an expression-oriented language that went indentation-only for CEs
+would inherit exactly that limitation. So Pyfun keeps the braces deliberately, not by inheritance:
+
+- Pyfun is currently whitespace-insensitive (no offside rule at all — `lexer/mod.rs`), so the `{ }`
+  is the *only* thing delimiting a CE block today.
+- The contextual-keyword scheme (`async`/`seq`/`result` are keywords *only* immediately before `{`)
+  depends on the explicit brace as its disambiguator.
+- A future offside rule for `let`/`match`/function bodies is **orthogonal** and composes with this
+  (exactly as in F#): adding it would not require changing CE or record braces. Records (a
+  post-MVP product type) will reuse `{ }` as well, so the brace family stays consistent.
 
 ### 8.2 Units of measure
 

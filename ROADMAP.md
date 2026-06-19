@@ -81,14 +81,24 @@ a valid program runs silently — `run`'s observable value today is exit status 
 errors (e.g. the non-exhaustive-match guard). Covered by `tests/run.rs`.
 - **Effort/risk:** Low. **Status:** landed.
 
-### 9. Standard library / prelude
-A set of built-in functions Pyfun programs can call — `print`, list/option/result helpers, math.
-A program can define functions today but has almost nothing to call (no `print`, no collections),
-so you can't do anything observable without dropping to Python interop. Arguably the biggest gap
-between "feature-complete compiler" and "usable language." Forces the **Python interop story**
-(`DESIGN.md` §6) to get real — how Pyfun types map to/from Python library functions.
-- **Effort/risk:** Medium, partly a design exercise (the interop surface; how Python functions are
-  imported and typed).
+### 9. Standard library / prelude — ✅ started (MVP prelude landed)
+A set of built-in functions Pyfun programs can call. The MVP prelude has landed: `print : 'a ->
+unit` and unit-polymorphic `abs`/`min`/`max : int<'u> -> …`, each a typed view over a Python builtin
+(single source of truth `types::PRELUDE` + `seed_prelude`), plus a `unit` type. This made programs
+observable and forced the first concrete slice of the **Python interop story** (`DESIGN.md` §6:
+Pyfun name = Python name, partial application via known arities). Shipping it surfaced that
+consecutive statements need separation, which prompted the **lightweight offside rule** (9b below).
+Covered by `tests/{typecheck,compile,roundtrip}.rs`.
+- **Still to do (a larger prelude):** collections, option/result helpers, and name-aliased imports
+  (`show` → Python `str`) — the general "import and type an arbitrary Python function" surface.
+- **Effort/risk:** Medium, partly a design exercise. **Status:** MVP slice done; broader prelude open.
+
+### 9b. Lightweight offside rule — ✅ done (fell out of #9)
+A line break returning to ≤ the first item's indentation column (outside `()`/`{}`) separates
+top-level items, so `print a` / `print b` are two statements, not one juxtaposition; deeper-indented
+lines and breaks inside brackets are continuations. Lives in the lexer (`Tok::Sep`).
+- **Still to do:** a **general** offside rule for *nested* blocks (local `let`-sequencing,
+  indentation-delimited bodies) — the prerequisite #3 (mutability) calls out.
 
 ### 10. LSP / editor support (`DESIGN.md` §9, v2)
 A language server: inline type errors, hover-for-type, go-to-definition. DESIGN always scoped this
@@ -98,11 +108,14 @@ infrastructure already exist as the foundation.
 
 ## Suggested sequencing
 
-The project is *correct* but not yet *usable* — you can't print or call a library. Highest leverage:
+The project is now *usable*: with **#8 (`run`)**, the **#9 MVP prelude** (`print`/`abs`/`min`/`max`),
+and the **#9b offside rule**, you can write and observe self-contained programs. Highest leverage
+next:
 
-1. **#9 (prelude + interop)** — with **#8 (`run`)** now landed, a prelude (`print`, collections) is
-   the remaining half of making Pyfun something you can actually write and observe programs in.
+1. **Broaden #9 (prelude + interop)** — collections and option/result helpers, plus name-aliased
+   Python imports, to flesh out the standard library and the general FFI surface.
 2. **#1 (effects)** — the most intellectually significant remaining feature, but large; bundles
-   naturally with adding IO.
+   naturally with adding IO (and the prelude now gives it effectful operations to track).
 3. **#2 (records)** and **#4 (floats)** — the biggest everyday-ergonomics wins.
+4. A **general offside rule** for nested blocks (extends #9b) unlocks #3 (mutability sequencing).
 4. **#5–#7** — satisfying, lower-stakes polish increments.

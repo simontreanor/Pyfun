@@ -220,6 +220,21 @@ fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
             line(out, depth + 2, &format!("self.{f} = {f}"));
         }
     }
+
+    // `__repr__` so values print readably (`Some(1)`, `Red`, `Ok("x")`) instead
+    // of `<Some object at 0x…>`. Fields use `!r` so nested values and strings are
+    // shown quoted.
+    line(out, depth + 1, "def __repr__(self):");
+    if fields.is_empty() {
+        line(out, depth + 2, &format!("return {}", string_literal(name)));
+    } else {
+        let parts = fields
+            .iter()
+            .map(|f| format!("{{self.{f}!r}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        line(out, depth + 2, &format!("return f\"{name}({parts})\""));
+    }
 }
 
 fn pattern(pat: &PyPattern) -> String {

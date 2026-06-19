@@ -63,6 +63,12 @@ pub enum Tok {
     Colon,      // :
     Underscore, // _
 
+    /// A statement separator, inserted by the lexer's lightweight offside rule at
+    /// a line break that returns to (or below) the enclosing item's indentation
+    /// (outside any brackets). It delimits top-level items so consecutive
+    /// expression statements don't merge into one juxtaposition. See the lexer.
+    Sep,
+
     Eof,
 }
 

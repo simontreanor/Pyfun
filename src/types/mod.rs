@@ -134,6 +134,9 @@ pub enum Ty {
     Float(Unit),
     Bool,
     Str,
+    /// The unit type `unit` (one value; lowers to Python `None`). The result of
+    /// effectful prelude functions like `print`.
+    Unit,
     /// A unification variable.
     Var(u32),
     /// A function `arg -> result` (curried).
@@ -162,7 +165,20 @@ impl Scheme {
 
 type Env = HashMap<String, Scheme>;
 
-const BUILTIN_TYPES: [&str; 4] = ["int", "float", "bool", "string"];
+const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
+
+/// Prelude functions backed directly by Python builtins (`DESIGN.md` §6). This is
+/// the single source of truth shared by the type checker (whose schemes live in
+/// [`seed_prelude`], kept in sync with the arities here) and by lowering, which
+/// reads the arities so a *partial* application of a builtin (e.g. `max 0`) still
+/// lowers correctly. The Python name equals the Pyfun name for every entry, so no
+/// call-site renaming is needed — the simplest honest interop surface.
+pub const PRELUDE: &[(&str, usize)] = &[("print", 1), ("abs", 1), ("min", 2), ("max", 2)];
+
+/// The unit variable id used by the unit-polymorphic prelude numerics
+/// (`abs`/`min`/`max`). Reserved (below [`RESERVED_VARS`]) so a freshly allocated
+/// variable can never alias it and corrupt the seeded schemes.
+const PRELUDE_UVAR: u32 = 2;
 
 /// A type error, with the source span it should be reported against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,6 +257,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     let mut decls = Decls::default();
     let mut env = Env::new();
     seed_builtin_types(&mut decls, &mut env);
+    seed_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -338,9 +355,52 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     (decls, env)
 }
 
-/// The number of variable ids reserved for built-in schemes (`Ok`/`Error` use
-/// type vars 0 and 1). Inference must start allocating fresh ids past this.
-const RESERVED_VARS: u32 = 2;
+/// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
+/// type vars 0 and 1, and the unit-polymorphic prelude numerics use unit var
+/// [`PRELUDE_UVAR`] (2). Inference must start allocating fresh ids past this so a
+/// freshly allocated (and later bound) variable can't alias a seeded bound var.
+const RESERVED_VARS: u32 = 3;
+
+/// Seed the prelude functions ([`PRELUDE`]) into the global environment. These are
+/// thin typed views over Python builtins (`DESIGN.md` §6): `print` is effectful
+/// and returns `unit`; `abs`/`min`/`max` are unit-polymorphic over `int<'u>`.
+fn seed_prelude(env: &mut Env) {
+    // print : 'a -> unit
+    env.insert(
+        "print".to_string(),
+        Scheme {
+            vars: vec![0],
+            uvars: vec![],
+            ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit)),
+        },
+    );
+    // abs : int<'u> -> int<'u>; min / max : int<'u> -> int<'u> -> int<'u>.
+    let int_u = || Ty::Int(Unit::var(PRELUDE_UVAR));
+    env.insert(
+        "abs".to_string(),
+        Scheme {
+            vars: vec![],
+            uvars: vec![PRELUDE_UVAR],
+            ty: Ty::Fun(Box::new(int_u()), Box::new(int_u())),
+        },
+    );
+    let binary = || {
+        Ty::Fun(
+            Box::new(int_u()),
+            Box::new(Ty::Fun(Box::new(int_u()), Box::new(int_u()))),
+        )
+    };
+    for name in ["min", "max"] {
+        env.insert(
+            name.to_string(),
+            Scheme {
+                vars: vec![],
+                uvars: vec![PRELUDE_UVAR],
+                ty: binary(),
+            },
+        );
+    }
+}
 
 /// Seed the built-in computation-expression types `Async a`, `Seq a`, and
 /// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
@@ -415,6 +475,7 @@ fn resolve(
                 "float" => return no_args(Ty::Float(Unit::dimensionless())),
                 "bool" => return no_args(Ty::Bool),
                 "string" => return no_args(Ty::Str),
+                "unit" => return no_args(Ty::Unit),
                 _ => {}
             }
             match type_arity.get(name) {
@@ -911,7 +972,7 @@ impl Infer {
         let a = self.apply(a);
         let b = self.apply(b);
         match (&a, &b) {
-            (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) => Ok(()),
+            (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::Unit, Ty::Unit) => Ok(()),
             (Ty::Int(u1), Ty::Int(u2)) | (Ty::Float(u1), Ty::Float(u2)) => {
                 if self.unify_unit(u1, u2) {
                     Ok(())
@@ -1168,6 +1229,7 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
         Ty::Float(u) => show_numeric("float", u, namer, out),
         Ty::Bool => out.push_str("bool"),
         Ty::Str => out.push_str("string"),
+        Ty::Unit => out.push_str("unit"),
         Ty::Var(n) => out.push_str(&namer.ty(*n)),
         Ty::Con(name, args) if args.is_empty() => out.push_str(name),
         Ty::Con(name, args) => {

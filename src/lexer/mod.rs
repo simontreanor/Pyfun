@@ -1,8 +1,13 @@
 //! Hand-written lexer for the Phase 1 Pyfun subset.
 //!
-//! Whitespace-insensitive for now (Pyfun's offside/whitespace rules are a later
-//! phase). Line comments start with `//` (F#-style). Spans are byte offsets into
-//! the original `&str`.
+//! Mostly whitespace-insensitive, with a **lightweight offside rule** for
+//! top-level item separation: a line break that returns to (or below) the first
+//! item's indentation column, while not inside any `()`/`{}` brackets, emits a
+//! [`Tok::Sep`] separator token. Deeper-indented lines and any line break inside
+//! brackets are continuations (no separator), so multi-line `match`/`if`/CE
+//! blocks keep working while consecutive statements no longer merge into one
+//! juxtaposition. A full general offside rule (for nested blocks) is still a
+//! later phase. Line comments start with `//` (F#-style); spans are byte offsets.
 
 mod token;
 
@@ -34,6 +39,10 @@ struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
     out: Vec<Token>,
+    /// Nesting depth of `()`/`{}`; line breaks inside brackets never separate.
+    depth: usize,
+    /// Indentation column of the first token, used as the offside baseline.
+    baseline: Option<usize>,
 }
 
 impl<'a> Lexer<'a> {
@@ -42,12 +51,14 @@ impl<'a> Lexer<'a> {
             src: source.as_bytes(),
             pos: 0,
             out: Vec::new(),
+            depth: 0,
+            baseline: None,
         }
     }
 
     fn run(mut self) -> Result<Vec<Token>, LexError> {
         loop {
-            self.skip_trivia();
+            let crossed_newline = self.skip_trivia();
             if self.pos >= self.src.len() {
                 let end = self.pos;
                 self.out.push(Token {
@@ -56,8 +67,25 @@ impl<'a> Lexer<'a> {
                 });
                 return Ok(self.out);
             }
+            // Offside rule: a line break that returns to (or below) the baseline
+            // indentation, outside any brackets, separates top-level items.
+            let col = self.column();
+            let baseline = *self.baseline.get_or_insert(col);
+            if crossed_newline && self.depth == 0 && !self.out.is_empty() && col <= baseline {
+                self.push(Tok::Sep, self.pos);
+            }
             self.lex_one()?;
         }
+    }
+
+    /// The column (0-based) of the current position, i.e. bytes since the last
+    /// newline. Assumes space indentation (a tab counts as one column).
+    fn column(&self) -> usize {
+        let mut i = self.pos;
+        while i > 0 && self.src[i - 1] != b'\n' {
+            i -= 1;
+        }
+        self.pos - i
     }
 
     fn peek(&self) -> Option<u8> {
@@ -68,11 +96,19 @@ impl<'a> Lexer<'a> {
         self.src.get(self.pos + 1).copied()
     }
 
-    /// Skip whitespace and `//` line comments.
-    fn skip_trivia(&mut self) {
+    /// Skip whitespace and `//` line comments, reporting whether at least one
+    /// newline was crossed (so the caller can apply the offside rule).
+    fn skip_trivia(&mut self) -> bool {
+        let mut newline = false;
         loop {
             match self.peek() {
+                Some(b'\n') => {
+                    newline = true;
+                    self.pos += 1;
+                }
                 Some(b) if b.is_ascii_whitespace() => self.pos += 1,
+                // A line comment runs to end of line; its terminating newline is
+                // handled by the `\n` arm on the next iteration, so it still counts.
                 Some(b'/') if self.peek2() == Some(b'/') => {
                     while let Some(b) = self.peek() {
                         if b == b'\n' {
@@ -81,7 +117,7 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                 }
-                _ => return,
+                _ => return newline,
             }
         }
     }
@@ -214,6 +250,13 @@ impl<'a> Lexer<'a> {
             b':' => Tok::Colon,
             _ => return Err(self.err(start, &format!("unexpected character {:?}", c as char))),
         };
+        // Track bracket nesting so the offside rule ignores line breaks inside
+        // `(...)` / `{...}` (implicit line continuation).
+        match tok {
+            Tok::LParen | Tok::LBrace => self.depth += 1,
+            Tok::RParen | Tok::RBrace => self.depth = self.depth.saturating_sub(1),
+            _ => {}
+        }
         self.pos += 1;
         self.push(tok, start);
         Ok(())
@@ -272,9 +315,44 @@ mod tests {
 
     #[test]
     fn skips_line_comments() {
+        // The newline after the comment returns to the baseline column, so the
+        // offside rule separates the two statements with a `Sep`.
         assert_eq!(
             kinds("1 // ignored\n2"),
-            vec![Tok::Int(1), Tok::Int(2), Tok::Eof]
+            vec![Tok::Int(1), Tok::Sep, Tok::Int(2), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn offside_separates_top_level_items_but_not_continuations() {
+        // Same-column lines separate; an indented continuation does not.
+        assert_eq!(
+            kinds("a\nb"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::Sep,
+                Tok::Ident("b".to_string()),
+                Tok::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("a\n  b"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::Ident("b".to_string()),
+                Tok::Eof
+            ]
+        );
+        // Line breaks inside brackets never separate.
+        assert_eq!(
+            kinds("(a\nb)"),
+            vec![
+                Tok::LParen,
+                Tok::Ident("a".to_string()),
+                Tok::Ident("b".to_string()),
+                Tok::RParen,
+                Tok::Eof
+            ]
         );
     }
 

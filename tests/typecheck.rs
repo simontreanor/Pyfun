@@ -242,6 +242,37 @@ fn dimensionless_units_unify_with_plain_ints() {
     assert!(pyfun::check("let x = 5<1> + 3").is_ok());
 }
 
+// ---------- prelude (built-in functions, DESIGN §6) ----------
+
+#[test]
+fn accepts_print_of_any_type() {
+    // `print : 'a -> unit` is parametrically polymorphic.
+    assert!(pyfun::check("let a = print 1\nlet b = print true\nlet c = print \"x\"").is_ok());
+}
+
+#[test]
+fn accepts_unit_polymorphic_numeric_builtins() {
+    let src = "measure m\n\
+               let big = max 3<m> 5<m>\n\
+               let small = min 1 2\n\
+               let d = abs (10<m> - 4<m>)";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_min_across_different_units() {
+    assert_error_contains(
+        "measure m\nmeasure s\nlet bad = min 3<m> 5<s>",
+        "expected int<m>, found int<s>",
+    );
+}
+
+#[test]
+fn user_definition_shadows_a_prelude_name() {
+    // A user `min` overrides the builtin, here at a non-numeric type.
+    assert!(pyfun::check("let min a b = a\nlet r = min true false").is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

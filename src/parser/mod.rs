@@ -127,10 +127,20 @@ impl Parser {
 
     fn parse_module(&mut self) -> Result<Module, ParseError> {
         let mut items = Vec::new();
+        self.skip_seps();
         while !self.at_eof() {
             items.push(self.parse_item()?);
+            // An item is delimited by the offside-inserted separators (or EOF).
+            self.skip_seps();
         }
         Ok(Module { items })
+    }
+
+    /// Consume any statement separators between top-level items.
+    fn skip_seps(&mut self) {
+        while matches!(self.peek(), Tok::Sep) {
+            self.bump();
+        }
     }
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
@@ -647,6 +657,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Str(_) => "string literal".to_string(),
         Tok::Ident(name) => format!("identifier `{name}`"),
         Tok::Eof => "end of input".to_string(),
+        Tok::Sep => "end of statement".to_string(),
         other => format!("`{}`", token_symbol(other)),
     }
 }

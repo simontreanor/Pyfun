@@ -98,6 +98,13 @@ impl Lowerer {
         // Built-in Result constructors (see the `result {}` computation expression).
         ctor_arity.insert("Ok".to_string(), 1);
         ctor_arity.insert("Error".to_string(), 1);
+        // Prelude builtins (`print`/`abs`/`min`/`max`): register arities so a
+        // *partial* application lowers to `functools.partial`. Pyfun names equal
+        // their Python builtin names, so no call-site renaming is needed. User
+        // definitions take precedence (`or_insert`), letting a program shadow one.
+        for (name, arity) in crate::types::PRELUDE {
+            arities.entry((*name).to_string()).or_insert(*arity);
+        }
         Lowerer {
             arities,
             ctor_arity,

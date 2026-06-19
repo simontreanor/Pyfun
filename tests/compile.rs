@@ -70,6 +70,22 @@ fn adt_lowers_to_classes_with_match_args() {
 }
 
 #[test]
+fn adt_classes_get_a_repr() {
+    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
+    assert!(py.contains("def __repr__(self):"), "{py}");
+    // Nullary uses the bare class name; a field uses `!r`.
+    assert!(py.contains("return \"None_\""), "{py}");
+    assert!(py.contains("return f\"Some({self._0!r})\""), "{py}");
+}
+
+#[test]
+fn prelude_partial_application_uses_partial() {
+    // A partially applied builtin must close over its arg, not call `max(0)`.
+    let py = pyfun::compile("let clamp0 = max 0").unwrap();
+    assert!(py.contains("clamp0 = functools.partial(max, 0)"), "{py}");
+}
+
+#[test]
 fn unknown_constructor_is_rejected() {
     let err = pyfun::compile("let f o = match o with | Some v -> v | None -> 0").unwrap_err();
     assert!(err.to_string().contains("unknown constructor"), "{err}");
@@ -220,6 +236,31 @@ fn e2e_async_ce_produces_a_coroutine() {
             .unwrap();
     program.push_str("\nimport asyncio\nprint(asyncio.run(twice))\n");
     assert_eq!(run_python(&python, &program).trim(), "42");
+}
+
+#[test]
+fn e2e_prelude_print_and_numerics() {
+    // Bare `print` statements (separated by the offside rule) and the numeric
+    // builtins run end to end and produce observable output.
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program = pyfun::compile(
+        "type Option a = None | Some a\n\
+         let a = 3\n\
+         let b = 10\n\
+         print (min a b)\n\
+         print (max a b)\n\
+         print (abs (a - b))\n\
+         print (Some 7)",
+    )
+    .unwrap();
+    let stdout = run_python(&python, &program);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["3", "10", "7", "Some(7)"]
+    );
 }
 
 // ---------- helpers ----------

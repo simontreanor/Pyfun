@@ -73,3 +73,15 @@ let speed = distance / elapsed       // inferred int<m/s>
 let area w h = w * h
 let floor = area 4<m> 5<m>            // int<m^2>
 // `distance + elapsed` would be a compile error: int<m> vs int<s>.
+
+// Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
+//   pyfun run examples/hello.pyfun
+// Consecutive `print` statements are separated by Pyfun's offside rule (a line
+// break back to the left margin), not braces or semicolons. Units erase, so the
+// printed numbers are plain ints.
+print answer                         // 42
+print seven                          // 7
+print (rank Green)                   // 2
+print floor                          // 20
+print speed                          // 10
+print (max distance 50<m>)           // 100

@@ -26,6 +26,10 @@ const PROGRAMS: &[&str] = &[
     "let nested = match p with | Pair (Some a) b -> a | _ -> b",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
+    // Offside rule: an indented continuation keeps a multi-line item together.
+    "let classify n =\n  match n with\n  | 0 -> \"zero\"\n  | _ -> \"many\"",
+    // Offside rule: consecutive bare statements are separate items.
+    "print a\nprint b",
     // Type declarations: nullary, parameterized, and recursive.
     "type Color = Red | Green | Blue",
     "type Option a = None | Some a",
@@ -119,6 +123,25 @@ fn arithmetic_precedence() {
         matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }),
         "right operand of + should be the multiplication"
     );
+}
+
+#[test]
+fn offside_rule_separates_statements_but_joins_continuations() {
+    // Two bare statements on separate lines are two items, not one juxtaposition.
+    let module = parse("print a\nprint b").unwrap();
+    assert_eq!(module.items.len(), 2, "statements should not merge");
+
+    // An indented continuation stays part of the same item.
+    let module = parse("let f n =\n  match n with\n  | 0 -> 1\n  | _ -> 2").unwrap();
+    assert_eq!(
+        module.items.len(),
+        1,
+        "continuation should not split the item"
+    );
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert!(matches!(binding.value.kind, ExprKind::Match { .. }));
 }
 
 #[test]
