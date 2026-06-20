@@ -233,11 +233,29 @@ fn rejects_unit_result_used_at_wrong_unit() {
 }
 
 #[test]
-fn true_division_yields_float_floor_division_yields_int() {
-    // `/` produces a float, so adding an int to it is rejected (arithmetic is
-    // integer-only until the `num` constraint lands); `//` keeps it an int.
-    assert_error_contains("let r = (7 / 2) + 1", "expected int, found float");
+fn numeric_literals_adapt_to_int_or_float() {
+    // Integer literals are polymorphic (`num 'a => 'a`), so they mix with floats
+    // the Python way; `/` yields float and `//` yields int, both fine here.
+    assert!(pyfun::check("let r = 1 + 2.0").is_ok());
+    assert!(pyfun::check("let r = (7 / 2) + 1").is_ok());
     assert!(pyfun::check("let r = (7 // 2) + 1").is_ok());
+}
+
+#[test]
+fn arithmetic_is_numeric_polymorphic() {
+    // `add` is usable at int *and* float in one program — the win from `num`.
+    let src = "let add a b = a + b\nlet i = add 1 2\nlet f = add 1.5 2.5";
+    assert!(pyfun::check(src).is_ok());
+    // The prelude numerics span int and float too.
+    assert!(pyfun::check("let a = max 1 2\nlet b = min 1.5 2.5\nlet c = abs 3").is_ok());
+}
+
+#[test]
+fn rejects_mixing_concrete_int_and_float() {
+    // Literals adapt, but two *concrete* numeric bases don't implicitly coerce:
+    // `f` is forced to `int` by its int-literal pattern, so `1.0 + f 0` clashes.
+    let src = "let f n = match n with | 0 -> n | _ -> n\nlet r = 1.0 + f 0";
+    assert_error_contains(src, "found int");
 }
 
 #[test]

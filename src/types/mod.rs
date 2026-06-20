@@ -13,10 +13,15 @@
 //! type variables, giving unit-polymorphic functions (`let area w h = w * h` infers
 //! `int<'u> -> int<'v> -> int<'u 'v>`). Units are erased at lowering.
 //!
-//! Still deferred until its syntax exists: effect inference. Arithmetic operands
-//! are integer-only for now (no numeric type classes — `DESIGN.md` §7.1), but
-//! mirrors Python's division: `/` is true division (result `float`) and `//`
-//! floors (result `int`).
+//! **Numbers (`DESIGN.md` §7.1).** A single built-in `num` constraint makes
+//! arithmetic polymorphic over `int`/`float`: integer literals are polymorphic
+//! ([`Ty::Num`]) and adapt to context (`1 + 2.0 : float`), so `let add a b = a +
+//! b` infers `num 'a => 'a -> 'a -> 'a` and works at both bases. Division mirrors
+//! Python: `/` is true division (`float`), `//` floors. No user-extensible type
+//! classes (the set is closed); an unresolved `num` defaults to `int`.
+//!
+//! Still deferred until its syntax exists: effect inference; `comparison`/
+//! `equality` constraints (no `<`/`==` operators yet).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -139,6 +144,11 @@ pub enum Ty {
     /// The unit type `unit` (one value; lowers to Python `None`). The result of
     /// effectful prelude functions like `print`.
     Unit,
+    /// A numeric type whose base (`int`/`float`) is not yet known — a variable
+    /// constrained to `num`, carrying a unit. Polymorphic numeric (integer)
+    /// literals start here and resolve to `Int`/`Float`; an unresolved one
+    /// behaves and displays as `int` (the default). See `DESIGN.md` §7.1.
+    Num(u32, Unit),
     /// A unification variable.
     Var(u32),
     /// A function `arg -> result` (curried).
@@ -147,11 +157,22 @@ pub enum Ty {
     Con(String, Vec<Ty>),
 }
 
-/// A type scheme, generalized over type variables and unit variables.
+/// The resolved base of a numeric type: a concrete `int`/`float`, or a `num`
+/// variable (possibly still unbound).
+#[derive(Debug, Clone, Copy)]
+enum NumRef {
+    Int,
+    Float,
+    Var(u32),
+}
+
+/// A type scheme, generalized over type variables, unit variables, and `num`
+/// (numeric base) variables.
 #[derive(Debug, Clone)]
 struct Scheme {
     vars: Vec<u32>,
     uvars: Vec<u32>,
+    num_vars: Vec<u32>,
     ty: Ty,
 }
 
@@ -160,6 +181,7 @@ impl Scheme {
         Scheme {
             vars: vec![],
             uvars: vec![],
+            num_vars: vec![],
             ty,
         }
     }
@@ -181,6 +203,10 @@ pub const PRELUDE: &[(&str, usize)] = &[("print", 1), ("abs", 1), ("min", 2), ("
 /// (`abs`/`min`/`max`). Reserved (below [`RESERVED_VARS`]) so a freshly allocated
 /// variable can never alias it and corrupt the seeded schemes.
 const PRELUDE_UVAR: u32 = 2;
+
+/// The `num` (numeric base) variable id used by the prelude numerics, so they are
+/// polymorphic over `int`/`float` as well as units. Also reserved.
+const PRELUDE_NUMVAR: u32 = 3;
 
 /// A type error, with the source span it should be reported against.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -342,6 +368,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
             let scheme = Scheme {
                 vars: (0..decl.params.len() as u32).collect(),
                 uvars: vec![],
+                num_vars: vec![],
                 ty: ctor_ty,
             };
             env.insert(variant.name.clone(), scheme.clone());
@@ -358,14 +385,16 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
 }
 
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
-/// type vars 0 and 1, and the unit-polymorphic prelude numerics use unit var
-/// [`PRELUDE_UVAR`] (2). Inference must start allocating fresh ids past this so a
-/// freshly allocated (and later bound) variable can't alias a seeded bound var.
-const RESERVED_VARS: u32 = 3;
+/// type vars 0 and 1, and the prelude numerics use unit var [`PRELUDE_UVAR`] (2)
+/// and `num` var [`PRELUDE_NUMVAR`] (3). Inference must start allocating fresh ids
+/// past this so a freshly allocated (and later bound) variable can't alias a
+/// seeded bound var and corrupt it via a substitution.
+const RESERVED_VARS: u32 = 4;
 
 /// Seed the prelude functions ([`PRELUDE`]) into the global environment. These are
 /// thin typed views over Python builtins (`DESIGN.md` §6): `print` is effectful
-/// and returns `unit`; `abs`/`min`/`max` are unit-polymorphic over `int<'u>`.
+/// and returns `unit`; `abs`/`min`/`max` are polymorphic over the numeric base
+/// (`num`) *and* the unit, i.e. `num 'a => 'a<'u> -> …`.
 fn seed_prelude(env: &mut Env) {
     // print : 'a -> unit
     env.insert(
@@ -373,34 +402,31 @@ fn seed_prelude(env: &mut Env) {
         Scheme {
             vars: vec![0],
             uvars: vec![],
+            num_vars: vec![],
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit)),
         },
     );
-    // abs : int<'u> -> int<'u>; min / max : int<'u> -> int<'u> -> int<'u>.
-    let int_u = || Ty::Int(Unit::var(PRELUDE_UVAR));
+    let num_u = || Ty::Num(PRELUDE_NUMVAR, Unit::var(PRELUDE_UVAR));
+    let scheme = |ty| Scheme {
+        vars: vec![],
+        uvars: vec![PRELUDE_UVAR],
+        num_vars: vec![PRELUDE_NUMVAR],
+        ty,
+    };
+    // abs : num 'a => 'a<'u> -> 'a<'u>
     env.insert(
         "abs".to_string(),
-        Scheme {
-            vars: vec![],
-            uvars: vec![PRELUDE_UVAR],
-            ty: Ty::Fun(Box::new(int_u()), Box::new(int_u())),
-        },
+        scheme(Ty::Fun(Box::new(num_u()), Box::new(num_u()))),
     );
+    // min / max : num 'a => 'a<'u> -> 'a<'u> -> 'a<'u>
     let binary = || {
         Ty::Fun(
-            Box::new(int_u()),
-            Box::new(Ty::Fun(Box::new(int_u()), Box::new(int_u()))),
+            Box::new(num_u()),
+            Box::new(Ty::Fun(Box::new(num_u()), Box::new(num_u()))),
         )
     };
     for name in ["min", "max"] {
-        env.insert(
-            name.to_string(),
-            Scheme {
-                vars: vec![],
-                uvars: vec![PRELUDE_UVAR],
-                ty: binary(),
-            },
-        );
+        env.insert(name.to_string(), scheme(binary()));
     }
 }
 
@@ -421,11 +447,13 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     let ok = Scheme {
         vars: vec![0, 1],
         uvars: vec![],
+        num_vars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
     };
     let err = Scheme {
         vars: vec![0, 1],
         uvars: vec![],
+        num_vars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -508,11 +536,27 @@ fn resolve(
 struct Infer {
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
+    /// Resolution of `num` (numeric base) variables — a small union-find: a var
+    /// maps to a concrete `Int`/`Float` or to another `num` var.
+    num_subst: HashMap<u32, NumRef>,
     next: u32,
     decls: Decls,
 }
 
 impl Infer {
+    /// Allocate a fresh variable id (shared id space for type/unit/num vars).
+    fn fresh_id(&mut self) -> u32 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+
+    /// A fresh polymorphic numeric (a `num` variable), dimensionless. Integer
+    /// literals get one of these so they adapt to int or float by context.
+    fn fresh_num(&mut self) -> Ty {
+        Ty::Num(self.fresh_id(), Unit::dimensionless())
+    }
+
     fn fresh(&mut self) -> Ty {
         let id = self.next;
         self.next += 1;
@@ -534,6 +578,7 @@ impl Infer {
             },
             Ty::Int(u) => Ty::Int(self.apply_unit(u)),
             Ty::Float(u) => Ty::Float(self.apply_unit(u)),
+            Ty::Num(v, u) => self.num_ty(NumRef::Var(*v), self.apply_unit(u)),
             Ty::Fun(a, b) => Ty::Fun(Box::new(self.apply(a)), Box::new(self.apply(b))),
             Ty::Con(name, args) => {
                 Ty::Con(name.clone(), args.iter().map(|a| self.apply(a)).collect())
@@ -559,6 +604,78 @@ impl Infer {
         r
     }
 
+    /// Follow the `num` union-find to a representative (a concrete base, or an
+    /// unbound `num` var).
+    fn resolve_num(&self, v: u32) -> NumRef {
+        match self.num_subst.get(&v) {
+            Some(NumRef::Var(w)) => self.resolve_num(*w),
+            Some(other) => *other,
+            None => NumRef::Var(v),
+        }
+    }
+
+    /// Build the concrete numeric type for a (possibly variable) base + unit. An
+    /// unresolved base stays `Num`; a resolved one becomes `Int`/`Float`.
+    fn num_ty(&self, base: NumRef, unit: Unit) -> Ty {
+        let base = match base {
+            NumRef::Var(v) => self.resolve_num(v),
+            concrete => concrete,
+        };
+        match base {
+            NumRef::Int => Ty::Int(unit),
+            NumRef::Float => Ty::Float(unit),
+            NumRef::Var(v) => Ty::Num(v, unit),
+        }
+    }
+
+    /// Unify two numeric bases. Returns false only on a genuine `int` vs `float`
+    /// clash (Pyfun does not implicitly coerce between numeric bases — §7.1).
+    fn unify_num(&mut self, a: NumRef, b: NumRef) -> bool {
+        let a = match a {
+            NumRef::Var(v) => self.resolve_num(v),
+            c => c,
+        };
+        let b = match b {
+            NumRef::Var(v) => self.resolve_num(v),
+            c => c,
+        };
+        match (a, b) {
+            (NumRef::Int, NumRef::Int) | (NumRef::Float, NumRef::Float) => true,
+            (NumRef::Int, NumRef::Float) | (NumRef::Float, NumRef::Int) => false,
+            (NumRef::Var(x), NumRef::Var(y)) => {
+                if x != y {
+                    self.num_subst.insert(x, NumRef::Var(y));
+                }
+                true
+            }
+            (NumRef::Var(x), c) | (c, NumRef::Var(x)) => {
+                self.num_subst.insert(x, c);
+                true
+            }
+        }
+    }
+
+    /// Require `ty` to be numeric, returning its base and unit (binding a bare
+    /// type variable to a fresh `num` if needed). Diagnostics read "int" because
+    /// `int` is the default numeric (§7.1).
+    fn expect_num(&mut self, ty: &Ty, span: Span) -> Result<(NumRef, Unit), TypeError> {
+        match self.apply(ty) {
+            Ty::Int(u) => Ok((NumRef::Int, u)),
+            Ty::Float(u) => Ok((NumRef::Float, u)),
+            Ty::Num(v, u) => Ok((NumRef::Var(v), u)),
+            Ty::Var(n) => {
+                let v = self.fresh_id();
+                let u = self.fresh_unit();
+                self.subst.insert(n, Ty::Num(v, u.clone()));
+                Ok((NumRef::Var(v), u))
+            }
+            other => Err(TypeError {
+                message: format!("expected int, found {}", show(&other)),
+                span,
+            }),
+        }
+    }
+
     fn infer_binding(&mut self, binding: &LetBinding, env: &Env) -> Result<Scheme, TypeError> {
         let ty = if binding.params.is_empty() {
             self.infer_expr(&binding.value, env)?
@@ -582,7 +699,10 @@ impl Infer {
     fn infer_expr(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
         let span = expr.span();
         match &expr.kind {
-            ExprKind::Int(_) => Ok(Ty::Int(Unit::dimensionless())),
+            // Integer literals are polymorphic numerics (`num 'a => 'a`) so they
+            // adapt to int or float by context; float literals are concretely
+            // float (§7.1).
+            ExprKind::Int(_) => Ok(self.fresh_num()),
             ExprKind::Float(_) => Ok(Ty::Float(Unit::dimensionless())),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Bool(_) => Ok(Ty::Bool),
@@ -601,6 +721,9 @@ impl Infer {
                 match self.apply(&vt) {
                     Ty::Int(_) => Ok(Ty::Int(u)),
                     Ty::Float(_) => Ok(Ty::Float(u)),
+                    // A polymorphic numeric literal keeps its base var, gaining
+                    // the annotated unit (`5<m>` : `num 'a => 'a<m>`).
+                    Ty::Num(v, _) => Ok(Ty::Num(v, u)),
                     other => Err(TypeError {
                         message: format!(
                             "unit annotations apply only to numeric values, not {}",
@@ -612,27 +735,37 @@ impl Infer {
             }
 
             ExprKind::Binary { op, lhs, rhs } => {
+                // Both operands must be the same numeric base (no int/float mixing
+                // beyond literal adaptation — §7.1). `+ - * //` keep that base;
+                // `/` is true division and always yields `float`.
                 let lt = self.infer_expr(lhs, env)?;
-                let u1 = self.expect_int(&lt, lhs.span())?;
+                let (lb, lu) = self.expect_num(&lt, lhs.span())?;
                 let rt = self.infer_expr(rhs, env)?;
-                let u2 = self.expect_int(&rt, rhs.span())?;
+                let (rb, ru) = self.expect_num(&rt, rhs.span())?;
+                let base_clash = |this: &Self| {
+                    mismatch(
+                        &this.num_ty(lb, this.apply_unit(&lu)),
+                        &this.num_ty(rb, this.apply_unit(&ru)),
+                        span,
+                    )
+                };
+                if !self.unify_num(lb, rb) {
+                    return Err(base_clash(self));
+                }
                 match op {
                     BinOp::Add | BinOp::Sub => {
-                        if !self.unify_unit(&u1, &u2) {
-                            return Err(mismatch(
-                                &Ty::Int(self.apply_unit(&u1)),
-                                &Ty::Int(self.apply_unit(&u2)),
-                                span,
-                            ));
+                        if !self.unify_unit(&lu, &ru) {
+                            return Err(base_clash(self));
                         }
-                        Ok(Ty::Int(self.apply_unit(&u1)))
+                        Ok(self.num_ty(lb, self.apply_unit(&lu)))
                     }
-                    BinOp::Mul => Ok(Ty::Int(self.apply_unit(&u1).mul(&self.apply_unit(&u2)))),
-                    // `/` is true division → float (Python `/`); `//` floors → int
-                    // (Python `//`). Both combine units the same way. Operands are
-                    // integer-only until the `num` constraint lands (DESIGN §7.1).
-                    BinOp::Div => Ok(Ty::Float(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
-                    BinOp::FloorDiv => Ok(Ty::Int(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
+                    BinOp::Mul => {
+                        Ok(self.num_ty(lb, self.apply_unit(&lu).mul(&self.apply_unit(&ru))))
+                    }
+                    BinOp::Div => Ok(Ty::Float(self.apply_unit(&lu).div(&self.apply_unit(&ru)))),
+                    BinOp::FloorDiv => {
+                        Ok(self.num_ty(lb, self.apply_unit(&lu).div(&self.apply_unit(&ru))))
+                    }
                 }
             }
 
@@ -677,23 +810,6 @@ impl Infer {
             }
 
             ExprKind::Ce { builder, items } => self.infer_ce(*builder, items, span, env),
-        }
-    }
-
-    /// Require `ty` to be an integer (binding a type variable if needed) and
-    /// return its unit. Keeps arithmetic diagnostics reading "expected int, …".
-    fn expect_int(&mut self, ty: &Ty, span: Span) -> Result<Unit, TypeError> {
-        match self.apply(ty) {
-            Ty::Int(u) => Ok(u),
-            Ty::Var(_) => {
-                let u = self.fresh_unit();
-                let _ = self.unify(&Ty::Int(u.clone()), ty, span);
-                Ok(self.apply_unit(&u))
-            }
-            other => Err(TypeError {
-                message: format!("expected int, found {}", show(&other)),
-                span,
-            }),
         }
     }
 
@@ -986,6 +1102,28 @@ impl Infer {
                     Err(mismatch(&a, &b, span))
                 }
             }
+            // A `num` variable meets another numeric: resolve its base, unify units.
+            (Ty::Num(x, ux), Ty::Num(y, uy)) => {
+                if self.unify_num(NumRef::Var(*x), NumRef::Var(*y)) && self.unify_unit(ux, uy) {
+                    Ok(())
+                } else {
+                    Err(mismatch(&a, &b, span))
+                }
+            }
+            (Ty::Num(v, un), Ty::Int(ui)) | (Ty::Int(ui), Ty::Num(v, un)) => {
+                if self.unify_num(NumRef::Var(*v), NumRef::Int) && self.unify_unit(un, ui) {
+                    Ok(())
+                } else {
+                    Err(mismatch(&a, &b, span))
+                }
+            }
+            (Ty::Num(v, un), Ty::Float(uf)) | (Ty::Float(uf), Ty::Num(v, un)) => {
+                if self.unify_num(NumRef::Var(*v), NumRef::Float) && self.unify_unit(un, uf) {
+                    Ok(())
+                } else {
+                    Err(mismatch(&a, &b, span))
+                }
+            }
             (Ty::Var(x), Ty::Var(y)) if x == y => Ok(()),
             (Ty::Var(x), t) | (t, Ty::Var(x)) => {
                 if occurs(*x, t) {
@@ -1083,12 +1221,17 @@ impl Infer {
             .iter()
             .map(|v| (*v, self.fresh_unit()))
             .collect();
-        subst_all(&scheme.ty, &tmap, &umap)
+        let nmap: HashMap<u32, u32> = scheme
+            .num_vars
+            .iter()
+            .map(|v| (*v, self.fresh_id()))
+            .collect();
+        subst_all(&scheme.ty, &tmap, &umap, &nmap)
     }
 
     fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
         let ty = self.apply(ty);
-        let (env_t, env_u) = self.env_free_vars(env);
+        let (env_t, env_u, env_n) = self.env_free_vars(env);
         let mut vars = Vec::new();
         free_type_vars(&ty, &mut |v| {
             if !env_t.contains(&v) && !vars.contains(&v) {
@@ -1101,15 +1244,28 @@ impl Infer {
                 uvars.push(v);
             }
         });
-        Scheme { vars, uvars, ty }
+        let mut num_vars = Vec::new();
+        free_num_vars(&ty, &mut |v| {
+            if !env_n.contains(&v) && !num_vars.contains(&v) {
+                num_vars.push(v);
+            }
+        });
+        Scheme {
+            vars,
+            uvars,
+            num_vars,
+            ty,
+        }
     }
 
-    fn env_free_vars(&self, env: &Env) -> (HashSet<u32>, HashSet<u32>) {
+    fn env_free_vars(&self, env: &Env) -> (HashSet<u32>, HashSet<u32>, HashSet<u32>) {
         let mut tys = HashSet::new();
         let mut units = HashSet::new();
+        let mut nums = HashSet::new();
         for scheme in env.values() {
             let bound_t: HashSet<u32> = scheme.vars.iter().copied().collect();
             let bound_u: HashSet<u32> = scheme.uvars.iter().copied().collect();
+            let bound_n: HashSet<u32> = scheme.num_vars.iter().copied().collect();
             let applied = self.apply(&scheme.ty);
             free_type_vars(&applied, &mut |v| {
                 if !bound_t.contains(&v) {
@@ -1121,8 +1277,13 @@ impl Infer {
                     units.insert(v);
                 }
             });
+            free_num_vars(&applied, &mut |v| {
+                if !bound_n.contains(&v) {
+                    nums.insert(v);
+                }
+            });
         }
-        (tys, units)
+        (tys, units, nums)
     }
 }
 
@@ -1175,7 +1336,7 @@ fn free_type_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
 
 fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
-        Ty::Int(u) | Ty::Float(u) => u.var_ids().into_iter().for_each(f),
+        Ty::Int(u) | Ty::Float(u) | Ty::Num(_, u) => u.var_ids().into_iter().for_each(f),
         Ty::Fun(a, b) => {
             free_unit_vars(a, f);
             free_unit_vars(b, f);
@@ -1185,18 +1346,38 @@ fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     }
 }
 
-fn subst_all(ty: &Ty, tmap: &HashMap<u32, Ty>, umap: &HashMap<u32, Unit>) -> Ty {
+fn free_num_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
+    match ty {
+        Ty::Num(v, _) => f(*v),
+        Ty::Fun(a, b) => {
+            free_num_vars(a, f);
+            free_num_vars(b, f);
+        }
+        Ty::Con(_, args) => args.iter().for_each(|a| free_num_vars(a, f)),
+        _ => {}
+    }
+}
+
+fn subst_all(
+    ty: &Ty,
+    tmap: &HashMap<u32, Ty>,
+    umap: &HashMap<u32, Unit>,
+    nmap: &HashMap<u32, u32>,
+) -> Ty {
     match ty {
         Ty::Var(n) => tmap.get(n).cloned().unwrap_or(Ty::Var(*n)),
         Ty::Int(u) => Ty::Int(u.subst(umap)),
         Ty::Float(u) => Ty::Float(u.subst(umap)),
+        Ty::Num(v, u) => Ty::Num(*nmap.get(v).unwrap_or(v), u.subst(umap)),
         Ty::Fun(a, b) => Ty::Fun(
-            Box::new(subst_all(a, tmap, umap)),
-            Box::new(subst_all(b, tmap, umap)),
+            Box::new(subst_all(a, tmap, umap, nmap)),
+            Box::new(subst_all(b, tmap, umap, nmap)),
         ),
         Ty::Con(name, args) => Ty::Con(
             name.clone(),
-            args.iter().map(|a| subst_all(a, tmap, umap)).collect(),
+            args.iter()
+                .map(|a| subst_all(a, tmap, umap, nmap))
+                .collect(),
         ),
         other => other.clone(),
     }
@@ -1231,7 +1412,8 @@ fn show(ty: &Ty) -> String {
 
 fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
     match ty {
-        Ty::Int(u) => show_numeric("int", u, namer, out),
+        // An unresolved `num` literal displays as its default, `int`.
+        Ty::Int(u) | Ty::Num(_, u) => show_numeric("int", u, namer, out),
         Ty::Float(u) => show_numeric("float", u, namer, out),
         Ty::Bool => out.push_str("bool"),
         Ty::Str => out.push_str("string"),

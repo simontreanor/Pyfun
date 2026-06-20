@@ -40,24 +40,23 @@ This adds assignment plus the rule "reassigning a non-`mut` binding is a compile
   statement blocks yet — you can't currently sequence a mutation then continue), the check, and
   lowering. The sequencing requirement makes it bigger than it first looks.
 
-### 4. Float arithmetic / numeric constraint — step (a) done; `num` constraint pending (`DESIGN.md` §7.1)
-Arithmetic *operands* are integer-only today, so `3.14 + 1.0` is still a type error even though
-floats exist as values. The design is **decided** — Python-familiar numerics via a single closed
-built-in constraint (full rationale and trade-offs in `DESIGN.md` §7.1). Progress:
-- **✅ Step (a) shipped:** `/` is now true division → `float` (`7 / 2 == 3.5`); new `//` floors →
-  `int`. To free `//`, line comments moved to `#` (Python-style). Each operator maps 1:1 to a Python
-  operator, so lowering stays syntactic (no type-directed `/`-vs-`//`). Covered by lexer/parser/
-  typecheck/compile tests; `examples/hello.pyfun` updated.
-- **Remaining — one built-in `num` constraint** with **polymorphic numeric literals** (so `1 + 2.0` works,
-  unconstrained literals default to `int`). Generic functions (`area`/`min`/`max`) stay polymorphic
-  over int/float **and units**. No annotations required.
-- Closed constraint set (not user-extensible type classes); no F# `inline`/SRTP needed because
-  Python dispatches operators at runtime. `+ - *` stay numeric (string concat is a later function).
-- **Unlocks:** Real numeric programming; makes units far more useful (physics is floats — they
-  inherit dimensional checking for free).
-- **Effort/risk:** Medium. The constraint solver (constrained schemes + propagation + satisfaction +
-  defaulting) is the bulk; lowering is trivial. Implementation order in §7.1. Defer
-  `comparison`/`equality` constraints until the `<`/`==` operators land.
+### 4. Float arithmetic / numeric constraint — ✅ done (`DESIGN.md` §7.1)
+Python-familiar numerics via a single closed built-in constraint. Both steps shipped:
+- **✅ Step (a):** `/` is true division → `float` (`7 / 2 == 3.5`); new `//` floors → `int`. To free
+  `//`, line comments moved to `#` (Python-style). Each operator maps 1:1 to a Python operator, so
+  lowering stays syntactic.
+- **✅ Step (b):** one built-in `num` constraint with **polymorphic integer literals** (so `1 + 2.0`
+  works; an unresolved numeric defaults to/displays as `int`). `let add a b = a + b` infers
+  `num 'a => 'a -> 'a -> 'a` and runs at both int and float; `abs`/`min`/`max` and `area` stay
+  polymorphic over int/float **and units**. Implemented as `Ty::Num(var, unit)` + a `num` union-find,
+  generalized/instantiated like type and unit vars. No annotations; no user-extensible type classes;
+  no F# `inline`/SRTP (Python dispatches operators at runtime). `+ - *` stay numeric.
+- **Unlocks:** real numeric programming; makes units genuinely useful (physics is floats — they get
+  dimensional checking for free, e.g. `10.5<m> / 2.0<s> : float<m/s>`).
+- **Remaining nearby work:** `comparison`/`equality` constraints (deferred until `<`/`==` operators
+  exist), and a guiding error for `+` on strings. Minor wart: a literal unified to `float` still
+  emits as an int literal, so a *bare* such value prints `7` not `7.0` (arithmetic coerces, so values
+  are unaffected).
 
 ## Polish on existing features
 

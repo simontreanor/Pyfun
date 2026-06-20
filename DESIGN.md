@@ -186,13 +186,13 @@ separation; a **general offside rule for nested blocks** (local `let`-sequencing
 delimited bodies) is deferred to a later phase, and pairs naturally with mutability/`let mut`
 sequencing (§3). It is orthogonal to the brace-delimited CEs and records (§8.1).
 
-### 7.1 Numbers & arithmetic — Python-familiar (step (a) implemented; `num` constraint pending)
+### 7.1 Numbers & arithmetic — Python-familiar (implemented)
 
-The decided design for adding floats puts **familiarity to Python programmers first** — Pyfun brings
-functional discipline, but numeric behaviour should not surprise someone coming from Python. A Python
-user never sees the type machinery; they feel a few surface behaviours, and those are what this
-design pins down. Step (a) — the division semantics and `#` comments — has shipped; the `num`
-constraint and float *operands* are the remaining work.
+The design for floats puts **familiarity to Python programmers first** — Pyfun brings functional
+discipline, but numeric behaviour should not surprise someone coming from Python. A Python user never
+sees the type machinery; they feel a few surface behaviours, and those are what this design pins
+down. Both steps have shipped: the division semantics + `#` comments (step a), and the `num`
+constraint with polymorphic literals (step b).
 
 **Decisions:**
 
@@ -200,20 +200,24 @@ constraint and float *operands* are the remaining work.
    `float`, `7 / 2 == 3.5`), and `//` is Python floor division (`7 // 2 == 3`, result `int`). This
    matches Python 3's most well-known numeric fact (the old floor-meaning `/` was the single most
    un-Pythonic thing in the language). To free the `//` spelling, **line comments moved from `//` to
-   `#`** (Python-style — another familiarity win). Operands are still integer-only until `num` lands,
-   so a float *result* of `/` can't yet be fed back into `+`/`*`. Bonus: because each operator maps
+   `#`** (Python-style — another familiarity win). Bonus: because each operator maps
    1:1 to a Python
    operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
    `//` (the type-directed-lowering problem this would otherwise create disappears).
-2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics) are typed with
-   a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a -> 'a`. `int` and
-   `float` (with any units) satisfy `num`; `bool`/`string` do not (→ a clear "not a numeric type"
-   error). Generic functions like `area`/`min`/`max` therefore stay polymorphic over int *and* float
+2. **One built-in numeric constraint, `num`. ✅ implemented.** `+ - * //` (and the prelude numerics)
+   are typed with a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a ->
+   'a`. `int` and `float` (with any units) satisfy `num`; `bool`/`string` do not (→ "expected int,
+   found bool"). Generic functions like `area`/`min`/`max` stay polymorphic over int *and* float
    *and* units — the property a hard-coded int-default would throw away. No type annotations are ever
-   required (Pyfun has none anyway).
-3. **Polymorphic numeric literals; default `int`.** A literal `1` has type `num 'a => 'a` and adapts
-   to context, so mixed-literal arithmetic just works the Python way: `1 + 2.0 : float`,
-   `add 1 2.0 : float`. An unconstrained literal (`let x = 1 + 1`) defaults to `int`.
+   required (Pyfun has none anyway). Implemented as a `Ty::Num(var, unit)` variant resolved by a tiny
+   `num` union-find, with `num` variables generalized/instantiated alongside type and unit variables.
+3. **Polymorphic numeric literals; default `int`. ✅ implemented.** An integer literal `1` has type
+   `num 'a => 'a` and adapts to context, so mixed-literal arithmetic just works the Python way:
+   `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`. An unresolved numeric defaults
+   to `int` — operationally automatic rather than a separate pass: it *displays* as `int`, and since
+   it lowers to an int literal that Python coerces in arithmetic, results stay correct. (Minor wart:
+   a literal whose type unifies to `float` still emits as an int literal, so a *bare* such literal
+   prints `7` not `7.0`; in any arithmetic Python coerces, so values are unaffected.)
 4. **No implicit int→float coercion between *variables*.** Mixing two values of genuinely different
    concrete numeric type (an `int`-typed variable plus a `float`-typed one) is a (gentle) error
    rather than a silent widening. Full coercion would require subtyping (`int <: float`), which
@@ -240,10 +244,10 @@ and equality/ordering for user ADTs (when those land) is the compiler's call —
 `__eq__`/`__lt__` on emitted classes the way it already generates `__repr__`. What it keeps is the
 thing that matters here: numeric and **unit** polymorphism, with Python-native surface behaviour.
 
-**Implementation order (ROADMAP #4):** (a) ✅ flipped `/` to true division, added `//`, moved
-comments to `#`; (b) add the `num` constraint with polymorphic literals and int-defaulting (this is
-what lets float *operands* into `+ - * //`); (c) keep `+ - *` numeric with a guiding string-concat
-error. Defer `comparison`/`equality` until the `<`/`==` operators exist.
+**Implementation status (ROADMAP #4):** (a) ✅ `/` true division, `//` floor, comments → `#`;
+(b) ✅ the `num` constraint with polymorphic literals; (c) `+ - *` stay numeric — string concat is
+deferred to a later named function (no guiding error yet). Still deferred: `comparison`/`equality`
+constraints until the `<`/`==` operators exist.
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
