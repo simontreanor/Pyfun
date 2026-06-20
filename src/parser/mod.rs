@@ -15,8 +15,12 @@
 //! comparison  := additive (("=="|"!="|"<"|">"|"<="|">=") additive)*
 //! additive    := multiplicative (("+"|"-") multiplicative)*
 //! multiplicative := application (("*"|"/"|"//") application)*
-//! application := atom atom*          // juxtaposition; curried, left-assoc
+//! application := postfix postfix*    // juxtaposition; curried, left-assoc
+//! postfix     := atom ("." ident)*   // record field access, binds tightest
 //! atom        := int | float | string | "true" | "false" | ident | "(" expr ")"
+//!              | record
+//! record      := "{" ident "=" expr ("," ident "=" expr)* "}"   // literal
+//!              | "{" expr "with" ident "=" expr ("," ...)* "}"   // update
 //! pattern     := ctor | atom_pattern
 //! ctor        := UpperIdent atom_pattern*
 //! atom_pattern:= "_" | ident | int | "true" | "false" | "(" pattern ")"
@@ -28,8 +32,8 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, NodeSpan,
-    Pattern, TypeDecl, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm,
+    Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -174,18 +178,45 @@ impl Parser {
             params.push(self.parse_ident("type parameter")?);
         }
         self.expect(&Tok::Eq, "`=`")?;
-        self.eat(&Tok::Bar); // optional leading bar
-        let mut variants = vec![self.parse_variant()?];
-        while self.eat(&Tok::Bar) {
-            variants.push(self.parse_variant()?);
-        }
+        // A `{` after `=` introduces a record body; otherwise it is a sum of
+        // constructors.
+        let kind = if matches!(self.peek(), Tok::LBrace) {
+            TypeDeclKind::Record(self.parse_record_decl_fields()?)
+        } else {
+            self.eat(&Tok::Bar); // optional leading bar
+            let mut variants = vec![self.parse_variant()?];
+            while self.eat(&Tok::Bar) {
+                variants.push(self.parse_variant()?);
+            }
+            TypeDeclKind::Sum(variants)
+        };
         let span = crate::parser::ast::NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(TypeDecl {
             name,
             params,
-            variants,
+            kind,
             span,
         })
+    }
+
+    /// Parse a record body `{ x: type, y: type }` in a `type` declaration.
+    fn parse_record_decl_fields(&mut self) -> Result<Vec<FieldDecl>, ParseError> {
+        self.expect(&Tok::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::RBrace) {
+            let name = self.parse_ident("field name")?;
+            self.expect(&Tok::Colon, "`:`")?;
+            let ty = self.parse_type()?;
+            fields.push(FieldDecl { name, ty });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        if fields.is_empty() {
+            return Err(self.error("a record must have at least one field"));
+        }
+        Ok(fields)
     }
 
     fn parse_variant(&mut self) -> Result<VariantDecl, ParseError> {
@@ -455,9 +486,9 @@ impl Parser {
 
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut func = self.parse_atom()?;
+        let mut func = self.parse_postfix()?;
         while starts_atom(self.peek()) {
-            let arg = self.parse_atom()?;
+            let arg = self.parse_postfix()?;
             func = self.mk(
                 start,
                 ExprKind::App {
@@ -467,6 +498,25 @@ impl Parser {
             );
         }
         Ok(func)
+    }
+
+    /// An atom followed by zero or more `.field` accesses. Field access binds
+    /// tighter than application (`f p.x` is `f (p.x)`) and chains left-to-right
+    /// (`p.x.y` is `(p.x).y`).
+    fn parse_postfix(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let mut base = self.parse_atom()?;
+        while self.eat(&Tok::Dot) {
+            let name = self.parse_ident("field name")?;
+            base = self.mk(
+                start,
+                ExprKind::Field {
+                    base: Box::new(base),
+                    name,
+                },
+            );
+        }
+        Ok(base)
     }
 
     fn parse_atom(&mut self) -> Result<Expr, ParseError> {
@@ -512,9 +562,52 @@ impl Parser {
                 // Keep the inner node's own (paren-free) span.
                 return Ok(inner);
             }
+            Tok::LBrace => return self.parse_record(start),
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
+    }
+
+    /// Parse a record literal `{ x = 1, y = 2 }` or update `{ base with x = 3 }`.
+    ///
+    /// The two are distinguished by lookahead: a leading `ident =` is a literal's
+    /// first field; anything else is the `base` expression of an update (followed
+    /// by `with`).
+    fn parse_record(&mut self, start: usize) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LBrace, "`{`")?;
+        let is_literal = matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Eq);
+        let kind = if is_literal {
+            ExprKind::Record {
+                fields: self.parse_field_inits()?,
+            }
+        } else {
+            let base = Box::new(self.parse_expr()?);
+            self.expect(&Tok::With, "`with`")?;
+            ExprKind::RecordUpdate {
+                base,
+                fields: self.parse_field_inits()?,
+            }
+        };
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(self.mk(start, kind))
+    }
+
+    /// Parse `ident = expr (, ident = expr)*` field initializers up to `}`.
+    fn parse_field_inits(&mut self) -> Result<Vec<FieldInit>, ParseError> {
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::RBrace) {
+            let name = self.parse_ident("field name")?;
+            self.expect(&Tok::Eq, "`=`")?;
+            let value = self.parse_expr()?;
+            fields.push(FieldInit { name, value });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        if fields.is_empty() {
+            return Err(self.error("a record needs at least one field"));
+        }
+        Ok(fields)
     }
 
     /// Wrap a freshly-parsed numeric literal in a unit annotation if one follows.
@@ -725,6 +818,7 @@ fn starts_atom(tok: &Tok) -> bool {
             | Tok::False
             | Tok::Ident(_)
             | Tok::LParen
+            | Tok::LBrace
     )
 }
 
@@ -799,6 +893,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::RParen => ")",
         Tok::Comma => ",",
         Tok::Colon => ":",
+        Tok::Dot => ".",
         Tok::Underscore => "_",
         _ => "token",
     }

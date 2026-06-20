@@ -7,6 +7,9 @@
 type Option a = None | Some a
 type Color = Red | Green | Blue
 
+# Records: named-field product types (nominal; field names are unique).
+type Point = { x: int, y: int }
+
 # Curried function: inferred type int -> int -> int.
 let add a b = a + b
 
@@ -100,3 +103,13 @@ print (Some 42 == Some answer)       # True   (structural ADT equality)
 # Logical operators: `and` / `or` / `not` (Python keywords, Python precedence).
 print (seven < 10 and answer == 42)  # True
 print (not (seven == 8) or false)    # True
+
+# Records: construct with `{ f = v }`, access with `.f`, copy-and-update with
+# `{ r with f = v }`. The record type is resolved from the field names.
+let here = { x = 3, y = 4 }
+let shifted = { here with x = 10 }
+let dot r = r.x + r.y                 # field access fixes `r : Point`
+print here.x                          # 3
+print shifted.x                       # 10
+print (dot here)                      # 7
+print here                            # Point(3, 4)

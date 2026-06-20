@@ -25,7 +25,8 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, Module, Pattern,
+    BinOp, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module, Pattern,
+    TypeDeclKind,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
@@ -55,6 +56,12 @@ struct Lowerer {
     /// application and to know which bare references are nullary (and so must be
     /// emitted as `Ctor()`).
     ctor_arity: std::collections::HashMap<String, usize>,
+    /// Declared field order of each record type, so literals and updates emit a
+    /// positional constructor call in the class's `__init__` order.
+    record_fields: std::collections::HashMap<String, Vec<String>>,
+    /// Field name → owning record type (mirrors the type checker's registry), to
+    /// resolve which class a `{ … }` literal or update constructs.
+    field_to_record: std::collections::HashMap<String, String>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -65,10 +72,15 @@ struct Lowerer {
 
 type Lowered = Result<(Vec<PyStmt>, PyExpr), LowerError>;
 
+/// Hoisted statements plus each record field's lowered value, keyed by name.
+type LoweredFields = Result<(Vec<PyStmt>, Vec<(String, PyExpr)>), LowerError>;
+
 impl Lowerer {
     fn new(module: &Module) -> Self {
         let mut arities = std::collections::HashMap::new();
         let mut ctor_arity = std::collections::HashMap::new();
+        let mut record_fields = std::collections::HashMap::new();
+        let mut field_to_record = std::collections::HashMap::new();
         for item in &module.items {
             match item {
                 Item::Let(binding) => {
@@ -87,11 +99,20 @@ impl Lowerer {
                         arities.insert(binding.name.clone(), k);
                     }
                 }
-                Item::Type(decl) => {
-                    for variant in &decl.variants {
-                        ctor_arity.insert(variant.name.clone(), variant.fields.len());
+                Item::Type(decl) => match &decl.kind {
+                    TypeDeclKind::Sum(variants) => {
+                        for variant in variants {
+                            ctor_arity.insert(variant.name.clone(), variant.fields.len());
+                        }
                     }
-                }
+                    TypeDeclKind::Record(fields) => {
+                        let names: Vec<String> = fields.iter().map(|f| f.name.clone()).collect();
+                        for name in &names {
+                            field_to_record.insert(name.clone(), decl.name.clone());
+                        }
+                        record_fields.insert(decl.name.clone(), names);
+                    }
+                },
                 Item::Measure { .. } | Item::Expr(_) => {}
             }
         }
@@ -108,6 +129,8 @@ impl Lowerer {
         Lowerer {
             arities,
             ctor_arity,
+            record_fields,
+            field_to_record,
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -116,16 +139,28 @@ impl Lowerer {
     }
 
     fn lower_module(&mut self, module: &Module) -> Result<PyModule, LowerError> {
-        // User constructor classes.
+        // User constructor classes (sum variants) and record classes.
         let mut classes = Vec::new();
         for item in &module.items {
             if let Item::Type(decl) = item {
-                for variant in &decl.variants {
-                    let fields = (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
-                    classes.push(PyStmt::ClassDef {
-                        name: py_ctor_name(&variant.name),
-                        fields,
-                    });
+                match &decl.kind {
+                    TypeDeclKind::Sum(variants) => {
+                        for variant in variants {
+                            let fields =
+                                (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
+                            classes.push(PyStmt::ClassDef {
+                                name: py_ctor_name(&variant.name),
+                                fields,
+                            });
+                        }
+                    }
+                    // Records lower to a class with their real field names.
+                    TypeDeclKind::Record(fields) => {
+                        classes.push(PyStmt::ClassDef {
+                            name: decl.name.clone(),
+                            fields: fields.iter().map(|f| f.name.clone()).collect(),
+                        });
+                    }
                 }
             }
         }
@@ -326,7 +361,102 @@ impl Lowerer {
 
             // Units are compile-time only: erase the annotation, keep the value.
             ExprKind::Annot { value, .. } => self.lower_value(value, locals),
+
+            ExprKind::Record { fields } => self.lower_record(fields, locals),
+            ExprKind::RecordUpdate { base, fields } => {
+                self.lower_record_update(base, fields, locals)
+            }
+            ExprKind::Field { base, name } => {
+                let (stmts, value) = self.lower_value(base, locals)?;
+                Ok((
+                    stmts,
+                    PyExpr::Attribute {
+                        value: Box::new(value),
+                        attr: name.clone(),
+                    },
+                ))
+            }
         }
+    }
+
+    /// `{ x = a, y = b }` → `Record(a, b)` — a positional constructor call in the
+    /// class's declared field order (the type checker guarantees the literal names
+    /// exactly the record's fields).
+    fn lower_record(&mut self, fields: &[FieldInit], locals: &HashSet<String>) -> Lowered {
+        let record = self.field_to_record[&fields[0].name].clone();
+        let order = self.record_fields[&record].clone();
+        let (stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
+        let mut args = Vec::with_capacity(order.len());
+        for name in &order {
+            let i = lowered
+                .iter()
+                .position(|(n, _)| n == name)
+                .expect("type-checked record literal is complete");
+            args.push(lowered.remove(i).1);
+        }
+        Ok((
+            stmts,
+            PyExpr::Call {
+                func: Box::new(PyExpr::Name(record)),
+                args,
+            },
+        ))
+    }
+
+    /// `{ base with x = a }` → `Record(_t.x_or_a, …)` — bind `base` to a temp so it
+    /// is evaluated once, then construct a fresh record taking each field from the
+    /// update or, failing that, from the temp.
+    fn lower_record_update(
+        &mut self,
+        base: &Expr,
+        fields: &[FieldInit],
+        locals: &HashSet<String>,
+    ) -> Lowered {
+        let record = self.field_to_record[&fields[0].name].clone();
+        let order = self.record_fields[&record].clone();
+        let (mut stmts, base_val) = self.lower_value(base, locals)?;
+        let tmp = self.fresh_tmp();
+        stmts.push(PyStmt::Assign {
+            target: tmp.clone(),
+            value: base_val,
+        });
+        let (field_stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
+        stmts.extend(field_stmts);
+        let mut args = Vec::with_capacity(order.len());
+        for name in &order {
+            match lowered.iter().position(|(n, _)| n == name) {
+                Some(i) => args.push(lowered.remove(i).1),
+                None => args.push(PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name(tmp.clone())),
+                    attr: name.clone(),
+                }),
+            }
+        }
+        Ok((
+            stmts,
+            PyExpr::Call {
+                func: Box::new(PyExpr::Name(record)),
+                args,
+            },
+        ))
+    }
+
+    /// Lower a list of `name = value` field initializers in source order, hoisting
+    /// any statements; returns the hoisted statements and the lowered values keyed
+    /// by field name.
+    fn lower_field_inits(
+        &mut self,
+        fields: &[FieldInit],
+        locals: &HashSet<String>,
+    ) -> LoweredFields {
+        let mut stmts = Vec::new();
+        let mut values = Vec::with_capacity(fields.len());
+        for init in fields {
+            let (s, v) = self.lower_value(&init.value, locals)?;
+            stmts.extend(s);
+            values.push((init.name.clone(), v));
+        }
+        Ok((stmts, values))
     }
 
     fn lower_application(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {

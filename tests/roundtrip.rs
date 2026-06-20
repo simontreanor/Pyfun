@@ -44,6 +44,14 @@ const PROGRAMS: &[&str] = &[
     "let classify n =\n  match n with\n  | 0 -> \"zero\"\n  | _ -> \"many\"",
     // Offside rule: consecutive bare statements are separate items.
     "print a\nprint b",
+    // Records: declaration, literal, functional update, field access.
+    "type Point = { x: int, y: int }",
+    "type Box a = { item: a, tag: string }",
+    "let p = { x = 3, y = 4 }",
+    "let q = { p with y = 9 }",
+    "let s = p.x",
+    "let d = obj.inner.value",
+    "let n = (mk a).field",
     // Type declarations: nullary, parameterized, and recursive.
     "type Color = Red | Green | Blue",
     "type Option a = None | Some a",

@@ -7,8 +7,8 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeExpr,
-    UnitExpr, VariantDecl,
+    CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm, Module, Pattern,
+    TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -75,9 +75,21 @@ fn print_type_decl(decl: &TypeDecl) -> String {
         s.push_str(param);
     }
     s.push_str(" = ");
-    let variants: Vec<String> = decl.variants.iter().map(print_variant).collect();
-    s.push_str(&variants.join(" | "));
+    match &decl.kind {
+        TypeDeclKind::Sum(variants) => {
+            let variants: Vec<String> = variants.iter().map(print_variant).collect();
+            s.push_str(&variants.join(" | "));
+        }
+        TypeDeclKind::Record(fields) => {
+            let fields: Vec<String> = fields.iter().map(print_field_decl).collect();
+            s.push_str(&format!("{{ {} }}", fields.join(", ")));
+        }
+    }
     s
+}
+
+fn print_field_decl(field: &FieldDecl) -> String {
+    format!("{}: {}", field.name, print_type(&field.ty))
 }
 
 fn print_variant(variant: &VariantDecl) -> String {
@@ -171,7 +183,20 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Annot { value, unit } => {
             format!("{}<{}>", print_expr(value), print_unit(unit))
         }
+        ExprKind::Record { fields } => {
+            let fields: Vec<String> = fields.iter().map(print_field_init).collect();
+            format!("{{ {} }}", fields.join(", "))
+        }
+        ExprKind::RecordUpdate { base, fields } => {
+            let fields: Vec<String> = fields.iter().map(print_field_init).collect();
+            format!("{{ {} with {} }}", print_expr(base), fields.join(", "))
+        }
+        ExprKind::Field { base, name } => format!("{}.{name}", print_expr(base)),
     }
+}
+
+fn print_field_init(field: &FieldInit) -> String {
+    format!("{} = {}", field.name, print_expr(&field.value))
 }
 
 fn print_ce_item(item: &CeItem) -> String {

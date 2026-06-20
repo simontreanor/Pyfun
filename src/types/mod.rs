@@ -4,7 +4,11 @@
 //! Algorithm W with a substitution map and let-generalization, so top-level
 //! bindings are polymorphic. Functions are curried.
 //!
-//! `type` declarations introduce ADTs (constructor schemes + exhaustiveness).
+//! `type` declarations introduce ADTs (constructor schemes + exhaustiveness) or
+//! **records** (nominal named-field product types). Field names are globally
+//! unique, so a bare `e.x` / `{ x = … }` resolves its record type from the field
+//! name alone — Pyfun has no type annotations to fall back on. Record types reuse
+//! [`Ty::Con`]; their fields live in a registry on [`Decls`].
 //!
 //! **Units of measure.** Numeric types carry a [`Unit`] — an element of the free
 //! abelian group over base measures and *unit variables*. Unit equality is solved
@@ -20,7 +24,7 @@
 //! Python: `/` is true division (`float`), `//` floors. No user-extensible type
 //! classes (the set is closed); an unresolved `num` defaults to `int`. Ordering
 //! (`< > <= >=`) carries a closed `comparison` constraint (int/float/string);
-//! equality (`== !=`) and logical `&& || not` are unconstrained over bool.
+//! equality (`== !=`) and logical `and`/`or`/`not` are unconstrained over bool.
 //!
 //! Still deferred until its syntax exists: effect inference.
 
@@ -29,7 +33,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::lexer::Span;
 use crate::parser::ast::{
     BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeExpr, UnOp, UnitExpr,
+    TypeDeclKind, TypeExpr, UnOp, UnitExpr,
 };
 
 /// A factor in a unit term: a base measure or a unit variable.
@@ -232,6 +236,15 @@ struct CtorInfo {
     arity: usize,
 }
 
+/// Information about one (nominal) record type: how many type parameters it has,
+/// and its fields in declared order with their types (parameter vars are `Ty::Var`
+/// of the parameter's index, instantiated afresh at each use).
+#[derive(Debug, Clone)]
+struct RecordInfo {
+    params_count: usize,
+    fields: Vec<(String, Ty)>,
+}
+
 /// The result of the declaration pre-pass.
 #[derive(Default)]
 struct Decls {
@@ -239,6 +252,12 @@ struct Decls {
     ctors: HashMap<String, CtorInfo>,
     type_ctors: HashMap<String, Vec<String>>,
     measures: HashSet<String>,
+    /// Record types by name.
+    records: HashMap<String, RecordInfo>,
+    /// Field name → owning record type. Field names are globally unique (the
+    /// nominal-record MVP), so a bare `e.x`/`{ x = … }` resolves its record type
+    /// from the field name alone, without type annotations (which Pyfun lacks).
+    field_owner: HashMap<String, String>,
 }
 
 /// Type-check a whole module, returning every independent error found.
@@ -320,12 +339,16 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 decls
                     .type_arity
                     .insert(decl.name.clone(), decl.params.len());
-                decls.type_ctors.insert(decl.name.clone(), Vec::new());
+                // Only sum types have a constructor set (used by exhaustiveness);
+                // records resolve through their field registry instead.
+                if let TypeDeclKind::Sum(_) = decl.kind {
+                    decls.type_ctors.insert(decl.name.clone(), Vec::new());
+                }
             }
         }
     }
 
-    // Pass 2: constructor schemes.
+    // Pass 2: constructor schemes (sum types) and field registries (records).
     for item in &module.items {
         let Item::Type(decl) = item else { continue };
         let span = decl.span.span();
@@ -335,53 +358,107 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
             .enumerate()
             .map(|(i, p)| (p.clone(), i as u32))
             .collect();
-        let result_ty = Ty::Con(
-            decl.name.clone(),
-            (0..decl.params.len() as u32).map(Ty::Var).collect(),
-        );
 
-        for variant in &decl.variants {
-            if decls.ctors.contains_key(&variant.name) {
-                errors.push(TypeError {
-                    message: format!("constructor `{}` is already defined", variant.name),
-                    span,
-                });
-                continue;
-            }
-            let mut field_tys = Vec::with_capacity(variant.fields.len());
-            let mut ok = true;
-            for field in &variant.fields {
-                match resolve(field, &param_map, &decls.type_arity, span) {
-                    Ok(t) => field_tys.push(t),
-                    Err(e) => {
-                        errors.push(e);
-                        ok = false;
+        match &decl.kind {
+            TypeDeclKind::Sum(variants) => {
+                let result_ty = Ty::Con(
+                    decl.name.clone(),
+                    (0..decl.params.len() as u32).map(Ty::Var).collect(),
+                );
+                for variant in variants {
+                    if decls.ctors.contains_key(&variant.name) {
+                        errors.push(TypeError {
+                            message: format!("constructor `{}` is already defined", variant.name),
+                            span,
+                        });
+                        continue;
+                    }
+                    let mut field_tys = Vec::with_capacity(variant.fields.len());
+                    let mut ok = true;
+                    for field in &variant.fields {
+                        match resolve(field, &param_map, &decls.type_arity, span) {
+                            Ok(t) => field_tys.push(t),
+                            Err(e) => {
+                                errors.push(e);
+                                ok = false;
+                            }
+                        }
+                    }
+                    if !ok {
+                        continue;
+                    }
+                    let arity = field_tys.len();
+                    let ctor_ty = field_tys
+                        .into_iter()
+                        .rev()
+                        .fold(result_ty.clone(), |acc, f| {
+                            Ty::Fun(Box::new(f), Box::new(acc))
+                        });
+                    let scheme = Scheme {
+                        vars: (0..decl.params.len() as u32).collect(),
+                        uvars: vec![],
+                        num_vars: vec![],
+                        ord_vars: vec![],
+                        ty: ctor_ty,
+                    };
+                    env.insert(variant.name.clone(), scheme.clone());
+                    decls
+                        .ctors
+                        .insert(variant.name.clone(), CtorInfo { scheme, arity });
+                    if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
+                        list.push(variant.name.clone());
                     }
                 }
             }
-            if !ok {
-                continue;
-            }
-            let arity = field_tys.len();
-            let ctor_ty = field_tys
-                .into_iter()
-                .rev()
-                .fold(result_ty.clone(), |acc, f| {
-                    Ty::Fun(Box::new(f), Box::new(acc))
-                });
-            let scheme = Scheme {
-                vars: (0..decl.params.len() as u32).collect(),
-                uvars: vec![],
-                num_vars: vec![],
-                ord_vars: vec![],
-                ty: ctor_ty,
-            };
-            env.insert(variant.name.clone(), scheme.clone());
-            decls
-                .ctors
-                .insert(variant.name.clone(), CtorInfo { scheme, arity });
-            if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
-                list.push(variant.name.clone());
+            TypeDeclKind::Record(fields) => {
+                let mut resolved = Vec::with_capacity(fields.len());
+                let mut ok = true;
+                let mut local = HashSet::new();
+                for field in fields {
+                    if !local.insert(field.name.clone()) {
+                        errors.push(TypeError {
+                            message: format!(
+                                "field `{}` is declared twice in record `{}`",
+                                field.name, decl.name
+                            ),
+                            span,
+                        });
+                        ok = false;
+                        continue;
+                    }
+                    if let Some(other) = decls.field_owner.get(&field.name) {
+                        errors.push(TypeError {
+                            message: format!(
+                                "field `{}` is already defined in record `{other}`",
+                                field.name
+                            ),
+                            span,
+                        });
+                        ok = false;
+                        continue;
+                    }
+                    match resolve(&field.ty, &param_map, &decls.type_arity, span) {
+                        Ok(t) => resolved.push((field.name.clone(), t)),
+                        Err(e) => {
+                            errors.push(e);
+                            ok = false;
+                        }
+                    }
+                }
+                // Only register a fully-valid record, so the field registry never
+                // points at a record without a `RecordInfo`.
+                if ok {
+                    for (name, _) in &resolved {
+                        decls.field_owner.insert(name.clone(), decl.name.clone());
+                    }
+                    decls.records.insert(
+                        decl.name.clone(),
+                        RecordInfo {
+                            params_count: decl.params.len(),
+                            fields: resolved,
+                        },
+                    );
+                }
             }
         }
     }
@@ -881,7 +958,157 @@ impl Infer {
             }
 
             ExprKind::Ce { builder, items } => self.infer_ce(*builder, items, span, env),
+
+            ExprKind::Record { fields } => self.infer_record(fields, span, env),
+            ExprKind::RecordUpdate { base, fields } => {
+                self.infer_record_update(base, fields, span, env)
+            }
+            ExprKind::Field { base, name } => self.infer_field(base, name, span, env),
         }
+    }
+
+    /// The record type owning `field`, or an error if no record declares it.
+    fn record_of_field(&self, field: &str, span: Span) -> Result<String, TypeError> {
+        self.decls.field_owner.get(field).cloned().ok_or_else(|| {
+            // `decls.records` empty means records aren't in use at all.
+            let hint = if self.decls.records.is_empty() {
+                " (no record types are declared)"
+            } else {
+                ""
+            };
+            TypeError {
+                message: format!("unknown record field `{field}`{hint}"),
+                span,
+            }
+        })
+    }
+
+    /// Instantiate a record type's parameters with fresh variables, returning the
+    /// record type itself and its field types (under the same instantiation).
+    fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
+        let info = self
+            .decls
+            .records
+            .get(name)
+            .cloned()
+            .expect("record type registered");
+        let fresh: Vec<Ty> = (0..info.params_count).map(|_| self.fresh()).collect();
+        let tmap: HashMap<u32, Ty> = (0..info.params_count as u32)
+            .zip(fresh.iter().cloned())
+            .collect();
+        let empty_u = HashMap::new();
+        let empty_n = HashMap::new();
+        let record_ty = Ty::Con(name.to_string(), fresh);
+        let fields = info
+            .fields
+            .iter()
+            .map(|(f, t)| (f.clone(), subst_all(t, &tmap, &empty_u, &empty_n)))
+            .collect();
+        (record_ty, fields)
+    }
+
+    /// `{ x = e, … }` — a record literal. The type is resolved from the field
+    /// names; the literal must mention exactly the record's fields, once each.
+    fn infer_record(
+        &mut self,
+        fields: &[crate::parser::ast::FieldInit],
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        let owner = self.record_of_field(&fields[0].name, span)?;
+        let (record_ty, field_tys) = self.instantiate_record(&owner);
+
+        let mut seen: HashSet<String> = HashSet::new();
+        for init in fields {
+            if !seen.insert(init.name.clone()) {
+                return Err(TypeError {
+                    message: format!("field `{}` is set twice", init.name),
+                    span: init.value.span(),
+                });
+            }
+            if !field_tys.iter().any(|(n, _)| n == &init.name) {
+                return Err(TypeError {
+                    message: format!("record `{owner}` has no field `{}`", init.name),
+                    span: init.value.span(),
+                });
+            }
+        }
+        let missing: Vec<&str> = field_tys
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !seen.contains(*n))
+            .collect();
+        if !missing.is_empty() {
+            let names = missing
+                .iter()
+                .map(|m| format!("`{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(TypeError {
+                message: format!("record `{owner}` is missing field(s) {names}"),
+                span,
+            });
+        }
+        for (fname, fty) in &field_tys {
+            let init = fields.iter().find(|i| &i.name == fname).unwrap();
+            let vt = self.infer_expr(&init.value, env)?;
+            self.unify(fty, &vt, init.value.span())?;
+        }
+        Ok(self.apply(&record_ty))
+    }
+
+    /// `{ base with x = e, … }` — copy `base`, replacing the listed fields.
+    fn infer_record_update(
+        &mut self,
+        base: &Expr,
+        fields: &[crate::parser::ast::FieldInit],
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        let owner = self.record_of_field(&fields[0].name, span)?;
+        let (record_ty, field_tys) = self.instantiate_record(&owner);
+        let bt = self.infer_expr(base, env)?;
+        self.unify(&record_ty, &bt, base.span())?;
+
+        let mut seen: HashSet<String> = HashSet::new();
+        for init in fields {
+            if !seen.insert(init.name.clone()) {
+                return Err(TypeError {
+                    message: format!("field `{}` is set twice", init.name),
+                    span: init.value.span(),
+                });
+            }
+            let Some((_, fty)) = field_tys.iter().find(|(n, _)| n == &init.name) else {
+                return Err(TypeError {
+                    message: format!("record `{owner}` has no field `{}`", init.name),
+                    span: init.value.span(),
+                });
+            };
+            let fty = fty.clone();
+            let vt = self.infer_expr(&init.value, env)?;
+            self.unify(&fty, &vt, init.value.span())?;
+        }
+        Ok(self.apply(&record_ty))
+    }
+
+    /// `base.name` — record field access.
+    fn infer_field(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        let owner = self.record_of_field(name, span)?;
+        let (record_ty, field_tys) = self.instantiate_record(&owner);
+        let bt = self.infer_expr(base, env)?;
+        self.unify(&record_ty, &bt, base.span())?;
+        let fty = field_tys
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .unwrap();
+        Ok(self.apply(&fty))
     }
 
     fn resolve_unit_expr(&self, unit: &UnitExpr, span: Span) -> Result<Unit, TypeError> {

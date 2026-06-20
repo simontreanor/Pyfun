@@ -57,24 +57,40 @@ pub struct UnitExpr {
     pub factors: Vec<(String, i32)>,
 }
 
-/// `type Name params... = V1 fields | V2 fields | ...`
+/// `type Name params... = ...` — either a sum of constructors or a record.
 ///
-/// An algebraic data type: a named, possibly parameterized sum of constructors.
-/// Type names and constructor names are capitalized; type parameters are
-/// lowercase (`DESIGN.md` §7 convention).
+/// A named, possibly parameterized type. Type names and constructor names are
+/// capitalized; type parameters and record field names are lowercase
+/// (`DESIGN.md` §7 convention).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecl {
     pub name: String,
     pub params: Vec<String>,
-    pub variants: Vec<VariantDecl>,
+    pub kind: TypeDeclKind,
     pub span: NodeSpan,
 }
 
-/// One constructor of a [`TypeDecl`], e.g. `Cons a (List a)`.
+/// The right-hand side of a `type` declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDeclKind {
+    /// `V1 fields | V2 fields | ...` — an algebraic data type (sum of constructors).
+    Sum(Vec<VariantDecl>),
+    /// `{ x: t, y: t }` — a record (named-field product type).
+    Record(Vec<FieldDecl>),
+}
+
+/// One constructor of a sum [`TypeDecl`], e.g. `Cons a (List a)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
     pub name: String,
     pub fields: Vec<TypeExpr>,
+}
+
+/// One field of a record [`TypeDecl`], e.g. `x: int`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldDecl {
+    pub name: String,
+    pub ty: TypeExpr,
 }
 
 /// A type expression appearing in a constructor field.
@@ -186,6 +202,32 @@ pub enum ExprKind {
         value: Box<Expr>,
         unit: UnitExpr,
     },
+
+    /// A record literal: `{ x = 1, y = 2 }`. The (nominal) record type is
+    /// resolved from the set of field names.
+    Record {
+        fields: Vec<FieldInit>,
+    },
+
+    /// A functional record update: `{ base with x = 3 }` — a copy of `base` with
+    /// the listed fields replaced.
+    RecordUpdate {
+        base: Box<Expr>,
+        fields: Vec<FieldInit>,
+    },
+
+    /// Record field access: `base.name`.
+    Field {
+        base: Box<Expr>,
+        name: String,
+    },
+}
+
+/// One `name = value` initializer in a record literal or update.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldInit {
+    pub name: String,
+    pub value: Expr,
 }
 
 /// The three built-in computation-expression builders.

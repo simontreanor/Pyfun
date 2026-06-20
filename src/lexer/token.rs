@@ -69,6 +69,7 @@ pub enum Tok {
     RBrace,     // }
     Comma,      // ,
     Colon,      // :
+    Dot,        // . (record field access)
     Underscore, // _
 
     /// A statement separator, inserted by the lexer's lightweight offside rule at

@@ -266,6 +266,7 @@ impl<'a> Lexer<'a> {
             b'}' => Tok::RBrace,
             b',' => Tok::Comma,
             b':' => Tok::Colon,
+            b'.' => Tok::Dot,
             _ => return Err(self.err(start, &format!("unexpected character {:?}", c as char))),
         };
         // Track bracket nesting so the offside rule ignores line breaks inside
@@ -384,6 +385,22 @@ mod tests {
                 Tok::Eof
             ]
         );
+    }
+
+    #[test]
+    fn lexes_field_access_dot() {
+        assert_eq!(
+            kinds("p.x"),
+            vec![
+                Tok::Ident("p".to_string()),
+                Tok::Dot,
+                Tok::Ident("x".to_string()),
+                Tok::Eof
+            ]
+        );
+        // A float still wins over a leading-digit `.`; `.` only stands alone
+        // between identifiers.
+        assert_eq!(kinds("2.5"), vec![Tok::Float(2.5), Tok::Eof]);
     }
 
     #[test]

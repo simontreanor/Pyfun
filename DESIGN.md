@@ -316,8 +316,8 @@ would inherit exactly that limitation. So Pyfun keeps the braces deliberately, n
 - The contextual-keyword scheme (`async`/`seq`/`result` are keywords *only* immediately before `{`)
   depends on the explicit brace as its disambiguator.
 - A future offside rule for `let`/`match`/function bodies is **orthogonal** and composes with this
-  (exactly as in F#): adding it would not require changing CE or record braces. Records (a
-  post-MVP product type) will reuse `{ }` as well, so the brace family stays consistent.
+  (exactly as in F#): adding it would not require changing CE or record braces. Records (§8.3) reuse
+  `{ }` as well, so the brace family stays consistent.
 
 ### 8.2 Units of measure
 
@@ -340,6 +340,36 @@ Design intent:
 - Open questions: measure-generic functions (unit polymorphism) in the MVP vs. later; how units
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).
+
+### 8.3 Records (implemented)
+
+Named-field **product** types, complementing ADTs' sum types: `type Point = { x: int, y: int }`,
+construction `{ x = 1, y = 2 }`, access `p.x`, functional update `{ p with x = 3 }`. Parameterized
+records (`type Box a = { item: a }`) are polymorphic.
+
+Decisions (all ✅ implemented):
+
+1. **Nominal, not structural / row-polymorphic.** A record literal/access resolves to a *declared*
+   record type. Records reuse the existing `Ty::Con` machinery (a record is just a type constructor
+   with a field registry), so no new `Ty` variant, and they unify and generalize exactly like ADTs.
+2. **Field names are globally unique.** Resolution is by field name: `e.x` and `{ x = … }` find their
+   record type from the field(s) alone. Pyfun has **no type annotations** on `let`/params, so there is
+   no other signal to resolve a bare `.x` against — and row polymorphism (inferring "some record with
+   field `x`") is explicitly out of scope (§11, keep the MVP bounded). Reusing a field name across two
+   records is therefore a compile error. This is the one real ergonomic limitation; lifting it needs
+   either annotations or row polymorphism.
+3. **Lowering reuses the ADT class machinery** (§5 representation contract): a record type becomes a
+   Python class with its real field names, `__match_args__`, structural `__eq__`, and `__repr__`.
+   Literals and updates emit **positional** constructor calls in declared field order; an update binds
+   its base to a temp first so it is evaluated once (`{ p with x = 3 }` → `_t = p; Point(3, _t.y)`).
+4. **Syntax disambiguation.** `{` collides with computation-expression blocks, so: a `{` immediately
+   after `=` in a `type` declaration is a record body; a CE block is always preceded by a builder name
+   (`async`/`seq`/`result`); a bare `{` in expression position is a record literal (`{ ident = …`
+   lookahead) or update (`{ expr with … }`). `.field` is a postfix that binds tighter than application
+   (`f p.x` is `f (p.x)`).
+
+Deferred: record *patterns* in `match`, derived ordering on records, and lifting the unique-field-name
+restriction.
 
 ## 9. Project layout (planned Rust crate)
 

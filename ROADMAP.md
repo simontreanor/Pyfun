@@ -20,15 +20,22 @@ F# notably does *not* have this; it's where Pyfun would out-design its inspirati
   and inference-vs-annotation at function boundaries. Needs effectful *operations* to track, so it
   pairs naturally with adding `print`/IO or mutation — really "effects + something that has effects."
 
-### 2. Records
+### 2. Records — ✅ done (nominal MVP)
 Named-field product types: `type Point = { x: int, y: int }`, construction `{ x = 1, y = 2 }`,
 field access `p.x`, and functional update `{ p with x = 3 }`. ADTs give *sum* types (tagged
 variants); records give ergonomic *product* types with named instead of positional fields.
-- **Unlocks:** Real data modeling — structs, config objects, returning multiple values. Lowers
-  cleanly to Python (dataclasses or named tuples).
-- **Effort/risk:** Medium. New syntax (`{...}` collides with CE blocks — needs disambiguation),
-  AST/parser, type inference for field access (row polymorphism for generic `.x`, or nominal
-  records to keep it simple), and lowering. Nominal records are the bounded MVP.
+- **Shipped:** **nominal** records reusing `Ty::Con`. A `{` after `=` in a `type` decl is a record
+  body; a bare `{` atom is a literal (`{ ident = …` lookahead) or update (`{ expr with … }`); `.field`
+  is a tight postfix. Records lower to Python classes (reusing the ADT class machinery — named
+  fields, `__match_args__`, structural `__eq__`, `__repr__`); literals/updates emit positional
+  constructor calls in declared field order, an update binding its base to a temp first. Parameterized
+  records (`type Box a = { item: a }`) are polymorphic; fields generalize/instantiate like ADT
+  constructors. Covered across lexer/parser/typecheck/compile/roundtrip tests.
+- **MVP limitation:** field names are **globally unique**, so `e.x` / `{ x = … }` resolves its record
+  type from the field name alone — Pyfun has no type annotations to disambiguate, and row polymorphism
+  is out of scope. Reusing a field name across records is a compile error.
+- **Still to do:** record *patterns* in `match`, derived ordering, and lifting the unique-field-name
+  restriction (needs annotations or row polymorphism / type-directed field resolution).
 
 ### 3. Mutability checking (`let mut`)
 The parser already accepts `let mut x = …`, and DESIGN promises immutable-by-default with a checked
@@ -136,10 +143,12 @@ The project is now *usable*: with **#8 (`run`)**, the **#9 MVP prelude** (`print
 and the **#9b offside rule**, you can write and observe self-contained programs. Highest leverage
 next:
 
+With **#2 (records)** and **#4 (floats)** now done alongside `run`/prelude/offside, the everyday-
+ergonomics wins are in. Highest leverage next:
+
 1. **Broaden #9 (prelude + interop)** — collections and option/result helpers, plus name-aliased
    Python imports, to flesh out the standard library and the general FFI surface.
 2. **#1 (effects)** — the most intellectually significant remaining feature, but large; bundles
    naturally with adding IO (and the prelude now gives it effectful operations to track).
-3. **#2 (records)** and **#4 (floats)** — the biggest everyday-ergonomics wins.
-4. A **general offside rule** for nested blocks (extends #9b) unlocks #3 (mutability sequencing).
-4. **#5–#7** — satisfying, lower-stakes polish increments.
+3. A **general offside rule** for nested blocks (extends #9b) unlocks #3 (mutability sequencing).
+4. **#5–#7** — satisfying, lower-stakes polish increments (record patterns from #2 fit here too).

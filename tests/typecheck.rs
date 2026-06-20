@@ -375,6 +375,93 @@ fn not_binds_looser_than_comparison() {
     assert!(pyfun::check("let r = not 1 == 2").is_ok());
 }
 
+// ---------- records ----------
+
+#[test]
+fn accepts_record_decl_literal_update_and_access() {
+    let src = "type Point = { x: int, y: int }\n\
+               let p = { x = 3, y = 4 }\n\
+               let q = { p with y = 9 }\n\
+               let s = p.x + q.y";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn record_field_access_drives_function_type() {
+    // `r.x + r.y` forces `r : Point` even without an annotation.
+    let src = "type Point = { x: int, y: int }\n\
+               let sumxy r = r.x + r.y\n\
+               let t = sumxy { x = 1, y = 2 }";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn parameterized_record_is_polymorphic() {
+    // A `Box a` literal/access used at two element types in one program.
+    let src = "type Box a = { item: a }\n\
+               let mk v = { item = v }\n\
+               let bi = (mk 5).item\n\
+               let bs = (mk \"hi\").item";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_missing_record_field() {
+    assert_error_contains(
+        "type Point = { x: int, y: int }\nlet p = { x = 1 }",
+        "missing field",
+    );
+}
+
+#[test]
+fn rejects_unknown_field_in_literal() {
+    assert_error_contains(
+        "type Point = { x: int, y: int }\nlet p = { x = 1, y = 2, z = 3 }",
+        "has no field `z`",
+    );
+}
+
+#[test]
+fn rejects_unknown_field_access() {
+    assert_error_contains(
+        "type Point = { x: int }\nlet p = { x = 1 }\nlet z = p.nope",
+        "unknown record field `nope`",
+    );
+}
+
+#[test]
+fn rejects_wrong_record_field_type() {
+    assert_error_contains(
+        "type Point = { x: int, y: int }\nlet p = { x = 1, y = true }",
+        "expected int, found bool",
+    );
+}
+
+#[test]
+fn rejects_field_name_reused_across_records() {
+    assert_error_contains(
+        "type A = { x: int }\ntype B = { x: int }",
+        "field `x` is already defined in record `A`",
+    );
+}
+
+#[test]
+fn rejects_field_declared_twice_in_one_record() {
+    assert_error_contains("type P = { x: int, x: int }", "field `x` is declared twice");
+}
+
+#[test]
+fn rejects_update_of_unrelated_field() {
+    // `y` belongs to a different record than `Point`, so the update mixes types.
+    assert_error_contains(
+        "type Point = { x: int }\n\
+         type Other = { y: int }\n\
+         let p = { x = 1 }\n\
+         let bad = { p with y = 2 }",
+        "type mismatch",
+    );
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

@@ -89,6 +89,33 @@ fn adt_classes_get_structural_eq() {
 }
 
 #[test]
+fn record_lowers_to_class_with_named_fields() {
+    let py = pyfun::compile("type Point = { x: int, y: int }\nlet p = { y = 4, x = 3 }").unwrap();
+    assert!(py.contains("class Point:"), "{py}");
+    assert!(py.contains("__match_args__ = ('x', 'y')"), "{py}");
+    assert!(py.contains("def __init__(self, x, y):"), "{py}");
+    // The literal is reordered to the declared field order for a positional call.
+    assert!(py.contains("p = Point(3, 4)"), "{py}");
+}
+
+#[test]
+fn record_update_copies_through_a_temp() {
+    let py = pyfun::compile(
+        "type Point = { x: int, y: int }\nlet p = { x = 1, y = 2 }\nlet q = { p with x = 9 }",
+    )
+    .unwrap();
+    // `p` is bound to a temp so it is evaluated once; the unchanged field is read
+    // from it, the changed one is the new value.
+    assert!(py.contains("q = Point(9, _pf_t0.y)"), "{py}");
+}
+
+#[test]
+fn record_field_access_lowers_to_attribute() {
+    let py = pyfun::compile("type Point = { x: int }\nlet p = { x = 1 }\nlet s = p.x").unwrap();
+    assert!(py.contains("s = p.x"), "{py}");
+}
+
+#[test]
 fn comparison_operators_lower_to_python() {
     let py =
         pyfun::compile("let a = 1 < 2\nlet b = 1 == 2\nlet c = 1 != 2\nlet d = 1 >= 2").unwrap();
@@ -235,6 +262,36 @@ fn e2e_adt_construction_and_match() {
         let r3 = rank Green
         ",
         &[("r1", "5"), ("r2", "0"), ("r3", "2")],
+    );
+}
+
+#[test]
+fn e2e_records_construct_access_and_update() {
+    run_and_check(
+        "
+        type Point = { x: int, y: int }
+        let p = { x = 3, y = 4 }
+        let moved = { p with x = 10 }
+        let sx = p.x
+        let sy = moved.y
+        let mx = moved.x
+        let sumxy r = r.x + r.y
+        let total = sumxy p
+        ",
+        &[("sx", "3"), ("sy", "4"), ("mx", "10"), ("total", "7")],
+    );
+}
+
+#[test]
+fn e2e_polymorphic_record_field() {
+    run_and_check(
+        "
+        type Box a = { item: a }
+        let mk v = { item = v }
+        let i = (mk 42).item
+        let s = (mk \"hi\").item
+        ",
+        &[("i", "42"), ("s", "hi")],
     );
 }
 
