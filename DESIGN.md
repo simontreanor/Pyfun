@@ -186,6 +186,61 @@ separation; a **general offside rule for nested blocks** (local `let`-sequencing
 delimited bodies) is deferred to a later phase, and pairs naturally with mutability/`let mut`
 sequencing (§3). It is orthogonal to the brace-delimited CEs and records (§8.1).
 
+### 7.1 Numbers & arithmetic — Python-familiar (decided; not yet implemented)
+
+Arithmetic is currently integer-only (`+ - * /` are `int -> int -> int`, and `/` lowers to Python
+`//`). The decided design for adding floats puts **familiarity to Python programmers first** — Pyfun
+brings functional discipline, but numeric behaviour should not surprise someone coming from Python.
+A Python user never sees the type machinery; they feel a few surface behaviours, and those are what
+this design pins down.
+
+**Decisions:**
+
+1. **`/` is true division; `//` floors.** Pyfun `/` becomes Python `/` (result type `float`,
+   `7 / 2 == 3.5`), and a new `//` operator is Python floor division (`7 // 2 == 3`, result `int`).
+   This matches Python 3's most well-known numeric fact (the *current* floor-meaning `/` is the
+   single most un-Pythonic thing in the language). Bonus: because each operator maps 1:1 to a Python
+   operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
+   `//` (the type-directed-lowering problem this would otherwise create disappears).
+2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics) are typed with
+   a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a -> 'a`. `int` and
+   `float` (with any units) satisfy `num`; `bool`/`string` do not (→ a clear "not a numeric type"
+   error). Generic functions like `area`/`min`/`max` therefore stay polymorphic over int *and* float
+   *and* units — the property a hard-coded int-default would throw away. No type annotations are ever
+   required (Pyfun has none anyway).
+3. **Polymorphic numeric literals; default `int`.** A literal `1` has type `num 'a => 'a` and adapts
+   to context, so mixed-literal arithmetic just works the Python way: `1 + 2.0 : float`,
+   `add 1 2.0 : float`. An unconstrained literal (`let x = 1 + 1`) defaults to `int`.
+4. **No implicit int→float coercion between *variables*.** Mixing two values of genuinely different
+   concrete numeric type (an `int`-typed variable plus a `float`-typed one) is a (gentle) error
+   rather than a silent widening. Full coercion would require subtyping (`int <: float`), which
+   breaks HM principal types; literal polymorphism (decision 3) covers the cases Python users
+   actually hit, so this stricter-than-Python corner is rare and is where the discipline pays off.
+5. **`+ - *` stay numeric.** Python overloads `+` for string/list concatenation; Pyfun does not.
+   String concatenation is a named function (or a distinct operator) later, with an error that
+   steers users there. This is the one deliberate departure from Python familiarity — silent
+   `+`-means-anything is exactly the dynamic mushiness Pyfun exists to replace.
+
+**Why a *closed* set of built-in constraints, not user type classes.** `num` is baked into the
+compiler; there is **no `class`/`instance` surface syntax**. When `<`/`==` operators are added, two
+more built-ins (`comparison`, `equality`) join in the same style — but the set stays closed, which
+is itself the guardrail against sprawling into a Haskell-style class system (§11). Notably, **Pyfun
+needs none of F#'s `inline`/SRTP machinery**: F# requires compile-time monomorphization for generic
+arithmetic because `+` is a static per-type method on .NET, whereas **Python dispatches `+`/`<`/`==`
+at runtime** (`__add__`/`__lt__`/`__eq__`). So a generic `add` lowers to one ordinary
+`def add(a, b): return a + b` that works at runtime on whatever flows in — the constraint system
+lives entirely in the type checker (for safety), and lowering stays trivial.
+
+**What this loses** (vs a real, user-extensible type-class system): users can't declare their own
+type `num`/`comparison` (e.g. a `Vector` supporting `+`), there are no custom classes or `deriving`,
+and equality/ordering for user ADTs (when those land) is the compiler's call — it would auto-generate
+`__eq__`/`__lt__` on emitted classes the way it already generates `__repr__`. What it keeps is the
+thing that matters here: numeric and **unit** polymorphism, with Python-native surface behaviour.
+
+**Implementation order when built (ROADMAP #4):** (a) flip `/` to true division and add `//`;
+(b) add the `num` constraint with polymorphic literals and int-defaulting; (c) keep `+ - *` numeric
+with a guiding string-concat error. Defer `comparison`/`equality` until the `<`/`==` operators exist.
+
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
 These two F# flagships are deliberately in the MVP — they are the clearest demonstrations of "what

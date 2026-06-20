@@ -40,16 +40,24 @@ This adds assignment plus the rule "reassigning a non-`mut` binding is a compile
   statement blocks yet — you can't currently sequence a mutation then continue), the check, and
   lowering. The sequencing requirement makes it bigger than it first looks.
 
-### 4. Float arithmetic / numeric type classes
-Arithmetic is integer-only today (`+ - * /` are `int -> int -> int`), so `3.14 + 1.0` is a type
-error even though floats exist as values. Doing this "properly" means an overloading mechanism —
-either a small built-in numeric class (so `+` works on `int` and `float` but not `string`), or
-duplicated operators. Units already ride on `int` and `float`, so float math inherits dimensional
-checking for free.
-- **Unlocks:** Real numeric programming; makes units far more useful (physics is floats).
-- **Effort/risk:** Medium, and a genuine design fork — HM has no type classes, so either add a
-  constrained-inference mechanism (bigger) or hard-code numeric overloading (simpler, less
-  principled).
+### 4. Float arithmetic / numeric constraint — design decided (`DESIGN.md` §7.1)
+Arithmetic is integer-only today (`+ - * /` are `int -> int -> int`, and `/` lowers to Python `//`),
+so `3.14 + 1.0` is a type error even though floats exist as values. The design is now **decided** —
+Python-familiar numerics via a single closed built-in constraint (full rationale and trade-offs in
+`DESIGN.md` §7.1). In short:
+- **`/` becomes true division → `float`** (`7 / 2 == 3.5`), with a new **`//`** for floor division.
+  This fixes the most un-Pythonic current behaviour *and* keeps lowering syntactic (no type-directed
+  `/`-vs-`//`).
+- **One built-in `num` constraint** with **polymorphic numeric literals** (so `1 + 2.0` works,
+  unconstrained literals default to `int`). Generic functions (`area`/`min`/`max`) stay polymorphic
+  over int/float **and units**. No annotations required.
+- Closed constraint set (not user-extensible type classes); no F# `inline`/SRTP needed because
+  Python dispatches operators at runtime. `+ - *` stay numeric (string concat is a later function).
+- **Unlocks:** Real numeric programming; makes units far more useful (physics is floats — they
+  inherit dimensional checking for free).
+- **Effort/risk:** Medium. The constraint solver (constrained schemes + propagation + satisfaction +
+  defaulting) is the bulk; lowering is trivial. Implementation order in §7.1. Defer
+  `comparison`/`equality` constraints until the `<`/`==` operators land.
 
 ## Polish on existing features
 
