@@ -355,15 +355,17 @@ fn unit_annotation_and_less_than_are_distinguished() {
 
 #[test]
 fn accepts_boolean_operators() {
-    assert!(pyfun::check("let a = true && false\nlet b = true || false\nlet c = not true").is_ok());
+    assert!(
+        pyfun::check("let a = true and false\nlet b = true or false\nlet c = not true").is_ok()
+    );
     // Mixed with comparisons, producing a bool condition.
-    assert!(pyfun::check("let between lo hi x = lo <= x && x <= hi").is_ok());
+    assert!(pyfun::check("let between lo hi x = lo <= x and x <= hi").is_ok());
 }
 
 #[test]
 fn rejects_non_bool_logical_operands() {
-    assert_error_contains("let r = 1 && true", "expected bool, found int");
-    assert_error_contains("let r = true || 2", "expected bool, found int");
+    assert_error_contains("let r = 1 and true", "expected bool, found int");
+    assert_error_contains("let r = true or 2", "expected bool, found int");
     assert_error_contains("let r = not 5", "expected bool, found int");
 }
 

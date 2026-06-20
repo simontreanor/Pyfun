@@ -227,16 +227,6 @@ impl<'a> Lexer<'a> {
             self.push(Tok::PipeOp, start);
             return Ok(());
         }
-        if c == b'|' && self.peek2() == Some(b'|') {
-            self.pos += 2;
-            self.push(Tok::BarBar, start);
-            return Ok(());
-        }
-        if c == b'&' && self.peek2() == Some(b'&') {
-            self.pos += 2;
-            self.push(Tok::AmpAmp, start);
-            return Ok(());
-        }
         if c == b'-' && self.peek2() == Some(b'>') {
             self.pos += 2;
             self.push(Tok::Arrow, start);

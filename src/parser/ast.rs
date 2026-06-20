@@ -271,7 +271,7 @@ pub enum BinOp {
     Gt,
     Le,
     Ge,
-    /// `&& ||` — logical and/or, result `bool` (short-circuiting in Python).
+    /// `and` / `or` — logical and/or, result `bool` (short-circuiting in Python).
     And,
     Or,
 }
@@ -291,8 +291,8 @@ impl BinOp {
             BinOp::Gt => ">",
             BinOp::Le => "<=",
             BinOp::Ge => ">=",
-            BinOp::And => "&&",
-            BinOp::Or => "||",
+            BinOp::And => "and",
+            BinOp::Or => "or",
         }
     }
 }

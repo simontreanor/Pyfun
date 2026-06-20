@@ -9,8 +9,8 @@
 //! if          := "if" expr "then" expr "else" expr
 //! match       := "match" expr "with" ("|" pattern "->" expr)+
 //! pipe        := or ("|>" or)*
-//! or          := and ("||" and)*
-//! and         := not ("&&" not)*
+//! or          := and ("or" and)*
+//! and         := not ("and" not)*
 //! not         := "not" not | comparison
 //! comparison  := additive (("=="|"!="|"<"|">"|"<="|">=") additive)*
 //! additive    := multiplicative (("+"|"-") multiplicative)*
@@ -22,7 +22,7 @@
 //! atom_pattern:= "_" | ident | int | "true" | "false" | "(" pattern ")"
 //! ```
 //! Operator precedence, lowest to highest:
-//! `|>` < `||` < `&&` < `not` < comparison/equality < `+ -` < `* / //` < application.
+//! `|>` < `or` < `and` < `not` < comparison/equality < `+ -` < `* / //` < application.
 
 pub mod ast;
 
@@ -323,11 +323,11 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// Logical or `||` — looser than `&&`.
+    /// Logical `or` — looser than `and`.
     fn parse_or(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let mut lhs = self.parse_and()?;
-        while self.eat(&Tok::BarBar) {
+        while self.eat(&Tok::Or) {
             let rhs = self.parse_and()?;
             lhs = self.mk(
                 start,
@@ -341,11 +341,11 @@ impl Parser {
         Ok(lhs)
     }
 
-    /// Logical and `&&` — looser than `not`/comparison, tighter than `||`.
+    /// Logical `and` — looser than `not`/comparison, tighter than `or`.
     fn parse_and(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let mut lhs = self.parse_not()?;
-        while self.eat(&Tok::AmpAmp) {
+        while self.eat(&Tok::And) {
             let rhs = self.parse_not()?;
             lhs = self.mk(
                 start,
@@ -772,8 +772,8 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Do => "do",
         Tok::Measure => "measure",
         Tok::Not => "not",
-        Tok::AmpAmp => "&&",
-        Tok::BarBar => "||",
+        Tok::And => "and",
+        Tok::Or => "or",
         Tok::Bang => "!",
         Tok::Caret => "^",
         Tok::Lt => "<",

@@ -97,6 +97,6 @@ print (seven < 10)                   # True
 print (speed < 50<m/s>)              # True   (dimensional comparison)
 print (Some 42 == Some answer)       # True   (structural ADT equality)
 
-# Logical operators: && || (-> and/or), prefix `not`. Precedence is Python's.
-print (seven < 10 && answer == 42)   # True
-print (not (seven == 8) || false)    # True
+# Logical operators: `and` / `or` / `not` (Python keywords, Python precedence).
+print (seven < 10 and answer == 42)  # True
+print (not (seven == 8) or false)    # True

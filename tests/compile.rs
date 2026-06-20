@@ -100,15 +100,15 @@ fn comparison_operators_lower_to_python() {
 
 #[test]
 fn boolean_operators_lower_to_python_keywords_with_precedence() {
-    // `&&`/`||` become `and`/`or`; `not` stays `not`. Precedence mirrors Python,
-    // so no redundant parentheses, but looser operands under `not` get them.
+    // `and`/`or`/`not` lower to the same Python keywords. Precedence mirrors
+    // Python, so no redundant parentheses, but looser operands under `not` get them.
     assert!(
-        pyfun::compile("let r = true && false")
+        pyfun::compile("let r = true and false")
             .unwrap()
             .contains("r = True and False")
     );
     assert!(
-        pyfun::compile("let r = true || false")
+        pyfun::compile("let r = true or false")
             .unwrap()
             .contains("r = True or False")
     );
@@ -361,9 +361,9 @@ fn e2e_boolean_logic() {
         return;
     };
     let program = pyfun::compile(
-        "let between lo hi x = lo <= x && x <= hi\n\
-         print (true && not false)\n\
-         print (1 < 2 || 5 < 3)\n\
+        "let between lo hi x = lo <= x and x <= hi\n\
+         print (true and not false)\n\
+         print (1 < 2 or 5 < 3)\n\
          print (not (1 == 2))\n\
          print (between 0 10 5)\n\
          print (between 0 10 20)",
