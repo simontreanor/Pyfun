@@ -158,6 +158,9 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Binary { op, lhs, rhs } => {
             format!("({} {} {})", print_expr(lhs), op.symbol(), print_expr(rhs))
         }
+        ExprKind::Unary { op, expr } => {
+            format!("({} {})", op.symbol(), print_expr(expr))
+        }
         ExprKind::Pipe { lhs, rhs } => {
             format!("({} |> {})", print_expr(lhs), print_expr(rhs))
         }

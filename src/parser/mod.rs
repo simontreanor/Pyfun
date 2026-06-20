@@ -8,7 +8,10 @@
 //! fun         := "fun" ident+ "->" expr
 //! if          := "if" expr "then" expr "else" expr
 //! match       := "match" expr "with" ("|" pattern "->" expr)+
-//! pipe        := comparison ("|>" comparison)*
+//! pipe        := or ("|>" or)*
+//! or          := and ("||" and)*
+//! and         := not ("&&" not)*
+//! not         := "not" not | comparison
 //! comparison  := additive (("=="|"!="|"<"|">"|"<="|">=") additive)*
 //! additive    := multiplicative (("+"|"-") multiplicative)*
 //! multiplicative := application (("*"|"/"|"//") application)*
@@ -19,14 +22,14 @@
 //! atom_pattern:= "_" | ident | int | "true" | "false" | "(" pattern ")"
 //! ```
 //! Operator precedence, lowest to highest:
-//! `|>` < comparison/equality < `+ -` < `* / //` < application.
+//! `|>` < `||` < `&&` < `not` < comparison/equality < `+ -` < `* / //` < application.
 
 pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
     BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, NodeSpan,
-    Pattern, TypeDecl, TypeExpr, UnitExpr, VariantDecl,
+    Pattern, TypeDecl, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -306,9 +309,9 @@ impl Parser {
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut lhs = self.parse_comparison()?;
+        let mut lhs = self.parse_or()?;
         while self.eat(&Tok::PipeOp) {
-            let rhs = self.parse_comparison()?;
+            let rhs = self.parse_or()?;
             lhs = self.mk(
                 start,
                 ExprKind::Pipe {
@@ -320,8 +323,62 @@ impl Parser {
         Ok(lhs)
     }
 
+    /// Logical or `||` — looser than `&&`.
+    fn parse_or(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let mut lhs = self.parse_and()?;
+        while self.eat(&Tok::BarBar) {
+            let rhs = self.parse_and()?;
+            lhs = self.mk(
+                start,
+                ExprKind::Binary {
+                    op: BinOp::Or,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
+        }
+        Ok(lhs)
+    }
+
+    /// Logical and `&&` — looser than `not`/comparison, tighter than `||`.
+    fn parse_and(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let mut lhs = self.parse_not()?;
+        while self.eat(&Tok::AmpAmp) {
+            let rhs = self.parse_not()?;
+            lhs = self.mk(
+                start,
+                ExprKind::Binary {
+                    op: BinOp::And,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
+        }
+        Ok(lhs)
+    }
+
+    /// Prefix `not` — binds looser than comparison (`not a == b` is `not (a == b)`,
+    /// matching Python), tighter than `&&`.
+    fn parse_not(&mut self) -> Result<Expr, ParseError> {
+        if matches!(self.peek(), Tok::Not) {
+            let start = self.cur_start();
+            self.bump();
+            let expr = Box::new(self.parse_not()?);
+            return Ok(self.mk(
+                start,
+                ExprKind::Unary {
+                    op: UnOp::Not,
+                    expr,
+                },
+            ));
+        }
+        self.parse_comparison()
+    }
+
     /// Comparison and equality: `== != < > <= >=`, looser than `+ -`, tighter than
-    /// `|>`. Left-associative (chained comparisons type-check arm by arm).
+    /// `not`. Left-associative (chained comparisons type-check arm by arm).
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let mut lhs = self.parse_additive()?;
@@ -714,6 +771,9 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Yield => "yield",
         Tok::Do => "do",
         Tok::Measure => "measure",
+        Tok::Not => "not",
+        Tok::AmpAmp => "&&",
+        Tok::BarBar => "||",
         Tok::Bang => "!",
         Tok::Caret => "^",
         Tok::Lt => "<",

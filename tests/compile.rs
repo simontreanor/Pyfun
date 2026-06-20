@@ -99,6 +99,39 @@ fn comparison_operators_lower_to_python() {
 }
 
 #[test]
+fn boolean_operators_lower_to_python_keywords_with_precedence() {
+    // `&&`/`||` become `and`/`or`; `not` stays `not`. Precedence mirrors Python,
+    // so no redundant parentheses, but looser operands under `not` get them.
+    assert!(
+        pyfun::compile("let r = true && false")
+            .unwrap()
+            .contains("r = True and False")
+    );
+    assert!(
+        pyfun::compile("let r = true || false")
+            .unwrap()
+            .contains("r = True or False")
+    );
+    assert!(
+        pyfun::compile("let r = not true")
+            .unwrap()
+            .contains("r = not True")
+    );
+    // `not (1 == 2)` needs no parens (not is looser than ==, as in Python).
+    assert!(
+        pyfun::compile("let r = not 1 == 2")
+            .unwrap()
+            .contains("r = not 1 == 2")
+    );
+    // `(not true) == false` does need them.
+    assert!(
+        pyfun::compile("let r = (not true) == false")
+            .unwrap()
+            .contains("r = (not True) == False")
+    );
+}
+
+#[test]
 fn prelude_partial_application_uses_partial() {
     // A partially applied builtin must close over its arg, not call `max(0)`.
     let py = pyfun::compile("let clamp0 = max 0").unwrap();
@@ -312,6 +345,28 @@ fn e2e_comparison_and_structural_equality() {
          print (3 == 3)\n\
          print (Some 1 == Some 1)\n\
          print (Some 1 == Some 2)",
+    )
+    .unwrap();
+    let stdout = run_python(&python, &program);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["True", "True", "True", "True", "False"]
+    );
+}
+
+#[test]
+fn e2e_boolean_logic() {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program = pyfun::compile(
+        "let between lo hi x = lo <= x && x <= hi\n\
+         print (true && not false)\n\
+         print (1 < 2 || 5 < 3)\n\
+         print (not (1 == 2))\n\
+         print (between 0 10 5)\n\
+         print (between 0 10 20)",
     )
     .unwrap();
     let stdout = run_python(&python, &program);

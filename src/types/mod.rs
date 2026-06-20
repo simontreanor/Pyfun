@@ -18,17 +18,18 @@
 //! ([`Ty::Num`]) and adapt to context (`1 + 2.0 : float`), so `let add a b = a +
 //! b` infers `num 'a => 'a -> 'a -> 'a` and works at both bases. Division mirrors
 //! Python: `/` is true division (`float`), `//` floors. No user-extensible type
-//! classes (the set is closed); an unresolved `num` defaults to `int`.
+//! classes (the set is closed); an unresolved `num` defaults to `int`. Ordering
+//! (`< > <= >=`) carries a closed `comparison` constraint (int/float/string);
+//! equality (`== !=`) and logical `&& || not` are unconstrained over bool.
 //!
-//! Still deferred until its syntax exists: effect inference; `comparison`/
-//! `equality` constraints (no `<`/`==` operators yet).
+//! Still deferred until its syntax exists: effect inference.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::lexer::Span;
 use crate::parser::ast::{
     BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeExpr, UnitExpr,
+    TypeExpr, UnOp, UnitExpr,
 };
 
 /// A factor in a unit term: a base measure or a unit variable.
@@ -819,6 +820,22 @@ impl Infer {
                     let rt = self.infer_expr(rhs, env)?;
                     self.unify(&lt, &rt, span)?;
                     self.require_ord(&lt, span)?;
+                    Ok(Ty::Bool)
+                }
+                // Logical: both operands `bool`, result `bool`.
+                BinOp::And | BinOp::Or => {
+                    let lt = self.infer_expr(lhs, env)?;
+                    self.unify(&Ty::Bool, &lt, lhs.span())?;
+                    let rt = self.infer_expr(rhs, env)?;
+                    self.unify(&Ty::Bool, &rt, rhs.span())?;
+                    Ok(Ty::Bool)
+                }
+            },
+
+            ExprKind::Unary { op, expr } => match op {
+                UnOp::Not => {
+                    let t = self.infer_expr(expr, env)?;
+                    self.unify(&Ty::Bool, &t, expr.span())?;
                     Ok(Ty::Bool)
                 }
             },

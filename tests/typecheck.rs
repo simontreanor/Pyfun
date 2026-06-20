@@ -351,6 +351,28 @@ fn unit_annotation_and_less_than_are_distinguished() {
     assert!(pyfun::check("let r = 5 < 9").is_ok());
 }
 
+// ---------- boolean operators ----------
+
+#[test]
+fn accepts_boolean_operators() {
+    assert!(pyfun::check("let a = true && false\nlet b = true || false\nlet c = not true").is_ok());
+    // Mixed with comparisons, producing a bool condition.
+    assert!(pyfun::check("let between lo hi x = lo <= x && x <= hi").is_ok());
+}
+
+#[test]
+fn rejects_non_bool_logical_operands() {
+    assert_error_contains("let r = 1 && true", "expected bool, found int");
+    assert_error_contains("let r = true || 2", "expected bool, found int");
+    assert_error_contains("let r = not 5", "expected bool, found int");
+}
+
+#[test]
+fn not_binds_looser_than_comparison() {
+    // `not 1 == 2` is `not (1 == 2)` (bool), which type-checks.
+    assert!(pyfun::check("let r = not 1 == 2").is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

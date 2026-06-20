@@ -312,6 +312,14 @@ impl Lowerer {
                 }
             }
 
+            ExprKind::Unary { op, expr } => {
+                let (stmts, value) = self.lower_value(expr, locals)?;
+                let lowered = match op {
+                    crate::parser::ast::UnOp::Not => PyExpr::Not(Box::new(value)),
+                };
+                Ok((stmts, lowered))
+            }
+
             ExprKind::App { .. } | ExprKind::Pipe { .. } => self.lower_application(expr, locals),
 
             ExprKind::Ce { builder, items } => self.lower_ce(*builder, items, locals),
@@ -684,6 +692,8 @@ fn lower_binop(op: BinOp) -> PyBinOp {
         BinOp::Gt => PyBinOp::Gt,
         BinOp::Le => PyBinOp::Le,
         BinOp::Ge => PyBinOp::Ge,
+        BinOp::And => PyBinOp::And,
+        BinOp::Or => PyBinOp::Or,
     }
 }
 

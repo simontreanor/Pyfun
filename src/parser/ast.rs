@@ -156,11 +156,17 @@ pub enum ExprKind {
         arms: Vec<MatchArm>,
     },
 
-    /// Arithmetic binary operator application.
+    /// Binary operator application (arithmetic, comparison, equality, logical).
     Binary {
         op: BinOp,
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+    },
+
+    /// Unary operator application (`not e`).
+    Unary {
+        op: UnOp,
+        expr: Box<Expr>,
     },
 
     /// `lhs |> rhs` — pipe (sugar for `rhs lhs`, kept explicit in the AST).
@@ -265,6 +271,9 @@ pub enum BinOp {
     Gt,
     Le,
     Ge,
+    /// `&& ||` — logical and/or, result `bool` (short-circuiting in Python).
+    And,
+    Or,
 }
 
 impl BinOp {
@@ -282,6 +291,24 @@ impl BinOp {
             BinOp::Gt => ">",
             BinOp::Le => "<=",
             BinOp::Ge => ">=",
+            BinOp::And => "&&",
+            BinOp::Or => "||",
+        }
+    }
+}
+
+/// Unary operators.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnOp {
+    /// `not e` — logical negation.
+    Not,
+}
+
+impl UnOp {
+    /// The source spelling, used by the pretty-printer.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            UnOp::Not => "not",
         }
     }
 }

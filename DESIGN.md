@@ -237,6 +237,10 @@ constraint with polymorphic literals (step b).
    `bool` and are looser than arithmetic, tighter than `|>`. Surface wrinkle: `<` opens a unit
    annotation only when *adjacent* to a literal (`5<m>`); spaced (`5 < m`) it is less-than — the F#
    rule.
+7. **Logical operators. ✅ implemented.** `&&`/`||` (F#-style, lowering to Python `and`/`or`) and a
+   prefix `not` (a keyword, lowering to Python `not`). All `bool -> bool` (`not`) / `bool -> bool ->
+   bool`. Precedence mirrors Python — `||` < `&&` < `not` < comparison — so `not a == b` is
+   `not (a == b)` and emitted Python needs minimal parentheses.
 
 **Why a *closed* set of built-in constraints, not user type classes.** `num` and `comparison` are
 baked into the compiler; there is **no `class`/`instance` surface syntax**. The set stays closed,
@@ -256,7 +260,8 @@ thing that matters here: numeric and **unit** polymorphism, with Python-native s
 **Implementation status (ROADMAP #4):** (a) ✅ `/` true division, `//` floor, comments → `#`;
 (b) ✅ the `num` constraint with polymorphic literals; (c) `+ - *` stay numeric — string concat is
 deferred to a later named function (no guiding error yet); plus ✅ comparison/equality operators
-(`< > <= >= == !=`) with the `comparison` constraint and structural ADT equality.
+(`< > <= >= == !=`) with the `comparison` constraint and structural ADT equality; plus ✅ logical
+`&& || not`.
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 

@@ -99,6 +99,8 @@ pub enum PyExpr {
     },
     /// `await value`
     Await(Box<PyExpr>),
+    /// `not value`
+    Not(Box<PyExpr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +116,8 @@ pub enum PyBinOp {
     Gt,
     Le,
     Ge,
+    And,
+    Or,
 }
 
 impl PyBinOp {
@@ -131,13 +135,18 @@ impl PyBinOp {
             PyBinOp::Gt => ">",
             PyBinOp::Le => "<=",
             PyBinOp::Ge => ">=",
+            // Pyfun `&&`/`||` lower to Python's keyword operators.
+            PyBinOp::And => "and",
+            PyBinOp::Or => "or",
         }
     }
 
-    /// Binding power, higher = tighter. Comparisons are loosest, then `+ -`, then
-    /// `* / //` — matching Python so emitted code needs minimal parentheses.
+    /// Binding power, higher = tighter. Mirrors Python so emitted code needs
+    /// minimal parentheses: `or` < `and` < `not` (4) < comparison < `+ -` < `* /`.
     fn precedence(self) -> u8 {
         match self {
+            PyBinOp::Or => 2,
+            PyBinOp::And => 3,
             PyBinOp::Eq | PyBinOp::Ne | PyBinOp::Lt | PyBinOp::Gt | PyBinOp::Le | PyBinOp::Ge => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv => 20,
@@ -296,6 +305,8 @@ fn prec(e: &PyExpr) -> u8 {
         PyExpr::IfExp { .. } => 1,
         PyExpr::Lambda { .. } => 2,
         PyExpr::Await(_) => 3,
+        // `not` sits between `and` (3) and comparison (5), as in Python.
+        PyExpr::Not(_) => 4,
         PyExpr::BinOp { op, .. } => op.precedence(),
         // Atoms / calls / attributes never need wrapping.
         _ => 100,
@@ -337,6 +348,9 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         }
         PyExpr::Attribute { value, attr } => format!("{}.{attr}", emit_expr(value, 100)),
         PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
+        // Emit the operand at `not`'s own level so comparisons stay bare
+        // (`not a == b`) while looser `and`/`or` get parenthesized.
+        PyExpr::Not(inner) => format!("not {}", emit_expr(inner, 4)),
     };
     if prec(e) < parent_prec {
         format!("({text})")

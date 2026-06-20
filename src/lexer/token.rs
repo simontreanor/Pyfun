@@ -39,6 +39,7 @@ pub enum Tok {
     Yield,
     Do,
     Measure,
+    Not,
     True,
     False,
 
@@ -60,6 +61,8 @@ pub enum Tok {
     Gt,         // >
     Le,         // <=
     Ge,         // >=
+    AmpAmp,     // && (logical and)
+    BarBar,     // || (logical or)
     LParen,     // (
     RParen,     // )
     LBrace,     // {
@@ -94,6 +97,7 @@ impl Tok {
             "yield" => Tok::Yield,
             "do" => Tok::Do,
             "measure" => Tok::Measure,
+            "not" => Tok::Not,
             "true" => Tok::True,
             "false" => Tok::False,
             _ => return None,

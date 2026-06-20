@@ -23,6 +23,11 @@ const PROGRAMS: &[&str] = &[
     "let r = a == b",
     "let r = x <= y",
     "let cmp a b = a < b",
+    // Boolean operators and prefix `not`.
+    "let r = a && b || c",
+    "let r = not a",
+    "let r = not a == b",
+    "let chk lo hi x = lo <= x && x <= hi",
     // `5<m>` (adjacent, in the units section below) is a unit annotation, whereas
     // `5 < m` (spaced) is a comparison — the printer keeps them distinct.
     "let r = 5 < m",

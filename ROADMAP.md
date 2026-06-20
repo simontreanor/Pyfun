@@ -68,6 +68,13 @@ compile/roundtrip tests.
 - **Remaining:** chained comparisons are left-assoc (not Python-style chaining); `<=`/`>=` on ADTs
   would need a derived ordering (only `comparison`-constrained primitives for now).
 
+### 4c. Logical operators — ✅ done
+`&&` / `||` (F#-style, lowering to Python `and`/`or`) and a prefix `not` keyword (lowering to Python
+`not`), all over `bool`. New `ExprKind::Unary`/`UnOp` model the prefix operator (reusable for a
+future unary minus). Precedence mirrors Python — `||` < `&&` < `not` < comparison — so emitted code
+needs minimal parentheses (`not a == b` stays bare; `(not a) == b` gets parens). Covered across
+lexer/parser/typecheck/compile/roundtrip tests.
+
 ## Polish on existing features
 
 ### 5. Deep exhaustiveness
