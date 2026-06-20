@@ -53,10 +53,20 @@ Python-familiar numerics via a single closed built-in constraint. Both steps shi
   no F# `inline`/SRTP (Python dispatches operators at runtime). `+ - *` stay numeric.
 - **Unlocks:** real numeric programming; makes units genuinely useful (physics is floats — they get
   dimensional checking for free, e.g. `10.5<m> / 2.0<s> : float<m/s>`).
-- **Remaining nearby work:** `comparison`/`equality` constraints (deferred until `<`/`==` operators
-  exist), and a guiding error for `+` on strings. Minor wart: a literal unified to `float` still
-  emits as an int literal, so a *bare* such value prints `7` not `7.0` (arithmetic coerces, so values
-  are unaffected).
+- **Remaining nearby work:** a guiding error for `+` on strings. Minor wart: a literal unified to
+  `float` still emits as an int literal, so a *bare* such value prints `7` not `7.0` (arithmetic
+  coerces, so values are unaffected).
+
+### 4b. Comparison & equality operators — ✅ done (`DESIGN.md` §7.1)
+`< > <= >= == !=`, the everyday gap after numbers. Comparison (`< > <= >=`) carries a closed
+`comparison` constraint (int/float/string), built like `num` (an `ord` set on type vars, propagated
+and generalized), so `let lt a b = a < b : comparison 'a => 'a -> 'a -> bool`; bools/functions are
+rejected. Equality (`== !=`) is `'a -> 'a -> bool` (any type, unconstrained), with structural
+`__eq__` generated on ADT classes (`Some 1 == Some 1`). `<` disambiguates from unit annotations by
+adjacency (`5<m>` unit vs `5 < m` comparison — the F# rule). Covered across lexer/parser/typecheck/
+compile/roundtrip tests.
+- **Remaining:** chained comparisons are left-assoc (not Python-style chaining); `<=`/`>=` on ADTs
+  would need a derived ordering (only `comparison`-constrained primitives for now).
 
 ## Polish on existing features
 

@@ -88,3 +88,11 @@ print floor                          # 20
 print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
 print (max distance 50<m>)           # 100
+
+# Comparison (`comparison 'a => …`) and equality (`'a -> 'a -> bool`, structural
+# for ADTs) both yield bool. `<` is comparison here because of the space; `5<m>`
+# without a space is a unit annotation.
+print (answer == 42)                 # True
+print (seven < 10)                   # True
+print (speed < 50<m/s>)              # True   (dimensional comparison)
+print (Some 42 == Some answer)       # True   (structural ADT equality)

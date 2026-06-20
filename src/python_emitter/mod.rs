@@ -108,6 +108,12 @@ pub enum PyBinOp {
     Mul,
     Div,
     FloorDiv,
+    Eq,
+    Ne,
+    Lt,
+    Gt,
+    Le,
+    Ge,
 }
 
 impl PyBinOp {
@@ -119,12 +125,20 @@ impl PyBinOp {
             // Pyfun mirrors Python: `/` is true division, `//` floors.
             PyBinOp::Div => "/",
             PyBinOp::FloorDiv => "//",
+            PyBinOp::Eq => "==",
+            PyBinOp::Ne => "!=",
+            PyBinOp::Lt => "<",
+            PyBinOp::Gt => ">",
+            PyBinOp::Le => "<=",
+            PyBinOp::Ge => ">=",
         }
     }
 
-    /// Binding power, higher = tighter. `* / //` bind tighter than `+ -`.
+    /// Binding power, higher = tighter. Comparisons are loosest, then `+ -`, then
+    /// `* / //` — matching Python so emitted code needs minimal parentheses.
     fn precedence(self) -> u8 {
         match self {
+            PyBinOp::Eq | PyBinOp::Ne | PyBinOp::Lt | PyBinOp::Gt | PyBinOp::Le | PyBinOp::Ge => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv => 20,
         }
@@ -235,6 +249,19 @@ fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
             .collect::<Vec<_>>()
             .join(", ");
         line(out, depth + 2, &format!("return f\"{name}({parts})\""));
+    }
+
+    // Structural `__eq__` so `==` compares by constructor + fields (recursively),
+    // not object identity — matching FP expectations and Pyfun's equality typing.
+    line(out, depth + 1, "def __eq__(self, other):");
+    if fields.is_empty() {
+        line(out, depth + 2, "return type(self) is type(other)");
+    } else {
+        line(
+            out,
+            depth + 2,
+            "return type(self) is type(other) and self.__dict__ == other.__dict__",
+        );
     }
 }
 

@@ -173,6 +173,8 @@ struct Scheme {
     vars: Vec<u32>,
     uvars: Vec<u32>,
     num_vars: Vec<u32>,
+    /// Generalized type variables carrying the `comparison` constraint.
+    ord_vars: Vec<u32>,
     ty: Ty,
 }
 
@@ -182,6 +184,7 @@ impl Scheme {
             vars: vec![],
             uvars: vec![],
             num_vars: vec![],
+            ord_vars: vec![],
             ty,
         }
     }
@@ -369,6 +372,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 vars: (0..decl.params.len() as u32).collect(),
                 uvars: vec![],
                 num_vars: vec![],
+                ord_vars: vec![],
                 ty: ctor_ty,
             };
             env.insert(variant.name.clone(), scheme.clone());
@@ -403,6 +407,7 @@ fn seed_prelude(env: &mut Env) {
             vars: vec![0],
             uvars: vec![],
             num_vars: vec![],
+            ord_vars: vec![],
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit)),
         },
     );
@@ -411,6 +416,7 @@ fn seed_prelude(env: &mut Env) {
         vars: vec![],
         uvars: vec![PRELUDE_UVAR],
         num_vars: vec![PRELUDE_NUMVAR],
+        ord_vars: vec![],
         ty,
     };
     // abs : num 'a => 'a<'u> -> 'a<'u>
@@ -448,12 +454,14 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         vars: vec![0, 1],
         uvars: vec![],
         num_vars: vec![],
+        ord_vars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
     };
     let err = Scheme {
         vars: vec![0, 1],
         uvars: vec![],
         num_vars: vec![],
+        ord_vars: vec![],
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -539,6 +547,8 @@ struct Infer {
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
     /// maps to a concrete `Int`/`Float` or to another `num` var.
     num_subst: HashMap<u32, NumRef>,
+    /// Type variables carrying the `comparison` constraint (from `< > <= >=`).
+    ord: HashSet<u32>,
     next: u32,
     decls: Decls,
 }
@@ -676,6 +686,63 @@ impl Infer {
         }
     }
 
+    /// Arithmetic (`+ - * / //`): both operands the same numeric base (no int/float
+    /// mixing beyond literal adaptation — §7.1). `+ - * //` keep that base; `/` is
+    /// true division and always yields `float`.
+    fn infer_arithmetic(
+        &mut self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        let lt = self.infer_expr(lhs, env)?;
+        let (lb, lu) = self.expect_num(&lt, lhs.span())?;
+        let rt = self.infer_expr(rhs, env)?;
+        let (rb, ru) = self.expect_num(&rt, rhs.span())?;
+        let base_clash = |this: &Self| {
+            mismatch(
+                &this.num_ty(lb, this.apply_unit(&lu)),
+                &this.num_ty(rb, this.apply_unit(&ru)),
+                span,
+            )
+        };
+        if !self.unify_num(lb, rb) {
+            return Err(base_clash(self));
+        }
+        match op {
+            BinOp::Add | BinOp::Sub => {
+                if !self.unify_unit(&lu, &ru) {
+                    return Err(base_clash(self));
+                }
+                Ok(self.num_ty(lb, self.apply_unit(&lu)))
+            }
+            BinOp::Mul => Ok(self.num_ty(lb, self.apply_unit(&lu).mul(&self.apply_unit(&ru)))),
+            BinOp::Div => Ok(Ty::Float(self.apply_unit(&lu).div(&self.apply_unit(&ru)))),
+            BinOp::FloorDiv => Ok(self.num_ty(lb, self.apply_unit(&lu).div(&self.apply_unit(&ru)))),
+            // infer_arithmetic is only called for the five arithmetic operators.
+            _ => unreachable!("non-arithmetic operator in infer_arithmetic"),
+        }
+    }
+
+    /// Require `ty` to support ordering comparison (`< > <= >=`): the `comparison`
+    /// constraint, satisfied by `int`/`float`/`string` (numbers and strings). A
+    /// bare type variable gains the constraint and is checked once it resolves.
+    fn require_ord(&mut self, ty: &Ty, span: Span) -> Result<(), TypeError> {
+        match self.apply(ty) {
+            Ty::Int(_) | Ty::Float(_) | Ty::Num(_, _) | Ty::Str => Ok(()),
+            Ty::Var(n) => {
+                self.ord.insert(n);
+                Ok(())
+            }
+            other => Err(TypeError {
+                message: format!("type {} does not support comparison (`<`)", show(&other)),
+                span,
+            }),
+        }
+    }
+
     fn infer_binding(&mut self, binding: &LetBinding, env: &Env) -> Result<Scheme, TypeError> {
         let ty = if binding.params.is_empty() {
             self.infer_expr(&binding.value, env)?
@@ -734,40 +801,27 @@ impl Infer {
                 }
             }
 
-            ExprKind::Binary { op, lhs, rhs } => {
-                // Both operands must be the same numeric base (no int/float mixing
-                // beyond literal adaptation — §7.1). `+ - * //` keep that base;
-                // `/` is true division and always yields `float`.
-                let lt = self.infer_expr(lhs, env)?;
-                let (lb, lu) = self.expect_num(&lt, lhs.span())?;
-                let rt = self.infer_expr(rhs, env)?;
-                let (rb, ru) = self.expect_num(&rt, rhs.span())?;
-                let base_clash = |this: &Self| {
-                    mismatch(
-                        &this.num_ty(lb, this.apply_unit(&lu)),
-                        &this.num_ty(rb, this.apply_unit(&ru)),
-                        span,
-                    )
-                };
-                if !self.unify_num(lb, rb) {
-                    return Err(base_clash(self));
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::FloorDiv => {
+                    self.infer_arithmetic(*op, lhs, rhs, span, env)
                 }
-                match op {
-                    BinOp::Add | BinOp::Sub => {
-                        if !self.unify_unit(&lu, &ru) {
-                            return Err(base_clash(self));
-                        }
-                        Ok(self.num_ty(lb, self.apply_unit(&lu)))
-                    }
-                    BinOp::Mul => {
-                        Ok(self.num_ty(lb, self.apply_unit(&lu).mul(&self.apply_unit(&ru))))
-                    }
-                    BinOp::Div => Ok(Ty::Float(self.apply_unit(&lu).div(&self.apply_unit(&ru)))),
-                    BinOp::FloorDiv => {
-                        Ok(self.num_ty(lb, self.apply_unit(&lu).div(&self.apply_unit(&ru))))
-                    }
+                // Equality: operands of the same type, result `bool` (§7.1). No
+                // constraint — every type has equality (ADTs structurally).
+                BinOp::Eq | BinOp::Ne => {
+                    let lt = self.infer_expr(lhs, env)?;
+                    let rt = self.infer_expr(rhs, env)?;
+                    self.unify(&lt, &rt, span)?;
+                    Ok(Ty::Bool)
                 }
-            }
+                // Ordering: same type, result `bool`, operand must be `comparison`.
+                BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                    let lt = self.infer_expr(lhs, env)?;
+                    let rt = self.infer_expr(rhs, env)?;
+                    self.unify(&lt, &rt, span)?;
+                    self.require_ord(&lt, span)?;
+                    Ok(Ty::Bool)
+                }
+            },
 
             ExprKind::If { cond, then, else_ } => {
                 let ct = self.infer_expr(cond, env)?;
@@ -1137,6 +1191,10 @@ impl Infer {
                     });
                 }
                 self.subst.insert(*x, t.clone());
+                // Carry a `comparison` constraint onto whatever `x` resolves to.
+                if self.ord.remove(x) {
+                    self.require_ord(t, span)?;
+                }
                 Ok(())
             }
             (Ty::Fun(a1, a2), Ty::Fun(b1, b2)) => {
@@ -1226,6 +1284,12 @@ impl Infer {
             .iter()
             .map(|v| (*v, self.fresh_id()))
             .collect();
+        // Carry the `comparison` constraint onto each fresh type variable.
+        for v in &scheme.ord_vars {
+            if let Some(Ty::Var(fresh)) = tmap.get(v) {
+                self.ord.insert(*fresh);
+            }
+        }
         subst_all(&scheme.ty, &tmap, &umap, &nmap)
     }
 
@@ -1250,10 +1314,17 @@ impl Infer {
                 num_vars.push(v);
             }
         });
+        // A generalized type variable that carries `comparison` records it.
+        let ord_vars: Vec<u32> = vars
+            .iter()
+            .copied()
+            .filter(|v| self.ord.contains(v))
+            .collect();
         Scheme {
             vars,
             uvars,
             num_vars,
+            ord_vars,
             ty,
         }
     }

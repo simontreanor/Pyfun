@@ -257,6 +257,14 @@ pub enum BinOp {
     Div,
     /// `//` — floor division (Python `//`), result is `int`.
     FloorDiv,
+    /// `==` / `!=` — equality, result `bool` (operands of the same type).
+    Eq,
+    Ne,
+    /// `< > <= >=` — ordering comparison, result `bool` (orderable operands).
+    Lt,
+    Gt,
+    Le,
+    Ge,
 }
 
 impl BinOp {
@@ -268,6 +276,12 @@ impl BinOp {
             BinOp::Mul => "*",
             BinOp::Div => "/",
             BinOp::FloorDiv => "//",
+            BinOp::Eq => "==",
+            BinOp::Ne => "!=",
+            BinOp::Lt => "<",
+            BinOp::Gt => ">",
+            BinOp::Le => "<=",
+            BinOp::Ge => ">=",
         }
     }
 }

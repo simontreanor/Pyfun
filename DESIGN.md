@@ -228,10 +228,19 @@ constraint with polymorphic literals (step b).
    steers users there. This is the one deliberate departure from Python familiarity — silent
    `+`-means-anything is exactly the dynamic mushiness Pyfun exists to replace.
 
-**Why a *closed* set of built-in constraints, not user type classes.** `num` is baked into the
-compiler; there is **no `class`/`instance` surface syntax**. When `<`/`==` operators are added, two
-more built-ins (`comparison`, `equality`) join in the same style — but the set stays closed, which
-is itself the guardrail against sprawling into a Haskell-style class system (§11). Notably, **Pyfun
+6. **Comparison & equality. ✅ implemented.** `< > <= >=` carry a closed built-in **`comparison`**
+   constraint (satisfied by `int`/`float`/`string`), implemented like `num` (an `ord` constraint set
+   on type variables, propagated through unification and generalized), so `let lt a b = a < b`
+   infers `comparison 'a => 'a -> 'a -> bool` and works at int/float/string but rejects bools and
+   functions. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
+   equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
+   `bool` and are looser than arithmetic, tighter than `|>`. Surface wrinkle: `<` opens a unit
+   annotation only when *adjacent* to a literal (`5<m>`); spaced (`5 < m`) it is less-than — the F#
+   rule.
+
+**Why a *closed* set of built-in constraints, not user type classes.** `num` and `comparison` are
+baked into the compiler; there is **no `class`/`instance` surface syntax**. The set stays closed,
+which is itself the guardrail against sprawling into a Haskell-style class system (§11). Notably, **Pyfun
 needs none of F#'s `inline`/SRTP machinery**: F# requires compile-time monomorphization for generic
 arithmetic because `+` is a static per-type method on .NET, whereas **Python dispatches `+`/`<`/`==`
 at runtime** (`__add__`/`__lt__`/`__eq__`). So a generic `add` lowers to one ordinary
@@ -246,8 +255,8 @@ thing that matters here: numeric and **unit** polymorphism, with Python-native s
 
 **Implementation status (ROADMAP #4):** (a) ✅ `/` true division, `//` floor, comments → `#`;
 (b) ✅ the `num` constraint with polymorphic literals; (c) `+ - *` stay numeric — string concat is
-deferred to a later named function (no guiding error yet). Still deferred: `comparison`/`equality`
-constraints until the `<`/`==` operators exist.
+deferred to a later named function (no guiding error yet); plus ✅ comparison/equality operators
+(`< > <= >= == !=`) with the `comparison` constraint and structural ADT equality.
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 

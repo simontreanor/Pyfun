@@ -18,6 +18,14 @@ const PROGRAMS: &[&str] = &[
     "let add a b = a + b",
     "let r = 1 + 2 * 3 - 4 / 2",
     "let r = 7 // 2",
+    // Comparison & equality (looser than arithmetic).
+    "let r = 1 + 1 < 3",
+    "let r = a == b",
+    "let r = x <= y",
+    "let cmp a b = a < b",
+    // `5<m>` (adjacent, in the units section below) is a unit annotation, whereas
+    // `5 < m` (spaced) is a comparison — the printer keeps them distinct.
+    "let r = 5 < m",
     "let curried = f a b c",
     "let piped = x |> f |> g a",
     "let choose = if cond then a else b",

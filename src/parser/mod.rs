@@ -8,7 +8,8 @@
 //! fun         := "fun" ident+ "->" expr
 //! if          := "if" expr "then" expr "else" expr
 //! match       := "match" expr "with" ("|" pattern "->" expr)+
-//! pipe        := additive ("|>" additive)*
+//! pipe        := comparison ("|>" comparison)*
+//! comparison  := additive (("=="|"!="|"<"|">"|"<="|">=") additive)*
 //! additive    := multiplicative (("+"|"-") multiplicative)*
 //! multiplicative := application (("*"|"/"|"//") application)*
 //! application := atom atom*          // juxtaposition; curried, left-assoc
@@ -17,7 +18,8 @@
 //! ctor        := UpperIdent atom_pattern*
 //! atom_pattern:= "_" | ident | int | "true" | "false" | "(" pattern ")"
 //! ```
-//! Operator precedence, lowest to highest: `|>` < `+ -` < `* /` < application.
+//! Operator precedence, lowest to highest:
+//! `|>` < comparison/equality < `+ -` < `* / //` < application.
 
 pub mod ast;
 
@@ -304,12 +306,41 @@ impl Parser {
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut lhs = self.parse_additive()?;
+        let mut lhs = self.parse_comparison()?;
         while self.eat(&Tok::PipeOp) {
-            let rhs = self.parse_additive()?;
+            let rhs = self.parse_comparison()?;
             lhs = self.mk(
                 start,
                 ExprKind::Pipe {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            );
+        }
+        Ok(lhs)
+    }
+
+    /// Comparison and equality: `== != < > <= >=`, looser than `+ -`, tighter than
+    /// `|>`. Left-associative (chained comparisons type-check arm by arm).
+    fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let mut lhs = self.parse_additive()?;
+        loop {
+            let op = match self.peek() {
+                Tok::EqEq => BinOp::Eq,
+                Tok::BangEq => BinOp::Ne,
+                Tok::Lt => BinOp::Lt,
+                Tok::Gt => BinOp::Gt,
+                Tok::Le => BinOp::Le,
+                Tok::Ge => BinOp::Ge,
+                _ => break,
+            };
+            self.bump();
+            let rhs = self.parse_additive()?;
+            lhs = self.mk(
+                start,
+                ExprKind::Binary {
+                    op,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                 },
@@ -430,9 +461,14 @@ impl Parser {
     }
 
     /// Wrap a freshly-parsed numeric literal in a unit annotation if one follows.
+    ///
+    /// A `<` is a unit annotation only when it sits *immediately* after the
+    /// literal (no whitespace), e.g. `5<m>`. With a space, `5 < m`, it is the
+    /// less-than operator — the F# rule, which keeps units and comparison apart.
     fn maybe_unit(&mut self, start: usize, kind: ExprKind) -> Result<Expr, ParseError> {
         let literal = self.mk(start, kind);
-        if matches!(self.peek(), Tok::Lt) {
+        let adjacent = self.cur_start() == self.prev_end();
+        if adjacent && matches!(self.peek(), Tok::Lt) {
             let unit = self.parse_unit_annotation()?;
             Ok(self.mk(
                 start,
@@ -687,6 +723,10 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::True => "true",
         Tok::False => "false",
         Tok::Eq => "=",
+        Tok::EqEq => "==",
+        Tok::BangEq => "!=",
+        Tok::Le => "<=",
+        Tok::Ge => ">=",
         Tok::Plus => "+",
         Tok::Minus => "-",
         Tok::Star => "*",

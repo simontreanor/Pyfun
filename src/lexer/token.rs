@@ -44,6 +44,8 @@ pub enum Tok {
 
     // Operators & punctuation
     Eq,         // =
+    EqEq,       // ==
+    BangEq,     // !=
     Plus,       // +
     Minus,      // -
     Star,       // *
@@ -54,8 +56,10 @@ pub enum Tok {
     Arrow,      // ->
     Bang,       // !
     Caret,      // ^
-    Lt,         // <
+    Lt,         // < (also opens a unit annotation when adjacent to a literal)
     Gt,         // >
+    Le,         // <=
+    Ge,         // >=
     LParen,     // (
     RParen,     // )
     LBrace,     // {

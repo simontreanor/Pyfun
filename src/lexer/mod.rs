@@ -237,6 +237,18 @@ impl<'a> Lexer<'a> {
             self.push(Tok::SlashSlash, start);
             return Ok(());
         }
+        // Two-char comparison / equality operators (checked before `=` `!` `<` `>`).
+        if let Some(tok) = match (c, self.peek2()) {
+            (b'=', Some(b'=')) => Some(Tok::EqEq),
+            (b'!', Some(b'=')) => Some(Tok::BangEq),
+            (b'<', Some(b'=')) => Some(Tok::Le),
+            (b'>', Some(b'=')) => Some(Tok::Ge),
+            _ => None,
+        } {
+            self.pos += 2;
+            self.push(tok, start);
+            return Ok(());
+        }
         let tok = match c {
             b'=' => Tok::Eq,
             b'+' => Tok::Plus,

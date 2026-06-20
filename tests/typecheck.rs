@@ -300,6 +300,57 @@ fn user_definition_shadows_a_prelude_name() {
     assert!(pyfun::check("let min a b = a\nlet r = min true false").is_ok());
 }
 
+// ---------- comparison & equality (DESIGN §7.1) ----------
+
+#[test]
+fn accepts_comparison_and_equality() {
+    assert!(pyfun::check("let a = 1 < 2\nlet b = 2.5 >= 1.0\nlet c = \"x\" < \"y\"").is_ok());
+    assert!(pyfun::check("let a = 1 == 1\nlet b = true != false\nlet c = \"x\" == \"y\"").is_ok());
+}
+
+#[test]
+fn comparison_and_equality_produce_bool() {
+    // The result is a bool, usable as an `if` condition.
+    assert!(pyfun::check("let pick a b = if a < b then a else b").is_ok());
+}
+
+#[test]
+fn generic_comparison_function_is_constrained() {
+    // `lt` infers `comparison 'a => 'a -> 'a -> bool`: usable at int, float, string.
+    let src = "let lt a b = a < b\nlet x = lt 1 2\nlet y = lt 1.5 2.5\nlet z = lt \"a\" \"b\"";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_comparison_of_unorderable_type() {
+    // Booleans and functions are not comparable with `<`.
+    assert_error_contains("let r = true < false", "does not support comparison");
+    // `id` is concretely a function here, so comparing it is rejected.
+    assert_error_contains(
+        "let id x = x\nlet bad = id < id",
+        "does not support comparison",
+    );
+}
+
+#[test]
+fn rejects_equality_across_different_types() {
+    // Equality requires both sides to have the same type.
+    assert_error_contains("let r = 1 == \"x\"", "expected int, found string");
+}
+
+#[test]
+fn accepts_structural_equality_of_adts() {
+    let src = "type Option a = None | Some a\nlet r = Some 1 == Some 2";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn unit_annotation_and_less_than_are_distinguished() {
+    // `5<m>` (adjacent) is a unit; `5 < x` (spaced) is a comparison.
+    assert!(pyfun::check("measure m\nlet d = 5<m>\nlet ok = d < 9<m>").is_ok());
+    assert!(pyfun::check("let r = 5 < 9").is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

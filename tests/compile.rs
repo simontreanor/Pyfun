@@ -79,6 +79,26 @@ fn adt_classes_get_a_repr() {
 }
 
 #[test]
+fn adt_classes_get_structural_eq() {
+    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
+    assert!(py.contains("def __eq__(self, other):"), "{py}");
+    assert!(
+        py.contains("type(self) is type(other) and self.__dict__ == other.__dict__"),
+        "{py}"
+    );
+}
+
+#[test]
+fn comparison_operators_lower_to_python() {
+    let py =
+        pyfun::compile("let a = 1 < 2\nlet b = 1 == 2\nlet c = 1 != 2\nlet d = 1 >= 2").unwrap();
+    assert!(py.contains("a = 1 < 2"), "{py}");
+    assert!(py.contains("b = 1 == 2"), "{py}");
+    assert!(py.contains("c = 1 != 2"), "{py}");
+    assert!(py.contains("d = 1 >= 2"), "{py}");
+}
+
+#[test]
 fn prelude_partial_application_uses_partial() {
     // A partially applied builtin must close over its arg, not call `max(0)`.
     let py = pyfun::compile("let clamp0 = max 0").unwrap();
@@ -276,6 +296,28 @@ fn e2e_prelude_print_and_numerics() {
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
         ["3", "10", "7", "Some(7)"]
+    );
+}
+
+#[test]
+fn e2e_comparison_and_structural_equality() {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program = pyfun::compile(
+        "type Option a = None | Some a\n\
+         print (1 < 2)\n\
+         print (\"a\" < \"b\")\n\
+         print (3 == 3)\n\
+         print (Some 1 == Some 1)\n\
+         print (Some 1 == Some 2)",
+    )
+    .unwrap();
+    let stdout = run_python(&python, &program);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["True", "True", "True", "True", "False"]
     );
 }
 
