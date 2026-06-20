@@ -1,25 +1,26 @@
-// A taste of the type-checked Phase 3 subset that compiles to runnable Python.
-//   pyfun check   examples/hello.pyfun   # type-check
-//   pyfun compile examples/hello.pyfun   # emit Python
+# A taste of the type-checked Phase 3 subset that compiles to runnable Python.
+#   pyfun check   examples/hello.pyfun     (type-check)
+#   pyfun compile examples/hello.pyfun     (emit Python)
+#   pyfun run     examples/hello.pyfun     (run it)
 
-// Algebraic data types: a parameterized sum and a plain enum.
+# Algebraic data types: a parameterized sum and a plain enum.
 type Option a = None | Some a
 type Color = Red | Green | Blue
 
-// Curried function: inferred type int -> int -> int.
+# Curried function: inferred type int -> int -> int.
 let add a b = a + b
 
-// Partial application (functools.partial); full application (add(1, 4)).
+# Partial application (functools.partial); full application (add(1, 4)).
 let inc = add 1
 let five = 4 |> inc
 
-// `id` is polymorphic: 'a -> 'a, instantiated afresh at each use.
+# `id` is polymorphic: 'a -> 'a, instantiated afresh at each use.
 let id x = x
 
-// Expression-oriented `if`; the condition must be a bool.
+# Expression-oriented `if`; the condition must be a bool.
 let pick b = if b then 1 else 0
 
-// Exhaustive pattern matching over an ADT (checked at compile time).
+# Exhaustive pattern matching over an ADT (checked at compile time).
 let unwrap o =
   match o with
   | Some v -> v
@@ -33,20 +34,20 @@ let rank c =
   | Green -> 2
   | Blue -> 3
 
-// Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
+# Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
 let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
 let seven = inc2 five
 
-// Computation expressions (F# showcase features):
-//   result {} — railway-oriented, short-circuits on Error (built-in Ok/Error).
+# Computation expressions (F# showcase features):
+#   result {} — railway-oriented, short-circuits on Error (built-in Ok/Error).
 let checked ok v =
   result {
     let! x = if ok then Ok v else Error 0
     return x + 1
   }
 
-//   seq {} — a lazy sequence, lowered to a Python generator.
+#   seq {} — a lazy sequence, lowered to a Python generator.
 let small =
   seq {
     yield 1
@@ -54,34 +55,36 @@ let small =
     yield 3
   }
 
-//   async {} — lowered to a Python coroutine (async def / await).
+#   async {} — lowered to a Python coroutine (async def / await).
 let computed =
   async {
     let! x = async { return 20 }
     return x + 1
   }
 
-// Units of measure: dimensional analysis at compile time, erased at runtime.
+# Units of measure: dimensional analysis at compile time, erased at runtime.
 measure m
 measure s
 
 let distance = 100<m>
 let elapsed = 10<s>
-let speed = distance / elapsed       // inferred int<m/s>
+let speed = distance / elapsed       # true division -> float<m/s>
+let trip = distance // 4<m>          # floor division -> int (dimensionless)
 
-// `area` is unit-polymorphic: int<'u> -> int<'v> -> int<'u 'v>.
+# `area` is unit-polymorphic: int<'u> -> int<'v> -> int<'u 'v>.
 let area w h = w * h
-let floor = area 4<m> 5<m>            // int<m^2>
-// `distance + elapsed` would be a compile error: int<m> vs int<s>.
+let floor = area 4<m> 5<m>            # int<m^2>
+# `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
-// Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
-//   pyfun run examples/hello.pyfun
-// Consecutive `print` statements are separated by Pyfun's offside rule (a line
-// break back to the left margin), not braces or semicolons. Units erase, so the
-// printed numbers are plain ints.
-print answer                         // 42
-print seven                          // 7
-print (rank Green)                   // 2
-print floor                          // 20
-print speed                          // 10
-print (max distance 50<m>)           // 100
+# Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
+#   pyfun run examples/hello.pyfun
+# Consecutive `print` statements are separated by Pyfun's offside rule (a line
+# break back to the left margin), not braces or semicolons. Units erase, so the
+# printed numbers are plain Python numbers.
+print answer                         # 42
+print seven                          # 7
+print (rank Green)                   # 2
+print floor                          # 20
+print speed                          # 10.0  (true division)
+print trip                           # 25    (floor division)
+print (max distance 50<m>)           # 100

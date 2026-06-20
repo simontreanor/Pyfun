@@ -226,9 +226,18 @@ fn rejects_adding_different_units() {
 
 #[test]
 fn rejects_unit_result_used_at_wrong_unit() {
-    // speed is m/s, so adding metres is a dimension error.
-    let src = "measure m\nmeasure s\nlet speed = 100<m> / 10<s>\nlet bad = speed + 1<m>";
+    // speed is m/s, so adding metres is a dimension error. Uses `//` so the
+    // result stays `int` (`/` would make it `float`, a different mismatch).
+    let src = "measure m\nmeasure s\nlet speed = 100<m> // 10<s>\nlet bad = speed + 1<m>";
     assert_error_contains(src, "expected int<m/s>, found int<m>");
+}
+
+#[test]
+fn true_division_yields_float_floor_division_yields_int() {
+    // `/` produces a float, so adding an int to it is rejected (arithmetic is
+    // integer-only until the `num` constraint lands); `//` keeps it an int.
+    assert_error_contains("let r = (7 / 2) + 1", "expected int, found float");
+    assert!(pyfun::check("let r = (7 // 2) + 1").is_ok());
 }
 
 #[test]

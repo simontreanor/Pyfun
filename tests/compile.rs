@@ -140,9 +140,24 @@ fn e2e_if_and_match() {
 }
 
 #[test]
-fn e2e_integer_division_uses_floor_division() {
-    // Pyfun `/` is integer division, lowered to Python `//`.
-    run_and_check("let d = 7 / 2", &[("d", "3")]);
+fn e2e_division_operators_match_python() {
+    // `/` is true division (float), `//` floors (int) — like Python 3.
+    run_and_check("let q = 7 / 2", &[("q", "3.5")]);
+    run_and_check("let d = 7 // 2", &[("d", "3")]);
+}
+
+#[test]
+fn division_operators_lower_to_matching_python_operators() {
+    assert!(
+        pyfun::compile("let q = 7 / 2")
+            .unwrap()
+            .contains("q = 7 / 2")
+    );
+    assert!(
+        pyfun::compile("let d = 7 // 2")
+            .unwrap()
+            .contains("d = 7 // 2")
+    );
 }
 
 #[test]
@@ -188,7 +203,7 @@ fn e2e_recursive_adt() {
 fn units_are_erased_in_emitted_python() {
     let py = pyfun::compile("measure m\nmeasure s\nlet speed = 100<m> / 10<s>").unwrap();
     assert!(!py.contains('<'), "units should be erased: {py}");
-    assert!(py.contains("speed = 100 // 10"), "{py}");
+    assert!(py.contains("speed = 100 / 10"), "{py}");
 }
 
 #[test]
@@ -201,7 +216,8 @@ fn e2e_units_compute_after_erasure() {
         let time = 10<s>
         let speed = dist / time
         ",
-        &[("speed", "10")],
+        // `/` is true division, so the unit-bearing result is a float.
+        &[("speed", "10.0")],
     );
 }
 

@@ -253,7 +253,10 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
+    /// `/` — true division (Python `/`), result is `float`.
     Div,
+    /// `//` — floor division (Python `//`), result is `int`.
+    FloorDiv,
 }
 
 impl BinOp {
@@ -264,6 +267,7 @@ impl BinOp {
             BinOp::Sub => "-",
             BinOp::Mul => "*",
             BinOp::Div => "/",
+            BinOp::FloorDiv => "//",
         }
     }
 }

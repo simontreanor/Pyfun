@@ -13,8 +13,10 @@
 //! type variables, giving unit-polymorphic functions (`let area w h = w * h` infers
 //! `int<'u> -> int<'v> -> int<'u 'v>`). Units are erased at lowering.
 //!
-//! Still deferred until its syntax exists: effect inference. Arithmetic is
-//! integer-only (no numeric type classes); `/` is integer division.
+//! Still deferred until its syntax exists: effect inference. Arithmetic operands
+//! are integer-only for now (no numeric type classes — `DESIGN.md` §7.1), but
+//! mirrors Python's division: `/` is true division (result `float`) and `//`
+//! floors (result `int`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -626,7 +628,11 @@ impl Infer {
                         Ok(Ty::Int(self.apply_unit(&u1)))
                     }
                     BinOp::Mul => Ok(Ty::Int(self.apply_unit(&u1).mul(&self.apply_unit(&u2)))),
-                    BinOp::Div => Ok(Ty::Int(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
+                    // `/` is true division → float (Python `/`); `//` floors → int
+                    // (Python `//`). Both combine units the same way. Operands are
+                    // integer-only until the `num` constraint lands (DESIGN §7.1).
+                    BinOp::Div => Ok(Ty::Float(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
+                    BinOp::FloorDiv => Ok(Ty::Int(self.apply_unit(&u1).div(&self.apply_unit(&u2)))),
                 }
             }
 

@@ -107,6 +107,7 @@ pub enum PyBinOp {
     Sub,
     Mul,
     Div,
+    FloorDiv,
 }
 
 impl PyBinOp {
@@ -115,17 +116,17 @@ impl PyBinOp {
             PyBinOp::Add => "+",
             PyBinOp::Sub => "-",
             PyBinOp::Mul => "*",
-            // Pyfun `/` is integer division (operands are int), so emit Python
-            // floor division to keep int-in / int-out semantics.
-            PyBinOp::Div => "//",
+            // Pyfun mirrors Python: `/` is true division, `//` floors.
+            PyBinOp::Div => "/",
+            PyBinOp::FloorDiv => "//",
         }
     }
 
-    /// Binding power, higher = tighter. `* /` bind tighter than `+ -`.
+    /// Binding power, higher = tighter. `* / //` bind tighter than `+ -`.
     fn precedence(self) -> u8 {
         match self {
             PyBinOp::Add | PyBinOp::Sub => 10,
-            PyBinOp::Mul | PyBinOp::Div => 20,
+            PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv => 20,
         }
     }
 }

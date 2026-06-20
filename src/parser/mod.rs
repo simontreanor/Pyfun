@@ -10,7 +10,7 @@
 //! match       := "match" expr "with" ("|" pattern "->" expr)+
 //! pipe        := additive ("|>" additive)*
 //! additive    := multiplicative (("+"|"-") multiplicative)*
-//! multiplicative := application (("*"|"/") application)*
+//! multiplicative := application (("*"|"/"|"//") application)*
 //! application := atom atom*          // juxtaposition; curried, left-assoc
 //! atom        := int | float | string | "true" | "false" | ident | "(" expr ")"
 //! pattern     := ctor | atom_pattern
@@ -348,6 +348,7 @@ impl Parser {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
                 Tok::Slash => BinOp::Div,
+                Tok::SlashSlash => BinOp::FloorDiv,
                 _ => break,
             };
             self.bump();
@@ -690,6 +691,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Minus => "-",
         Tok::Star => "*",
         Tok::Slash => "/",
+        Tok::SlashSlash => "//",
         Tok::PipeOp => "|>",
         Tok::Bar => "|",
         Tok::Arrow => "->",

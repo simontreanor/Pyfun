@@ -47,7 +47,8 @@ pub enum Tok {
     Plus,       // +
     Minus,      // -
     Star,       // *
-    Slash,      // /
+    Slash,      // / (true division)
+    SlashSlash, // // (floor division)
     PipeOp,     // |>
     Bar,        // |
     Arrow,      // ->

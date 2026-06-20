@@ -7,7 +7,8 @@
 //! brackets are continuations (no separator), so multi-line `match`/`if`/CE
 //! blocks keep working while consecutive statements no longer merge into one
 //! juxtaposition. A full general offside rule (for nested blocks) is still a
-//! later phase. Line comments start with `//` (F#-style); spans are byte offsets.
+//! later phase. Line comments start with `#` (Python-style — `//` is the
+//! floor-division operator); spans are byte offsets.
 
 mod token;
 
@@ -96,7 +97,7 @@ impl<'a> Lexer<'a> {
         self.src.get(self.pos + 1).copied()
     }
 
-    /// Skip whitespace and `//` line comments, reporting whether at least one
+    /// Skip whitespace and `#` line comments, reporting whether at least one
     /// newline was crossed (so the caller can apply the offside rule).
     fn skip_trivia(&mut self) -> bool {
         let mut newline = false;
@@ -107,9 +108,9 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 Some(b) if b.is_ascii_whitespace() => self.pos += 1,
-                // A line comment runs to end of line; its terminating newline is
-                // handled by the `\n` arm on the next iteration, so it still counts.
-                Some(b'/') if self.peek2() == Some(b'/') => {
+                // A `#` line comment runs to end of line; its terminating newline
+                // is handled by the `\n` arm on the next iteration, so it counts.
+                Some(b'#') => {
                     while let Some(b) = self.peek() {
                         if b == b'\n' {
                             break;
@@ -231,6 +232,11 @@ impl<'a> Lexer<'a> {
             self.push(Tok::Arrow, start);
             return Ok(());
         }
+        if c == b'/' && self.peek2() == Some(b'/') {
+            self.pos += 2;
+            self.push(Tok::SlashSlash, start);
+            return Ok(());
+        }
         let tok = match c {
             b'=' => Tok::Eq,
             b'+' => Tok::Plus,
@@ -315,11 +321,23 @@ mod tests {
 
     #[test]
     fn skips_line_comments() {
-        // The newline after the comment returns to the baseline column, so the
-        // offside rule separates the two statements with a `Sep`.
+        // `#` starts a line comment; the newline after it returns to the baseline
+        // column, so the offside rule separates the two statements with a `Sep`.
         assert_eq!(
-            kinds("1 // ignored\n2"),
+            kinds("1 # ignored\n2"),
             vec![Tok::Int(1), Tok::Sep, Tok::Int(2), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn distinguishes_division_operators() {
+        assert_eq!(
+            kinds("7 / 2"),
+            vec![Tok::Int(7), Tok::Slash, Tok::Int(2), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("7 // 2"),
+            vec![Tok::Int(7), Tok::SlashSlash, Tok::Int(2), Tok::Eof]
         );
     }
 

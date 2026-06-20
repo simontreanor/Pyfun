@@ -17,6 +17,7 @@ const PROGRAMS: &[&str] = &[
     "let yes = true",
     "let add a b = a + b",
     "let r = 1 + 2 * 3 - 4 / 2",
+    "let r = 7 // 2",
     "let curried = f a b c",
     "let piped = x |> f |> g a",
     "let choose = if cond then a else b",

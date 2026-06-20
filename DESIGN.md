@@ -186,20 +186,23 @@ separation; a **general offside rule for nested blocks** (local `let`-sequencing
 delimited bodies) is deferred to a later phase, and pairs naturally with mutability/`let mut`
 sequencing (§3). It is orthogonal to the brace-delimited CEs and records (§8.1).
 
-### 7.1 Numbers & arithmetic — Python-familiar (decided; not yet implemented)
+### 7.1 Numbers & arithmetic — Python-familiar (step (a) implemented; `num` constraint pending)
 
-Arithmetic is currently integer-only (`+ - * /` are `int -> int -> int`, and `/` lowers to Python
-`//`). The decided design for adding floats puts **familiarity to Python programmers first** — Pyfun
-brings functional discipline, but numeric behaviour should not surprise someone coming from Python.
-A Python user never sees the type machinery; they feel a few surface behaviours, and those are what
-this design pins down.
+The decided design for adding floats puts **familiarity to Python programmers first** — Pyfun brings
+functional discipline, but numeric behaviour should not surprise someone coming from Python. A Python
+user never sees the type machinery; they feel a few surface behaviours, and those are what this
+design pins down. Step (a) — the division semantics and `#` comments — has shipped; the `num`
+constraint and float *operands* are the remaining work.
 
 **Decisions:**
 
-1. **`/` is true division; `//` floors.** Pyfun `/` becomes Python `/` (result type `float`,
-   `7 / 2 == 3.5`), and a new `//` operator is Python floor division (`7 // 2 == 3`, result `int`).
-   This matches Python 3's most well-known numeric fact (the *current* floor-meaning `/` is the
-   single most un-Pythonic thing in the language). Bonus: because each operator maps 1:1 to a Python
+1. **`/` is true division; `//` floors. ✅ implemented.** Pyfun `/` is Python `/` (result type
+   `float`, `7 / 2 == 3.5`), and `//` is Python floor division (`7 // 2 == 3`, result `int`). This
+   matches Python 3's most well-known numeric fact (the old floor-meaning `/` was the single most
+   un-Pythonic thing in the language). To free the `//` spelling, **line comments moved from `//` to
+   `#`** (Python-style — another familiarity win). Operands are still integer-only until `num` lands,
+   so a float *result* of `/` can't yet be fed back into `+`/`*`. Bonus: because each operator maps
+   1:1 to a Python
    operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
    `//` (the type-directed-lowering problem this would otherwise create disappears).
 2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics) are typed with
@@ -237,9 +240,10 @@ and equality/ordering for user ADTs (when those land) is the compiler's call —
 `__eq__`/`__lt__` on emitted classes the way it already generates `__repr__`. What it keeps is the
 thing that matters here: numeric and **unit** polymorphism, with Python-native surface behaviour.
 
-**Implementation order when built (ROADMAP #4):** (a) flip `/` to true division and add `//`;
-(b) add the `num` constraint with polymorphic literals and int-defaulting; (c) keep `+ - *` numeric
-with a guiding string-concat error. Defer `comparison`/`equality` until the `<`/`==` operators exist.
+**Implementation order (ROADMAP #4):** (a) ✅ flipped `/` to true division, added `//`, moved
+comments to `#`; (b) add the `num` constraint with polymorphic literals and int-defaulting (this is
+what lets float *operands* into `+ - * //`); (c) keep `+ - *` numeric with a guiding string-concat
+error. Defer `comparison`/`equality` until the `<`/`==` operators exist.
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
