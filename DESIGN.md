@@ -512,12 +512,22 @@ features, all reusing the existing front end:
   local binder now carries a span, so all are resolvable.
 - **Find-references** — every occurrence of the symbol under the cursor (the
   inverse of go-to-definition, reusing the same resolver). The cursor may sit on a
-  *use* or the *definition/binder* itself: `symbol_at` maps the offset to a `Target`
-  (the narrowest enclosing reference / local-binder / definition span wins), then
-  `find_references` returns all references with that target plus, when the request's
-  `context.includeDeclaration` is set, the declaration(s). Works for both locals
-  (all binder spans are collected during the walk, so even an unused binder is
-  recognized) and module symbols.
+  *use* or the *definition/binder* itself: `symbol_at` maps the offset to its
+  occurrence span and a `Target` (the narrowest enclosing reference / local-binder /
+  definition span wins), then `find_references` returns all references with that
+  target plus, when the request's `context.includeDeclaration` is set, the
+  declaration(s). Works for both locals (all binder spans are collected during the
+  walk, so even an unused binder is recognized) and module symbols.
+- **Rename** — rewrite every occurrence (declaration included) of the symbol under
+  the cursor to a new name, returned as a `WorkspaceEdit`. Built directly on
+  `symbol_at` + `find_references`. `prepareRename` validates first and returns the
+  identifier's range. Only **locals** and top-level **`let` values** are renameable
+  — their every occurrence is a precise span; constructors / types / `extern`s are
+  refused, because their declaration span covers the whole declaration and their
+  type-annotation uses aren't tracked as references, so a rename would be unsound.
+  The new name must be a valid lowercase value identifier (not a keyword). No
+  capture-avoidance check is done (renaming to a name already bound nearby can
+  shadow) — the editor shows the diff for review.
 - **Completion** — in-scope module symbols (when the file parses) plus the always-
   available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
   builtin/reserved type names), and keywords, each tagged with a
@@ -532,9 +542,9 @@ equality is unaffected; lowering erases them (`param_names`).
 
 Deferred (next LSP slices, `ROADMAP` #10): incremental parsing / resilient recovery
 for half-typed files (today each change re-analyzes from scratch — fine at this
-size); rename (a natural extension of find-references); and richer hover (docs,
-separate effect line). The `editors/vscode/` client is intentionally thin — all
-language smarts live in the Rust server.
+size); document/workspace symbols (outline); and richer hover (docs, separate effect
+line). The `editors/vscode/` client is intentionally thin — all language smarts live
+in the Rust server.
 
 ## 10. Scope & phases
 

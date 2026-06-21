@@ -1,14 +1,15 @@
 //! A small, dependency-free Language Server (`DESIGN.md` §9) — the "front-end-
 //! first" tooling slice. It speaks LSP over stdio (JSON-RPC with `Content-Length`
-//! framing) and offers four features:
+//! framing) and offers six features:
 //!
 //! - **Diagnostics**: the existing type/effect/unit errors ([`crate::analyze`])
 //!   streamed as `textDocument/publishDiagnostics` on open/change.
 //! - **Hover**: the inferred type (effects included, e.g. `string ->{io} unit`) of
 //!   the narrowest expression under the cursor — the only way to *see* an inferred
 //!   type, since Pyfun never writes them.
-//! - **Go-to-definition**: jump from a module-level reference to its definition,
-//!   via the name resolver in [`resolve`].
+//! - **Go-to-definition** and **find-references**: navigate between a symbol and its
+//!   uses (module-level or local), via the name resolver in [`resolve`].
+//! - **Rename**: rewrite every occurrence of a local or top-level `let` value.
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
 //!
 //! The protocol plumbing is hand-rolled (see [`json`]) to keep the crate
@@ -82,6 +83,14 @@ impl Server {
             }
             Some("textDocument/references") => {
                 let result = self.references(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/prepareRename") => {
+                let result = self.prepare_rename(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/rename") => {
+                let result = self.rename(msg);
                 vec![response(id, result)]
             }
             Some("textDocument/completion") => {
@@ -288,7 +297,7 @@ impl Server {
         let Ok(module) = crate::parse(text) else {
             return Json::Array(vec![]);
         };
-        let Some(symbol) = resolve::symbol_at(&module, offset) else {
+        let Some((_, symbol)) = resolve::symbol_at(&module, offset) else {
             return Json::Array(vec![]);
         };
         let locations = resolve::find_references(&module, &symbol, include_declaration)
@@ -296,6 +305,87 @@ impl Server {
             .map(|span| obj(vec![("uri", str(uri)), ("range", span_range(text, span))]))
             .collect();
         Json::Array(locations)
+    }
+
+    /// `prepareRename`: validate that the cursor is on a renameable symbol and, if
+    /// so, return the range of the identifier to rename (so the editor pre-fills its
+    /// rename box). `Null` when the symbol cannot be renamed (a prelude/builtin, or
+    /// a constructor/type/extern whose occurrences aren't all precisely tracked).
+    fn prepare_rename(&self, msg: &Json) -> Json {
+        let Some((text, offset)) = self.locate(msg) else {
+            return Json::Null;
+        };
+        let Ok(module) = crate::parse(text) else {
+            return Json::Null;
+        };
+        match resolve::symbol_at(&module, offset) {
+            Some((span, target)) if is_renameable(&module, &target) => span_range(text, span),
+            _ => Json::Null,
+        }
+    }
+
+    /// `rename`: produce a `WorkspaceEdit` replacing every occurrence of the symbol
+    /// under the cursor (declaration included) with `newName`. `Null` when the
+    /// symbol is not renameable or `newName` is not a valid value identifier — the
+    /// editor's `prepareRename` call normally rules these out first.
+    ///
+    /// Only **locals** and top-level **`let`** values are renameable: their every
+    /// occurrence is a precise span. Constructors / types / `extern`s are refused —
+    /// their declaration span is the whole declaration and their type-annotation
+    /// uses are not tracked as references, so a rename would be unsound. No
+    /// capture-avoidance check is done (renaming to a name already bound nearby can
+    /// shadow); editors surface the diff for review.
+    fn rename(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let new_name = params.and_then(|p| p.get("newName")).and_then(Json::as_str);
+        let (Some((text, offset)), Some(new_name)) = (self.locate(msg), new_name) else {
+            return Json::Null;
+        };
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str)
+            .unwrap_or_default();
+        if !is_value_identifier(new_name) {
+            return Json::Null;
+        }
+        let Ok(module) = crate::parse(text) else {
+            return Json::Null;
+        };
+        let Some((_, target)) = resolve::symbol_at(&module, offset) else {
+            return Json::Null;
+        };
+        if !is_renameable(&module, &target) {
+            return Json::Null;
+        }
+        let edits: Vec<Json> = resolve::find_references(&module, &target, true)
+            .into_iter()
+            .map(|span| {
+                obj(vec![
+                    ("range", span_range(text, span)),
+                    ("newText", str(new_name)),
+                ])
+            })
+            .collect();
+        // A single-document `WorkspaceEdit`: { changes: { <uri>: [TextEdit…] } }.
+        obj(vec![("changes", obj(vec![(uri, Json::Array(edits))]))])
+    }
+
+    /// Resolve a position-bearing request to its document text and byte offset.
+    fn locate(&self, msg: &Json) -> Option<(&String, usize)> {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str)?;
+        let position = params.and_then(|p| p.get("position"))?;
+        let text = self.documents.get(uri)?;
+        let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
+        let character = position
+            .get("character")
+            .and_then(Json::as_i64)
+            .unwrap_or(0) as u32;
+        Some((text, position_to_byte(text, line, character)))
     }
 
     /// Completion: module-level symbols (when the document parses) plus the always-
@@ -353,6 +443,34 @@ const KIND_CLASS: i64 = 7;
 const KIND_UNIT: i64 = 11;
 const KIND_KEYWORD: i64 = 14;
 
+/// Whether the symbol under the cursor can be safely renamed: a local binder, or a
+/// top-level `let` value. Constructors / types / records / `extern`s / measures are
+/// refused — their declaration span isn't a precise name and their type-annotation
+/// occurrences aren't tracked, so renaming them would be unsound.
+fn is_renameable(module: &crate::syntax::Module, target: &resolve::Target) -> bool {
+    match target {
+        resolve::Target::Local(_) => true,
+        resolve::Target::Module(name) => resolve::definitions(module)
+            .iter()
+            .any(|sym| &sym.name == name && sym.kind == resolve::SymbolKind::Value),
+    }
+}
+
+/// Whether `name` is a valid value identifier (lowercase-leading, then word
+/// characters) — the shape of every renameable symbol, so a rename can't turn a
+/// value into a constructor/keyword or otherwise break the program.
+fn is_value_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_keyword(name)
+}
+
+/// Reserved words that a value identifier must not collide with.
+fn is_keyword(name: &str) -> bool {
+    KEYWORDS.contains(&name)
+}
+
 /// Map a resolved symbol kind to a `CompletionItemKind`.
 fn completion_kind(kind: resolve::SymbolKind) -> i64 {
     use resolve::SymbolKind::*;
@@ -390,6 +508,11 @@ fn initialize_result() -> Json {
                 ("hoverProvider", Json::Bool(true)),
                 ("definitionProvider", Json::Bool(true)),
                 ("referencesProvider", Json::Bool(true)),
+                // Rename, with prepare support so the editor validates first.
+                (
+                    "renameProvider",
+                    obj(vec![("prepareProvider", Json::Bool(true))]),
+                ),
                 // An (empty) CompletionOptions object enables completion.
                 ("completionProvider", obj(vec![])),
             ]),
@@ -672,6 +795,66 @@ mod tests {
     }
 
     #[test]
+    fn rename_rewrites_every_occurrence() {
+        let mut server = Server::default();
+        let uri = "file:///rn.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let one = 1\nlet two = one + one")).unwrap());
+        // Rename `one` (definition name, line 0 char 4) to `uno`.
+        let req = rename_msg(uri, 0, 4, "uno");
+        let out = server.handle(&json::parse(&req).unwrap());
+        let edits = out[0]
+            .get("result")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get(uri)
+            .unwrap()
+            .as_array()
+            .unwrap();
+        // Declaration + two uses, all rewritten to `uno`.
+        assert_eq!(edits.len(), 3);
+        assert!(
+            edits
+                .iter()
+                .all(|e| e.get("newText").unwrap().as_str() == Some("uno"))
+        );
+    }
+
+    #[test]
+    fn prepare_rename_returns_a_range_for_a_value() {
+        let mut server = Server::default();
+        let uri = "file:///pr.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let one = 1")).unwrap());
+        let req = pos_msg("textDocument/prepareRename", uri, 0, 4);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let start = out[0].get("result").unwrap().get("start").unwrap();
+        assert_eq!(start.get("character").unwrap().as_i64(), Some(4));
+    }
+
+    #[test]
+    fn rename_refuses_a_constructor() {
+        let mut server = Server::default();
+        let uri = "file:///ct.pyfun";
+        server
+            .handle(&json::parse(&open_msg(uri, "type Color = Red | Green\nlet c = Red")).unwrap());
+        // `Red` use on line 1 (char 8) — a constructor, not renameable.
+        let req = rename_msg(uri, 1, 9, "Crimson");
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result").unwrap(), &Json::Null);
+    }
+
+    #[test]
+    fn rename_rejects_an_invalid_new_name() {
+        let mut server = Server::default();
+        let uri = "file:///iv.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let one = 1\nlet two = one")).unwrap());
+        // `match` is a keyword — not a valid value identifier.
+        let req = rename_msg(uri, 0, 4, "match");
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result").unwrap(), &Json::Null);
+    }
+
+    #[test]
     fn completion_lists_user_symbols_and_prelude() {
         let mut server = Server::default();
         let uri = "file:///c.pyfun";
@@ -710,6 +893,27 @@ mod tests {
 
     fn hover_msg(uri: &str, line: i64, character: i64) -> String {
         pos_msg("textDocument/hover", uri, line, character)
+    }
+
+    /// A `textDocument/rename` request with a `newName`.
+    fn rename_msg(uri: &str, line: i64, character: i64, new_name: &str) -> String {
+        obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(line)), ("character", int(character))]),
+                    ),
+                    ("newName", str(new_name)),
+                ]),
+            ),
+        ])
+        .to_string()
     }
 
     /// A `textDocument/references` request with an `includeDeclaration` context.

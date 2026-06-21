@@ -164,7 +164,7 @@ Originally a top-level-only rule (a line break back to the first item's column e
 nested blocks (indented `let` bodies) while keeping the same continuation behavior for multi-line
 `match`/`if`/CE. Lives in the lexer.
 
-### 10. LSP / editor support (`DESIGN.md` §9) — ✅ diagnostics + hover + go-to-def + find-refs + completion done
+### 10. LSP / editor support (`DESIGN.md` §9) — ✅ diagnostics + hover + go-to-def + find-refs + rename + completion done
 A language server (`pyfun lsp`, stdio JSON-RPC). DESIGN always scoped this as later,
 "rust-analyzer-style front-end-first"; the span-carrying AST and diagnostics infrastructure were the
 foundation.
@@ -178,16 +178,18 @@ foundation.
   computation-expression `let`/`let!` all resolvable); **find-references** (the inverse of go-to-def,
   reusing the resolver: `symbol_at` maps the cursor to a `Target`, `find_references` returns every
   matching occurrence plus the declaration when `includeDeclaration` is set — works from a use or from
-  the definition/binder); and **completion** (in-scope module symbols + prelude + builtins + keywords,
-  with a static fallback while the file doesn't parse). The JSON/JSON-RPC layer is **hand-rolled**
-  (`src/lsp/json.rs`) to keep the crate dependency-free; the handler core is a pure function,
-  unit-tested, plus a real-binary stdio integration test (`tests/lsp.rs`). To enable local navigation,
-  params became `Param { name, span }`, pattern vars `Pattern::Var { name, span }`, and `CeItem::Let`/
-  `LetBang` gained a `name_span` (spans are `NodeSpan`, invisible to roundtrip). A thin VS Code client
-  lives in `editors/vscode/`.
+  the definition/binder); **rename** (a `WorkspaceEdit` rewriting every occurrence + declaration, with
+  `prepareRename` validation; restricted to locals and top-level `let` values, whose occurrences are
+  all precise — ctors/types/externs are refused as unsound); and **completion** (in-scope module
+  symbols + prelude + builtins + keywords, with a static fallback while the file doesn't parse). The
+  JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
+  handler core is a pure function, unit-tested, plus a real-binary stdio integration test
+  (`tests/lsp.rs`). To enable local navigation, params became `Param { name, span }`, pattern vars
+  `Pattern::Var { name, span }`, and `CeItem::Let`/`LetBang` gained a `name_span` (spans are
+  `NodeSpan`, invisible to roundtrip). A thin VS Code client lives in `editors/vscode/`.
 - **Still to do (next slices):** incremental & resilient analysis for half-typed files (today each
-  change re-analyzes from scratch — fine at this size); rename (extends find-references); richer hover
-  (docs, a separate effect line).
+  change re-analyzes from scratch — fine at this size); document/workspace symbols (outline); richer
+  hover (docs, a separate effect line).
 - **Effort/risk:** the headline features landed; remaining slices are medium effort, high payoff.
 
 ## Suggested sequencing
@@ -201,7 +203,7 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 Remaining, in rough priority:
 
 1. **#10 (LSP) cont.** — next slices: incremental/resilient analysis for half-typed files (current
-   analysis is whole-document per change), and rename (extends find-references).
+   analysis is whole-document per change), and document/workspace symbols (outline).
 2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
    option/result helpers, and a value-level library over the existing `seq {}` lazy type.
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus

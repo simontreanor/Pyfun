@@ -119,10 +119,11 @@ fn walk(module: &Module) -> Resolver {
 }
 
 /// Identify the symbol at byte `offset` — whether the cursor sits on a reference,
-/// a local binder, or a module-level definition name. Returns the symbol's
-/// [`Target`] identity (a local binder span, or a module symbol name), choosing the
-/// narrowest enclosing span so a precise name beats an enclosing declaration.
-pub fn symbol_at(module: &Module, offset: usize) -> Option<Target> {
+/// a local binder, or a module-level definition name. Returns the **occurrence
+/// span** under the cursor (the identifier the editor highlights) together with the
+/// symbol's [`Target`] identity, choosing the narrowest enclosing span so a precise
+/// name beats an enclosing declaration.
+pub fn symbol_at(module: &Module, offset: usize) -> Option<(Span, Target)> {
     let r = walk(module);
     // Candidate (span, identity) pairs from references, local binders, and
     // module-level definitions; the narrowest span containing the offset wins.
@@ -140,7 +141,6 @@ pub fn symbol_at(module: &Module, offset: usize) -> Option<Target> {
         .into_iter()
         .filter(|(span, _)| span.start <= offset && offset < span.end)
         .min_by_key(|(span, _)| span.end - span.start)
-        .map(|(_, target)| target)
 }
 
 /// Every occurrence of `symbol` in the module: all references to it, plus its
@@ -431,7 +431,7 @@ mod tests {
         let src = "let one = 1\nlet two = one + one";
         let m = module(src);
         let def_off = src.find("one").unwrap() + 1; // inside the name span
-        let sym = symbol_at(&m, def_off).unwrap();
+        let (_, sym) = symbol_at(&m, def_off).unwrap();
         assert_eq!(sym, Target::Module("one".to_string()));
         assert_eq!(find_references(&m, &sym, true).len(), 3);
         assert_eq!(find_references(&m, &sym, false).len(), 2);
@@ -442,7 +442,7 @@ mod tests {
         // From a use of the parameter `x`, find both uses + its declaration.
         let src = "let add x = x + x";
         let m = module(src);
-        let sym = symbol_at(&m, src.rfind('x').unwrap()).unwrap();
+        let (_, sym) = symbol_at(&m, src.rfind('x').unwrap()).unwrap();
         assert!(matches!(sym, Target::Local(_)));
         assert_eq!(find_references(&m, &sym, true).len(), 3);
         assert_eq!(find_references(&m, &sym, false).len(), 2);
@@ -454,7 +454,10 @@ mod tests {
         let src = "let id x = x";
         let m = module(src);
         let binder_off = src.find(" x ").unwrap() + 1;
-        assert!(matches!(symbol_at(&m, binder_off), Some(Target::Local(_))));
+        let (span, target) = symbol_at(&m, binder_off).unwrap();
+        assert!(matches!(target, Target::Local(_)));
+        // The occurrence span is the binder identifier itself.
+        assert_eq!((span.start, span.end), (binder_off, binder_off + 1));
     }
 
     #[test]

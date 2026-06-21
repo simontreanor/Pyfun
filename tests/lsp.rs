@@ -365,3 +365,59 @@ fn serves_find_references() {
             .all(|l| l.get("uri").is_some() && l.get("range").is_some())
     );
 }
+
+#[test]
+fn serves_rename() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    let uri = "file:///rn.pyfun";
+    // Rename `one` (definition name, line 0 char 4) to `uno`: declaration + 2 uses.
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rn.pyfun","text":"let one = 1\nlet two = one + one"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/rename","params":{"textDocument":{"uri":"file:///rn.pyfun"},"position":{"line":0,"character":4},"newName":"uno"}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let rename = unframe(&out)
+        .into_iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("rename response");
+    let edits = rename
+        .get("result")
+        .unwrap()
+        .get("changes")
+        .unwrap()
+        .get(uri)
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(edits.len(), 3, "edits: {edits:?}");
+    assert!(
+        edits
+            .iter()
+            .all(|e| e.get("newText").and_then(Json::as_str) == Some("uno"))
+    );
+}
