@@ -712,7 +712,7 @@ impl Lowerer {
                     body.push(PyStmt::YieldFrom(v));
                     has_yield = true;
                 }
-                CeItem::Let { name, value } => {
+                CeItem::Let { name, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {
@@ -777,7 +777,7 @@ impl Lowerer {
                 s.push(PyStmt::Return(v));
                 Ok(s)
             }
-            CeItem::Let { name, value } => {
+            CeItem::Let { name, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 s.push(PyStmt::Assign {
                     target: name.clone(),
@@ -788,7 +788,7 @@ impl Lowerer {
                 s.extend(self.lower_result_items(rest, &locals)?);
                 Ok(s)
             }
-            CeItem::LetBang { name, value } => {
+            CeItem::LetBang { name, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 let mut inner_locals = locals.clone();
                 inner_locals.insert(name.clone());
@@ -841,7 +841,7 @@ impl Lowerer {
         let mut locals = locals.clone();
         for item in items {
             match item {
-                CeItem::LetBang { name, value } => {
+                CeItem::LetBang { name, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {
@@ -850,7 +850,7 @@ impl Lowerer {
                     });
                     locals.insert(name.clone());
                 }
-                CeItem::Let { name, value } => {
+                CeItem::Let { name, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {

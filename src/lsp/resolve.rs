@@ -4,12 +4,10 @@
 //! any program that *parses*, even one that fails to type-check.
 //!
 //! Every identifier *reference* resolves to a [`Target`]: either a **local** binder
-//! (a function parameter, block-local `let`, or pattern variable — resolved to the
-//! binder's own span) or a **module-level** symbol (resolved by name against
-//! [`definitions`]). The walk tracks lexical scopes so an inner binding correctly
-//! shadows an outer one. Computation-expression `let`/`let!` names are the one
-//! local kind without a span yet, so a reference to one is dropped (no jump)
-//! rather than mis-resolved to a same-named module symbol.
+//! (a function parameter, block-local `let`, pattern variable, or computation-
+//! expression `let`/`let!` — resolved to the binder's own span) or a **module-level**
+//! symbol (resolved by name against [`definitions`]). The walk tracks lexical scopes
+//! so an inner binding correctly shadows an outer one.
 
 use std::collections::HashMap;
 
@@ -118,15 +116,15 @@ pub fn references(module: &Module) -> Vec<Reference> {
 #[derive(Default)]
 struct Resolver {
     /// A stack of local scopes (innermost last); each maps a bound name to its
-    /// binder span, or `None` for a binder that has no span yet (CE `let`).
-    scopes: Vec<HashMap<String, Option<Span>>>,
+    /// binder span.
+    scopes: Vec<HashMap<String, Span>>,
     refs: Vec<Reference>,
 }
 
 impl Resolver {
-    /// The binder span for `name`, if it is locally bound (`Some(None)` = bound but
-    /// span-less); `None` if it is free (a module-level reference).
-    fn lookup(&self, name: &str) -> Option<Option<Span>> {
+    /// The binder span for `name`, if it is locally bound; `None` if it is free
+    /// (a module-level reference).
+    fn lookup(&self, name: &str) -> Option<Span> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
 
@@ -143,11 +141,10 @@ impl Resolver {
         match &expr.kind {
             ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}
             ExprKind::Var(name) => match self.lookup(name) {
-                Some(Some(span)) => self.refs.push(Reference {
+                Some(span) => self.refs.push(Reference {
                     span: expr.span(),
                     target: Target::Local(span),
                 }),
-                Some(None) => {} // span-less local (CE binding) — no jump target
                 None => self.refs.push(Reference {
                     span: expr.span(),
                     target: Target::Module(name.clone()),
@@ -157,7 +154,7 @@ impl Resolver {
                 self.scopes.push(
                     params
                         .iter()
-                        .map(|p| (p.name.clone(), Some(p.span.span())))
+                        .map(|p| (p.name.clone(), p.span.span()))
                         .collect(),
                 );
                 self.walk_expr(body);
@@ -193,15 +190,26 @@ impl Resolver {
             }
             ExprKind::Ce { items, .. } => {
                 // Each `let!`/`let` binds for the *following* items, so track a
-                // single growing scope frame across the block. CE binders have no
-                // span yet, so they shadow with `None` (a reference to one is
-                // dropped rather than mis-resolved).
+                // single growing scope frame across the block; a reference resolves
+                // to the binding's name span.
                 self.scopes.push(HashMap::new());
                 for item in items {
                     match item {
-                        CeItem::LetBang { name, value } | CeItem::Let { name, value } => {
+                        CeItem::LetBang {
+                            name,
+                            name_span,
+                            value,
+                        }
+                        | CeItem::Let {
+                            name,
+                            name_span,
+                            value,
+                        } => {
                             self.walk_expr(value);
-                            self.scopes.last_mut().unwrap().insert(name.clone(), None);
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(name.clone(), name_span.span());
                         }
                         CeItem::DoBang(e)
                         | CeItem::Return(e)
@@ -244,7 +252,7 @@ impl Resolver {
                             self.scopes
                                 .last_mut()
                                 .unwrap()
-                                .insert(binding.name.clone(), Some(binding.name_span.span()));
+                                .insert(binding.name.clone(), binding.name_span.span());
                         }
                         BlockStmt::Expr(e) => self.walk_expr(e),
                     }
@@ -259,20 +267,20 @@ impl Resolver {
 }
 
 /// A scope frame for a binding's parameters (name → its span).
-fn param_scope(binding: &LetBinding) -> HashMap<String, Option<Span>> {
+fn param_scope(binding: &LetBinding) -> HashMap<String, Span> {
     binding
         .params
         .iter()
-        .map(|p| (p.name.clone(), Some(p.span.span())))
+        .map(|p| (p.name.clone(), p.span.span()))
         .collect()
 }
 
 /// Collect the variables a pattern binds, mapped to their spans (constructor
 /// arguments recurse).
-fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Option<Span>>) {
+fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
     match pattern {
         Pattern::Var { name, span } => {
-            out.insert(name.clone(), Some(span.span()));
+            out.insert(name.clone(), span.span());
         }
         Pattern::Ctor { args, .. } => {
             for arg in args {
@@ -343,5 +351,21 @@ mod tests {
         let refs = references(&m);
         // `y` resolves to its pattern binder.
         assert!(refs.iter().any(|r| matches!(r.target, Target::Local(_))));
+    }
+
+    #[test]
+    fn computation_expression_binding_is_a_local_target() {
+        // `x` bound by `let!` in a `result {}` block; the later reference resolves
+        // to its binder, not to a module symbol.
+        let m = module("let go = result {\n  let! x = Ok 1\n  return x\n}");
+        let refs = references(&m);
+        assert!(
+            refs.iter().any(|r| matches!(r.target, Target::Local(_))),
+            "CE binding ref not local: {refs:?}"
+        );
+        assert!(refs.iter().all(|r| match &r.target {
+            Target::Module(n) => n != "x",
+            Target::Local(_) => true,
+        }));
     }
 }

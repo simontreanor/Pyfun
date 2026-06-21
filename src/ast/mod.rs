@@ -255,8 +255,8 @@ fn print_field_init(field: &FieldInit) -> String {
 
 fn print_ce_item(item: &CeItem) -> String {
     match item {
-        CeItem::LetBang { name, value } => format!("let! {name} = {}", print_expr(value)),
-        CeItem::Let { name, value } => format!("let {name} = {}", print_expr(value)),
+        CeItem::LetBang { name, value, .. } => format!("let! {name} = {}", print_expr(value)),
+        CeItem::Let { name, value, .. } => format!("let {name} = {}", print_expr(value)),
         CeItem::DoBang(e) => format!("do! {}", print_expr(e)),
         CeItem::Return(e) => format!("return {}", print_expr(e)),
         CeItem::ReturnBang(e) => format!("return! {}", print_expr(e)),

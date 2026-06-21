@@ -505,12 +505,11 @@ features, all reusing the existing front end:
   that *parses*): `definitions` collects module-level symbols (top-level `let`s with
   their precise name span; constructors / type / record decls / `extern`s at their
   declaration), and `references` resolves every identifier occurrence to a `Target`
-  — either a `Local` binder (function parameter, block-local `let`, or pattern
-  variable, resolved to the binder's own span) or a `Module` symbol (resolved by
-  name against `definitions`). The walk tracks lexical scopes so an inner binding
-  correctly shadows an outer one. Computation-expression `let`/`let!` names are the
-  one local kind still without a span, so a reference to one is dropped (no jump)
-  rather than mis-resolved.
+  — either a `Local` binder (function parameter, block-local `let`, pattern
+  variable, or computation-expression `let`/`let!`, resolved to the binder's own
+  span) or a `Module` symbol (resolved by name against `definitions`). The walk
+  tracks lexical scopes so an inner binding correctly shadows an outer one — every
+  local binder now carries a span, so all are resolvable.
 - **Completion** — in-scope module symbols (when the file parses) plus the always-
   available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
   builtin/reserved type names), and keywords, each tagged with a
@@ -518,16 +517,16 @@ features, all reusing the existing front end:
   and does not yet parse.
 
 The AST changes that enable local navigation: function/binding parameters are
-`Param { name, span }` (was `Vec<String>`) and `Pattern::Var { name, span }` (was
-`Var(String)`). The spans are `NodeSpan` (which compares equal unconditionally), so
-roundtrip/structural equality is unaffected; lowering erases them (`param_names`).
+`Param { name, span }` (was `Vec<String>`), `Pattern::Var { name, span }` (was
+`Var(String)`), and the `CeItem::Let`/`LetBang` variants carry a `name_span`. The
+spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/structural
+equality is unaffected; lowering erases them (`param_names`).
 
-Deferred (next LSP slices, `ROADMAP` #10): go-to-definition into computation-
-expression `let`/`let!` bindings (the last span-less local kind); find-references;
-incremental parsing / resilient recovery for half-typed files (today each change
-re-analyzes from scratch — fine at this size); and richer hover (docs, separate
-effect line). The `editors/vscode/` client is intentionally thin — all language
-smarts live in the Rust server.
+Deferred (next LSP slices, `ROADMAP` #10): find-references; incremental parsing /
+resilient recovery for half-typed files (today each change re-analyzes from scratch
+— fine at this size); and richer hover (docs, separate effect line). The
+`editors/vscode/` client is intentionally thin — all language smarts live in the
+Rust server.
 
 ## 10. Scope & phases
 

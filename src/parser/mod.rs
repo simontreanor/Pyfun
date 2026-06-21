@@ -839,13 +839,23 @@ impl Parser {
             Tok::Let => {
                 self.bump();
                 let bang = self.eat(&Tok::Bang);
+                let name_start = self.cur_start();
                 let name = self.parse_ident("binding name")?;
+                let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
                 self.expect(&Tok::Eq, "`=`")?;
                 let value = self.parse_expr()?;
                 Ok(if bang {
-                    CeItem::LetBang { name, value }
+                    CeItem::LetBang {
+                        name,
+                        name_span,
+                        value,
+                    }
                 } else {
-                    CeItem::Let { name, value }
+                    CeItem::Let {
+                        name,
+                        name_span,
+                        value,
+                    }
                 })
             }
             Tok::Return => {

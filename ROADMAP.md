@@ -174,17 +174,17 @@ foundation.
   `->{io}` shown on arrows — the display half of #1); **go-to-definition** (**module-level *and*
   local** — params, block `let`s, pattern vars — via a dependency-free AST name resolver
   `src/lsp/resolve.rs` that tracks lexical scopes, resolving each reference to a `Local(span)` or
-  `Module(name)` target and never mis-jumping on shadowing); and **completion** (in-scope module
-  symbols + prelude + builtins + keywords, with a static fallback while the file doesn't parse). The
-  JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
-  handler core is a pure function, unit-tested, plus a real-binary stdio integration test
-  (`tests/lsp.rs`). To enable local navigation, params became `Param { name, span }` and pattern vars
-  `Pattern::Var { name, span }` (spans are `NodeSpan`, invisible to roundtrip). A thin VS Code client
-  lives in `editors/vscode/`.
-- **Still to do (next slices):** go-to-def into computation-expression `let`/`let!` bindings (the last
-  span-less local kind); find-references; incremental & resilient analysis for half-typed files (today
-  each change re-analyzes from scratch — fine at this size); richer hover (docs, a separate effect
-  line).
+  `Module(name)` target and never mis-jumping on shadowing — params, block `let`s, pattern vars, and
+  computation-expression `let`/`let!` all resolvable); and **completion** (in-scope module symbols +
+  prelude + builtins + keywords, with a static fallback while the file doesn't parse). The JSON/JSON-RPC
+  layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the handler core is a
+  pure function, unit-tested, plus a real-binary stdio integration test (`tests/lsp.rs`). To enable
+  local navigation, params became `Param { name, span }`, pattern vars `Pattern::Var { name, span }`,
+  and `CeItem::Let`/`LetBang` gained a `name_span` (spans are `NodeSpan`, invisible to roundtrip). A
+  thin VS Code client lives in `editors/vscode/`.
+- **Still to do (next slices):** find-references; incremental & resilient analysis for half-typed files
+  (today each change re-analyzes from scratch — fine at this size); richer hover (docs, a separate
+  effect line).
 - **Effort/risk:** the headline features landed; remaining slices are medium effort, high payoff.
 
 ## Suggested sequencing
@@ -197,9 +197,8 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-definition + completion + a VS Code client), are now done.
 Remaining, in rough priority:
 
-1. **#10 (LSP) cont.** — next slices: go-to-def into CE `let`/`let!` bindings (last span-less local),
-   find-references, and incremental/resilient analysis for half-typed files (current analysis is
-   whole-document per change).
+1. **#10 (LSP) cont.** — next slices: find-references, and incremental/resilient analysis for
+   half-typed files (current analysis is whole-document per change).
 2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
    option/result helpers, and a value-level library over the existing `seq {}` lazy type.
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus

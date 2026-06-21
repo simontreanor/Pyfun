@@ -329,10 +329,19 @@ impl CeBuilder {
 /// One item inside a computation-expression block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CeItem {
-    /// `let! name = value` — monadic bind.
-    LetBang { name: String, value: Expr },
+    /// `let! name = value` — monadic bind. `name_span` is the binding name's span
+    /// (for editor jump/hover; `NodeSpan` compares equal, so roundtrip-invisible).
+    LetBang {
+        name: String,
+        name_span: NodeSpan,
+        value: Expr,
+    },
     /// `let name = value` — ordinary binding.
-    Let { name: String, value: Expr },
+    Let {
+        name: String,
+        name_span: NodeSpan,
+        value: Expr,
+    },
     /// `do! value` — monadic bind discarding the result.
     DoBang(Expr),
     /// `return value` — wrap a value into the monad.

@@ -1730,9 +1730,16 @@ impl Infer {
                         e.span(),
                     )?;
                 }
-                CeItem::Let { name, value } => {
+                CeItem::Let {
+                    name,
+                    name_span,
+                    value,
+                } => {
                     let t = self.infer_expr(value, &env)?;
                     let applied = self.apply(&t);
+                    if self.record_types {
+                        self.recorded.push((name_span.span(), applied.clone()));
+                    }
                     env.insert(name.clone(), Scheme::mono(applied));
                 }
                 _ => {
@@ -1770,17 +1777,31 @@ impl Infer {
         for (i, item) in items.iter().enumerate() {
             let is_last = i + 1 == items.len();
             match item {
-                CeItem::LetBang { name, value } => {
+                CeItem::LetBang {
+                    name,
+                    name_span,
+                    value,
+                } => {
                     let t = self.infer_expr(value, &env)?;
                     let inner = self.fresh();
                     let expected = monad(inner.clone(), self);
                     self.unify(&expected, &t, value.span())?;
                     let bound = self.apply(&inner);
+                    if self.record_types {
+                        self.recorded.push((name_span.span(), bound.clone()));
+                    }
                     env.insert(name.clone(), Scheme::mono(bound));
                 }
-                CeItem::Let { name, value } => {
+                CeItem::Let {
+                    name,
+                    name_span,
+                    value,
+                } => {
                     let t = self.infer_expr(value, &env)?;
                     let applied = self.apply(&t);
+                    if self.record_types {
+                        self.recorded.push((name_span.span(), applied.clone()));
+                    }
                     env.insert(name.clone(), Scheme::mono(applied));
                 }
                 CeItem::DoBang(e) => {
