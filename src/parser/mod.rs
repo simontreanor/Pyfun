@@ -38,7 +38,7 @@ pub mod ast;
 use crate::lexer::{Span, Tok, Token};
 use ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, Item,
-    LetBinding, MatchArm, Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
+    LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
     UnitExpr, VariantDecl,
 };
 
@@ -326,7 +326,7 @@ impl Parser {
         let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
         while let Tok::Ident(_) = self.peek() {
-            params.push(self.parse_ident("parameter name")?);
+            params.push(self.parse_param()?);
         }
         self.expect(&Tok::Eq, "`=`")?;
         // The body is either an inline expression or an indented block (opened by
@@ -419,13 +419,23 @@ impl Parser {
     fn parse_fun(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         self.expect(&Tok::Fun, "`fun`")?;
-        let mut params = vec![self.parse_ident("parameter name")?];
+        let mut params = vec![self.parse_param()?];
         while let Tok::Ident(_) = self.peek() {
-            params.push(self.parse_ident("parameter name")?);
+            params.push(self.parse_param()?);
         }
         self.expect(&Tok::Arrow, "`->`")?;
         let body = Box::new(self.parse_expr()?);
         Ok(self.mk(start, ExprKind::Fn { params, body }))
+    }
+
+    /// Parse a single parameter name, capturing its span (for editor jump/hover).
+    fn parse_param(&mut self) -> Result<Param, ParseError> {
+        let start = self.cur_start();
+        let name = self.parse_ident("parameter name")?;
+        Ok(Param {
+            name,
+            span: NodeSpan::new(Span::new(start, self.prev_end())),
+        })
     }
 
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
@@ -890,6 +900,7 @@ impl Parser {
                 Ok(Pattern::Wildcard)
             }
             Tok::Ident(name) => {
+                let start = self.cur_start();
                 self.bump();
                 if is_upper(&name) {
                     Ok(Pattern::Ctor {
@@ -897,7 +908,10 @@ impl Parser {
                         args: Vec::new(),
                     })
                 } else {
-                    Ok(Pattern::Var(name))
+                    Ok(Pattern::Var {
+                        name,
+                        span: NodeSpan::new(Span::new(start, self.prev_end())),
+                    })
                 }
             }
             Tok::Int(n) => {

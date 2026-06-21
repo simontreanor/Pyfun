@@ -170,17 +170,21 @@ A language server (`pyfun lsp`, stdio JSON-RPC). DESIGN always scoped this as la
 foundation.
 - **Done:** **diagnostics** (existing type/effect/unit/exhaustiveness errors streamed as
   `publishDiagnostics` on open/change); **hover-for-type-and-effect** (the inferred type of the
-  narrowest expression *or binding name* under the cursor, with `->{io}` shown on arrows — the display
-  half of #1); **go-to-definition** (module-level symbols, via a dependency-free AST name resolver
-  `src/lsp/resolve.rs` that skips shadowed locals so it never mis-jumps); and **completion** (in-scope
-  module symbols + prelude + builtins + keywords, with a static fallback while the file doesn't parse).
-  The JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
+  narrowest expression / binding name / **parameter / pattern variable** under the cursor, with
+  `->{io}` shown on arrows — the display half of #1); **go-to-definition** (**module-level *and*
+  local** — params, block `let`s, pattern vars — via a dependency-free AST name resolver
+  `src/lsp/resolve.rs` that tracks lexical scopes, resolving each reference to a `Local(span)` or
+  `Module(name)` target and never mis-jumping on shadowing); and **completion** (in-scope module
+  symbols + prelude + builtins + keywords, with a static fallback while the file doesn't parse). The
+  JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
   handler core is a pure function, unit-tested, plus a real-binary stdio integration test
-  (`tests/lsp.rs`). Bindings gained a `name_span` (precise hover/jump to a definition). A thin VS Code
-  client lives in `editors/vscode/`.
-- **Still to do (next slices):** go-to-definition *into* locals/params/pattern bindings (needs spans on
-  those binders); find-references; incremental & resilient analysis for half-typed files (today each
-  change re-analyzes from scratch — fine at this size); richer hover (docs, a separate effect line).
+  (`tests/lsp.rs`). To enable local navigation, params became `Param { name, span }` and pattern vars
+  `Pattern::Var { name, span }` (spans are `NodeSpan`, invisible to roundtrip). A thin VS Code client
+  lives in `editors/vscode/`.
+- **Still to do (next slices):** go-to-def into computation-expression `let`/`let!` bindings (the last
+  span-less local kind); find-references; incremental & resilient analysis for half-typed files (today
+  each change re-analyzes from scratch — fine at this size); richer hover (docs, a separate effect
+  line).
 - **Effort/risk:** the headline features landed; remaining slices are medium effort, high payoff.
 
 ## Suggested sequencing
@@ -193,8 +197,8 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-definition + completion + a VS Code client), are now done.
 Remaining, in rough priority:
 
-1. **#10 (LSP) cont.** — next slices: go-to-def into locals/params (needs binder spans), find-
-   references, and incremental/resilient analysis for half-typed files (current analysis is
+1. **#10 (LSP) cont.** — next slices: go-to-def into CE `let`/`let!` bindings (last span-less local),
+   find-references, and incremental/resilient analysis for half-typed files (current analysis is
    whole-document per change).
 2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
    option/result helpers, and a value-level library over the existing `seq {}` lazy type.

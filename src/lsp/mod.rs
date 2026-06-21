@@ -230,23 +230,24 @@ impl Server {
             return Json::Null;
         };
         // The narrowest reference span containing the cursor is the identifier.
-        let name = resolve::references(&module)
+        let target = resolve::references(&module)
             .into_iter()
-            .filter(|(span, _)| span.start <= offset && offset < span.end)
-            .min_by_key(|(span, _)| span.end - span.start)
-            .map(|(_, name)| name);
-        let Some(name) = name else {
-            return Json::Null;
+            .filter(|r| r.span.start <= offset && offset < r.span.end)
+            .min_by_key(|r| r.span.end - r.span.start)
+            .map(|r| r.target);
+        let span = match target {
+            // A local binder (param / block `let` / pattern var) jumps to itself.
+            Some(resolve::Target::Local(span)) => Some(span),
+            // A module symbol is resolved by name against the definition table.
+            Some(resolve::Target::Module(name)) => resolve::definitions(&module)
+                .into_iter()
+                .find(|sym| sym.name == name)
+                .map(|sym| sym.span),
+            None => None,
         };
-        match resolve::definitions(&module)
-            .into_iter()
-            .find(|sym| sym.name == name)
-        {
-            Some(sym) => obj(vec![
-                ("uri", str(uri)),
-                ("range", span_range(text, sym.span)),
-            ]),
-            None => Json::Null, // a prelude/builtin/local — no source location
+        match span {
+            Some(span) => obj(vec![("uri", str(uri)), ("range", span_range(text, span))]),
+            None => Json::Null, // a prelude/builtin — no source location
         }
     }
 
@@ -567,14 +568,42 @@ mod tests {
     }
 
     #[test]
-    fn goto_definition_is_null_on_a_local() {
+    fn goto_definition_jumps_to_a_parameter() {
         let mut server = Server::default();
         let uri = "file:///d2.pyfun";
-        // `x` is a parameter — a local with no source location to jump to.
+        // `let id x = x` — the reference to `x` (char 11) jumps to the parameter
+        // binder `x` (char 7).
         server.handle(&json::parse(&open_msg(uri, "let id x = x")).unwrap());
-        let req = pos_msg("textDocument/definition", uri, 0, 10);
+        let req = pos_msg("textDocument/definition", uri, 0, 11);
         let out = server.handle(&json::parse(&req).unwrap());
-        assert_eq!(out[0].get("result").unwrap(), &Json::Null);
+        let start = out[0]
+            .get("result")
+            .unwrap()
+            .get("range")
+            .unwrap()
+            .get("start")
+            .unwrap();
+        assert_eq!(start.get("line").unwrap().as_i64(), Some(0));
+        assert_eq!(start.get("character").unwrap().as_i64(), Some(7));
+    }
+
+    #[test]
+    fn hover_reports_a_parameter_type() {
+        let mut server = Server::default();
+        let uri = "file:///h.pyfun";
+        // Hover the parameter `n` in `let inc n = n + 1` (char 8) → its type.
+        server.handle(&json::parse(&open_msg(uri, "let inc n = n + 1")).unwrap());
+        let out = server.handle(&json::parse(&hover_msg(uri, 0, 8)).unwrap());
+        let value = out[0]
+            .get("result")
+            .unwrap()
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(value.contains("int"), "param hover was {value:?}");
     }
 
     #[test]

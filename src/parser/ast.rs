@@ -140,8 +140,17 @@ pub struct LetBinding {
     /// to see its inferred type (`NodeSpan` compares equal, so this is invisible
     /// to structural/roundtrip equality).
     pub name_span: NodeSpan,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub value: Expr,
+}
+
+/// A function/value-binding parameter: its name and source span. The span lets an
+/// editor jump to / hover the parameter (`NodeSpan` compares equal, so it is
+/// invisible to structural/roundtrip equality).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub span: NodeSpan,
 }
 
 /// One statement inside a block (an indented `let … =` body). The final statement
@@ -187,7 +196,7 @@ pub enum ExprKind {
 
     /// `fun a b -> body`
     Fn {
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Box<Expr>,
     },
 
@@ -348,10 +357,18 @@ pub struct MatchArm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Wildcard,
-    Var(String),
+    /// A variable binding pattern. Carries the binding's span so an editor can
+    /// jump to / hover it (`NodeSpan` compares equal — invisible to roundtrip).
+    Var {
+        name: String,
+        span: NodeSpan,
+    },
     Int(i64),
     Bool(bool),
-    Ctor { name: String, args: Vec<Pattern> },
+    Ctor {
+        name: String,
+        args: Vec<Pattern>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

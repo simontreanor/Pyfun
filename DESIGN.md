@@ -488,38 +488,46 @@ features, all reusing the existing front end:
 
 - **Diagnostics** — the existing type/effect/unit/exhaustiveness errors, streamed
   as `textDocument/publishDiagnostics` on open/change (full document sync).
-- **Hover-for-type** — the inferred type of the narrowest expression *or binding
-  name* under the cursor, **with latent effects** shown on arrows (e.g. `string
-  ->{io} unit`). This is the display half of the type+effect system: Pyfun types
-  are inferred and never written, so hover is the only way to *see* one without
-  provoking an error. It works because the checker, in a `record`-enabled pass
-  (`types::check_collecting`, surfaced via `analyze`), accumulates a `(span, ty)`
-  table for every expression node and every binding name, then resolves each entry
-  against the final substitution and renders it. Bindings carry a `name_span` so a
-  function name hovers to its full inferred signature.
-- **Go-to-definition** — jump from a reference to its definition. Backed by a
-  dependency-free name resolver (`src/lsp/resolve.rs`) that walks the parsed AST
-  (independent of the type checker, so it works on any program that *parses*):
-  `definitions` collects module-level symbols (top-level `let`s with their precise
-  name span; constructors / type / record decls / `extern`s at their declaration),
-  and `references` collects `Var` occurrences while tracking lexical scopes —
-  crucially it **skips** any identifier a local binder (param, block `let`, pattern
-  var) shadows, so a module reference resolves and a local reference resolves to
-  *nothing* rather than wrongly jumping to a same-named module symbol. Scope is
-  module-level: locals/params/pattern vars have no spans yet (jumping *to* them is
-  deferred until the AST carries those spans).
+- **Hover-for-type** — the inferred type of the narrowest expression, binding name,
+  **parameter, or pattern variable** under the cursor, **with latent effects** shown
+  on arrows (e.g. `string ->{io} unit`). This is the display half of the type+effect
+  system: Pyfun types are inferred and never written, so hover is the only way to
+  *see* one without provoking an error. It works because the checker, in a
+  `record`-enabled pass (`types::check_collecting`, surfaced via `analyze`),
+  accumulates a `(span, ty)` table for every expression node, binding name, function
+  parameter, and pattern variable, then resolves each entry against the final
+  substitution and renders it. Bindings carry a `name_span`, and parameters /
+  pattern variables carry their own spans, so a function name hovers to its full
+  inferred signature and a parameter hovers to its element type.
+- **Go-to-definition** — jump from a reference to its definition, **module-level or
+  local**. Backed by a dependency-free name resolver (`src/lsp/resolve.rs`) that
+  walks the parsed AST (independent of the type checker, so it works on any program
+  that *parses*): `definitions` collects module-level symbols (top-level `let`s with
+  their precise name span; constructors / type / record decls / `extern`s at their
+  declaration), and `references` resolves every identifier occurrence to a `Target`
+  — either a `Local` binder (function parameter, block-local `let`, or pattern
+  variable, resolved to the binder's own span) or a `Module` symbol (resolved by
+  name against `definitions`). The walk tracks lexical scopes so an inner binding
+  correctly shadows an outer one. Computation-expression `let`/`let!` names are the
+  one local kind still without a span, so a reference to one is dropped (no jump)
+  rather than mis-resolved.
 - **Completion** — in-scope module symbols (when the file parses) plus the always-
   available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
   builtin/reserved type names), and keywords, each tagged with a
   `CompletionItemKind`. The static set is the fallback while the file is mid-edit
   and does not yet parse.
 
-Deferred (next LSP slices, `ROADMAP` #10): go-to-definition *into* locals/params/
-pattern bindings (needs spans on those binders); find-references; incremental
-parsing / resilient recovery for half-typed files (today each change re-analyzes
-from scratch — fine at this size); and richer hover (docs, separate effect line).
-The `editors/vscode/` client is intentionally thin — all language smarts live in
-the Rust server.
+The AST changes that enable local navigation: function/binding parameters are
+`Param { name, span }` (was `Vec<String>`) and `Pattern::Var { name, span }` (was
+`Var(String)`). The spans are `NodeSpan` (which compares equal unconditionally), so
+roundtrip/structural equality is unaffected; lowering erases them (`param_names`).
+
+Deferred (next LSP slices, `ROADMAP` #10): go-to-definition into computation-
+expression `let`/`let!` bindings (the last span-less local kind); find-references;
+incremental parsing / resilient recovery for half-typed files (today each change
+re-analyzes from scratch — fine at this size); and richer hover (docs, separate
+effect line). The `editors/vscode/` client is intentionally thin — all language
+smarts live in the Rust server.
 
 ## 10. Scope & phases
 

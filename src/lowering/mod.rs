@@ -26,7 +26,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use crate::parser::ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module,
-    Pattern, TypeDeclKind, TypeExpr,
+    Param, Pattern, TypeDeclKind, TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
@@ -253,11 +253,12 @@ impl Lowerer {
         } else {
             // A nested function captures the enclosing locals (Python closures),
             // so they count as locals when resolving names in its body.
-            let inner = extend(locals, &binding.params);
+            let names = param_names(&binding.params);
+            let inner = extend(locals, &names);
             let body = self.lower_return(&binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
                 name: binding.name.clone(),
-                params: binding.params.clone(),
+                params: names,
                 body,
                 is_async: false,
             });
@@ -403,13 +404,14 @@ impl Lowerer {
             }
 
             ExprKind::Fn { params, body } => {
-                let inner = extend(locals, params);
+                let names = param_names(params);
+                let inner = extend(locals, &names);
                 let (body_stmts, body_val) = self.lower_value(body, &inner)?;
                 if body_stmts.is_empty() {
                     Ok((
                         vec![],
                         PyExpr::Lambda {
-                            params: params.clone(),
+                            params: names,
                             body: Box::new(body_val),
                         },
                     ))
@@ -419,7 +421,7 @@ impl Lowerer {
                     let def_body = self.lower_return(body, &inner)?;
                     let def = PyStmt::FuncDef {
                         name: name.clone(),
-                        params: params.clone(),
+                        params: names,
                         body: def_body,
                         is_async: false,
                     };
@@ -654,7 +656,7 @@ impl Lowerer {
     fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
         match pattern {
             Pattern::Wildcard => PyPattern::Wildcard,
-            Pattern::Var(name) => PyPattern::Capture(name.clone()),
+            Pattern::Var { name, .. } => PyPattern::Capture(name.clone()),
             Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
             Pattern::Ctor { name, args } => {
@@ -1123,7 +1125,7 @@ fn ce_item_error(builder: &str) -> LowerError {
 /// Names a pattern binds, so they can be treated as locals when lowering the arm.
 fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
     match pattern {
-        Pattern::Var(name) => vec![name.clone()],
+        Pattern::Var { name, .. } => vec![name.clone()],
         Pattern::Ctor { args, .. } => args.iter().flat_map(pattern_bindings).collect(),
         _ => vec![],
     }
@@ -1132,7 +1134,7 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
 /// A `match` is exhaustive at lowering time only if some arm is irrefutable.
 fn has_catch_all(arms: &[crate::parser::ast::MatchArm]) -> bool {
     arms.iter()
-        .any(|arm| matches!(arm.pattern, Pattern::Wildcard | Pattern::Var(_)))
+        .any(|arm| matches!(arm.pattern, Pattern::Wildcard | Pattern::Var { .. }))
 }
 
 fn non_exhaustive_guard() -> PyCase {
@@ -1148,6 +1150,12 @@ fn extend(base: &HashSet<String>, names: &[String]) -> HashSet<String> {
     let mut out = base.clone();
     out.extend(names.iter().cloned());
     out
+}
+
+/// The names of a parameter list — parameters lower to plain Python argument
+/// names; their source spans (carried for the LSP) are erased here.
+fn param_names(params: &[Param]) -> Vec<String> {
+    params.iter().map(|p| p.name.clone()).collect()
 }
 
 /// Append `target = value` to a (possibly empty) statement list.

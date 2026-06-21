@@ -265,3 +265,54 @@ fn serves_go_to_definition_and_completion() {
     assert!(labels.contains(&"one"), "labels: {labels:?}");
     assert!(labels.contains(&"print"));
 }
+
+#[test]
+fn go_to_definition_resolves_a_parameter() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    // `let add a b = a + b` — the reference to `a` (character 14) jumps to the
+    // parameter `a` (character 8). This is the locals slice: go-to-def into a
+    // parameter, not just a module symbol.
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///p.pyfun","text":"let add a b = a + b"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///p.pyfun"},"position":{"line":0,"character":14}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let def = unframe(&out)
+        .into_iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("definition response");
+    let start = def
+        .get("result")
+        .unwrap()
+        .get("range")
+        .unwrap()
+        .get("start")
+        .unwrap();
+    assert_eq!(start.get("line").unwrap().as_i64(), Some(0));
+    assert_eq!(start.get("character").unwrap().as_i64(), Some(8));
+}

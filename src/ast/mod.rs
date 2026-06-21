@@ -155,7 +155,7 @@ fn print_let(binding: &LetBinding, indent: usize) -> String {
     s.push_str(&binding.name);
     for param in &binding.params {
         s.push(' ');
-        s.push_str(param);
+        s.push_str(&param.name);
     }
     if let ExprKind::Block { stmts } = &binding.value.kind {
         s.push_str(" =\n");
@@ -193,7 +193,8 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Var(name) => name.clone(),
 
         ExprKind::Fn { params, body } => {
-            format!("(fun {} -> {})", params.join(" "), print_expr(body))
+            let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            format!("(fun {} -> {})", names.join(" "), print_expr(body))
         }
         ExprKind::App { func, arg } => {
             format!("({} {})", print_expr(func), print_expr(arg))
@@ -277,7 +278,7 @@ fn print_arm(arm: &MatchArm) -> String {
 pub fn print_pattern(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Wildcard => "_".to_string(),
-        Pattern::Var(name) => name.clone(),
+        Pattern::Var { name, .. } => name.clone(),
         Pattern::Int(n) => n.to_string(),
         Pattern::Bool(b) => b.to_string(),
         Pattern::Ctor { name, args } if args.is_empty() => name.clone(),

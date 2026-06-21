@@ -1246,7 +1246,10 @@ impl Infer {
             for param in &binding.params {
                 let pty = self.fresh();
                 param_tys.push(pty.clone());
-                body_env.insert(param.clone(), Scheme::mono(pty));
+                if self.record_types {
+                    self.recorded.push((param.span.span(), pty.clone()));
+                }
+                body_env.insert(param.name.clone(), Scheme::mono(pty));
             }
             self.infer_expr(&binding.value, &body_env).map(|body_ty| {
                 // The innermost arrow (applied last) carries the body's effect;
@@ -1410,7 +1413,10 @@ impl Infer {
                 for param in params {
                     let pty = self.fresh();
                     param_tys.push(pty.clone());
-                    body_env.insert(param.clone(), Scheme::mono(pty));
+                    if self.record_types {
+                        self.recorded.push((param.span.span(), pty.clone()));
+                    }
+                    body_env.insert(param.name.clone(), Scheme::mono(pty));
                 }
                 // Defining a lambda is pure: capture the body's effect as the
                 // innermost arrow's latent effect rather than performing it here.
@@ -1856,7 +1862,13 @@ impl Infer {
     ) -> Result<(), TypeError> {
         match pattern {
             Pattern::Wildcard => Ok(()),
-            Pattern::Var(name) => {
+            Pattern::Var {
+                name,
+                span: var_span,
+            } => {
+                if self.record_types {
+                    self.recorded.push((var_span.span(), scrut_ty.clone()));
+                }
                 env.insert(name.clone(), Scheme::mono(scrut_ty.clone()));
                 Ok(())
             }
@@ -1900,7 +1912,7 @@ impl Infer {
     ) -> Result<(), TypeError> {
         if arms
             .iter()
-            .any(|a| matches!(a.pattern, Pattern::Wildcard | Pattern::Var(_)))
+            .any(|a| matches!(a.pattern, Pattern::Wildcard | Pattern::Var { .. }))
         {
             return Ok(());
         }
