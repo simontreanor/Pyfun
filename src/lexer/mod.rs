@@ -39,7 +39,22 @@ impl std::fmt::Display for LexError {
 }
 
 /// Tokenize `source` into a flat token stream terminated by [`Tok::Eof`].
+///
+/// The strict entry point used by the compiler: any lexing error fails the whole
+/// tokenization (the first error is returned). The editor uses [`lex_recover`].
 pub fn lex(source: &str) -> Result<Vec<Token>, LexError> {
+    let (tokens, errors) = Lexer::new(source).run();
+    match errors.into_iter().next() {
+        Some(error) => Err(error),
+        None => Ok(tokens),
+    }
+}
+
+/// Tokenize `source`, **recovering** from lexing errors: a bad character or an
+/// unterminated string is recorded and skipped, and tokenization continues. Always
+/// returns a token stream (of what *did* lex) plus every error. This is the editor
+/// entry point ([`crate::analyze`]); the compiler keeps the strict [`lex`].
+pub fn lex_recover(source: &str) -> (Vec<Token>, Vec<LexError>) {
     Lexer::new(source).run()
 }
 
@@ -47,6 +62,8 @@ struct Lexer<'a> {
     src: &'a [u8],
     pos: usize,
     out: Vec<Token>,
+    /// Lexing errors collected during recovery (strict [`lex`] keeps only the first).
+    errors: Vec<LexError>,
     /// Nesting depth of `()`/`{}`; line breaks inside brackets never separate.
     depth: usize,
     /// Stack of active layout (block) columns, innermost last. The first entry is
@@ -63,13 +80,14 @@ impl<'a> Lexer<'a> {
             src: source.as_bytes(),
             pos: 0,
             out: Vec::new(),
+            errors: Vec::new(),
             depth: 0,
             layout: Vec::new(),
             pending_block: false,
         }
     }
 
-    fn run(mut self) -> Result<Vec<Token>, LexError> {
+    fn run(mut self) -> (Vec<Token>, Vec<LexError>) {
         loop {
             let crossed_newline = self.skip_trivia();
             if self.pos >= self.src.len() {
@@ -83,7 +101,7 @@ impl<'a> Lexer<'a> {
                     tok: Tok::Eof,
                     span: Span::new(end, end),
                 });
-                return Ok(self.out);
+                return (self.out, self.errors);
             }
             // The offside rule (see module docs): at bracket depth 0 a line break
             // opens a block (after `=`), closes blocks (dedent), or separates
@@ -102,12 +120,32 @@ impl<'a> Lexer<'a> {
                     self.offside(col);
                 }
             }
-            self.lex_one()?;
+            let before = self.pos;
+            if let Err(error) = self.lex_one() {
+                self.errors.push(error);
+                // Recover: skip the offending character (a whole UTF-8 scalar, so a
+                // multi-byte char yields one error, not one per byte) and carry on.
+                // An unterminated string already consumed to EOF, so `before == pos`
+                // is the bad-character case that needs a manual nudge.
+                if self.pos == before {
+                    self.skip_char();
+                }
+                continue;
+            }
             // An `=` at bracket depth 0 (a `let` binding's `=`) primes a block to
             // open if its body begins on a deeper line.
             if self.depth == 0 && matches!(self.out.last().map(|t| &t.tok), Some(Tok::Eq)) {
                 self.pending_block = true;
             }
+        }
+    }
+
+    /// Advance past one UTF-8 scalar value (the lead byte plus any continuation
+    /// bytes), used to skip an un-lexable character during recovery.
+    fn skip_char(&mut self) {
+        self.pos += 1;
+        while matches!(self.peek(), Some(b) if b & 0b1100_0000 == 0b1000_0000) {
+            self.pos += 1;
         }
     }
 
@@ -562,5 +600,49 @@ mod tests {
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
         );
+    }
+
+    #[test]
+    fn recovers_from_a_bad_character() {
+        // `@` is not a valid token; recovery skips it and lexes the rest.
+        let (tokens, errors) = lex_recover("let x = 1 @ 2");
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        let toks: Vec<Tok> = tokens.into_iter().map(|t| t.tok).collect();
+        assert_eq!(
+            toks,
+            vec![
+                Tok::Let,
+                Tok::Ident("x".to_string()),
+                Tok::Eq,
+                Tok::Int(1),
+                Tok::Int(2),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn recovers_from_an_unterminated_string() {
+        // The string runs to EOF; recovery records the error and still yields the
+        // leading tokens (so the editor sees `let s =`).
+        let (tokens, errors) = lex_recover("let s = \"oops");
+        assert_eq!(errors.len(), 1);
+        let toks: Vec<Tok> = tokens.into_iter().map(|t| t.tok).collect();
+        assert_eq!(
+            toks,
+            vec![Tok::Let, Tok::Ident("s".to_string()), Tok::Eq, Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn multibyte_bad_char_is_one_error() {
+        // A non-ASCII bad character is skipped as a single scalar, not per-byte.
+        let (_, errors) = lex_recover("let x = §");
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+    }
+
+    #[test]
+    fn strict_lex_still_fails_on_the_first_error() {
+        assert!(lex("let x = 1 @ 2").is_err());
     }
 }

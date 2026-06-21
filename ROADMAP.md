@@ -164,7 +164,7 @@ Originally a top-level-only rule (a line break back to the first item's column e
 nested blocks (indented `let` bodies) while keeping the same continuation behavior for multi-line
 `match`/`if`/CE. Lives in the lexer.
 
-### 10. LSP / editor support (`DESIGN.md` §9) — ✅ diagnostics + hover + go-to-def + find-refs + rename + completion + resilient/cached analysis done
+### 10. LSP / editor support (`DESIGN.md` §9) — ✅ diagnostics + hover + go-to-def + find-refs + rename + completion + document symbols, over resilient (lex + parse recovery) / version-cached analysis
 A language server (`pyfun lsp`, stdio JSON-RPC). DESIGN always scoped this as later,
 "rust-analyzer-style front-end-first"; the span-carrying AST and diagnostics infrastructure were the
 foundation.
@@ -181,23 +181,26 @@ foundation.
   the definition/binder); **rename** (a `WorkspaceEdit` rewriting every occurrence + declaration, with
   `prepareRename` validation; restricted to locals and top-level `let` values, whose occurrences are
   all precise — ctors/types/externs are refused as unsound); and **completion** (in-scope module
-  symbols + prelude + builtins + keywords, contributed from the recovered partial module). The
-  JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
-  handler core is a pure function, unit-tested, plus a real-binary stdio integration test
-  (`tests/lsp.rs`). To enable local navigation, params became `Param { name, span }`, pattern vars
-  `Pattern::Var { name, span }`, and `CeItem::Let`/`LetBang` gained a `name_span` (spans are
-  `NodeSpan`, invisible to roundtrip). **Resilient & incremental analysis:** the parser has an
-  error-recovering entry point (`parse_recover`, synchronizing to the next item boundary at block
-  depth 0) so a single broken `let` no longer blanks the whole file — the items that parse still drive
-  hover/navigation/completion, only syntax errors are reported until the file is clean (then type
-  errors take over), and rename stays conservative (requires a fully-parsing file). The compiler keeps
-  the strict `parse`. A per-document version-keyed analysis cache means repeated requests on an
-  unchanged document share one parse + type-check. A thin VS Code client lives in `editors/vscode/`.
-- **Still to do (next slices):** *truly* incremental reparsing (the cache only avoids redundant
-  re-analysis between requests on the same version, not partial reparse on edit); resilience to
-  *lexing* errors (only parse errors recover today); document/workspace symbols (outline); richer
-  hover (docs, a separate effect line).
-- **Effort/risk:** the headline features landed; remaining slices are medium effort, high payoff.
+  symbols + prelude + builtins + keywords, contributed from the recovered partial module); and
+  **document symbols** (the outline — every module-level definition as a flat `DocumentSymbol[]` from
+  `resolve::definitions`, each with a precise range + LSP `SymbolKind`). The JSON/JSON-RPC layer is
+  **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the handler core is a pure
+  function, unit-tested, plus a real-binary stdio integration test (`tests/lsp.rs`). To enable local
+  navigation, params became `Param { name, span }`, pattern vars `Pattern::Var { name, span }`, and
+  `CeItem::Let`/`LetBang` gained a `name_span` (spans are `NodeSpan`, invisible to roundtrip).
+  **Resilient & incremental analysis:** *both* the lexer (`lex_recover` — skip a bad char /
+  unterminated string and continue) and the parser (`parse_recover` — synchronize to the next item
+  boundary at block depth 0) recover, so a bad character or single broken `let` no longer blanks the
+  whole file: the parts that lex+parse still drive hover/navigation/completion/outline, only syntax
+  errors are reported until the file is clean (then type errors take over), and rename stays
+  conservative (requires a fully-parsing file). The compiler keeps the strict `lex`/`parse`. A
+  per-document version-keyed analysis cache means repeated requests on an unchanged document share one
+  parse + type-check. A thin VS Code client lives in `editors/vscode/`.
+- **Still to do (lower-value tail):** *truly* incremental reparsing (a red-green-tree subsystem — the
+  version cache already avoids redundant re-analysis between requests; partial reparse on edit is
+  disproportionate at this file size); workspace symbols (project-wide, vs. today's per-document
+  outline); richer hover (needs doc-comment *syntax* — a language feature — or a separate effect line).
+- **Effort/risk:** the headline features all landed; the remaining tail is low-value at current scale.
 
 ## Suggested sequencing
 
@@ -206,13 +209,13 @@ All four language pillars beyond the MVP core are now done: **#1 (effects)**, **
 The remaining work is breadth and polish, not new pillars. Highest leverage next:
 
 The general FFI surface (`extern`) and the eager `List` collection (both #9), and the **#10 LSP**
-(diagnostics + hover-for-type/effect + go-to-definition + completion + a VS Code client), are now done.
-Remaining, in rough priority:
+(diagnostics + hover-for-type/effect + go-to-def/find-refs/rename/completion/document-symbols over
+resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
-1. **#10 (LSP) cont.** — resilient parse-recovery + a version-keyed analysis cache landed; remaining
-   slices: document/workspace symbols (outline), lex-error recovery, and truly incremental reparse.
-2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
+1. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
    option/result helpers, and a value-level library over the existing `seq {}` lazy type.
-3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
+2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).
+3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
+   reparse, doc-comment hover.

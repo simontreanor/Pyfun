@@ -367,6 +367,73 @@ fn serves_find_references() {
 }
 
 #[test]
+fn serves_document_symbols() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///s.pyfun","text":"type Color = Red | Green\nlet x = 1"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///s.pyfun"}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let messages = unframe(&out);
+
+    // Capability advertised.
+    let caps = messages
+        .iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(1))
+        .unwrap()
+        .get("result")
+        .unwrap()
+        .get("capabilities")
+        .unwrap();
+    assert_eq!(
+        caps.get("documentSymbolProvider").unwrap(),
+        &Json::Bool(true)
+    );
+
+    // The outline lists the type, its constructors, and the value.
+    let symbols = messages
+        .iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("documentSymbol response")
+        .get("result")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let names: Vec<&str> = symbols
+        .iter()
+        .filter_map(|s| s.get("name").and_then(Json::as_str))
+        .collect();
+    assert!(names.contains(&"Color"), "names: {names:?}");
+    assert!(names.contains(&"Red"));
+    assert!(names.contains(&"x"));
+}
+
+#[test]
 fn serves_resilient_analysis_on_a_half_typed_file() {
     let exe = env!("CARGO_BIN_EXE_pyfun");
     let mut child = Command::new(exe)

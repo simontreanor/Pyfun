@@ -50,54 +50,49 @@ pub fn check(source: &str) -> Result<(), Vec<types::TypeError>> {
 /// item boundaries, so the items that *do* parse populate `module` (and its hover
 /// `types` and navigation), while the broken ones surface as `diagnostics`.
 pub struct Analysis {
-    /// The parsed module — present unless lexing itself failed. May be *partial*
-    /// (missing the items that did not parse) when `parse_ok` is false.
+    /// The recovered module. Always present (lexing and parsing both recover), but
+    /// may be *partial* — missing items that did not parse — when `parse_ok` is
+    /// false. Kept an `Option` so the API tolerates a future fatal-parse path.
     pub module: Option<syntax::Module>,
-    /// Diagnostics to publish: syntax errors when the file does not fully parse,
-    /// otherwise the type/effect/unit errors.
+    /// Diagnostics to publish: syntax errors (lex + parse) when the file does not
+    /// fully parse, otherwise the type/effect/unit errors.
     pub diagnostics: Vec<types::TypeError>,
     /// The span→type table for hover (best-effort, even for a partial module).
     pub types: Vec<types::TypeSpan>,
-    /// Whether the document parsed with no lex/syntax errors. Mutating features
-    /// (rename) require this — a partial module could hide occurrences.
+    /// Whether the document lexed and parsed with no syntax errors. Mutating
+    /// features (rename) require this — a partial module could hide occurrences.
     pub parse_ok: bool,
 }
 
 /// Analyze `source` for the editor (the LSP, `DESIGN.md` §9).
 ///
-/// Unlike [`check`], this never short-circuits. Lexing errors are fatal (no AST).
-/// Parse errors recover at item boundaries: the recovered (possibly partial)
-/// module still drives hover and navigation, and only the *syntax* errors are
-/// reported until the file parses cleanly — at which point the type errors take
-/// over. This is the one entry point the LSP server needs.
+/// Unlike [`check`], this never short-circuits. Both the lexer and the parser
+/// recover from errors: a bad character / unterminated string is skipped, and a
+/// broken item is skipped to the next boundary, so the parts that *do* lex and
+/// parse still populate the module (driving hover and navigation). Until the syntax
+/// is clean, only the *syntax* errors are reported (type errors over a partial
+/// module are noise); once it is, the type errors take over. This is the one entry
+/// point the LSP server needs.
 pub fn analyze(source: &str) -> Analysis {
-    let tokens = match lexer::lex(source) {
-        Ok(tokens) => tokens,
-        Err(e) => {
-            return Analysis {
-                module: None,
-                diagnostics: vec![to_type_error(&CompileError::Lex(e))],
-                types: Vec::new(),
-                parse_ok: false,
-            };
-        }
-    };
+    let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
     let (type_errors, types) = types::check_collecting(&module);
-    // Until the syntax is clean, report only the parse errors (type errors over a
-    // partial module are noise) — but still surface the recovered hover types.
-    let (diagnostics, parse_ok) = if parse_errors.is_empty() {
-        (type_errors, true)
-    } else {
-        let parse: Vec<_> = parse_errors
-            .iter()
-            .map(|e| to_type_error(&CompileError::Parse(e.clone())))
-            .collect();
-        (parse, false)
-    };
+    // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
+    // by position so cascading errors read top-to-bottom.
+    let mut syntax_errors: Vec<_> = lex_errors
+        .iter()
+        .map(|e| to_type_error(&CompileError::Lex(e.clone())))
+        .chain(
+            parse_errors
+                .iter()
+                .map(|e| to_type_error(&CompileError::Parse(e.clone()))),
+        )
+        .collect();
+    syntax_errors.sort_by_key(|e| (e.span.start, e.span.end));
+    let parse_ok = syntax_errors.is_empty();
     Analysis {
         module: Some(module),
-        diagnostics,
+        diagnostics: if parse_ok { type_errors } else { syntax_errors },
         types,
         parse_ok,
     }

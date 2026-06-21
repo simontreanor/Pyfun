@@ -1,6 +1,6 @@
 //! A small, dependency-free Language Server (`DESIGN.md` §9) — the "front-end-
 //! first" tooling slice. It speaks LSP over stdio (JSON-RPC with `Content-Length`
-//! framing) and offers six features:
+//! framing) and offers these features:
 //!
 //! - **Diagnostics**: the existing type/effect/unit errors ([`crate::analyze`])
 //!   streamed as `textDocument/publishDiagnostics` on open/change.
@@ -11,6 +11,11 @@
 //!   uses (module-level or local), via the name resolver in [`resolve`].
 //! - **Rename**: rewrite every occurrence of a local or top-level `let` value.
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
+//! - **Document symbols**: the module outline, from [`resolve::definitions`].
+//!
+//! All of them run over a **resilient, version-cached analysis** ([`crate::analyze`]):
+//! the lexer and parser recover from errors, so a half-typed file still produces
+//! results, and an unchanged document is analyzed once and reused.
 //!
 //! The protocol plumbing is hand-rolled (see [`json`]) to keep the crate
 //! dependency-free, the same choice we made for the lexer and parser. The
@@ -114,6 +119,10 @@ impl Server {
             }
             Some("textDocument/completion") => {
                 let result = self.completion(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/documentSymbol") => {
+                let result = self.document_symbols(msg);
                 vec![response(id, result)]
             }
             // Unknown *request* (has an id) → a proper error so the client isn't
@@ -495,6 +504,42 @@ impl Server {
         }
         Json::Array(items)
     }
+
+    /// Document symbols (the outline): every module-level definition as a flat
+    /// `DocumentSymbol[]`, reusing the same `resolve::definitions` that powers
+    /// go-to-definition and completion. Works on whatever parsed (a partial module
+    /// still outlines its good items).
+    fn document_symbols(&self, msg: &Json) -> Json {
+        let uri = msg
+            .get("params")
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let (Some(uri), Some(analysis)) = (uri, uri.and_then(|u| self.analysis(u))) else {
+            return Json::Array(vec![]);
+        };
+        let Some(text) = self.text(uri) else {
+            return Json::Array(vec![]);
+        };
+        let Some(module) = analysis.module.as_ref() else {
+            return Json::Array(vec![]);
+        };
+        let symbols = resolve::definitions(module)
+            .into_iter()
+            .map(|sym| {
+                // `range` is the full extent, `selectionRange` the name to reveal;
+                // we have one precise span, valid for both (selection ⊆ range).
+                let range = span_range(text, sym.span);
+                obj(vec![
+                    ("name", str(sym.name)),
+                    ("kind", int(symbol_kind(sym.kind))),
+                    ("range", range.clone()),
+                    ("selectionRange", range),
+                ])
+            })
+            .collect();
+        Json::Array(symbols)
+    }
 }
 
 /// `CompletionItemKind` codes (LSP spec) for the kinds we emit.
@@ -545,6 +590,25 @@ fn completion_kind(kind: resolve::SymbolKind) -> i64 {
     }
 }
 
+/// `SymbolKind` codes (LSP spec) for the document-outline icons.
+const SYM_ENUM: i64 = 10;
+const SYM_FUNCTION: i64 = 12;
+const SYM_NUMBER: i64 = 16;
+const SYM_ENUM_MEMBER: i64 = 22;
+const SYM_STRUCT: i64 = 23;
+
+/// Map a resolved symbol kind to an LSP document-symbol `SymbolKind`.
+fn symbol_kind(kind: resolve::SymbolKind) -> i64 {
+    use resolve::SymbolKind::*;
+    match kind {
+        Value | Extern => SYM_FUNCTION,
+        Constructor => SYM_ENUM_MEMBER,
+        Type => SYM_ENUM,
+        Record => SYM_STRUCT,
+        Measure => SYM_NUMBER,
+    }
+}
+
 /// Reserved data constructors always in scope (`DESIGN.md` §8.1, `result`).
 const BUILTIN_CTORS: &[&str] = &["Ok", "Error"];
 
@@ -577,6 +641,7 @@ fn initialize_result() -> Json {
                 ),
                 // An (empty) CompletionOptions object enables completion.
                 ("completionProvider", obj(vec![])),
+                ("documentSymbolProvider", Json::Bool(true)),
             ]),
         ),
         (
@@ -970,6 +1035,35 @@ mod tests {
     }
 
     #[test]
+    fn lex_error_does_not_blank_the_file() {
+        // An unterminated string is a *lexing* error; the earlier `good` must still
+        // diagnose and hover (lexer recovery, not a hard failure).
+        let mut server = Server::default();
+        let uri = "file:///lexerr.pyfun";
+        let src = "let good = 1\nlet s = \"oops";
+        let out = server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(!diags.is_empty(), "expected a lex diagnostic");
+        let out = server.handle(&json::parse(&hover_msg(uri, 0, 4)).unwrap());
+        let value = out[0]
+            .get("result")
+            .unwrap()
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(value.contains("int"), "hover after lex error: {value:?}");
+    }
+
+    #[test]
     fn rename_is_refused_when_the_file_does_not_fully_parse() {
         let mut server = Server::default();
         let uri = "file:///partialrn.pyfun";
@@ -995,6 +1089,35 @@ mod tests {
         server.handle(&json::parse(&change_msg(uri, "let n = 2")).unwrap());
         let c = server.analysis(uri).unwrap();
         assert!(!Rc::ptr_eq(&a, &c), "edited document served stale analysis");
+    }
+
+    #[test]
+    fn document_symbols_lists_module_definitions() {
+        let mut server = Server::default();
+        let uri = "file:///sym.pyfun";
+        server.handle(
+            &json::parse(&open_msg(
+                uri,
+                "type Color = Red | Green\nlet x = 1\nlet inc n = n + 1",
+            ))
+            .unwrap(),
+        );
+        let req = pos_msg("textDocument/documentSymbol", uri, 0, 0);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let symbols = out[0].get("result").unwrap().as_array().unwrap();
+        let names: Vec<&str> = symbols
+            .iter()
+            .filter_map(|s| s.get("name").and_then(Json::as_str))
+            .collect();
+        assert!(names.contains(&"Color"), "names: {names:?}");
+        assert!(names.contains(&"Red"));
+        assert!(names.contains(&"Green"));
+        assert!(names.contains(&"x"));
+        assert!(names.contains(&"inc"));
+        // Every entry carries a range and a contained selectionRange.
+        assert!(symbols.iter().all(|s| s.get("range").is_some()
+            && s.get("selectionRange").is_some()
+            && s.get("kind").and_then(Json::as_i64).is_some()));
     }
 
     fn open_msg(uri: &str, text: &str) -> String {

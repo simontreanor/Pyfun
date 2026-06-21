@@ -533,6 +533,10 @@ features, all reusing the existing front end:
   plus the always-available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins
   (`Ok`/`Error`, the builtin/reserved type names), and keywords, each tagged with a
   `CompletionItemKind`. The static set is the fallback when nothing parses.
+- **Document symbols** — the editor outline: every module-level definition as a flat
+  `DocumentSymbol[]`, reusing the same `resolve::definitions` (each with a precise
+  `range`/`selectionRange` and an LSP `SymbolKind` icon). Works on whatever parsed,
+  so a partial file still outlines its good items.
 - **Resilient & incremental analysis** — a half-typed file still yields results.
   The parser has an error-recovering entry point (`parser::parse_recover →
   (Module, Vec<ParseError>)`) used by the editor (the compiler keeps the strict
@@ -561,9 +565,9 @@ Deferred (next LSP slices, `ROADMAP` #10): *truly* incremental reparsing (today 
 change re-analyzes the whole document — fine at this size; the version cache only
 avoids redundant re-analysis between requests on the *same* version, not partial
 reparse on edit); resilience to *lexing* errors (only parse errors recover today);
-document/workspace symbols (outline); and richer hover (docs, separate effect line).
-The `editors/vscode/` client is intentionally thin — all language smarts live in the
-Rust server.
+workspace symbols (project-wide, vs. today's per-document outline); and richer hover
+(docs, separate effect line). The `editors/vscode/` client is intentionally thin —
+all language smarts live in the Rust server.
 
 ## 10. Scope & phases
 
