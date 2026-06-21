@@ -116,6 +116,57 @@ fn pipe_becomes_application() {
 }
 
 #[test]
+fn empty_collections_lower_to_set_and_dict() {
+    let py = pyfun::compile("let s = set_empty\nlet m = map_empty").unwrap();
+    assert!(py.contains("s = set()"), "{py}");
+    assert!(py.contains("m = dict()"), "{py}");
+}
+
+#[test]
+fn set_functions_lower_to_emitted_helpers() {
+    let py = pyfun::compile("let r = set_contains 1 (set_add 1 (set_of_list [2]))").unwrap();
+    assert!(py.contains("def _pf_set_add(x, s):"), "{py}");
+    assert!(py.contains("return s.union([x])"), "{py}");
+    assert!(py.contains("def _pf_set_contains(x, s):"), "{py}");
+    assert!(py.contains("return x in s"), "{py}");
+}
+
+#[test]
+fn map_add_and_get_lower_to_emitted_helpers() {
+    let py =
+        pyfun::compile("let m = map_add \"a\" 1 map_empty\nlet v = map_get \"a\" 0 m").unwrap();
+    assert!(py.contains("def _pf_map_add(k, v, m):"), "{py}");
+    assert!(
+        py.contains("return dict(list(m.items()) + [[k, v]])"),
+        "{py}"
+    );
+    assert!(py.contains("def _pf_map_get(k, default, m):"), "{py}");
+    assert!(py.contains("return m.get(k, default)"), "{py}");
+}
+
+#[test]
+fn map_remove_lowers_to_a_copy_and_pop() {
+    let py = pyfun::compile("let m = map_remove \"a\" map_empty").unwrap();
+    assert!(py.contains("def _pf_map_remove(k, m):"), "{py}");
+    assert!(py.contains("r = dict(m)"), "{py}");
+    assert!(py.contains("r.pop(k, None)"), "{py}");
+    assert!(py.contains("return r"), "{py}");
+}
+
+#[test]
+fn unused_collection_helpers_are_not_emitted() {
+    let py = pyfun::compile("let s = set_empty").unwrap();
+    assert!(!py.contains("_pf_"), "{py}");
+}
+
+#[test]
+fn a_user_definition_shadows_a_collection_prelude_name() {
+    let py = pyfun::compile("let set_size n = n\nlet r = set_size 1").unwrap();
+    assert!(!py.contains("_pf_set_size"), "{py}");
+    assert!(py.contains("def set_size(n):"), "{py}");
+}
+
+#[test]
 fn if_in_value_position_is_a_conditional_expression() {
     let py = pyfun::compile("let r = if true then 1 else 2").unwrap();
     assert!(py.contains("r = 1 if True else 2"), "{py}");
@@ -618,6 +669,48 @@ fn e2e_list_functions() {
             ("s", "10"),
             ("r", "[4, 3, 2, 1]"),
             ("q", "[1, 2, 3]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_set_functions() {
+    run_and_check(
+        "let s = set_of_list [1, 2, 3, 3]\n\
+         let n = set_size s\n\
+         let has = set_contains 2 s\n\
+         let u = set_size (set_union s (set_of_list [3, 4]))\n\
+         let i = set_size (set_inter s (set_of_list [3, 4]))\n\
+         let d = set_size (set_diff s (set_of_list [3, 4]))\n\
+         let e = set_size set_empty",
+        &[
+            ("n", "3"),
+            ("has", "True"),
+            ("u", "4"),
+            ("i", "1"),
+            ("d", "2"),
+            ("e", "0"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_map_functions() {
+    run_and_check(
+        "let m = map_add \"a\" 1 (map_add \"b\" 2 map_empty)\n\
+         let v = map_get \"a\" 0 m\n\
+         let dflt = map_get \"z\" 99 m\n\
+         let sz = map_size m\n\
+         let mc = map_contains \"b\" m\n\
+         let rm = map_size (map_remove \"b\" m)\n\
+         let ks = len (map_keys m)",
+        &[
+            ("v", "1"),
+            ("dflt", "99"),
+            ("sz", "2"),
+            ("mc", "True"),
+            ("rm", "1"),
+            ("ks", "2"),
         ],
     );
 }

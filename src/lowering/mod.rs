@@ -74,6 +74,9 @@ struct Lowerer {
     /// List-prelude helpers actually referenced, emitted on demand (like the
     /// `Result` prelude). Stored as the Python helper names (e.g. `_pf_map`).
     needed_list_helpers: BTreeSet<&'static str>,
+    /// Set/Map-prelude helpers actually referenced (e.g. `_pf_set_add`), emitted on
+    /// demand by [`collection_prelude`].
+    needed_collection_helpers: BTreeSet<&'static str>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -154,6 +157,15 @@ impl Lowerer {
         for (name, arity) in crate::types::LIST_PRELUDE {
             arities.entry((*name).to_string()).or_insert(*arity);
         }
+        // Set / Map preludes (`set_*` / `map_*`): same arity registration; every
+        // function routes to an emitted `_pf_*` helper in `lower_var`, and the two
+        // nullary `*_empty` values lower to `set()` / `dict()`.
+        for (name, arity) in crate::types::SET_PRELUDE
+            .iter()
+            .chain(crate::types::MAP_PRELUDE)
+        {
+            arities.entry((*name).to_string()).or_insert(*arity);
+        }
         Lowerer {
             arities,
             ctor_arity,
@@ -163,6 +175,7 @@ impl Lowerer {
             needed_imports: BTreeSet::new(),
             user_defs,
             needed_list_helpers: BTreeSet::new(),
+            needed_collection_helpers: BTreeSet::new(),
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -232,6 +245,8 @@ impl Lowerer {
         }
         // List-prelude helpers referenced by the program (deterministic order).
         body.extend(list_prelude(&self.needed_list_helpers));
+        // Set/Map-prelude helpers referenced by the program.
+        body.extend(collection_prelude(&self.needed_collection_helpers));
         body.extend(classes);
         body.extend(code);
         Ok(PyModule { body })
@@ -640,6 +655,24 @@ impl Lowerer {
                 if helper == "_pf_fold" {
                     self.needs_functools = true; // `_pf_fold` uses functools.reduce
                 }
+                return PyExpr::Name(helper.to_string());
+            }
+            // The nullary collection values lower to a fresh empty `set()`/`dict()`.
+            if name == "set_empty" {
+                return PyExpr::Call {
+                    func: Box::new(PyExpr::Name("set".to_string())),
+                    args: vec![],
+                };
+            }
+            if name == "map_empty" {
+                return PyExpr::Call {
+                    func: Box::new(PyExpr::Name("dict".to_string())),
+                    args: vec![],
+                };
+            }
+            // A set-/map-prelude function backed by an emitted helper.
+            if let Some(helper) = collection_helper(name) {
+                self.needed_collection_helpers.insert(helper);
                 return PyExpr::Name(helper.to_string());
             }
         }
@@ -1111,6 +1144,165 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 call("list", vec![call("range", vec![name("lo"), name("hi")])]),
             ),
             other => unreachable!("unknown list helper {other}"),
+        })
+        .collect()
+}
+
+/// The emitted-helper name for a set-/map-prelude function. The nullary
+/// `set_empty`/`map_empty` are handled directly in `lower_var` (→ `set()`/`dict()`),
+/// so they have no helper here.
+fn collection_helper(name: &str) -> Option<&'static str> {
+    let helper = match name {
+        "set_add" => "_pf_set_add",
+        "set_remove" => "_pf_set_remove",
+        "set_contains" => "_pf_set_contains",
+        "set_size" => "_pf_set_size",
+        "set_union" => "_pf_set_union",
+        "set_inter" => "_pf_set_inter",
+        "set_diff" => "_pf_set_diff",
+        "set_of_list" => "_pf_set_of_list",
+        "set_to_list" => "_pf_set_to_list",
+        "map_add" => "_pf_map_add",
+        "map_remove" => "_pf_map_remove",
+        "map_contains" => "_pf_map_contains",
+        "map_get" => "_pf_map_get",
+        "map_size" => "_pf_map_size",
+        "map_keys" => "_pf_map_keys",
+        "map_values" => "_pf_map_values",
+        _ => return None,
+    };
+    Some(helper)
+}
+
+/// The set-/map-prelude helper definitions actually referenced (`DESIGN.md` §6).
+/// Each is a small wrapper over Python's `set`/`dict` so the curried Pyfun function
+/// is a single callable (partial application still works). The collections are
+/// immutable-style: every operation returns a fresh container. Built from the IR
+/// (no string splicing); emitted in sorted helper-name order for deterministic
+/// output.
+fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+    let name = |n: &str| PyExpr::Name(n.to_string());
+    let call = |func: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Name(func.to_string())),
+        args,
+    };
+    // `recv.method(args...)`
+    let method = |recv: PyExpr, m: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Attribute {
+            value: Box::new(recv),
+            attr: m.to_string(),
+        }),
+        args,
+    };
+    let binop = |op: PyBinOp, left: PyExpr, right: PyExpr| PyExpr::BinOp {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let def1 = |fn_name: &str, params: &[&str], ret: PyExpr| PyStmt::FuncDef {
+        name: fn_name.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body: vec![PyStmt::Return(ret)],
+        is_async: false,
+    };
+    used.iter()
+        .map(|&helper| match helper {
+            // set_add(x, s) -> s.union([x])  (a fresh set)
+            "_pf_set_add" => def1(
+                helper,
+                &["x", "s"],
+                method(name("s"), "union", vec![PyExpr::List(vec![name("x")])]),
+            ),
+            // set_remove(x, s) -> s.difference([x])
+            "_pf_set_remove" => def1(
+                helper,
+                &["x", "s"],
+                method(name("s"), "difference", vec![PyExpr::List(vec![name("x")])]),
+            ),
+            // set_contains(x, s) -> x in s
+            "_pf_set_contains" => def1(
+                helper,
+                &["x", "s"],
+                binop(PyBinOp::In, name("x"), name("s")),
+            ),
+            // set_size(s) -> len(s)
+            "_pf_set_size" => def1(helper, &["s"], call("len", vec![name("s")])),
+            // set_union(a, b) -> a.union(b)
+            "_pf_set_union" => def1(
+                helper,
+                &["a", "b"],
+                method(name("a"), "union", vec![name("b")]),
+            ),
+            // set_inter(a, b) -> a.intersection(b)
+            "_pf_set_inter" => def1(
+                helper,
+                &["a", "b"],
+                method(name("a"), "intersection", vec![name("b")]),
+            ),
+            // set_diff(a, b) -> a.difference(b)
+            "_pf_set_diff" => def1(
+                helper,
+                &["a", "b"],
+                method(name("a"), "difference", vec![name("b")]),
+            ),
+            // set_of_list(xs) -> set(xs)
+            "_pf_set_of_list" => def1(helper, &["xs"], call("set", vec![name("xs")])),
+            // set_to_list(s) -> list(s)
+            "_pf_set_to_list" => def1(helper, &["s"], call("list", vec![name("s")])),
+            // map_add(k, v, m) -> dict(list(m.items()) + [[k, v]])  (last pair wins)
+            "_pf_map_add" => def1(
+                helper,
+                &["k", "v", "m"],
+                call(
+                    "dict",
+                    vec![binop(
+                        PyBinOp::Add,
+                        call("list", vec![method(name("m"), "items", vec![])]),
+                        PyExpr::List(vec![PyExpr::List(vec![name("k"), name("v")])]),
+                    )],
+                ),
+            ),
+            // map_remove(k, m): copy then pop (no comprehensions in the IR).
+            "_pf_map_remove" => PyStmt::FuncDef {
+                name: helper.to_string(),
+                params: vec!["k".to_string(), "m".to_string()],
+                body: vec![
+                    PyStmt::Assign {
+                        target: "r".to_string(),
+                        value: call("dict", vec![name("m")]),
+                    },
+                    PyStmt::Expr(method(name("r"), "pop", vec![name("k"), PyExpr::NoneLit])),
+                    PyStmt::Return(name("r")),
+                ],
+                is_async: false,
+            },
+            // map_contains(k, m) -> k in m
+            "_pf_map_contains" => def1(
+                helper,
+                &["k", "m"],
+                binop(PyBinOp::In, name("k"), name("m")),
+            ),
+            // map_get(k, default, m) -> m.get(k, default)
+            "_pf_map_get" => def1(
+                helper,
+                &["k", "default", "m"],
+                method(name("m"), "get", vec![name("k"), name("default")]),
+            ),
+            // map_size(m) -> len(m)
+            "_pf_map_size" => def1(helper, &["m"], call("len", vec![name("m")])),
+            // map_keys(m) -> list(m.keys())
+            "_pf_map_keys" => def1(
+                helper,
+                &["m"],
+                call("list", vec![method(name("m"), "keys", vec![])]),
+            ),
+            // map_values(m) -> list(m.values())
+            "_pf_map_values" => def1(
+                helper,
+                &["m"],
+                call("list", vec![method(name("m"), "values", vec![])]),
+            ),
+            other => unreachable!("unknown collection helper {other}"),
         })
         .collect()
 }

@@ -122,6 +122,9 @@ pub enum PyBinOp {
     Ge,
     And,
     Or,
+    /// `x in container` — membership, used by the collection prelude
+    /// (`set_contains`/`map_contains`). Comparison-precedence, like in Python.
+    In,
 }
 
 impl PyBinOp {
@@ -142,6 +145,7 @@ impl PyBinOp {
             // Pyfun `&&`/`||` lower to Python's keyword operators.
             PyBinOp::And => "and",
             PyBinOp::Or => "or",
+            PyBinOp::In => "in",
         }
     }
 
@@ -151,7 +155,13 @@ impl PyBinOp {
         match self {
             PyBinOp::Or => 2,
             PyBinOp::And => 3,
-            PyBinOp::Eq | PyBinOp::Ne | PyBinOp::Lt | PyBinOp::Gt | PyBinOp::Le | PyBinOp::Ge => 5,
+            PyBinOp::Eq
+            | PyBinOp::Ne
+            | PyBinOp::Lt
+            | PyBinOp::Gt
+            | PyBinOp::Le
+            | PyBinOp::Ge
+            | PyBinOp::In => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv => 20,
         }

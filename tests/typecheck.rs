@@ -638,6 +638,72 @@ fn rejects_redefining_builtin_list() {
     assert_error_contains("type List a = Empty | More a", "already defined");
 }
 
+// ---------- sets & maps (the hashed collections, `DESIGN.md` §6) ----------
+
+#[test]
+fn accepts_set_functions() {
+    let src = "let s = set_of_list [1, 2, 3]\n\
+               let s2 = set_add 4 s\n\
+               let s3 = set_remove 1 s2\n\
+               let has = set_contains 2 s3\n\
+               let n = set_size s3\n\
+               let u = set_union s s2\n\
+               let i = set_inter s s2\n\
+               let d = set_diff s s2\n\
+               let xs = set_to_list (set_union s set_empty)";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_map_functions() {
+    let src = "let m = map_add \"a\" 1 (map_add \"b\" 2 map_empty)\n\
+               let v = map_get \"a\" 0 m\n\
+               let m2 = map_remove \"b\" m\n\
+               let has = map_contains \"a\" m2\n\
+               let n = map_size m2\n\
+               let ks = map_keys m\n\
+               let vs = map_values m";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn set_element_type_is_enforced() {
+    // `set_add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
+    assert_error_contains(
+        "let bad = set_add \"x\" (set_of_list [1, 2])",
+        "expected string, found int",
+    );
+}
+
+#[test]
+fn map_get_default_must_match_the_value_type() {
+    // `map_get : k -> v -> Map k v -> v`; an int default against a string-valued
+    // map is a type error.
+    assert_error_contains(
+        "let m = map_add \"a\" \"x\" map_empty\nlet bad = map_get \"a\" 0 m",
+        "string",
+    );
+}
+
+#[test]
+fn empty_collections_are_polymorphic() {
+    // The generalized nullary values work at independent element/key types.
+    assert!(
+        pyfun::check(
+            "let a = set_size (set_add 1 set_empty)\n\
+             let b = set_size (set_add \"x\" set_empty)\n\
+             let c = map_size (map_add 1 true map_empty)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn rejects_redefining_builtin_map_and_set() {
+    assert_error_contains("type Set a = Empty", "already defined");
+    assert_error_contains("type Map a = Empty", "already defined");
+}
+
 // ---------- extern (typed Python imports, `DESIGN.md` §6) ----------
 
 #[test]

@@ -154,9 +154,17 @@ big-O: O(1) index/`len`, O(n) prepend/concat), with `[1, 2, 3]` literal syntax. 
 `io`). The lazy counterpart is the existing `seq {}` CE. `List` is reserved like `Result`/`Seq`. Note:
 `cons`/`head`/`tail` and list patterns in `match` are deferred (poor fit for a dynamic array). Covered
 by `tests/{typecheck,compile,roundtrip}.rs`.
-- **Still to do (a larger prelude):** `Array`/`Map`/`Set` (each its own type + functions + big-O),
-  option/result helpers, and a value-level library over `seq {}`.
-- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists done; other collections/helpers open.
+**Sets and maps have landed.** `Set a` / `Map k v` are built-in types lowering to a Python `set` /
+`dict`, built entirely from pure `set_*` / `map_*` prelude functions — **no new syntax** (`{…}` is
+records/CEs) and no constructors, so they were a pure types + lowering addition (the non-literal half
+of the `List` story), needing only one IR addition (an `in` operator). Names are prefixed because the
+MVP has no overloading/modules; `map_get key default m` is a total `dict.get` (no `option` type);
+there's no `map_of_list` (no tuples). Keys/elements must be hashable at runtime (primitives are; ADTs
+not yet — they'd need a generated `__hash__`). Covered by `tests/{typecheck,compile}.rs`.
+- **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
+  Python dynamic array); option/result helpers; a value-level library over the lazy `seq {}`; and a
+  generated `__hash__` on ADT classes (to let them be set elements / map keys).
+- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps done; helpers/`seq` lib open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -212,8 +220,9 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-def/find-refs/rename/completion/document-symbols over
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
-1. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
-   option/result helpers, and a value-level library over the existing `seq {}` lazy type.
+1. **Prelude breadth (#9 cont.)** — sets/maps landed; remaining: option/result helpers, a value-level
+   library over the existing `seq {}` lazy type, and a generated `__hash__` on ADTs (so they can be
+   set elements / map keys). `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).

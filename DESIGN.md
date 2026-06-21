@@ -211,8 +211,31 @@ still lowers to `functools.partial`). The higher-order functions are **effect-po
 (a ->{e} b) -> List a ->{e} List b`, so mapping an impure function makes the whole call `io` and that
 flows out (a single bound effect variable links the function arrow to the traversal arrow). A
 user-defined name shadows a list-prelude name at lowering (no rerouting). The lazy counterpart
-already exists as the `seq {}` computation expression (§8.1); `Array`/`Map`/`Set` and option/result
-helpers are the next layer.
+already exists as the `seq {}` computation expression (§8.1).
+
+**Sets and maps — the hashed collections (implemented).** `Set a` and `Map k v` are built-in types
+that **lower to a Python `set` / `dict`**. They have **no literal syntax** (`{…}` is already records
+and CE builders) and **no constructors** — they are built entirely from prelude functions, so adding
+them needed no lexer/parser/AST changes, only new seeded schemes + emitted helpers (the non-literal
+half of the `List` story). The two preludes (single source of truth `types::SET_PRELUDE` /
+`MAP_PRELUDE` + `seed_set_prelude` / `seed_map_prelude`) are all **pure** (unlike `List`'s
+higher-order trio, none take a function): `set_empty`/`set_add`/`set_remove`/`set_contains`/`set_size`/
+`set_union`/`set_inter`/`set_diff`/`set_of_list`/`set_to_list`, and `map_empty`/`map_add`/`map_remove`/
+`map_contains`/`map_get`/`map_size`/`map_keys`/`map_values`. Each lowers to a small **emitted helper**
+(`_pf_set_add` = `s.union([x])`, `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) — wrappers so
+the curried function is one callable (partial application → `functools.partial`); the nullary
+`set_empty`/`map_empty` lower directly to `set()`/`dict()`. The collections are **immutable-style**:
+every operation returns a fresh container. **Design constraints in an MVP without overloading,
+modules, tuples, or `option`:** names are **prefixed** (`set_*`/`map_*`) because a global `add`/`len`
+would collide across collections (no overloading or module qualification); there is **no
+`map_of_list`** (no tuples to express a pair list — build with `map_empty` + `map_add`); and `map_get
+key default m` is a **total lookup with a fallback** (`dict.get`) rather than returning an `option`
+Pyfun does not have. Element/key types are **unconstrained polymorphic** but must be **hashable at
+runtime** — Pyfun primitives are; ADT instances are not yet (they have structural `__eq__` but no
+`__hash__`), so a future `__hash__` on generated classes would let ADTs be keys/elements. `Array` is
+**deferred** as redundant — `List` already *is* a Python list (dynamic array). A user-defined name
+shadows a collection-prelude name at lowering (no rerouting), like the list prelude. Remaining next
+layer: option/result helpers and a value-level library over the lazy `seq {}`.
 
 ## 7. Surface language (MVP)
 

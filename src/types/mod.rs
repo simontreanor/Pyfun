@@ -297,6 +297,45 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("range", 2),
 ];
 
+/// The set prelude (`DESIGN.md` §6): functions over the built-in `Set a` (which
+/// lowers to a Python `set`). Like [`LIST_PRELUDE`], the `(name, arity)` pairs are
+/// the single source of truth shared with [`seed_set_prelude`] (schemes) and
+/// lowering (arities + emitted helpers). All are pure. Names are prefixed (`set_*`)
+/// because Pyfun has no overloading or module qualification, so a global `add`
+/// would collide across collections. Elements must be hashable at runtime (Pyfun
+/// primitives are); element types are otherwise unconstrained. `set_empty` is a
+/// nullary value (arity 0, lowers to `set()`).
+pub const SET_PRELUDE: &[(&str, usize)] = &[
+    ("set_empty", 0),
+    ("set_add", 2),
+    ("set_remove", 2),
+    ("set_contains", 2),
+    ("set_size", 1),
+    ("set_union", 2),
+    ("set_inter", 2),
+    ("set_diff", 2),
+    ("set_of_list", 1),
+    ("set_to_list", 1),
+];
+
+/// The map prelude (`DESIGN.md` §6): functions over the built-in `Map k v` (which
+/// lowers to a Python `dict`). Single source of truth shared with
+/// [`seed_map_prelude`] + lowering, all pure, `map_*`-prefixed (see [`SET_PRELUDE`]).
+/// Keys must be hashable at runtime. `map_get key default m` is a total lookup with
+/// a fallback (`dict.get`) — Pyfun has no `option` type yet. `map_empty` is a
+/// nullary value (arity 0, lowers to `dict()`). No `map_of_list` (Pyfun has no
+/// tuples to express a pair list); build with `map_empty` + `map_add`.
+pub const MAP_PRELUDE: &[(&str, usize)] = &[
+    ("map_empty", 0),
+    ("map_add", 3),
+    ("map_remove", 2),
+    ("map_contains", 2),
+    ("map_get", 3),
+    ("map_size", 1),
+    ("map_keys", 1),
+    ("map_values", 1),
+];
+
 /// The unit variable id used by the unit-polymorphic prelude numerics
 /// (`abs`/`min`/`max`). Reserved (below [`RESERVED_VARS`]) so a freshly allocated
 /// variable can never alias it and corrupt the seeded schemes.
@@ -445,6 +484,8 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_builtin_types(&mut decls, &mut env);
     seed_prelude(&mut env);
     seed_list_prelude(&mut env);
+    seed_set_prelude(&mut env);
+    seed_map_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -828,6 +869,71 @@ fn seed_list_prelude(env: &mut Env) {
     );
 }
 
+/// Seed the set prelude ([`SET_PRELUDE`]) — pure functions over `Set a` (var 0).
+fn seed_set_prelude(env: &mut Env) {
+    let set = |t: Ty| Ty::Con("Set".to_string(), vec![t]);
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let int = || Ty::Int(Unit::dimensionless());
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let a = || Ty::Var(0);
+    // Each scheme generalizes the one element variable (id 0).
+    let scheme = |ty: Ty| Scheme {
+        vars: vec![0],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mut put = |name: &str, ty: Ty| {
+        env.insert(name.to_string(), scheme(ty));
+    };
+    put("set_empty", set(a()));
+    put("set_add", pure_fn(a(), pure_fn(set(a()), set(a()))));
+    put("set_remove", pure_fn(a(), pure_fn(set(a()), set(a()))));
+    put("set_contains", pure_fn(a(), pure_fn(set(a()), Ty::Bool)));
+    put("set_size", pure_fn(set(a()), int()));
+    put("set_union", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("set_inter", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("set_diff", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("set_of_list", pure_fn(list(a()), set(a())));
+    put("set_to_list", pure_fn(set(a()), list(a())));
+}
+
+/// Seed the map prelude ([`MAP_PRELUDE`]) — pure functions over `Map k v`
+/// (key var 0, value var 1).
+fn seed_map_prelude(env: &mut Env) {
+    let map = |k: Ty, v: Ty| Ty::Con("Map".to_string(), vec![k, v]);
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let int = || Ty::Int(Unit::dimensionless());
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let k = || Ty::Var(0);
+    let v = || Ty::Var(1);
+    // Each scheme generalizes both the key and value variables (ids 0 and 1).
+    let scheme = |ty: Ty| Scheme {
+        vars: vec![0, 1],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mv = || map(k(), v());
+    let mut put = |name: &str, ty: Ty| {
+        env.insert(name.to_string(), scheme(ty));
+    };
+    put("map_empty", mv());
+    put("map_add", pure_fn(k(), pure_fn(v(), pure_fn(mv(), mv()))));
+    put("map_remove", pure_fn(k(), pure_fn(mv(), mv())));
+    put("map_contains", pure_fn(k(), pure_fn(mv(), Ty::Bool)));
+    put("map_get", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
+    put("map_size", pure_fn(mv(), int()));
+    put("map_keys", pure_fn(mv(), list(k())));
+    put("map_values", pure_fn(mv(), list(v())));
+}
+
 /// Seed the built-in computation-expression types `Async a`, `Seq a`, and
 /// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
 fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
@@ -837,6 +943,11 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     // `List a` — the eager collection (lowers to a Python list). It has no
     // constructors (list patterns in `match` are deferred), so no `type_ctors`.
     decls.type_arity.insert("List".to_string(), 1);
+    // `Set a` / `Map k v` — the hashed collections (lower to Python `set`/`dict`).
+    // Built purely from the `set_*` / `map_*` prelude (no constructors, no literal
+    // syntax — `{…}` is records/CEs).
+    decls.type_arity.insert("Set".to_string(), 1);
+    decls.type_arity.insert("Map".to_string(), 2);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(

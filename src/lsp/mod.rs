@@ -493,6 +493,12 @@ impl Server {
         for (name, _) in crate::types::LIST_PRELUDE {
             push(&mut items, name, KIND_FUNCTION);
         }
+        for (name, _) in crate::types::SET_PRELUDE
+            .iter()
+            .chain(crate::types::MAP_PRELUDE)
+        {
+            push(&mut items, name, KIND_FUNCTION);
+        }
         for name in BUILTIN_CTORS {
             push(&mut items, name, KIND_CONSTRUCTOR);
         }
@@ -614,7 +620,7 @@ const BUILTIN_CTORS: &[&str] = &["Ok", "Error"];
 
 /// Built-in and reserved type names.
 const BUILTIN_TYPES: &[&str] = &[
-    "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List",
+    "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List", "Set", "Map",
 ];
 
 /// Pyfun keywords (and contextual builder/CE words) offered as completions.
