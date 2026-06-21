@@ -1,12 +1,15 @@
 //! A small, dependency-free Language Server (`DESIGN.md` §9) — the "front-end-
 //! first" tooling slice. It speaks LSP over stdio (JSON-RPC with `Content-Length`
-//! framing) and offers exactly two features for now:
+//! framing) and offers four features:
 //!
 //! - **Diagnostics**: the existing type/effect/unit errors ([`crate::analyze`])
 //!   streamed as `textDocument/publishDiagnostics` on open/change.
 //! - **Hover**: the inferred type (effects included, e.g. `string ->{io} unit`) of
 //!   the narrowest expression under the cursor — the only way to *see* an inferred
 //!   type, since Pyfun never writes them.
+//! - **Go-to-definition**: jump from a module-level reference to its definition,
+//!   via the name resolver in [`resolve`].
+//! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
 //!
 //! The protocol plumbing is hand-rolled (see [`json`]) to keep the crate
 //! dependency-free, the same choice we made for the lexer and parser. The
@@ -14,8 +17,9 @@
 //! is tested directly without spawning a process or touching stdio.
 
 pub mod json;
+pub mod resolve;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 
 use json::{Json, int, obj, str};
@@ -70,6 +74,14 @@ impl Server {
             Some("textDocument/didClose") => self.did_close(msg),
             Some("textDocument/hover") => {
                 let result = self.hover(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/definition") => {
+                let result = self.definition(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/completion") => {
+                let result = self.completion(msg);
                 vec![response(id, result)]
             }
             // Unknown *request* (has an id) → a proper error so the client isn't
@@ -190,7 +202,134 @@ impl Server {
             ]),
         }
     }
+
+    /// Resolve go-to-definition: the narrowest module-level reference under the
+    /// cursor, mapped to its definition's `Location` (same document). `Null` when
+    /// the cursor is not on a resolvable reference (or the document does not parse).
+    fn definition(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let position = params.and_then(|p| p.get("position"));
+        let (Some(uri), Some(position)) = (uri, position) else {
+            return Json::Null;
+        };
+        let Some(text) = self.documents.get(uri) else {
+            return Json::Null;
+        };
+        let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
+        let character = position
+            .get("character")
+            .and_then(Json::as_i64)
+            .unwrap_or(0) as u32;
+        let offset = position_to_byte(text, line, character);
+
+        let Ok(module) = crate::parse(text) else {
+            return Json::Null;
+        };
+        // The narrowest reference span containing the cursor is the identifier.
+        let name = resolve::references(&module)
+            .into_iter()
+            .filter(|(span, _)| span.start <= offset && offset < span.end)
+            .min_by_key(|(span, _)| span.end - span.start)
+            .map(|(_, name)| name);
+        let Some(name) = name else {
+            return Json::Null;
+        };
+        match resolve::definitions(&module)
+            .into_iter()
+            .find(|sym| sym.name == name)
+        {
+            Some(sym) => obj(vec![
+                ("uri", str(uri)),
+                ("range", span_range(text, sym.span)),
+            ]),
+            None => Json::Null, // a prelude/builtin/local — no source location
+        }
+    }
+
+    /// Completion: module-level symbols (when the document parses) plus the always-
+    /// available prelude, builtins, and keywords. The static set is the fallback
+    /// while the file is mid-edit and does not yet parse.
+    fn completion(&self, msg: &Json) -> Json {
+        let text = msg
+            .get("params")
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str)
+            .and_then(|uri| self.documents.get(uri));
+
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        let mut push = |items: &mut Vec<Json>, label: &str, kind: i64| {
+            if seen.insert(label.to_string()) {
+                items.push(obj(vec![("label", str(label)), ("kind", int(kind))]));
+            }
+        };
+
+        // User symbols first (they shadow prelude names), if the file parses.
+        if let Some(text) = text
+            && let Ok(module) = crate::parse(text)
+        {
+            for sym in resolve::definitions(&module) {
+                push(&mut items, &sym.name, completion_kind(sym.kind));
+            }
+        }
+
+        for (name, _) in crate::types::PRELUDE {
+            push(&mut items, name, KIND_FUNCTION);
+        }
+        for (name, _) in crate::types::LIST_PRELUDE {
+            push(&mut items, name, KIND_FUNCTION);
+        }
+        for name in BUILTIN_CTORS {
+            push(&mut items, name, KIND_CONSTRUCTOR);
+        }
+        for name in BUILTIN_TYPES {
+            push(&mut items, name, KIND_CLASS);
+        }
+        for name in KEYWORDS {
+            push(&mut items, name, KIND_KEYWORD);
+        }
+        Json::Array(items)
+    }
 }
+
+/// `CompletionItemKind` codes (LSP spec) for the kinds we emit.
+const KIND_FUNCTION: i64 = 3;
+const KIND_CONSTRUCTOR: i64 = 4;
+const KIND_VALUE: i64 = 12;
+const KIND_CLASS: i64 = 7;
+const KIND_UNIT: i64 = 11;
+const KIND_KEYWORD: i64 = 14;
+
+/// Map a resolved symbol kind to a `CompletionItemKind`.
+fn completion_kind(kind: resolve::SymbolKind) -> i64 {
+    use resolve::SymbolKind::*;
+    match kind {
+        Value => KIND_VALUE,
+        Constructor => KIND_CONSTRUCTOR,
+        Type | Record => KIND_CLASS,
+        Extern => KIND_FUNCTION,
+        Measure => KIND_UNIT,
+    }
+}
+
+/// Reserved data constructors always in scope (`DESIGN.md` §8.1, `result`).
+const BUILTIN_CTORS: &[&str] = &["Ok", "Error"];
+
+/// Built-in and reserved type names.
+const BUILTIN_TYPES: &[&str] = &[
+    "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List",
+];
+
+/// Pyfun keywords (and contextual builder/CE words) offered as completions.
+const KEYWORDS: &[&str] = &[
+    "let", "mut", "pure", "type", "measure", "extern", "if", "then", "else", "match", "with",
+    "fun", "and", "or", "not", "true", "false", "return", "in", "async", "seq", "result",
+];
 
 /// The `initialize` result advertising our capabilities (full document sync +
 /// hover).
@@ -201,6 +340,9 @@ fn initialize_result() -> Json {
             obj(vec![
                 ("textDocumentSync", int(1)), // 1 = Full
                 ("hoverProvider", Json::Bool(true)),
+                ("definitionProvider", Json::Bool(true)),
+                // An (empty) CompletionOptions object enables completion.
+                ("completionProvider", obj(vec![])),
             ]),
         ),
         (
@@ -409,6 +551,54 @@ mod tests {
         assert!(server.exit);
     }
 
+    #[test]
+    fn goto_definition_jumps_to_the_binding() {
+        let mut server = Server::default();
+        let uri = "file:///d.pyfun";
+        // `one` is defined on line 0; referenced on line 1 at character 10.
+        server.handle(&json::parse(&open_msg(uri, "let one = 1\nlet two = one")).unwrap());
+        let req = pos_msg("textDocument/definition", uri, 1, 11);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let range = out[0].get("result").unwrap().get("range").unwrap();
+        let start = range.get("start").unwrap();
+        // Jumps back to the name span of `one` on line 0 (character 4).
+        assert_eq!(start.get("line").unwrap().as_i64(), Some(0));
+        assert_eq!(start.get("character").unwrap().as_i64(), Some(4));
+    }
+
+    #[test]
+    fn goto_definition_is_null_on_a_local() {
+        let mut server = Server::default();
+        let uri = "file:///d2.pyfun";
+        // `x` is a parameter — a local with no source location to jump to.
+        server.handle(&json::parse(&open_msg(uri, "let id x = x")).unwrap());
+        let req = pos_msg("textDocument/definition", uri, 0, 10);
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result").unwrap(), &Json::Null);
+    }
+
+    #[test]
+    fn completion_lists_user_symbols_and_prelude() {
+        let mut server = Server::default();
+        let uri = "file:///c.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let foo = 1")).unwrap());
+        let req = pos_msg("textDocument/completion", uri, 0, 0);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let labels: Vec<&str> = out[0]
+            .get("result")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i.get("label").and_then(Json::as_str))
+            .collect();
+        assert!(labels.contains(&"foo"), "user symbol missing: {labels:?}");
+        assert!(labels.contains(&"map"), "list prelude missing");
+        assert!(labels.contains(&"print"), "prelude missing");
+        assert!(labels.contains(&"match"), "keyword missing");
+        assert!(labels.contains(&"List"), "builtin type missing");
+    }
+
     fn open_msg(uri: &str, text: &str) -> String {
         obj(vec![
             ("jsonrpc", str("2.0")),
@@ -425,10 +615,15 @@ mod tests {
     }
 
     fn hover_msg(uri: &str, line: i64, character: i64) -> String {
+        pos_msg("textDocument/hover", uri, line, character)
+    }
+
+    /// A position-bearing request (hover/definition/completion) as JSON text.
+    fn pos_msg(method: &str, uri: &str, line: i64, character: i64) -> String {
         obj(vec![
             ("jsonrpc", str("2.0")),
             ("id", int(1)),
-            ("method", str("textDocument/hover")),
+            ("method", str(method)),
             (
                 "params",
                 obj(vec![

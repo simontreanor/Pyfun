@@ -477,14 +477,14 @@ tests/             parser tests, compile tests, .pyfun fixtures (favor snapshot/
 **Build order:** `lexer` + `parser` + `ast` → `desugar` → `types` (incl. `units`) →
 `lowering` + `python_emitter` → `diagnostics` + `cli` → `lsp`.
 
-**The LSP (implemented — first slice).** `pyfun lsp` runs a small language server
-over stdio. It speaks LSP/JSON-RPC with `Content-Length` framing; to keep the crate
+**The LSP (implemented).** `pyfun lsp` runs a small language server over stdio. It
+speaks LSP/JSON-RPC with `Content-Length` framing; to keep the crate
 **dependency-free** (no `serde`/`lsp-types`), the JSON value type, parser, and
 serializer are hand-rolled in `src/lsp/json.rs` — the same choice as the
 hand-rolled lexer/parser. The message-handling core (`Server::handle`) is pure
 (JSON in → JSON out) so it is unit-tested without spawning a process; a separate
-integration test (`tests/lsp.rs`) drives the real binary over piped stdio. Two
-features so far, both reusing the existing front end:
+integration test (`tests/lsp.rs`) drives the real binary over piped stdio. Four
+features, all reusing the existing front end:
 
 - **Diagnostics** — the existing type/effect/unit/exhaustiveness errors, streamed
   as `textDocument/publishDiagnostics` on open/change (full document sync).
@@ -497,12 +497,29 @@ features so far, both reusing the existing front end:
   table for every expression node and every binding name, then resolves each entry
   against the final substitution and renders it. Bindings carry a `name_span` so a
   function name hovers to its full inferred signature.
+- **Go-to-definition** — jump from a reference to its definition. Backed by a
+  dependency-free name resolver (`src/lsp/resolve.rs`) that walks the parsed AST
+  (independent of the type checker, so it works on any program that *parses*):
+  `definitions` collects module-level symbols (top-level `let`s with their precise
+  name span; constructors / type / record decls / `extern`s at their declaration),
+  and `references` collects `Var` occurrences while tracking lexical scopes —
+  crucially it **skips** any identifier a local binder (param, block `let`, pattern
+  var) shadows, so a module reference resolves and a local reference resolves to
+  *nothing* rather than wrongly jumping to a same-named module symbol. Scope is
+  module-level: locals/params/pattern vars have no spans yet (jumping *to* them is
+  deferred until the AST carries those spans).
+- **Completion** — in-scope module symbols (when the file parses) plus the always-
+  available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
+  builtin/reserved type names), and keywords, each tagged with a
+  `CompletionItemKind`. The static set is the fallback while the file is mid-edit
+  and does not yet parse.
 
-Deferred (next LSP slices, `ROADMAP` #10): go-to-definition, completion (in-scope
-names / constructors / record fields / prelude), incremental parsing/resilient
-recovery for half-typed files (today each change re-analyzes from scratch — fine at
-this size), and richer hover (docs, separate effect line). The `editors/vscode/`
-client is intentionally thin — all language smarts live in the Rust server.
+Deferred (next LSP slices, `ROADMAP` #10): go-to-definition *into* locals/params/
+pattern bindings (needs spans on those binders); find-references; incremental
+parsing / resilient recovery for half-typed files (today each change re-analyzes
+from scratch — fine at this size); and richer hover (docs, separate effect line).
+The `editors/vscode/` client is intentionally thin — all language smarts live in
+the Rust server.
 
 ## 10. Scope & phases
 
@@ -518,9 +535,9 @@ compiler-pipeline and diagnostics quality over feature breadth.
 - **Phase 3 — check + CLI:** type **and effect** inference, exhaustiveness, immutability, **and
   unit inference**; `pyfun check`; good errors for reassignment, missing arms, type/effect/unit
   mismatches.
-- **Phase 4+ — tooling:** formatter (`pyfun fmt`); LSP / editor support — **first slice landed**
-  (`pyfun lsp`: diagnostics + hover-for-type/effect over stdio, plus a thin VS Code client; see §9);
-  then user-defined CE builders and unit polymorphism if not already in.
+- **Phase 4+ — tooling:** formatter (`pyfun fmt`); LSP / editor support — **landed**
+  (`pyfun lsp`: diagnostics + hover-for-type/effect + go-to-definition + completion over stdio, plus a
+  thin VS Code client; see §9); then user-defined CE builders and unit polymorphism if not already in.
 
 Because effects, CEs, and units are all MVP, their checking lands in Phase 3 alongside HM type
 inference — not deferred. Units-of-measure unification (§8.2) is the highest-risk item in Phase 3;

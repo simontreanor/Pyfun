@@ -164,21 +164,24 @@ Originally a top-level-only rule (a line break back to the first item's column e
 nested blocks (indented `let` bodies) while keeping the same continuation behavior for multi-line
 `match`/`if`/CE. Lives in the lexer.
 
-### 10. LSP / editor support (`DESIGN.md` §9) — ✅ first slice done
+### 10. LSP / editor support (`DESIGN.md` §9) — ✅ diagnostics + hover + go-to-def + completion done
 A language server (`pyfun lsp`, stdio JSON-RPC). DESIGN always scoped this as later,
 "rust-analyzer-style front-end-first"; the span-carrying AST and diagnostics infrastructure were the
 foundation.
-- **Done (first slice):** **diagnostics** (existing type/effect/unit/exhaustiveness errors streamed
-  as `publishDiagnostics` on open/change) and **hover-for-type-and-effect** (the inferred type of the
+- **Done:** **diagnostics** (existing type/effect/unit/exhaustiveness errors streamed as
+  `publishDiagnostics` on open/change); **hover-for-type-and-effect** (the inferred type of the
   narrowest expression *or binding name* under the cursor, with `->{io}` shown on arrows — the display
-  half of #1). The JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate
-  dependency-free; the handler core is a pure function, unit-tested, plus a real-binary stdio
-  integration test (`tests/lsp.rs`). Bindings gained a `name_span` so a function name hovers to its
-  inferred signature. A thin VS Code client lives in `editors/vscode/`.
-- **Still to do (next slices):** go-to-definition; completion (in-scope names / constructors / record
-  fields / prelude); incremental & resilient analysis for half-typed files (today each change
-  re-analyzes from scratch — fine at this size); richer hover (docs, a separate effect line).
-- **Effort/risk:** the slice landed; remaining slices are medium effort, high payoff for usability.
+  half of #1); **go-to-definition** (module-level symbols, via a dependency-free AST name resolver
+  `src/lsp/resolve.rs` that skips shadowed locals so it never mis-jumps); and **completion** (in-scope
+  module symbols + prelude + builtins + keywords, with a static fallback while the file doesn't parse).
+  The JSON/JSON-RPC layer is **hand-rolled** (`src/lsp/json.rs`) to keep the crate dependency-free; the
+  handler core is a pure function, unit-tested, plus a real-binary stdio integration test
+  (`tests/lsp.rs`). Bindings gained a `name_span` (precise hover/jump to a definition). A thin VS Code
+  client lives in `editors/vscode/`.
+- **Still to do (next slices):** go-to-definition *into* locals/params/pattern bindings (needs spans on
+  those binders); find-references; incremental & resilient analysis for half-typed files (today each
+  change re-analyzes from scratch — fine at this size); richer hover (docs, a separate effect line).
+- **Effort/risk:** the headline features landed; remaining slices are medium effort, high payoff.
 
 ## Suggested sequencing
 
@@ -186,12 +189,13 @@ All four language pillars beyond the MVP core are now done: **#1 (effects)**, **
 **#3 (mutability + blocks)**, **#4 (floats)** — on top of `run` + prelude + the general offside rule.
 The remaining work is breadth and polish, not new pillars. Highest leverage next:
 
-The general FFI surface (`extern`) and the eager `List` collection (both #9), and the **#10 LSP first
-slice** (diagnostics + hover-for-type/effect + a VS Code client), are now done. Remaining, in rough
-priority:
+The general FFI surface (`extern`) and the eager `List` collection (both #9), and the **#10 LSP**
+(diagnostics + hover-for-type/effect + go-to-definition + completion + a VS Code client), are now done.
+Remaining, in rough priority:
 
-1. **#10 (LSP) cont.** — next slices: go-to-definition, completion, and incremental/resilient
-   analysis for half-typed files (current analysis is whole-document per change).
+1. **#10 (LSP) cont.** — next slices: go-to-def into locals/params (needs binder spans), find-
+   references, and incremental/resilient analysis for half-typed files (current analysis is
+   whole-document per change).
 2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
    option/result helpers, and a value-level library over the existing `seq {}` lazy type.
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
