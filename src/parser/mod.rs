@@ -64,6 +64,15 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
     Parser { tokens, pos: 0 }.parse_module()
 }
 
+/// Parse a token stream into a [`Module`], **recovering** from errors at item
+/// boundaries. Always returns a module — of the items that parsed — together with
+/// every error encountered, so a single broken `let` no longer hides the rest of
+/// the file. This is the entry point the editor tooling uses ([`crate::analyze`]);
+/// the compiler keeps the strict [`parse`] (it must reject any broken program).
+pub fn parse_recover(tokens: Vec<Token>) -> (Module, Vec<ParseError>) {
+    Parser { tokens, pos: 0 }.parse_module_recover()
+}
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -149,6 +158,51 @@ impl Parser {
             self.skip_seps();
         }
         Ok(Module { items })
+    }
+
+    /// Error-recovering variant of [`Self::parse_module`]: parse items one by one,
+    /// and on a failure record the error, ensure forward progress, then
+    /// [`synchronize`](Self::synchronize) to the next item boundary and carry on.
+    /// The result is the module of the items that did parse plus all the errors.
+    fn parse_module_recover(&mut self) -> (Module, Vec<ParseError>) {
+        let mut items = Vec::new();
+        let mut errors = Vec::new();
+        self.skip_seps();
+        while !self.at_eof() {
+            let before = self.pos;
+            match self.parse_item() {
+                Ok(item) => items.push(item),
+                Err(e) => {
+                    errors.push(e);
+                    // Guarantee progress even if `parse_item` consumed nothing,
+                    // then skip ahead to the next plausible item start.
+                    if self.pos == before {
+                        self.bump();
+                    }
+                    self.synchronize();
+                }
+            }
+            self.skip_seps();
+        }
+        (Module { items }, errors)
+    }
+
+    /// Skip tokens after a failed item until the next top-level item boundary: a
+    /// statement separator at block depth 0 (left for [`skip_seps`](Self::skip_seps)
+    /// to consume) or end of input. `Indent`/`Dedent` are tracked so a separator
+    /// *inside* a broken block is not mistaken for the boundary.
+    fn synchronize(&mut self) {
+        let mut depth = 0i32;
+        loop {
+            match self.peek() {
+                Tok::Eof => return,
+                Tok::Sep if depth <= 0 => return,
+                Tok::Indent => depth += 1,
+                Tok::Dedent => depth -= 1,
+                _ => {}
+            }
+            self.bump();
+        }
     }
 
     /// Consume any statement separators between top-level items.
@@ -1063,5 +1117,50 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Dot => ".",
         Tok::Underscore => "_",
         _ => "token",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::lex;
+
+    fn names(module: &Module) -> Vec<&str> {
+        module
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Let(b) => Some(b.name.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn recovers_items_around_a_broken_let() {
+        // The middle `let bad =` has no body; recovery should still yield the
+        // surrounding well-formed items.
+        let src = "let good = 1\nlet bad =\nlet also = 2";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert_eq!(names(&module), ["good", "also"]);
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+    }
+
+    #[test]
+    fn recovers_after_a_broken_block() {
+        // A garbage expression statement inside an indented block is one broken
+        // item; the following top-level `let` must still parse.
+        let src = "let f x =\n  x +\nlet g = 2";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(names(&module).contains(&"g"), "names: {:?}", names(&module));
+        assert!(!errors.is_empty());
+    }
+
+    #[test]
+    fn clean_source_recovers_with_no_errors() {
+        let src = "let a = 1\nlet b = 2";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert_eq!(names(&module), ["a", "b"]);
+        assert!(errors.is_empty());
     }
 }

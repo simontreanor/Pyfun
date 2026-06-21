@@ -43,17 +43,63 @@ pub fn check(source: &str) -> Result<(), Vec<types::TypeError>> {
     types::check(&module)
 }
 
-/// Analyze `source` for the editor (the LSP, `DESIGN.md` §9): return every
-/// diagnostic plus a span→type table for hover.
+/// A resilient analysis of a source document, for the editor (the LSP,
+/// `DESIGN.md` §9). Produced by [`analyze`] and consumed by every LSP feature.
 ///
-/// Unlike [`check`], this never short-circuits — a parse failure becomes a single
-/// diagnostic (with an empty hover table), and a module that type-checks with
-/// errors still yields whatever inferred types were recovered. This is the one
-/// entry point the LSP server needs.
-pub fn analyze(source: &str) -> (Vec<types::TypeError>, Vec<types::TypeSpan>) {
-    match parse(source) {
-        Ok(module) => types::check_collecting(&module),
-        Err(e) => (vec![to_type_error(&e)], Vec::new()),
+/// "Resilient" means a half-typed file still yields results: parsing recovers at
+/// item boundaries, so the items that *do* parse populate `module` (and its hover
+/// `types` and navigation), while the broken ones surface as `diagnostics`.
+pub struct Analysis {
+    /// The parsed module — present unless lexing itself failed. May be *partial*
+    /// (missing the items that did not parse) when `parse_ok` is false.
+    pub module: Option<syntax::Module>,
+    /// Diagnostics to publish: syntax errors when the file does not fully parse,
+    /// otherwise the type/effect/unit errors.
+    pub diagnostics: Vec<types::TypeError>,
+    /// The span→type table for hover (best-effort, even for a partial module).
+    pub types: Vec<types::TypeSpan>,
+    /// Whether the document parsed with no lex/syntax errors. Mutating features
+    /// (rename) require this — a partial module could hide occurrences.
+    pub parse_ok: bool,
+}
+
+/// Analyze `source` for the editor (the LSP, `DESIGN.md` §9).
+///
+/// Unlike [`check`], this never short-circuits. Lexing errors are fatal (no AST).
+/// Parse errors recover at item boundaries: the recovered (possibly partial)
+/// module still drives hover and navigation, and only the *syntax* errors are
+/// reported until the file parses cleanly — at which point the type errors take
+/// over. This is the one entry point the LSP server needs.
+pub fn analyze(source: &str) -> Analysis {
+    let tokens = match lexer::lex(source) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            return Analysis {
+                module: None,
+                diagnostics: vec![to_type_error(&CompileError::Lex(e))],
+                types: Vec::new(),
+                parse_ok: false,
+            };
+        }
+    };
+    let (module, parse_errors) = parser::parse_recover(tokens);
+    let (type_errors, types) = types::check_collecting(&module);
+    // Until the syntax is clean, report only the parse errors (type errors over a
+    // partial module are noise) — but still surface the recovered hover types.
+    let (diagnostics, parse_ok) = if parse_errors.is_empty() {
+        (type_errors, true)
+    } else {
+        let parse: Vec<_> = parse_errors
+            .iter()
+            .map(|e| to_type_error(&CompileError::Parse(e.clone())))
+            .collect();
+        (parse, false)
+    };
+    Analysis {
+        module: Some(module),
+        diagnostics,
+        types,
+        parse_ok,
     }
 }
 

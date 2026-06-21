@@ -367,6 +367,76 @@ fn serves_find_references() {
 }
 
 #[test]
+fn serves_resilient_analysis_on_a_half_typed_file() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    // The middle `let bad =` is broken; `good` and `also` still parse, so the
+    // server reports one syntax diagnostic *and* hover still works on `good`.
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///p.pyfun","text":"let good = 1\nlet bad =\nlet also = 2"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///p.pyfun"},"position":{"line":0,"character":4}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let messages = unframe(&out);
+
+    // A syntax diagnostic is still published despite the broken middle item.
+    let diag = messages
+        .iter()
+        .find(|m| m.get("method").and_then(Json::as_str) == Some("textDocument/publishDiagnostics"))
+        .expect("publishDiagnostics notification");
+    assert_eq!(
+        diag.get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Hover over `good` still resolves a type from the recovered items.
+    let hover = messages
+        .iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("hover response");
+    let value = hover
+        .get("result")
+        .unwrap()
+        .get("contents")
+        .unwrap()
+        .get("value")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(value.contains("int"), "hover on partial file: {value:?}");
+}
+
+#[test]
 fn serves_rename() {
     let exe = env!("CARGO_BIN_EXE_pyfun");
     let mut child = Command::new(exe)

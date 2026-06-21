@@ -528,11 +528,28 @@ features, all reusing the existing front end:
   The new name must be a valid lowercase value identifier (not a keyword). No
   capture-avoidance check is done (renaming to a name already bound nearby can
   shadow) — the editor shows the diff for review.
-- **Completion** — in-scope module symbols (when the file parses) plus the always-
-  available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
-  builtin/reserved type names), and keywords, each tagged with a
-  `CompletionItemKind`. The static set is the fallback while the file is mid-edit
-  and does not yet parse.
+- **Completion** — in-scope module symbols (from whatever the recovering parser
+  produced — see below, so even a partially-typed file contributes its symbols)
+  plus the always-available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins
+  (`Ok`/`Error`, the builtin/reserved type names), and keywords, each tagged with a
+  `CompletionItemKind`. The static set is the fallback when nothing parses.
+- **Resilient & incremental analysis** — a half-typed file still yields results.
+  The parser has an error-recovering entry point (`parser::parse_recover →
+  (Module, Vec<ParseError>)`) used by the editor (the compiler keeps the strict
+  `parse`, as it must reject any broken program): on a failed item it records the
+  error, guarantees forward progress, then `synchronize`s to the next item
+  boundary (a statement separator at block depth 0, tracking `Indent`/`Dedent` so a
+  separator *inside* a broken block isn't mistaken for it). So one broken `let` no
+  longer hides the rest of the file — the items that parse still drive hover and
+  navigation, and only the *syntax* errors are reported until the file is clean (a
+  type error over a partial module is noise), at which point the type errors take
+  over. `analyze` returns an `Analysis { module, diagnostics, types, parse_ok }`
+  bundle; **lexing errors remain fatal** (no AST) and **rename requires `parse_ok`**
+  — a partial module could hide occurrences in the unparsed region, so the mutating
+  feature stays conservative while the read-only ones degrade gracefully. The
+  "incremental" half is a per-document analysis cache keyed on a monotonic version
+  stamp: repeated requests on an unchanged document (hover, then go-to-def, then
+  references) reuse one parse + type-check instead of redoing it each time.
 
 The AST changes that enable local navigation: function/binding parameters are
 `Param { name, span }` (was `Vec<String>`), `Pattern::Var { name, span }` (was
@@ -540,11 +557,13 @@ The AST changes that enable local navigation: function/binding parameters are
 spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/structural
 equality is unaffected; lowering erases them (`param_names`).
 
-Deferred (next LSP slices, `ROADMAP` #10): incremental parsing / resilient recovery
-for half-typed files (today each change re-analyzes from scratch — fine at this
-size); document/workspace symbols (outline); and richer hover (docs, separate effect
-line). The `editors/vscode/` client is intentionally thin — all language smarts live
-in the Rust server.
+Deferred (next LSP slices, `ROADMAP` #10): *truly* incremental reparsing (today a
+change re-analyzes the whole document — fine at this size; the version cache only
+avoids redundant re-analysis between requests on the *same* version, not partial
+reparse on edit); resilience to *lexing* errors (only parse errors recover today);
+document/workspace symbols (outline); and richer hover (docs, separate effect line).
+The `editors/vscode/` client is intentionally thin — all language smarts live in the
+Rust server.
 
 ## 10. Scope & phases
 

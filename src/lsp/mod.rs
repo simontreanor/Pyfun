@@ -20,9 +20,12 @@
 pub mod json;
 pub mod resolve;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
+use std::rc::Rc;
 
+use crate::Analysis;
 use json::{Json, int, obj, str};
 
 /// Run the server: read framed JSON-RPC messages from stdin, dispatch them, and
@@ -48,10 +51,26 @@ pub fn run() -> io::Result<()> {
     Ok(())
 }
 
-/// The server state: open documents by URI, plus a flag set by `exit`.
+/// One open document: its text and a monotonic version stamp (assigned by the
+/// server, so it is independent of any `version` the client sends). The version
+/// keys the analysis cache.
+struct Doc {
+    text: String,
+    version: u64,
+}
+
+/// The server state: open documents by URI, a per-document **analysis cache**
+/// (so repeated requests on an unchanged document reuse one parse + type-check —
+/// the "incremental" half), plus a flag set by `exit`.
 #[derive(Default)]
 pub struct Server {
-    documents: HashMap<String, String>,
+    documents: HashMap<String, Doc>,
+    /// Cached analysis per URI, tagged with the document version it was computed
+    /// from; a stale entry (older version) is recomputed on demand. `RefCell`
+    /// because the read handlers take `&self`.
+    cache: RefCell<HashMap<String, (u64, Rc<Analysis>)>>,
+    /// Monotonic clock stamping each document edit with a fresh version.
+    clock: u64,
     pub exit: bool,
 }
 
@@ -112,7 +131,7 @@ impl Server {
         ) else {
             return vec![];
         };
-        self.documents.insert(uri.to_string(), text.to_string());
+        self.set_document(uri, text);
         vec![self.diagnostics_for(uri)]
     }
 
@@ -135,7 +154,7 @@ impl Server {
         else {
             return vec![];
         };
-        self.documents.insert(uri.to_string(), text.to_string());
+        self.set_document(uri, text);
         vec![self.diagnostics_for(uri)]
     }
 
@@ -149,17 +168,54 @@ impl Server {
             return vec![];
         };
         self.documents.remove(uri);
+        self.cache.borrow_mut().remove(uri);
         // Clear diagnostics for the closed file.
         vec![publish_diagnostics(uri, Json::Array(vec![]))]
     }
 
-    /// Build a `publishDiagnostics` notification for `uri` from a fresh analysis.
+    /// Store `text` for `uri` under a fresh version (which invalidates the cache
+    /// entry lazily, on the next [`analysis`](Self::analysis) call).
+    fn set_document(&mut self, uri: &str, text: &str) {
+        self.clock += 1;
+        self.documents.insert(
+            uri.to_string(),
+            Doc {
+                text: text.to_string(),
+                version: self.clock,
+            },
+        );
+    }
+
+    /// The source text of an open document.
+    fn text(&self, uri: &str) -> Option<&str> {
+        self.documents.get(uri).map(|d| d.text.as_str())
+    }
+
+    /// The analysis of `uri`, served from the cache when the document is
+    /// unchanged since it was computed, otherwise analyzed fresh and cached. This
+    /// is what makes repeated requests (hover, then go-to-def, then references) on
+    /// one document version share a single parse + type-check.
+    fn analysis(&self, uri: &str) -> Option<Rc<Analysis>> {
+        let doc = self.documents.get(uri)?;
+        if let Some((version, analysis)) = self.cache.borrow().get(uri)
+            && *version == doc.version
+        {
+            return Some(analysis.clone());
+        }
+        let analysis = Rc::new(crate::analyze(&doc.text));
+        self.cache
+            .borrow_mut()
+            .insert(uri.to_string(), (doc.version, analysis.clone()));
+        Some(analysis)
+    }
+
+    /// Build a `publishDiagnostics` notification for `uri` from its analysis.
     fn diagnostics_for(&self, uri: &str) -> Json {
-        let Some(text) = self.documents.get(uri) else {
+        let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
             return publish_diagnostics(uri, Json::Array(vec![]));
         };
-        let (errors, _types) = crate::analyze(text);
-        let items = errors
+        let items = analysis
+            .diagnostics
             .iter()
             .map(|e| {
                 obj(vec![
@@ -185,7 +241,7 @@ impl Server {
         let (Some(uri), Some(position)) = (uri, position) else {
             return Json::Null;
         };
-        let Some(text) = self.documents.get(uri) else {
+        let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
             return Json::Null;
         };
         let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
@@ -195,9 +251,9 @@ impl Server {
             .unwrap_or(0) as u32;
         let offset = position_to_byte(text, line, character);
 
-        let (_errors, types) = crate::analyze(text);
         // The narrowest span containing the offset is the most specific node.
-        let best = types
+        let best = analysis
+            .types
             .iter()
             .filter(|t| t.span.start <= offset && offset < t.span.end)
             .min_by_key(|t| t.span.end - t.span.start);
@@ -229,7 +285,10 @@ impl Server {
         let (Some(uri), Some(position)) = (uri, position) else {
             return Json::Null;
         };
-        let Some(text) = self.documents.get(uri) else {
+        let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
+            return Json::Null;
+        };
+        let Some(module) = analysis.module.as_ref() else {
             return Json::Null;
         };
         let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
@@ -239,11 +298,8 @@ impl Server {
             .unwrap_or(0) as u32;
         let offset = position_to_byte(text, line, character);
 
-        let Ok(module) = crate::parse(text) else {
-            return Json::Null;
-        };
         // The narrowest reference span containing the cursor is the identifier.
-        let target = resolve::references(&module)
+        let target = resolve::references(module)
             .into_iter()
             .filter(|r| r.span.start <= offset && offset < r.span.end)
             .min_by_key(|r| r.span.end - r.span.start)
@@ -252,7 +308,7 @@ impl Server {
             // A local binder (param / block `let` / pattern var) jumps to itself.
             Some(resolve::Target::Local(span)) => Some(span),
             // A module symbol is resolved by name against the definition table.
-            Some(resolve::Target::Module(name)) => resolve::definitions(&module)
+            Some(resolve::Target::Module(name)) => resolve::definitions(module)
                 .into_iter()
                 .find(|sym| sym.name == name)
                 .map(|sym| sym.span),
@@ -278,7 +334,10 @@ impl Server {
         let (Some(uri), Some(position)) = (uri, position) else {
             return Json::Array(vec![]);
         };
-        let Some(text) = self.documents.get(uri) else {
+        let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
+            return Json::Array(vec![]);
+        };
+        let Some(module) = analysis.module.as_ref() else {
             return Json::Array(vec![]);
         };
         let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
@@ -294,13 +353,10 @@ impl Server {
             .map(|v| v == &Json::Bool(true))
             .unwrap_or(true);
 
-        let Ok(module) = crate::parse(text) else {
+        let Some((_, symbol)) = resolve::symbol_at(module, offset) else {
             return Json::Array(vec![]);
         };
-        let Some((_, symbol)) = resolve::symbol_at(&module, offset) else {
-            return Json::Array(vec![]);
-        };
-        let locations = resolve::find_references(&module, &symbol, include_declaration)
+        let locations = resolve::find_references(module, &symbol, include_declaration)
             .into_iter()
             .map(|span| obj(vec![("uri", str(uri)), ("range", span_range(text, span))]))
             .collect();
@@ -312,14 +368,16 @@ impl Server {
     /// rename box). `Null` when the symbol cannot be renamed (a prelude/builtin, or
     /// a constructor/type/extern whose occurrences aren't all precisely tracked).
     fn prepare_rename(&self, msg: &Json) -> Json {
-        let Some((text, offset)) = self.locate(msg) else {
+        let Some((text, offset, analysis)) = self.locate(msg) else {
             return Json::Null;
         };
-        let Ok(module) = crate::parse(text) else {
+        // Refuse rename unless the document fully parses: a partial module could
+        // hide occurrences in the unparsed region, making the rewrite unsound.
+        let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
-        match resolve::symbol_at(&module, offset) {
-            Some((span, target)) if is_renameable(&module, &target) => span_range(text, span),
+        match resolve::symbol_at(module, offset) {
+            Some((span, target)) if is_renameable(module, &target) => span_range(text, span),
             _ => Json::Null,
         }
     }
@@ -338,7 +396,7 @@ impl Server {
     fn rename(&self, msg: &Json) -> Json {
         let params = msg.get("params");
         let new_name = params.and_then(|p| p.get("newName")).and_then(Json::as_str);
-        let (Some((text, offset)), Some(new_name)) = (self.locate(msg), new_name) else {
+        let (Some((text, offset, analysis)), Some(new_name)) = (self.locate(msg), new_name) else {
             return Json::Null;
         };
         let uri = params
@@ -349,16 +407,17 @@ impl Server {
         if !is_value_identifier(new_name) {
             return Json::Null;
         }
-        let Ok(module) = crate::parse(text) else {
+        // Only rename when the document fully parses (see `prepare_rename`).
+        let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
-        let Some((_, target)) = resolve::symbol_at(&module, offset) else {
+        let Some((_, target)) = resolve::symbol_at(module, offset) else {
             return Json::Null;
         };
-        if !is_renameable(&module, &target) {
+        if !is_renameable(module, &target) {
             return Json::Null;
         }
-        let edits: Vec<Json> = resolve::find_references(&module, &target, true)
+        let edits: Vec<Json> = resolve::find_references(module, &target, true)
             .into_iter()
             .map(|span| {
                 obj(vec![
@@ -371,33 +430,35 @@ impl Server {
         obj(vec![("changes", obj(vec![(uri, Json::Array(edits))]))])
     }
 
-    /// Resolve a position-bearing request to its document text and byte offset.
-    fn locate(&self, msg: &Json) -> Option<(&String, usize)> {
+    /// Resolve a position-bearing request to its document text, byte offset, and
+    /// (cached) analysis — everything a navigation/rename handler needs.
+    fn locate(&self, msg: &Json) -> Option<(&str, usize, Rc<Analysis>)> {
         let params = msg.get("params");
         let uri = params
             .and_then(|p| p.get("textDocument"))
             .and_then(|d| d.get("uri"))
             .and_then(Json::as_str)?;
         let position = params.and_then(|p| p.get("position"))?;
-        let text = self.documents.get(uri)?;
+        let analysis = self.analysis(uri)?;
+        let text = self.text(uri)?;
         let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
         let character = position
             .get("character")
             .and_then(Json::as_i64)
             .unwrap_or(0) as u32;
-        Some((text, position_to_byte(text, line, character)))
+        Some((text, position_to_byte(text, line, character), analysis))
     }
 
     /// Completion: module-level symbols (when the document parses) plus the always-
     /// available prelude, builtins, and keywords. The static set is the fallback
     /// while the file is mid-edit and does not yet parse.
     fn completion(&self, msg: &Json) -> Json {
-        let text = msg
+        let analysis = msg
             .get("params")
             .and_then(|p| p.get("textDocument"))
             .and_then(|d| d.get("uri"))
             .and_then(Json::as_str)
-            .and_then(|uri| self.documents.get(uri));
+            .and_then(|uri| self.analysis(uri));
 
         let mut items = Vec::new();
         let mut seen = HashSet::new();
@@ -407,11 +468,12 @@ impl Server {
             }
         };
 
-        // User symbols first (they shadow prelude names), if the file parses.
-        if let Some(text) = text
-            && let Ok(module) = crate::parse(text)
+        // User symbols first (they shadow prelude names), from whatever parsed —
+        // even a partial module contributes the symbols it recovered.
+        if let Some(analysis) = &analysis
+            && let Some(module) = analysis.module.as_ref()
         {
-            for sym in resolve::definitions(&module) {
+            for sym in resolve::definitions(module) {
                 push(&mut items, &sym.name, completion_kind(sym.kind));
             }
         }
@@ -876,6 +938,65 @@ mod tests {
         assert!(labels.contains(&"List"), "builtin type missing");
     }
 
+    #[test]
+    fn half_typed_file_still_diagnoses_and_hovers() {
+        // The middle `let bad =` is broken; the surrounding items are fine.
+        let mut server = Server::default();
+        let uri = "file:///partial.pyfun";
+        let src = "let good = 1\nlet bad =\nlet also = 2";
+        let out = server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        // A syntax diagnostic is still published (recovery, not a hard failure).
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(diags.len(), 1, "diags: {diags:?}");
+        // Hover over `good` (line 0, char 4) still resolves a type from the
+        // recovered items.
+        let out = server.handle(&json::parse(&hover_msg(uri, 0, 4)).unwrap());
+        let value = out[0]
+            .get("result")
+            .unwrap()
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap();
+        assert!(value.contains("int"), "hover on partial file: {value:?}");
+    }
+
+    #[test]
+    fn rename_is_refused_when_the_file_does_not_fully_parse() {
+        let mut server = Server::default();
+        let uri = "file:///partialrn.pyfun";
+        // `one` is well-formed, but the file has a syntax error below it; renaming
+        // could miss an occurrence in the unparsed region, so it is refused.
+        let src = "let one = 1\nlet bad =\nlet two = one";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let req = rename_msg(uri, 0, 4, "uno");
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result").unwrap(), &Json::Null);
+    }
+
+    #[test]
+    fn analysis_is_cached_per_version() {
+        let mut server = Server::default();
+        let uri = "file:///cache.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let n = 1")).unwrap());
+        // Two requests on the unchanged document share one analysis (same Rc).
+        let a = server.analysis(uri).unwrap();
+        let b = server.analysis(uri).unwrap();
+        assert!(Rc::ptr_eq(&a, &b), "unchanged document re-analyzed");
+        // An edit bumps the version, so the cache is recomputed.
+        server.handle(&json::parse(&change_msg(uri, "let n = 2")).unwrap());
+        let c = server.analysis(uri).unwrap();
+        assert!(!Rc::ptr_eq(&a, &c), "edited document served stale analysis");
+    }
+
     fn open_msg(uri: &str, text: &str) -> String {
         obj(vec![
             ("jsonrpc", str("2.0")),
@@ -893,6 +1014,25 @@ mod tests {
 
     fn hover_msg(uri: &str, line: i64, character: i64) -> String {
         pos_msg("textDocument/hover", uri, line, character)
+    }
+
+    /// A full-sync `textDocument/didChange` carrying the whole new document text.
+    fn change_msg(uri: &str, text: &str) -> String {
+        obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("method", str("textDocument/didChange")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(uri))])),
+                    (
+                        "contentChanges",
+                        Json::Array(vec![obj(vec![("text", str(text))])]),
+                    ),
+                ]),
+            ),
+        ])
+        .to_string()
     }
 
     /// A `textDocument/rename` request with a `newName`.
