@@ -82,9 +82,28 @@ Design intent (to be refined as the type checker takes shape):
   types do. Decide early how (or whether) effect wrappers appear in emitted Python — the bias is
   toward zero-cost, readable output.
 
-Open design questions to resolve while building the checker: inference vs. mandatory annotation at
-function boundaries; the exact effect lattice; how `mut` state interacts with the effect system;
-and how much of the effect machinery is allowed to surface in generated Python.
+**Resolved direction (2026-06-21): inference-first, zero syntactic pollution.** Effects follow the
+Koka/Flix/Unison model — **inferred, never written in ordinary code** — rather than effects-as-values
+(Haskell `IO`: `do`/`<-`/wrapper types) or effects-as-keywords (Rust/Python `async` *coloring*, the
+very pain we're avoiding). A pure function reads exactly as it does today (`let add a b = a + b`);
+`print : 'a ->{io} unit` and impurity propagate automatically. Effects surface only in (a) `pyfun
+check`/hover output — the Python gradual-typing mindset, where tooling reports the property and the
+source stays clean — and (b) error messages at a violation. Any *written* purity assertion, if we add
+one, is **definition-level and opt-in** (decorator-shaped, like `@property`), never expression-body
+syntax. Start coarse: one `io` label plus effect *variables* for polymorphism (so `compose`/`map`
+stay pure-polymorphic). Arrows (`Ty::Fun`) carry the latent effect; it generalizes/instantiates like
+the existing unit/num/comparison variables; it is **fully erased at lowering** (zero runtime residue,
+exactly like units).
+
+**Sequencing (decided): effects are deferred until there is something to track.** With only `print`
+effectful and no enforcement site today, effect inference would be pure infrastructure. It is bundled
+with **mutation (`let mut` + `<-`, §3/ROADMAP #3)** or **real Python FFI (§6)** — mutation is an
+`io`-style effect and the FFI boundary is effectful-by-default — so the guarantee has teeth on day
+one. "Effects + something that has effects," together.
+
+Still open (to resolve when building it): the exact discharge story (is `io` terminal until a runtime
+boundary?); whether `async`/`Async` joins the effect lattice or stays typed via its value form; and
+the precise ergonomics of the opt-in purity assertion.
 
 **Relationship to computation expressions (§8).** Effects and CEs are distinct but related:
 effects track side effects *in types*; CEs provide *monadic sugar*. They coexist (F# has CEs and

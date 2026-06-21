@@ -7,7 +7,7 @@ design and [`GUIDE.md`](./GUIDE.md) for current status.
 
 ## Language features (the remaining vision)
 
-### 1. Effect inference (`DESIGN.md` §4)
+### 1. Effect inference (`DESIGN.md` §4) — deferred, bundled with #3/FFI (decided 2026-06-21)
 The last first-class showcase pillar. Today the type system tracks *what* values are (`int<m>`,
 `Option a`) but not *what a function does* — whether it prints, mutates, awaits, or can fail.
 Effect inference makes purity part of the type: a function is pure unless it performs an effect,
@@ -15,10 +15,23 @@ and impurity propagates (a caller of an impure function is impure unless the eff
 F# notably does *not* have this; it's where Pyfun would out-design its inspiration.
 - **Unlocks:** "this function is pure" guarantees; principled boundaries (the Python FFI becomes
   effectful-by-default); ties into `async` (an `Async` effect).
-- **Effort/risk:** High and somewhat open-ended. Hard parts: designing the effect lattice (start
-  coarse — pure vs `IO`), threading effects through inference (an effect-row system à la Koka),
-  and inference-vs-annotation at function boundaries. Needs effectful *operations* to track, so it
-  pairs naturally with adding `print`/IO or mutation — really "effects + something that has effects."
+- **Decided direction (low-pollution).** Follow the **inference-first** model (Koka/Flix/Unison),
+  *not* effects-as-values (Haskell `IO`) or effects-as-keywords (Rust `async` coloring). Effects are
+  **inferred and never written in ordinary code** — a pure function looks exactly as it does today
+  (`let add a b = a + b`); `print : 'a ->{io} unit` propagates automatically. Effects surface only in
+  (a) `pyfun check`/hover output (like mypy reporting a type — the Python-gradual-typing mindset),
+  (b) error messages at a violation. Any *written* purity assertion, if added, is **definition-level
+  and opt-in** (decorator-shaped, like `@property`), never expression-body syntax. Start coarse: one
+  `io` label + effect *variables* for polymorphism (so `compose`/`map` stay pure-polymorphic). Fully
+  erased at lowering.
+- **Why deferred.** With only `print` to track and no enforcement site, effect inference today is
+  pure infrastructure. Holding it until **mutation (#3, `<-`)** or **real Python FFI** exists means
+  shipping it as one payoff-bearing unit where purity has teeth on day one (mutation is an `io`-style
+  effect; the FFI boundary is effectful-by-default). Do "effects + something that has effects"
+  together, not effects first.
+- **Effort/risk:** High and somewhat open-ended. The invasive part is mechanical: every `Ty::Fun`
+  arrow and every `infer_expr` rule gains an effect component, generalized/instantiated like the
+  existing unit/num/ord variables.
 
 ### 2. Records — ✅ done (nominal MVP)
 Named-field product types: `type Point = { x: int, y: int }`, construction `{ x = 1, y = 2 }`,
@@ -42,7 +55,9 @@ The parser already accepts `let mut x = …`, and DESIGN promises immutable-by-d
 `mut` opt-in — but there's **no reassignment syntax** yet (`x <- 5`), so there's nothing to check.
 This adds assignment plus the rule "reassigning a non-`mut` binding is a compile error."
 - **Unlocks:** The "immutable by default, mutation explicit and tracked" guarantee central to the
-  F# pitch.
+  F# pitch. Also the natural **carrier for effects (#1):** a `<-` reassignment is an `io`-style effect,
+  giving effect inference its first real source beyond `print` — so the decision is to land effects
+  *with* this (or with FFI), not before.
 - **Effort/risk:** Low–medium. Needs assignment syntax + statement sequencing (Pyfun has no
   statement blocks yet — you can't currently sequence a mutation then continue), the check, and
   lowering. The sequencing requirement makes it bigger than it first looks.
@@ -148,7 +163,9 @@ ergonomics wins are in. Highest leverage next:
 
 1. **Broaden #9 (prelude + interop)** — collections and option/result helpers, plus name-aliased
    Python imports, to flesh out the standard library and the general FFI surface.
-2. **#1 (effects)** — the most intellectually significant remaining feature, but large; bundles
-   naturally with adding IO (and the prelude now gives it effectful operations to track).
-3. A **general offside rule** for nested blocks (extends #9b) unlocks #3 (mutability sequencing).
+2. **#3 (mutability, `<-`)** and/or **FFI** — these give effects something to track, so they are the
+   gateway to bundling **#1 (effects)** with real teeth. A **general offside rule** for nested blocks
+   (extends #9b) is the prerequisite for #3's statement sequencing.
+3. **#1 (effects)** — landed *together with* #3/FFI (decided 2026-06-21), not before; the most
+   intellectually significant remaining feature, inference-first and zero-pollution (see #1 above).
 4. **#5–#7** — satisfying, lower-stakes polish increments (record patterns from #2 fit here too).
