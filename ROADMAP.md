@@ -50,17 +50,29 @@ variants); records give ergonomic *product* types with named instead of position
 - **Still to do:** record *patterns* in `match`, derived ordering, and lifting the unique-field-name
   restriction (needs annotations or row polymorphism / type-directed field resolution).
 
-### 3. Mutability checking (`let mut`)
-The parser already accepts `let mut x = …`, and DESIGN promises immutable-by-default with a checked
-`mut` opt-in — but there's **no reassignment syntax** yet (`x <- 5`), so there's nothing to check.
-This adds assignment plus the rule "reassigning a non-`mut` binding is a compile error."
-- **Unlocks:** The "immutable by default, mutation explicit and tracked" guarantee central to the
-  F# pitch. Also the natural **carrier for effects (#1):** a `<-` reassignment is an `io`-style effect,
-  giving effect inference its first real source beyond `print` — so the decision is to land effects
-  *with* this (or with FFI), not before.
-- **Effort/risk:** Low–medium. Needs assignment syntax + statement sequencing (Pyfun has no
-  statement blocks yet — you can't currently sequence a mutation then continue), the check, and
-  lowering. The sequencing requirement makes it bigger than it first looks.
+### 3. Mutability checking (`let mut`) — ✅ done (with blocks + general offside)
+Immutable-by-default with a checked `mut` opt-in: `let mut x = …` and `x <- v` reassignment, where
+reassigning a non-`mut` binding is a compile error.
+- **Shipped (the "go big" version):** this required real **statement sequencing**, so it landed
+  together with a **general offside rule** and **block expressions**:
+  - **General offside rule** (lexer): a layout stack emits `Indent`/`Dedent`/`Sep`. The one block
+    opener is an indented `let … =` body; a deeper line, or one led by a continuation token (infix
+    op, `|`, `then`/`else`/…), continues the current statement, so multi-line `match`/`if`/CE still
+    parse. Replaces the old top-level-only `Sep` rule (#9b).
+  - **Blocks** (`ExprKind::Block`): an indented `let` body is a sequence of statements — local
+    `let`/`let mut`, `<-` reassignments, and expression statements — whose final expression is the
+    value. A single-expression block is unwrapped, so existing bodies keep their plain AST. Local
+    `let`s are scoped and generalized (let-polymorphism); non-final statements must be `unit` (no
+    silently dropped values).
+  - **`<-`** (`ExprKind::Assign`, type `unit`): checked against a `Scheme.mutable` flag; `let mut`
+    bindings are monomorphic and can't take parameters. Lowers to plain Python assignment (blocks →
+    flat statement sequences; the curried n-ary lowering and expression-bridging handle the rest).
+  - Covered across lexer/parser/typecheck/compile/roundtrip tests; `hello.pyfun` shows a block with
+    local mutation. The indentation-aware pretty-printer round-trips blocks.
+- **Carrier for effects (#1):** `<-` is the first real `io`-style effect source beyond `print`, so
+  effect inference can now be bundled here (decided 2026-06-21).
+- **Still to do:** blocks in `match`-arm / `then` / `else` positions (only `let` bodies open blocks
+  today); `nonlocal` for a closure that reassigns an outer `mut` (cross-function mutation).
 
 ### 4. Float arithmetic / numeric constraint — ✅ done (`DESIGN.md` §7.1)
 Python-familiar numerics via a single closed built-in constraint. Both steps shipped:
@@ -139,12 +151,11 @@ Covered by `tests/{typecheck,compile,roundtrip}.rs`.
   (`show` → Python `str`) — the general "import and type an arbitrary Python function" surface.
 - **Effort/risk:** Medium, partly a design exercise. **Status:** MVP slice done; broader prelude open.
 
-### 9b. Lightweight offside rule — ✅ done (fell out of #9)
-A line break returning to ≤ the first item's indentation column (outside `()`/`{}`) separates
-top-level items, so `print a` / `print b` are two statements, not one juxtaposition; deeper-indented
-lines and breaks inside brackets are continuations. Lives in the lexer (`Tok::Sep`).
-- **Still to do:** a **general** offside rule for *nested* blocks (local `let`-sequencing,
-  indentation-delimited bodies) — the prerequisite #3 (mutability) calls out.
+### 9b. Lightweight offside rule — ✅ done, then generalized by #3
+Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
+**Superseded by the general offside rule in #3**, which adds a layout stack with `Indent`/`Dedent` for
+nested blocks (indented `let` bodies) while keeping the same continuation behavior for multi-line
+`match`/`if`/CE. Lives in the lexer.
 
 ### 10. LSP / editor support (`DESIGN.md` §9, v2)
 A language server: inline type errors, hover-for-type, go-to-definition. DESIGN always scoped this
@@ -154,18 +165,13 @@ infrastructure already exist as the foundation.
 
 ## Suggested sequencing
 
-The project is now *usable*: with **#8 (`run`)**, the **#9 MVP prelude** (`print`/`abs`/`min`/`max`),
-and the **#9b offside rule**, you can write and observe self-contained programs. Highest leverage
-next:
-
-With **#2 (records)** and **#4 (floats)** now done alongside `run`/prelude/offside, the everyday-
-ergonomics wins are in. Highest leverage next:
+The project is now *usable* and expressive: `run` + prelude + the general offside rule, plus
+**#2 (records)**, **#3 (mutability + blocks)**, and **#4 (floats)**. Highest leverage next:
 
 1. **Broaden #9 (prelude + interop)** — collections and option/result helpers, plus name-aliased
    Python imports, to flesh out the standard library and the general FFI surface.
-2. **#3 (mutability, `<-`)** and/or **FFI** — these give effects something to track, so they are the
-   gateway to bundling **#1 (effects)** with real teeth. A **general offside rule** for nested blocks
-   (extends #9b) is the prerequisite for #3's statement sequencing.
-3. **#1 (effects)** — landed *together with* #3/FFI (decided 2026-06-21), not before; the most
-   intellectually significant remaining feature, inference-first and zero-pollution (see #1 above).
-4. **#5–#7** — satisfying, lower-stakes polish increments (record patterns from #2 fit here too).
+2. **#1 (effects)** — now unblocked: `<-` (from #3) is the first real `io` effect source, so effect
+   inference can land with teeth (FFI from #9 would add more). Inference-first, zero-pollution
+   (decided 2026-06-21; see #1 above).
+3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
+   the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms).

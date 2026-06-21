@@ -44,6 +44,12 @@ const PROGRAMS: &[&str] = &[
     "let classify n =\n  match n with\n  | 0 -> \"zero\"\n  | _ -> \"many\"",
     // Offside rule: consecutive bare statements are separate items.
     "print a\nprint b",
+    // Blocks: indented `let` bodies with local bindings, sequencing, and `<-`.
+    "let f x =\n    let y = x\n    y",
+    "let sum3 a b c =\n    let mut acc = 0\n    acc <- acc + a\n    acc <- acc + b\n    acc",
+    "let nested x =\n    let y =\n        let mut t = x\n        t <- t * 2\n        t\n    y",
+    // Top-level mutable binding and reassignment (already-sequenced items).
+    "let mut counter = 0\ncounter <- counter + 1",
     // Records: declaration, literal, functional update, field access.
     "type Point = { x: int, y: int }",
     "type Box a = { item: a, tag: string }",

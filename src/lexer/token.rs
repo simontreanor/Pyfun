@@ -63,6 +63,7 @@ pub enum Tok {
     Gt,         // >
     Le,         // <=
     Ge,         // >=
+    LArrow,     // <- (reassignment of a `mut` binding)
     LParen,     // (
     RParen,     // )
     LBrace,     // {
@@ -72,11 +73,15 @@ pub enum Tok {
     Dot,        // . (record field access)
     Underscore, // _
 
-    /// A statement separator, inserted by the lexer's lightweight offside rule at
-    /// a line break that returns to (or below) the enclosing item's indentation
-    /// (outside any brackets). It delimits top-level items so consecutive
-    /// expression statements don't merge into one juxtaposition. See the lexer.
+    /// A statement separator, inserted by the lexer's offside rule between
+    /// statements at the same layout column (outside any brackets) so consecutive
+    /// statements don't merge into one juxtaposition. See the lexer.
     Sep,
+    /// Opens an indentation block (the body of a `let … =` that begins on a
+    /// deeper line). Inserted by the offside rule. See the lexer.
+    Indent,
+    /// Closes an indentation block (a line dedents below the block's column).
+    Dedent,
 
     Eof,
 }

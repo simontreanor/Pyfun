@@ -116,6 +116,40 @@ fn record_field_access_lowers_to_attribute() {
 }
 
 #[test]
+fn block_body_lowers_to_statement_sequence() {
+    let py = pyfun::compile(
+        "let sum3 a b c =\n    let mut acc = 0\n    acc <- acc + a\n    acc <- acc + b\n    acc",
+    )
+    .unwrap();
+    assert!(py.contains("def sum3(a, b, c):"), "{py}");
+    assert!(py.contains("    acc = 0"), "{py}");
+    assert!(py.contains("    acc = acc + a"), "{py}");
+    assert!(py.contains("    return acc"), "{py}");
+}
+
+#[test]
+fn top_level_assignment_lowers_to_plain_assign() {
+    let py = pyfun::compile("let mut x = 0\nx <- x + 1").unwrap();
+    assert!(py.contains("x = 0"), "{py}");
+    assert!(py.contains("x = x + 1"), "{py}");
+    // No bare `None` line from the unit-valued assignment statement.
+    assert!(!py.contains("\nNone"), "{py}");
+}
+
+#[test]
+fn nested_local_let_lowers_to_nested_assignments() {
+    let py = pyfun::compile(
+        "let f x =\n    let y =\n        let mut t = x\n        t <- t + 1\n        t\n    y",
+    )
+    .unwrap();
+    assert!(py.contains("def f(x):"), "{py}");
+    assert!(py.contains("t = x"), "{py}");
+    assert!(py.contains("t = t + 1"), "{py}");
+    assert!(py.contains("y = t"), "{py}");
+    assert!(py.contains("return y"), "{py}");
+}
+
+#[test]
 fn comparison_operators_lower_to_python() {
     let py =
         pyfun::compile("let a = 1 < 2\nlet b = 1 == 2\nlet c = 1 != 2\nlet d = 1 >= 2").unwrap();
@@ -292,6 +326,41 @@ fn e2e_polymorphic_record_field() {
         let s = (mk \"hi\").item
         ",
         &[("i", "42"), ("s", "hi")],
+    );
+}
+
+#[test]
+fn e2e_blocks_and_mutation() {
+    run_and_check(
+        "
+        let sum3 a b c =
+            let mut acc = 0
+            acc <- acc + a
+            acc <- acc + b
+            acc <- acc + c
+            acc
+        let nested x =
+            let y =
+                let mut t = x
+                t <- t * 2
+                t
+            y + 1
+        let r1 = sum3 1 2 3
+        let r2 = nested 10
+        ",
+        &[("r1", "6"), ("r2", "21")],
+    );
+}
+
+#[test]
+fn e2e_top_level_mutation() {
+    run_and_check(
+        "
+        let mut counter = 0
+        counter <- counter + 1
+        counter <- counter + 5
+        ",
+        &[("counter", "6")],
     );
 }
 

@@ -25,8 +25,8 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module, Pattern,
-    TypeDeclKind,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module,
+    Pattern, TypeDeclKind,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
@@ -171,11 +171,15 @@ impl Lowerer {
             match item {
                 // Measures and type declarations have no runtime code.
                 Item::Measure { .. } | Item::Type(_) => {}
-                Item::Let(binding) => self.lower_let(binding, &mut code)?,
+                Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
                     code.append(&mut stmts);
-                    code.push(PyStmt::Expr(value));
+                    // A unit-valued statement (e.g. an assignment) has no useful
+                    // expression to emit — drop the bare `None`.
+                    if !matches!(value, PyExpr::NoneLit) {
+                        code.push(PyStmt::Expr(value));
+                    }
                 }
             }
         }
@@ -194,17 +198,24 @@ impl Lowerer {
         Ok(PyModule { body })
     }
 
-    fn lower_let(&mut self, binding: &LetBinding, out: &mut Vec<PyStmt>) -> Result<(), LowerError> {
+    fn lower_let(
+        &mut self,
+        binding: &LetBinding,
+        locals: &HashSet<String>,
+        out: &mut Vec<PyStmt>,
+    ) -> Result<(), LowerError> {
         if binding.params.is_empty() {
-            let (mut stmts, value) = self.lower_value(&binding.value, &HashSet::new())?;
+            let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
             out.append(&mut stmts);
             out.push(PyStmt::Assign {
                 target: binding.name.clone(),
                 value,
             });
         } else {
-            let locals: HashSet<String> = binding.params.iter().cloned().collect();
-            let body = self.lower_return(&binding.value, &locals)?;
+            // A nested function captures the enclosing locals (Python closures),
+            // so they count as locals when resolving names in its body.
+            let inner = extend(locals, &binding.params);
+            let body = self.lower_return(&binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
                 name: binding.name.clone(),
                 params: binding.params.clone(),
@@ -245,12 +256,42 @@ impl Lowerer {
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }
+            ExprKind::Block { stmts } => self.lower_block_return(stmts, locals),
             _ => {
                 let (mut stmts, value) = self.lower_value(expr, locals)?;
                 stmts.push(PyStmt::Return(value));
                 Ok(stmts)
             }
         }
+    }
+
+    /// Lower a block in tail position: each non-final statement becomes Python
+    /// statements; the final expression is lowered in return position.
+    fn lower_block_return(
+        &mut self,
+        stmts: &[BlockStmt],
+        locals: &HashSet<String>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let mut out = Vec::new();
+        let mut locals = locals.clone();
+        let last = stmts.len().saturating_sub(1);
+        for (i, stmt) in stmts.iter().enumerate() {
+            match stmt {
+                BlockStmt::Let(b) => {
+                    self.lower_let(b, &locals, &mut out)?;
+                    locals.insert(b.name.clone());
+                }
+                BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
+                BlockStmt::Expr(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    out.append(&mut s);
+                    if !matches!(v, PyExpr::NoneLit) {
+                        out.push(PyStmt::Expr(v));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Lower `expr` in value position: a list of statements to run first, plus a
@@ -376,7 +417,46 @@ impl Lowerer {
                     },
                 ))
             }
+
+            ExprKind::Block { stmts } => self.lower_block_value(stmts, locals),
+
+            ExprKind::Assign { target, value } => {
+                let (mut stmts, v) = self.lower_value(value, locals)?;
+                stmts.push(PyStmt::Assign {
+                    target: target.clone(),
+                    value: v,
+                });
+                // An assignment is a Python statement; its value is unit.
+                Ok((stmts, PyExpr::NoneLit))
+            }
         }
+    }
+
+    /// Lower a block in value position: non-final statements are hoisted before
+    /// the value, the final expression supplies the value.
+    fn lower_block_value(&mut self, stmts: &[BlockStmt], locals: &HashSet<String>) -> Lowered {
+        let mut out = Vec::new();
+        let mut locals = locals.clone();
+        let last = stmts.len().saturating_sub(1);
+        let mut value = PyExpr::NoneLit;
+        for (i, stmt) in stmts.iter().enumerate() {
+            match stmt {
+                BlockStmt::Let(b) => {
+                    self.lower_let(b, &locals, &mut out)?;
+                    locals.insert(b.name.clone());
+                }
+                BlockStmt::Expr(e) => {
+                    let (mut s, v) = self.lower_value(e, &locals)?;
+                    out.append(&mut s);
+                    if i == last {
+                        value = v;
+                    } else if !matches!(v, PyExpr::NoneLit) {
+                        out.push(PyStmt::Expr(v));
+                    }
+                }
+            }
+        }
+        Ok((out, value))
     }
 
     /// `{ x = a, y = b }` → `Record(a, b)` — a positional constructor call in the

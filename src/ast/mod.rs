@@ -7,8 +7,8 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
+    BlockStmt, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm, Module,
+    Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -26,7 +26,7 @@ pub fn print_item(item: &Item) -> String {
     match item {
         Item::Measure { name, .. } => format!("measure {name}"),
         Item::Type(decl) => print_type_decl(decl),
-        Item::Let(binding) => print_let(binding),
+        Item::Let(binding) => print_let(binding, 0),
         Item::Expr(expr) => print_expr(expr),
     }
 }
@@ -122,7 +122,10 @@ fn print_type_atom(ty: &TypeExpr) -> String {
     }
 }
 
-fn print_let(binding: &LetBinding) -> String {
+/// Print a binding at indentation `indent` (in 4-space levels). A block-valued
+/// body is rendered as `=` followed by its statements on deeper lines, so it
+/// reparses through the offside rule; an inline body stays on one line.
+fn print_let(binding: &LetBinding, indent: usize) -> String {
     let mut s = String::from("let ");
     if binding.mutable {
         s.push_str("mut ");
@@ -132,9 +135,27 @@ fn print_let(binding: &LetBinding) -> String {
         s.push(' ');
         s.push_str(param);
     }
-    s.push_str(" = ");
-    s.push_str(&print_expr(&binding.value));
+    if let ExprKind::Block { stmts } = &binding.value.kind {
+        s.push_str(" =\n");
+        s.push_str(&print_block(stmts, indent + 1));
+    } else {
+        s.push_str(" = ");
+        s.push_str(&print_expr(&binding.value));
+    }
     s
+}
+
+/// Print block statements, one per line, each indented `indent` levels.
+fn print_block(stmts: &[BlockStmt], indent: usize) -> String {
+    let pad = "    ".repeat(indent);
+    let lines: Vec<String> = stmts
+        .iter()
+        .map(|stmt| match stmt {
+            BlockStmt::Let(b) => format!("{pad}{}", print_let(b, indent)),
+            BlockStmt::Expr(e) => format!("{pad}{}", print_expr(e)),
+        })
+        .collect();
+    lines.join("\n")
 }
 
 /// Render an expression. Atoms print bare; everything compound is wrapped in
@@ -192,6 +213,12 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("{{ {} with {} }}", print_expr(base), fields.join(", "))
         }
         ExprKind::Field { base, name } => format!("{}.{name}", print_expr(base)),
+        // A block only ever appears as a binding's body (printed by `print_let`),
+        // so this arm is a defensive fallback.
+        ExprKind::Block { stmts } => format!("\n{}", print_block(stmts, 1)),
+        ExprKind::Assign { target, value } => {
+            format!("({target} <- {})", print_expr(value))
+        }
     }
 }
 

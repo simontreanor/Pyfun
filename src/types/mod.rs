@@ -32,8 +32,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::lexer::Span;
 use crate::parser::ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeDeclKind, TypeExpr, UnOp, UnitExpr,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module,
+    Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
 };
 
 /// A factor in a unit term: a base measure or a unit variable.
@@ -180,6 +180,9 @@ struct Scheme {
     num_vars: Vec<u32>,
     /// Generalized type variables carrying the `comparison` constraint.
     ord_vars: Vec<u32>,
+    /// Whether this binding was declared `let mut` (so `<-` may reassign it).
+    /// Mutable bindings are monomorphic (never generalized).
+    mutable: bool,
     ty: Ty,
 }
 
@@ -190,6 +193,7 @@ impl Scheme {
             uvars: vec![],
             num_vars: vec![],
             ord_vars: vec![],
+            mutable: false,
             ty,
         }
     }
@@ -399,6 +403,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                         uvars: vec![],
                         num_vars: vec![],
                         ord_vars: vec![],
+                        mutable: false,
                         ty: ctor_ty,
                     };
                     env.insert(variant.name.clone(), scheme.clone());
@@ -486,6 +491,7 @@ fn seed_prelude(env: &mut Env) {
             uvars: vec![],
             num_vars: vec![],
             ord_vars: vec![],
+            mutable: false,
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit)),
         },
     );
@@ -495,6 +501,7 @@ fn seed_prelude(env: &mut Env) {
         uvars: vec![PRELUDE_UVAR],
         num_vars: vec![PRELUDE_NUMVAR],
         ord_vars: vec![],
+        mutable: false,
         ty,
     };
     // abs : num 'a => 'a<'u> -> 'a<'u>
@@ -533,6 +540,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         uvars: vec![],
         num_vars: vec![],
         ord_vars: vec![],
+        mutable: false,
         ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
     };
     let err = Scheme {
@@ -540,6 +548,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         uvars: vec![],
         num_vars: vec![],
         ord_vars: vec![],
+        mutable: false,
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -838,7 +847,24 @@ impl Infer {
                 .rev()
                 .fold(body_ty, |acc, p| Ty::Fun(Box::new(p), Box::new(acc)))
         };
-        Ok(self.generalize(env, &ty))
+        // A `mut` binding is monomorphic (so a later `<-` can't change its type)
+        // and cannot be a function — only a reassignable value.
+        if binding.mutable {
+            if !binding.params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "a mutable binding cannot take parameters (`{}` is `let mut`)",
+                        binding.name
+                    ),
+                    span: binding.value.span(),
+                });
+            }
+            let mut scheme = Scheme::mono(self.apply(&ty));
+            scheme.mutable = true;
+            Ok(scheme)
+        } else {
+            Ok(self.generalize(env, &ty))
+        }
     }
 
     fn infer_expr(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
@@ -964,7 +990,74 @@ impl Infer {
                 self.infer_record_update(base, fields, span, env)
             }
             ExprKind::Field { base, name } => self.infer_field(base, name, span, env),
+
+            ExprKind::Block { stmts } => self.infer_block(stmts, env),
+            ExprKind::Assign { target, value } => self.infer_assign(target, value, span, env),
         }
+    }
+
+    /// A block introduces a new scope: local bindings (immutable ones generalized,
+    /// `mut` ones monomorphic) are visible to later statements; every statement but
+    /// the last must be `unit` (so a value is never silently dropped); the last
+    /// statement's type is the block's type.
+    fn infer_block(&mut self, stmts: &[BlockStmt], env: &Env) -> Result<Ty, TypeError> {
+        let mut scope = env.clone();
+        let mut result = Ty::Unit;
+        let last = stmts.len().saturating_sub(1);
+        for (i, stmt) in stmts.iter().enumerate() {
+            match stmt {
+                BlockStmt::Let(binding) => {
+                    let scheme = self.infer_binding(binding, &scope)?;
+                    scope.insert(binding.name.clone(), scheme);
+                }
+                BlockStmt::Expr(e) => {
+                    let t = self.infer_expr(e, &scope)?;
+                    if i == last {
+                        result = self.apply(&t);
+                    } else {
+                        let applied = self.apply(&t);
+                        if self.unify(&Ty::Unit, &applied, e.span()).is_err() {
+                            return Err(TypeError {
+                                message: format!(
+                                    "this statement has type {} but must be `unit`; bind it with `let` or make it the block's final expression",
+                                    show(&applied)
+                                ),
+                                span: e.span(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// `target <- value` — reassignment, valid only for a `let mut` binding.
+    fn infer_assign(
+        &mut self,
+        target: &str,
+        value: &Expr,
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        let Some(scheme) = env.get(target).cloned() else {
+            return Err(TypeError {
+                message: format!("unbound name `{target}`"),
+                span,
+            });
+        };
+        if !scheme.mutable {
+            return Err(TypeError {
+                message: format!(
+                    "cannot assign to `{target}`: it is immutable (declare it with `let mut`)"
+                ),
+                span,
+            });
+        }
+        let target_ty = self.instantiate(&scheme);
+        let vt = self.infer_expr(value, env)?;
+        self.unify(&target_ty, &vt, value.span())?;
+        Ok(Ty::Unit)
     }
 
     /// The record type owning `field`, or an error if no record declares it.
@@ -1569,6 +1662,7 @@ impl Infer {
             uvars,
             num_vars,
             ord_vars,
+            mutable: false,
             ty,
         }
     }

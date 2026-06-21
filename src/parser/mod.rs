@@ -3,8 +3,13 @@
 //! Grammar (informal):
 //! ```text
 //! module      := item*
-//! item        := "let" ["mut"] ident ident* "=" expr | expr
-//! expr        := fun | if | match | pipe
+//! item        := let | expr
+//! let         := "let" ["mut"] ident ident* "=" (block | expr)
+//! block       := INDENT stmt (SEP stmt)* DEDENT      // last stmt is the value
+//! stmt        := let | expr
+//! expr        := assign
+//! assign      := head ("<-" expr)?                   // target must be a variable
+//! head        := fun | if | match | pipe
 //! fun         := "fun" ident+ "->" expr
 //! if          := "if" expr "then" expr "else" expr
 //! match       := "match" expr "with" ("|" pattern "->" expr)+
@@ -32,8 +37,9 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, CeBuilder, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm,
-    Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding,
+    MatchArm, Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
+    VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -279,7 +285,13 @@ impl Parser {
             params.push(self.parse_ident("parameter name")?);
         }
         self.expect(&Tok::Eq, "`=`")?;
-        let value = self.parse_expr()?;
+        // The body is either an inline expression or an indented block (opened by
+        // the lexer's offside rule as a leading `Indent`).
+        let value = if matches!(self.peek(), Tok::Indent) {
+            self.parse_block()?
+        } else {
+            self.parse_expr()?
+        };
         Ok(LetBinding {
             mutable,
             name,
@@ -288,7 +300,68 @@ impl Parser {
         })
     }
 
+    /// Parse an indented block `Indent stmt (Sep stmt)* Dedent`. A block with a
+    /// single expression statement is unwrapped to that expression so existing
+    /// single-expression bodies (a multi-line `match`/`if`) keep their plain AST.
+    fn parse_block(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Indent, "an indented block")?;
+        let mut stmts = Vec::new();
+        loop {
+            let stmt = if matches!(self.peek(), Tok::Let) {
+                BlockStmt::Let(self.parse_let_binding()?)
+            } else {
+                BlockStmt::Expr(self.parse_expr()?)
+            };
+            stmts.push(stmt);
+            if self.eat(&Tok::Sep) {
+                if matches!(self.peek(), Tok::Dedent) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        self.expect(&Tok::Dedent, "end of the block")?;
+        if matches!(stmts.last(), Some(BlockStmt::Let(_))) {
+            return Err(self.error("a block must end with an expression"));
+        }
+        if stmts.len() == 1
+            && let Some(BlockStmt::Expr(_)) = stmts.last()
+        {
+            let BlockStmt::Expr(e) = stmts.pop().unwrap() else {
+                unreachable!()
+            };
+            return Ok(e);
+        }
+        Ok(self.mk(start, ExprKind::Block { stmts }))
+    }
+
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let lhs = self.parse_expr_head()?;
+        // `target <- value` — reassignment, the lowest-precedence form.
+        if matches!(self.peek(), Tok::LArrow) {
+            self.bump();
+            let value = self.parse_expr()?;
+            let ExprKind::Var(target) = lhs.kind else {
+                return Err(ParseError {
+                    message: "the target of `<-` must be a variable".to_string(),
+                    span: lhs.span(),
+                });
+            };
+            return Ok(self.mk(
+                start,
+                ExprKind::Assign {
+                    target,
+                    value: Box::new(value),
+                },
+            ));
+        }
+        Ok(lhs)
+    }
+
+    fn parse_expr_head(&mut self) -> Result<Expr, ParseError> {
         match self.peek() {
             Tok::Fun => self.parse_fun(),
             Tok::If => self.parse_if(),
@@ -846,6 +919,8 @@ fn describe(tok: &Tok) -> String {
         Tok::Ident(name) => format!("identifier `{name}`"),
         Tok::Eof => "end of input".to_string(),
         Tok::Sep => "end of statement".to_string(),
+        Tok::Indent => "start of an indented block".to_string(),
+        Tok::Dedent => "end of block".to_string(),
         other => format!("`{}`", token_symbol(other)),
     }
 }
@@ -881,6 +956,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::BangEq => "!=",
         Tok::Le => "<=",
         Tok::Ge => ">=",
+        Tok::LArrow => "<-",
         Tok::Plus => "+",
         Tok::Minus => "-",
         Tok::Star => "*",

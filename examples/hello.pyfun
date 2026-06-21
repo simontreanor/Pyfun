@@ -23,6 +23,15 @@ let id x = x
 # Expression-oriented `if`; the condition must be a bool.
 let pick b = if b then 1 else 0
 
+# Blocks: an indented `let` body is a sequence of statements ending in the value.
+# `let mut` + `<-` give local mutation; reassigning a plain `let` is a compile
+# error (immutable by default). Lowers to a flat Python statement sequence.
+let scaled a b =
+  let mut acc = a
+  acc <- acc + b
+  acc <- acc * 2
+  acc
+
 # Exhaustive pattern matching over an ADT (checked at compile time).
 let unwrap o =
   match o with
@@ -113,3 +122,4 @@ print here.x                          # 3
 print shifted.x                       # 10
 print (dot here)                      # 7
 print here                            # Point(3, 4)
+print (scaled 3 4)                    # 14   ((3 + 4) * 2, via local mutation)

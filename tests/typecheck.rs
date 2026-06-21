@@ -462,6 +462,61 @@ fn rejects_update_of_unrelated_field() {
     );
 }
 
+// ---------- blocks & mutability ----------
+
+#[test]
+fn accepts_block_with_local_bindings() {
+    let src = "let f x =\n    let y = x + 1\n    let z = y + 1\n    z";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_local_mut_and_reassignment() {
+    let src = "let sum3 a b c =\n    let mut acc = 0\n    acc <- acc + a\n    acc <- acc + b\n    acc <- acc + c\n    acc";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_top_level_mut_and_reassignment() {
+    assert!(pyfun::check("let mut x = 0\nx <- x + 1").is_ok());
+}
+
+#[test]
+fn local_bindings_stay_in_scope_polymorphically() {
+    // A local `let` is generalized like a top-level one (usable at two types).
+    let src = "let f u =\n    let id a = a\n    let p = id 1\n    let q = id true\n    p";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_assigning_immutable_binding() {
+    assert_error_contains(
+        "let f x =\n    let y = 0\n    y <- x\n    y",
+        "it is immutable",
+    );
+}
+
+#[test]
+fn rejects_assigning_unbound_binding() {
+    assert_error_contains("nope <- 1", "unbound name `nope`");
+}
+
+#[test]
+fn rejects_reassignment_with_wrong_type() {
+    assert_error_contains("let mut x = 0\nx <- true", "expected int, found bool");
+}
+
+#[test]
+fn rejects_mutable_binding_with_parameters() {
+    assert_error_contains("let mut f x = x", "cannot take parameters");
+}
+
+#[test]
+fn rejects_non_unit_intermediate_statement() {
+    // A non-final statement that yields a value must be bound, not dropped.
+    assert_error_contains("let f x =\n    x + 1\n    x", "must be `unit`");
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

@@ -51,8 +51,10 @@ What the compiler enforces, mirroring (and exceeding) F#:
 
 - **Type safety** — Hindley–Milner inference; annotations optional but semantic.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
-- **Immutable-by-default** — `let` is immutable; reassignment is a compile error; `let mut` is the
-  explicit opt-in.
+- **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
+  binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
+  cannot take parameters. Reassignment requires statement **sequencing**, which Pyfun gets from
+  indentation **blocks** (an indented `let … =` body); see §7's offside note.
 - **Effect discipline** — first-class (see §4).
 
 Example diagnostics the compiler must produce (rustc-style, with spans, codes, and `help` notes):
@@ -188,22 +190,33 @@ makes `|>` and point-free style pay off. Inference handles curried arrows and pa
 (standard HM); lowering keeps output readable via the n-ary-collapse strategy (§5); the Python
 boundary stays n-ary (§6).
 
-MVP language features: immutable bindings by default, expression `if`/`match`, **curried
-functions + partial application**, **pipe `|>`**, ADT declarations, effect-tracked functions, the
-three computation expressions of §8, units of measure (§8), readable Python output.
+MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
+blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
+and **record** declarations, the three computation expressions of §8, units of measure (§8), readable
+Python output. (Effect tracking is designed but deferred — §4.)
 
-Lexical conventions (decided in Phase 1): line comments start with `//` (F#-style); identifiers are
-ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position (§ patterns).
+Lexical conventions: line comments start with `#` (Python-style — `//` is floor division, §7.1);
+identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
+(§ patterns).
 
-**Statement separation (lightweight offside rule).** Top-level items are separated by a layout rule,
-not by semicolons or braces: at lexing time, a line break that returns to (or below) the first
-item's indentation column — while outside any `()`/`{}` brackets — emits a separator token. Lines
-indented *past* that column, and any line break inside brackets, are continuations. So consecutive
-statements (`print a` then `print b`) are distinct items rather than one juxtaposed application,
-while multi-line `match`/`if` and CE blocks stay together. This is intentionally just *item*
-separation; a **general offside rule for nested blocks** (local `let`-sequencing, indentation-
-delimited bodies) is deferred to a later phase, and pairs naturally with mutability/`let mut`
-sequencing (§3). It is orthogonal to the brace-delimited CEs and records (§8.1).
+**Statement separation & blocks (general offside rule, implemented).** Indentation is turned into
+block structure by a layout rule, not semicolons or braces. At lexing time a layout stack of block
+columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
+synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates two statements.
+- The **one block opener** is an indented `let … =` body (an `=` at bracket depth 0 primes it). The
+  top level is the outermost (implicit) block.
+- A line on the current block's column starts a **new statement** (`Sep`) *unless* it leads with a
+  continuation token (an infix operator, `|`, `then`/`else`/`with`/`and`/`or`/`in`) — none of which
+  can begin a statement. A line indented *past* the block continues the current statement. So
+  consecutive statements (`print a` then `print b`) are distinct, while multi-line `match`/`if` and
+  CE blocks stay together.
+- A **block** (an indented `let` body) is a sequence of statements — local `let`/`let mut`, `<-`
+  reassignments, expression statements — whose final expression is its value. A single-expression
+  block is unwrapped, so existing one-expression bodies keep their plain form. This is what gives
+  mutability (§3) the statement sequencing it needs. Blocks lower to flat Python statement sequences.
+
+Blocks currently open only after `=`; opening them in `match`-arm / `then` / `else` positions is a
+later refinement. The rule is orthogonal to the brace-delimited CEs and records (§8.1).
 
 ### 7.1 Numbers & arithmetic — Python-familiar (implemented)
 

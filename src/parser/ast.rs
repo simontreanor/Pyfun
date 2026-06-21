@@ -106,14 +106,25 @@ pub enum TypeExpr {
 /// `let [mut] name params... = value`.
 ///
 /// Parameters make this a (curried) function definition; with no parameters it
-/// is a value binding. `mutable` records the `let mut` opt-in (§3); the
-/// immutability *check* itself is a later phase.
+/// is a value binding. `mutable` records the `let mut` opt-in (§3); a non-`mut`
+/// binding cannot be the target of `<-` (checked in the type phase). A binding
+/// appears both as a top-level [`Item`] and as a local [`BlockStmt`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetBinding {
     pub mutable: bool,
     pub name: String,
     pub params: Vec<String>,
     pub value: Expr,
+}
+
+/// One statement inside a block (an indented `let … =` body). The final statement
+/// is the block's value and must be an expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockStmt {
+    /// A local binding: `let [mut] name params... = value`.
+    Let(LetBinding),
+    /// An expression evaluated for its effect (non-final) or value (final).
+    Expr(Expr),
 }
 
 /// An expression node: its [`ExprKind`] plus the source span it came from.
@@ -220,6 +231,20 @@ pub enum ExprKind {
     Field {
         base: Box<Expr>,
         name: String,
+    },
+
+    /// An indentation block: a sequence of statements whose final statement is
+    /// the value. Introduced by an indented `let … =` body. A block with a single
+    /// expression statement is unwrapped to that expression at parse time, so a
+    /// `Block` always has either multiple statements or a leading binding.
+    Block {
+        stmts: Vec<BlockStmt>,
+    },
+
+    /// Reassignment of a `mut` binding: `target <- value` (type `unit`).
+    Assign {
+        target: String,
+        value: Box<Expr>,
     },
 }
 

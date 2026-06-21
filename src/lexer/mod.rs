@@ -1,14 +1,21 @@
-//! Hand-written lexer for the Phase 1 Pyfun subset.
+//! Hand-written lexer for the Pyfun subset.
 //!
-//! Mostly whitespace-insensitive, with a **lightweight offside rule** for
-//! top-level item separation: a line break that returns to (or below) the first
-//! item's indentation column, while not inside any `()`/`{}` brackets, emits a
-//! [`Tok::Sep`] separator token. Deeper-indented lines and any line break inside
-//! brackets are continuations (no separator), so multi-line `match`/`if`/CE
-//! blocks keep working while consecutive statements no longer merge into one
-//! juxtaposition. A full general offside rule (for nested blocks) is still a
-//! later phase. Line comments start with `#` (Python-style — `//` is the
-//! floor-division operator); spans are byte offsets.
+//! Mostly whitespace-insensitive, with an **offside rule** that turns indentation
+//! into block structure (outside any `()`/`{}` brackets, where line breaks are
+//! always continuations). A layout stack of block columns drives three synthetic
+//! tokens:
+//! - [`Tok::Indent`] — a `let … =` whose body begins on a *deeper* line opens a
+//!   block (the only block opener; `=` at bracket depth 0 primes it).
+//! - [`Tok::Dedent`] — a line dedents below the current block's column, closing it.
+//! - [`Tok::Sep`] — a line lands on the current block's column and the next token
+//!   can begin a statement, separating two statements.
+//!
+//! A deeper line, or one led by a continuation token (an infix operator, `|`,
+//! `then`/`else`/`with`/…), continues the current statement — so multi-line
+//! `match`/`if`/CE blocks keep working while statement sequences (and nested let
+//! bodies) split correctly. The top level is the outermost block. Line comments
+//! start with `#` (Python-style — `//` is the floor-division operator); spans are
+//! byte offsets.
 
 mod token;
 
@@ -42,8 +49,12 @@ struct Lexer<'a> {
     out: Vec<Token>,
     /// Nesting depth of `()`/`{}`; line breaks inside brackets never separate.
     depth: usize,
-    /// Indentation column of the first token, used as the offside baseline.
-    baseline: Option<usize>,
+    /// Stack of active layout (block) columns, innermost last. The first entry is
+    /// the top-level column; deeper blocks (let bodies) push their own column.
+    layout: Vec<usize>,
+    /// Set right after an `=` at bracket depth 0: the next token, if it begins a
+    /// deeper line, opens an indentation block (the let binding's body).
+    pending_block: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -53,7 +64,8 @@ impl<'a> Lexer<'a> {
             pos: 0,
             out: Vec::new(),
             depth: 0,
-            baseline: None,
+            layout: Vec::new(),
+            pending_block: false,
         }
     }
 
@@ -61,6 +73,11 @@ impl<'a> Lexer<'a> {
         loop {
             let crossed_newline = self.skip_trivia();
             if self.pos >= self.src.len() {
+                // Close any still-open blocks before EOF.
+                while self.layout.len() > 1 {
+                    self.layout.pop();
+                    self.push_layout(Tok::Dedent);
+                }
                 let end = self.pos;
                 self.out.push(Token {
                     tok: Tok::Eof,
@@ -68,15 +85,86 @@ impl<'a> Lexer<'a> {
                 });
                 return Ok(self.out);
             }
-            // Offside rule: a line break that returns to (or below) the baseline
-            // indentation, outside any brackets, separates top-level items.
+            // The offside rule (see module docs): at bracket depth 0 a line break
+            // opens a block (after `=`), closes blocks (dedent), or separates
+            // statements (same column), via Indent/Dedent/Sep tokens.
             let col = self.column();
-            let baseline = *self.baseline.get_or_insert(col);
-            if crossed_newline && self.depth == 0 && !self.out.is_empty() && col <= baseline {
-                self.push(Tok::Sep, self.pos);
+            if self.layout.is_empty() {
+                self.layout.push(col);
+            }
+            let pending = std::mem::take(&mut self.pending_block);
+            if !self.out.is_empty() && self.depth == 0 && crossed_newline {
+                let top = *self.layout.last().unwrap();
+                if pending && col > top {
+                    self.layout.push(col);
+                    self.push_layout(Tok::Indent);
+                } else {
+                    self.offside(col);
+                }
             }
             self.lex_one()?;
+            // An `=` at bracket depth 0 (a `let` binding's `=`) primes a block to
+            // open if its body begins on a deeper line.
+            if self.depth == 0 && matches!(self.out.last().map(|t| &t.tok), Some(Tok::Eq)) {
+                self.pending_block = true;
+            }
         }
+    }
+
+    /// Close any blocks deeper than `col`, then — if `col` lands exactly on the
+    /// enclosing block's column and the next token can begin a statement — emit a
+    /// statement separator. A line that is deeper than the current block, or one
+    /// that leads with a continuation token (an infix operator, `|`, `then`,
+    /// `else`, …), continues the current statement instead.
+    fn offside(&mut self, col: usize) {
+        while self.layout.len() > 1 && col < *self.layout.last().unwrap() {
+            self.layout.pop();
+            self.push_layout(Tok::Dedent);
+        }
+        let top = *self.layout.last().unwrap();
+        if col == top && self.upcoming_starts_stmt() {
+            self.push_layout(Tok::Sep);
+        }
+    }
+
+    /// Push a zero-width layout token (`Sep`/`Indent`/`Dedent`) at the cursor.
+    fn push_layout(&mut self, tok: Tok) {
+        self.out.push(Token {
+            tok,
+            span: Span::new(self.pos, self.pos),
+        });
+    }
+
+    /// Whether the upcoming token can begin a new statement (so a same-column line
+    /// is a separate statement) rather than continue the current one. Continuation
+    /// leads are infix operators, `|`, `.`, and the keywords `then`/`else`/`with`/
+    /// `and`/`or`/`in` — none of which can start an expression.
+    fn upcoming_starts_stmt(&self) -> bool {
+        let Some(c) = self.peek() else { return false };
+        if c.is_ascii_digit() || c == b'"' || c == b'(' || c == b'{' {
+            return true;
+        }
+        if c == b'_' {
+            return false;
+        }
+        if is_ident_start(c) {
+            let ident = self.peek_ident();
+            return !matches!(
+                ident.as_str(),
+                "then" | "else" | "with" | "and" | "or" | "in"
+            );
+        }
+        // Operators, `|`, `.`, `,`, closing brackets, etc. all continue a statement.
+        false
+    }
+
+    /// Read (without consuming) the identifier starting at the cursor.
+    fn peek_ident(&self) -> String {
+        let mut i = self.pos;
+        while i < self.src.len() && is_ident_continue(self.src[i]) {
+            i += 1;
+        }
+        String::from_utf8_lossy(&self.src[self.pos..i]).into_owned()
     }
 
     /// The column (0-based) of the current position, i.e. bytes since the last
@@ -243,6 +331,7 @@ impl<'a> Lexer<'a> {
             (b'!', Some(b'=')) => Some(Tok::BangEq),
             (b'<', Some(b'=')) => Some(Tok::Le),
             (b'>', Some(b'=')) => Some(Tok::Ge),
+            (b'<', Some(b'-')) => Some(Tok::LArrow),
             _ => None,
         } {
             self.pos += 2;
@@ -401,6 +490,68 @@ mod tests {
         // A float still wins over a leading-digit `.`; `.` only stands alone
         // between identifiers.
         assert_eq!(kinds("2.5"), vec![Tok::Float(2.5), Tok::Eof]);
+    }
+
+    #[test]
+    fn lexes_reassignment_arrow() {
+        assert_eq!(
+            kinds("x <- 5"),
+            vec![
+                Tok::Ident("x".to_string()),
+                Tok::LArrow,
+                Tok::Int(5),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn opens_a_block_after_indented_let_body() {
+        // `let f =` with a deeper body opens a block; statements at the body
+        // column are separated; the block closes (Dedent) at EOF.
+        assert_eq!(
+            kinds("let f =\n    a\n    b"),
+            vec![
+                Tok::Let,
+                Tok::Ident("f".to_string()),
+                Tok::Eq,
+                Tok::Indent,
+                Tok::Ident("a".to_string()),
+                Tok::Sep,
+                Tok::Ident("b".to_string()),
+                Tok::Dedent,
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn inline_let_body_opens_no_block() {
+        assert_eq!(
+            kinds("let x = 1\nlet y = 2"),
+            vec![
+                Tok::Let,
+                Tok::Ident("x".to_string()),
+                Tok::Eq,
+                Tok::Int(1),
+                Tok::Sep,
+                Tok::Let,
+                Tok::Ident("y".to_string()),
+                Tok::Eq,
+                Tok::Int(2),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn match_arms_stay_one_statement_in_a_block() {
+        // The body block opens after `=`; the `|` arms lead with a continuation
+        // token, so no `Sep` splits them — the match is a single statement.
+        let toks = kinds("let f n =\n  match n with\n  | 0 -> 1\n  | _ -> 2");
+        assert_eq!(toks.iter().filter(|t| **t == Tok::Sep).count(), 0);
+        assert_eq!(toks.iter().filter(|t| **t == Tok::Indent).count(), 1);
+        assert_eq!(toks.iter().filter(|t| **t == Tok::Dedent).count(), 1);
     }
 
     #[test]
