@@ -32,7 +32,7 @@ variants); records give ergonomic *product* types with named instead of position
 - **Shipped:** **nominal** records reusing `Ty::Con`. A `{` after `=` in a `type` decl is a record
   body; a bare `{` atom is a literal (`{ ident = …` lookahead) or update (`{ expr with … }`); `.field`
   is a tight postfix. Records lower to Python classes (reusing the ADT class machinery — named
-  fields, `__match_args__`, structural `__eq__`, `__repr__`); literals/updates emit positional
+  fields, `__match_args__`, structural `__eq__`/`__hash__`, `__repr__`); literals/updates emit positional
   constructor calls in declared field order, an update binding its base to a temp first. Parameterized
   records (`type Box a = { item: a }`) are polymorphic; fields generalize/instantiate like ADT
   constructors. Covered across lexer/parser/typecheck/compile/roundtrip tests.
@@ -156,13 +156,14 @@ needed **no parser change**: `Module.member` reuses the field-access node, disam
 `types::qualified_name`. Single source of truth `MODULES` + `MODULE_PRELUDES`. `List.map`/`filter`/`fold`
 and `Option.map` are **effect-polymorphic**; `Map.tryFind` returns `Option`; `Map.findOr` is a total
 `dict.get`. Lists keep `[1,2,3]` literals; the hashed collections have no literals (`{…}` is taken) and
-no constructors. Keys/elements must be hashable at runtime (primitives are; ADTs not yet). `cons`/`head`/
+no constructors. Keys/elements must be hashable at runtime — primitives and ADT/record values both are
+(generated structural `__hash__`). `cons`/`head`/
 `tail` + list patterns deferred; the lazy counterpart is the `seq {}` CE. Covered by
 `tests/{typecheck,compile,roundtrip,run}.rs` + `examples/hello.pyfun`.
 - **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
   Python dynamic array); `Result` helpers + a `Result` module; a value-level library over the lazy
-  `seq {}`; a generated `__hash__` on ADT classes (to let them be set elements / map keys); and the
-  full *user-defined* module system (declarations, files, imports, visibility).
+  `seq {}`; and the full *user-defined* module system (declarations, files, imports, visibility).
+  (Generated `__hash__` on ADT/record classes — letting them be set elements / map keys — is **done**.)
 - **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + built-in
   modules done; `Result` helpers / `seq` lib / user modules open.
 
@@ -222,8 +223,8 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options + built-in modules landed; remaining:
    `Result` helpers/module, a value-level library over the existing `seq {}` lazy type, a generated
-   `__hash__` on ADTs (so they can be set elements / map keys), and the full user-defined module
-   system. `Array` deferred as redundant with `List`.
+   and the full user-defined module system. `Array` deferred as redundant with `List`. (ADT/record
+   `__hash__` done.)
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).

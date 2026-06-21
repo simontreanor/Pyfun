@@ -230,8 +230,10 @@ application → `functools.partial`). The collections are **immutable-style**: e
 fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
 `Map.tryFind key m : Option v` is the optional form. There is **no `Map.ofList`** (no tuples to express
 a pair list — build with `Map.empty` + `Map.add`). Element/key types are **unconstrained polymorphic**
-but must be **hashable at runtime** — Pyfun primitives are; ADT instances are not yet (structural
-`__eq__`, no `__hash__`), so a future generated `__hash__` would let ADTs be keys/elements. `Array` is
+but must be **hashable at runtime** — Pyfun primitives are, and ADT/record values are too: generated
+classes get a structural `__hash__` (a tuple of the type and field values, consistent with the
+structural `__eq__`), so `Set Color` and `Map (Point) v` work and equal values collapse. A field that
+is itself unhashable raises at hash time, the same way Python rejects an unhashable key. `Array` is
 **deferred** as redundant — `List` already *is* a Python list (dynamic array).
 
 **Option — the built-in optional (implemented).** `Option a` (constructors `Some`/`None`) is seeded
@@ -477,7 +479,8 @@ Decisions (all ✅ implemented):
    records is therefore a compile error. This is the one real ergonomic limitation; lifting it needs
    either annotations or row polymorphism.
 3. **Lowering reuses the ADT class machinery** (§5 representation contract): a record type becomes a
-   Python class with its real field names, `__match_args__`, structural `__eq__`, and `__repr__`.
+   Python class with its real field names, `__match_args__`, structural `__eq__`/`__hash__`, and
+   `__repr__`.
    Literals and updates emit **positional** constructor calls in declared field order; an update binds
    its base to a temp first so it is evaluated once (`{ p with x = 3 }` → `_t = p; Point(3, _t.y)`).
 4. **Syntax disambiguation.** `{` collides with computation-expression blocks, so: a `{` immediately

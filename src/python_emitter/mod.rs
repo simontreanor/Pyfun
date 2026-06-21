@@ -286,6 +286,22 @@ fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
             "return type(self) is type(other) and self.__dict__ == other.__dict__",
         );
     }
+
+    // Structural `__hash__`, consistent with `__eq__` (equal values hash equally):
+    // a tuple of the type and the field values. Defining `__eq__` otherwise makes a
+    // class unhashable in Python, so without this an ADT/record could not be a `Set`
+    // element or `Map` key. A field whose value is itself unhashable raises at hash
+    // time — the same way Python rejects an unhashable key.
+    line(out, depth + 1, "def __hash__(self):");
+    if fields.is_empty() {
+        line(out, depth + 2, "return hash(type(self))");
+    } else {
+        let parts = std::iter::once("type(self)".to_string())
+            .chain(fields.iter().map(|f| format!("self.{f}")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        line(out, depth + 2, &format!("return hash(({parts}))"));
+    }
 }
 
 fn pattern(pat: &PyPattern) -> String {

@@ -211,6 +211,18 @@ fn adt_classes_get_structural_eq() {
 }
 
 #[test]
+fn adt_classes_get_structural_hash() {
+    // A `__hash__` consistent with `__eq__` (type + fields) so ADTs/records can be
+    // `Set` elements / `Map` keys — defining `__eq__` alone would make them
+    // unhashable in Python.
+    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
+    assert!(py.contains("def __hash__(self):"), "{py}");
+    // Nullary hashes the type; a field hashes (type, field).
+    assert!(py.contains("return hash(type(self))"), "{py}");
+    assert!(py.contains("return hash((type(self), self._0))"), "{py}");
+}
+
+#[test]
 fn record_lowers_to_class_with_named_fields() {
     let py = pyfun::compile("type Point = { x: int, y: int }\nlet p = { y = 4, x = 3 }").unwrap();
     assert!(py.contains("class Point:"), "{py}");
@@ -710,6 +722,29 @@ fn e2e_map_functions() {
             ("ks", "2"),
             ("hit", "1"),
             ("miss", "0"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_adts_and_records_as_keys_and_elements() {
+    // The generated `__hash__` lets ADTs and records be `Set` elements / `Map`
+    // keys, with structural identity (equal values collapse).
+    run_and_check(
+        "type Color = Red | Green | Blue\n\
+         type Point = { x: int, y: int }\n\
+         let cs = Set.ofList [Red, Green, Red, Blue]\n\
+         let ncolors = Set.len cs\n\
+         let hasGreen = Set.contains Green cs\n\
+         let m = Map.add (Some 1) \"one\" Map.empty\n\
+         let v = Option.withDefault \"?\" (Map.tryFind (Some 1) m)\n\
+         let pts = Set.ofList [{ x = 1, y = 2 }, { x = 1, y = 2 }, { x = 3, y = 4 }]\n\
+         let npts = Set.len pts",
+        &[
+            ("ncolors", "3"),
+            ("hasGreen", "True"),
+            ("v", "one"),
+            ("npts", "2"),
         ],
     );
 }
