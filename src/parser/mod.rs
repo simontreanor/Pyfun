@@ -217,9 +217,42 @@ impl Parser {
             Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
+            Tok::Module => self.parse_module_item(),
             Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
             _ => Ok(Item::Expr(self.parse_expr()?)),
         }
+    }
+
+    /// `module Name = <indented let bindings>` — an in-file namespace. The body is
+    /// an indented block (opened by the offside rule after `=`) of `let` bindings
+    /// only (MVP; `type`/`measure`/`extern` inside a module are deferred).
+    fn parse_module_item(&mut self) -> Result<Item, ParseError> {
+        self.expect(&Tok::Module, "`module`")?;
+        let name_start = self.cur_start();
+        let name = self.parse_upper_ident("module name")?;
+        let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
+        self.expect(&Tok::Eq, "`=`")?;
+        self.expect(&Tok::Indent, "an indented module body")?;
+        let mut items = Vec::new();
+        loop {
+            if !matches!(self.peek(), Tok::Let) {
+                return Err(self.error("a module body may only contain `let` bindings"));
+            }
+            items.push(self.parse_let_binding()?);
+            if self.eat(&Tok::Sep) {
+                if matches!(self.peek(), Tok::Dedent) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+        self.expect(&Tok::Dedent, "end of the module body")?;
+        Ok(Item::Module {
+            name,
+            name_span,
+            items,
+        })
     }
 
     fn parse_measure(&mut self) -> Result<Item, ParseError> {
@@ -1083,6 +1116,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Do => "do",
         Tok::Measure => "measure",
         Tok::Extern => "extern",
+        Tok::Module => "module",
         Tok::Not => "not",
         Tok::And => "and",
         Tok::Or => "or",

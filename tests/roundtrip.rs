@@ -91,6 +91,10 @@ const PROGRAMS: &[&str] = &[
     "extern show: a -> string = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
+    // In-file modules: members and qualified access.
+    "module Geometry =\n    let pi = 3\n    let area r = pi * r * r",
+    "module M =\n    let add a b = a + b",
+    "let big = Geometry.area 10",
 ];
 
 #[test]

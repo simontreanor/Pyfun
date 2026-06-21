@@ -391,13 +391,15 @@ pub const SEQ_PRELUDE: &[(&str, usize)] = &[
     ("range", 2),
 ];
 
-/// If `expr` is a built-in module member access `Module.member`, return its dotted
-/// name (e.g. `"List.map"`). Shared by the checker and lowering so both resolve
-/// qualified references the same way.
+/// If `expr` is a module member access `Module.member` (built-in *or* user module),
+/// return its dotted name (e.g. `"List.map"`). The base being an **uppercase**
+/// identifier is the signal: value identifiers are lowercase, so `Upper.x` is only
+/// ever module access (a record-field base is a lowercase value). Shared by the
+/// checker and lowering so both resolve qualified references the same way.
 pub fn qualified_name(expr: &Expr) -> Option<String> {
     if let ExprKind::Field { base, name } = &expr.kind
         && let ExprKind::Var(m) = &base.kind
-        && MODULES.contains(&m.as_str())
+        && m.chars().next().is_some_and(|c| c.is_uppercase())
     {
         Some(format!("{m}.{name}"))
     } else {
@@ -467,6 +469,9 @@ struct Decls {
     /// nominal-record MVP), so a bare `e.x`/`{ x = … }` resolves its record type
     /// from the field name alone, without type annotations (which Pyfun lacks).
     field_owner: HashMap<String, String>,
+    /// User-declared in-file module names (`module Foo = …`), for the "X is a
+    /// module" diagnostic on a bare reference.
+    modules: HashSet<String>,
 }
 
 /// Type-check a whole module, returning every independent error found.
@@ -525,6 +530,25 @@ fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
                     errors.push(e);
                 }
             }
+            // A module is typed in its own scope: members see prior siblings
+            // unqualified (and qualified); only `Module.member` escapes to the outer
+            // env (so the bare names are not visible after the module).
+            Item::Module { name, items, .. } => {
+                let mut module_env = env.clone();
+                for member in items {
+                    let scheme = match inf.infer_binding(member, &module_env) {
+                        Ok((scheme, _eff)) => scheme,
+                        Err(e) => {
+                            errors.push(e);
+                            Scheme::mono(inf.fresh())
+                        }
+                    };
+                    let qualified = format!("{name}.{}", member.name);
+                    module_env.insert(member.name.clone(), scheme.clone());
+                    module_env.insert(qualified.clone(), scheme.clone());
+                    env.insert(qualified, scheme);
+                }
+            }
         }
     }
 
@@ -567,6 +591,27 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 message: format!("measure `{name}` is already defined"),
                 span: span.span(),
             });
+        }
+    }
+
+    // Collect user module names (reserving against built-in modules + duplicates),
+    // so a bare reference to one reports "X is a module" rather than "unbound".
+    for item in &module.items {
+        if let Item::Module {
+            name, name_span, ..
+        } = item
+        {
+            if MODULES.contains(&name.as_str()) {
+                errors.push(TypeError {
+                    message: format!("cannot redefine built-in module `{name}`"),
+                    span: name_span.span(),
+                });
+            } else if !decls.modules.insert(name.clone()) {
+                errors.push(TypeError {
+                    message: format!("module `{name}` is already defined"),
+                    span: name_span.span(),
+                });
+            }
         }
     }
 
@@ -1770,10 +1815,12 @@ impl Infer {
 
             ExprKind::Var(name) => match env.get(name) {
                 Some(scheme) => Ok(self.instantiate(scheme)),
-                None if MODULES.contains(&name.as_str()) => Err(TypeError {
-                    message: format!("`{name}` is a module; use `{name}.member`"),
-                    span,
-                }),
+                None if MODULES.contains(&name.as_str()) || self.decls.modules.contains(name) => {
+                    Err(TypeError {
+                        message: format!("`{name}` is a module; use `{name}.member`"),
+                        span,
+                    })
+                }
                 None => Err(TypeError {
                     message: format!("unbound name `{name}`"),
                     span,
@@ -1904,15 +1951,18 @@ impl Infer {
                 self.infer_record_update(base, fields, span, env)
             }
             ExprKind::Field { base, name } => {
-                // `Module.member` (built-in modules) resolves against the qualified
-                // prelude; otherwise it is ordinary record-field access.
+                // `Module.member` (built-in or user module) resolves against the
+                // qualified env; otherwise it is ordinary record-field access.
                 if let Some(q) = qualified_name(expr) {
                     return match env.get(&q) {
                         Some(scheme) => Ok(self.instantiate(scheme)),
-                        None => Err(TypeError {
-                            message: format!("`{name}` is not a member of the built-in module"),
-                            span,
-                        }),
+                        None => {
+                            let module = q.split('.').next().unwrap_or("");
+                            Err(TypeError {
+                                message: format!("`{name}` is not a member of `{module}`"),
+                                span,
+                            })
+                        }
                     };
                 }
                 self.infer_field(base, name, span, env)

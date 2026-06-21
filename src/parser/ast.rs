@@ -51,6 +51,14 @@ pub enum Item {
     /// effectful-by-default (`io` on the innermost arrow) unless `pure` is asserted.
     Extern(ExternDecl),
     Let(LetBinding),
+    /// `module Name = <indented let bindings>` — an in-file namespace (`DESIGN.md`
+    /// §6). Members are accessed `Name.member` outside and see each other
+    /// unqualified inside. MVP: the body holds only `let` bindings.
+    Module {
+        name: String,
+        name_span: NodeSpan,
+        items: Vec<LetBinding>,
+    },
     Expr(Expr),
 }
 

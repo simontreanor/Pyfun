@@ -793,6 +793,70 @@ fn rejects_redefining_builtin_map_and_set() {
     assert_error_contains("type Map a = Empty", "already defined");
 }
 
+// ---------- in-file modules (`DESIGN.md` §6) ----------
+
+#[test]
+fn accepts_module_and_qualified_access() {
+    let src = "module Geometry =\n  let pi = 3\n  let area r = pi * r * r\n\
+               let big = Geometry.area 10";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn module_members_see_siblings_unqualified() {
+    // `double` calls `area` (a sibling) bare; `area` reads `pi` bare.
+    let src = "module M =\n  let pi = 3\n  let area r = pi * r * r\n  let double a = area a + area a\n\
+               let r = M.double 2";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn module_members_are_not_visible_unqualified_outside() {
+    // `area` is only `M.area` outside the module.
+    assert_error_contains(
+        "module M =\n  let area r = r\nlet bad = area 1",
+        "unbound name `area`",
+    );
+}
+
+#[test]
+fn qualified_member_type_is_enforced() {
+    // `M.inc : int -> int`, so applying it to a bool is a type error.
+    assert_error_contains(
+        "module M =\n  let inc n = n + 1\nlet bad = M.inc true",
+        "expected int, found bool",
+    );
+}
+
+#[test]
+fn unknown_module_member_is_rejected_for_user_modules() {
+    assert_error_contains(
+        "module M =\n  let x = 1\nlet bad = M.nope",
+        "not a member of `M`",
+    );
+}
+
+#[test]
+fn bare_user_module_reference_is_an_error() {
+    assert_error_contains("module M =\n  let x = 1\nlet bad = M", "`M` is a module");
+}
+
+#[test]
+fn rejects_redefining_a_builtin_module() {
+    assert_error_contains(
+        "module List =\n  let x = 1",
+        "cannot redefine built-in module `List`",
+    );
+}
+
+#[test]
+fn rejects_duplicate_module() {
+    assert_error_contains(
+        "module M =\n  let x = 1\nmodule M =\n  let y = 2",
+        "module `M` is already defined",
+    );
+}
+
 // ---------- extern (typed Python imports, `DESIGN.md` §6) ----------
 
 #[test]

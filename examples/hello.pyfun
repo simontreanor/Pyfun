@@ -53,6 +53,15 @@ let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
 let seven = inc2 five
 
+# In-file modules: a namespace of `let` bindings. Members see each other
+# unqualified inside (`area` calls `square`); outside they are `Geom.member`.
+module Geom =
+  let square x = x * x
+  let area w h = w * h
+  let diagSq w h = square w + square h
+let floorArea = Geom.area 4 5         # 20
+let diag = Geom.diagSq 3 4            # 25
+
 # Computation expressions (F# showcase features):
 #   result {} — railway-oriented, short-circuits on Error (built-in Ok/Error).
 let checked ok v =
@@ -169,3 +178,7 @@ print count                           # 5
 print (Set.len uniq)                  # 3
 print ada                             # 10
 print nobody                          # 0
+
+# In-file module members.
+print floorArea                       # 20
+print diag                            # 25

@@ -197,6 +197,26 @@ fn seq_take_lowers_to_itertools_islice() {
 }
 
 #[test]
+fn module_members_lower_to_mangled_top_level_names() {
+    let py = pyfun::compile(
+        "module Geometry =\n  let pi = 3\n  let area r = pi * r * r\nlet big = Geometry.area 10",
+    )
+    .unwrap();
+    assert!(py.contains("Geometry_pi = 3"), "{py}");
+    assert!(py.contains("def Geometry_area(r):"), "{py}");
+    // A bare sibling reference (`pi` inside `area`) is rewritten to the mangled name.
+    assert!(py.contains("return Geometry_pi * r * r"), "{py}");
+    // Qualified access from outside lowers to the same mangled name.
+    assert!(py.contains("big = Geometry_area(10)"), "{py}");
+}
+
+#[test]
+fn partial_application_of_a_module_member() {
+    let py = pyfun::compile("module M =\n  let add a b = a + b\nlet inc = M.add 1").unwrap();
+    assert!(py.contains("inc = functools.partial(M_add, 1)"), "{py}");
+}
+
+#[test]
 fn result_to_option_pulls_in_both_preludes() {
     let py = pyfun::compile("let o = Result.toOption (Ok 1)").unwrap();
     assert!(py.contains("class Ok:"), "Result prelude: {py}");
@@ -805,6 +825,20 @@ fn e2e_seq_module_is_lazy() {
             ("evens", "[0, 2, 4]"),
             ("total", "10"),
         ],
+    );
+}
+
+#[test]
+fn e2e_in_file_module() {
+    run_and_check(
+        "module Geometry =\n\
+        \x20 let pi = 3\n\
+        \x20 let area r = pi * r * r\n\
+        \x20 let double a = area a + area a\n\
+         let a = Geometry.area 10\n\
+         let d = Geometry.double 2\n\
+         let p = Geometry.pi",
+        &[("a", "300"), ("d", "24"), ("p", "3")],
     );
 }
 

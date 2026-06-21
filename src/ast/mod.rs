@@ -28,6 +28,15 @@ pub fn print_item(item: &Item) -> String {
         Item::Type(decl) => print_type_decl(decl),
         Item::Extern(decl) => print_extern(decl),
         Item::Let(binding) => print_let(binding, 0),
+        Item::Module { name, items, .. } => {
+            let mut s = format!("module {name} =\n");
+            let lines: Vec<String> = items
+                .iter()
+                .map(|b| format!("    {}", print_let(b, 1)))
+                .collect();
+            s.push_str(&lines.join("\n"));
+            s
+        }
         Item::Expr(expr) => print_expr(expr),
     }
 }

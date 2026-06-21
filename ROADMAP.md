@@ -164,12 +164,16 @@ no constructors. Keys/elements must be hashable at runtime — primitives and AD
   `isNone`; `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`; and the lazy
   `Seq.map`/`filter`/`take`/`fold`/`toList`/`ofList`/`range` (the map/bind ones effect-poly;
   `Result.toOption` bridges to `Option`; `Seq` routes to Python's lazy `map`/`filter`/`islice`/`range`).
+  **In-file user modules have landed**: `module Name = <indented let bindings>` declares a namespace;
+  members see siblings unqualified inside and are `Name.member` outside, lowering to mangled top-level
+  names (`Geometry_area`). Reuses the same `Module.member` access mechanism as the built-ins (no parser
+  change for access). MVP: `let`-only bodies, no nested modules.
 - **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
-  Python dynamic array); and the full *user-defined* module system (declarations, files, imports,
-  visibility). (Generated `__hash__` on ADT/record classes — letting them be set elements / map keys —
-  is **done**.)
+  Python dynamic array); and the full *file-based* module system (one module per file, `import`, a
+  resolver + dependency graph, visibility, multi-file LSP) — a separate, larger initiative. (Generated
+  `__hash__` on ADT/record classes and **in-file modules** are **done**.)
 - **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + results + lazy
-  seq + built-in modules + ADT `__hash__` done; user-defined modules open.
+  seq + built-in & in-file modules + ADT `__hash__` done; file-based modules open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -225,9 +229,9 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-def/find-refs/rename/completion/document-symbols over
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
-1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in modules +
-   ADT/record `__hash__` landed; remaining: the full user-defined module system. `Array` deferred as
-   redundant with `List`.
+1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
+   modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
+   `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).

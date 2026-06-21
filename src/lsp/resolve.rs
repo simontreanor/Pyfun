@@ -94,6 +94,17 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                 span: span.span(),
                 kind: SymbolKind::Measure,
             }),
+            // A module's members appear qualified (`Geometry.area`) in the outline
+            // and completion, each at its own name span.
+            Item::Module { name, items, .. } => {
+                for member in items {
+                    out.push(Symbol {
+                        name: format!("{name}.{}", member.name),
+                        span: member.name_span.span(),
+                        kind: SymbolKind::Value,
+                    });
+                }
+            }
             Item::Expr(_) => {}
         }
     }
@@ -112,6 +123,13 @@ fn walk(module: &Module) -> Resolver {
         match item {
             Item::Let(binding) => r.walk_binding(binding),
             Item::Expr(expr) => r.walk_expr(expr),
+            // Walk each module member's body (params in scope) so locals inside
+            // resolve for hover/local navigation.
+            Item::Module { items, .. } => {
+                for member in items {
+                    r.walk_binding(member);
+                }
+            }
             _ => {}
         }
     }

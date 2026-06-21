@@ -254,19 +254,35 @@ function's effect is attributed at the call (sound, slightly conservative for th
 Python iterators are **single-pass**, unlike F#'s re-enumerable `seq` — consistent with the one-shot
 generator the `seq {}` CE already produces.
 
-**Built-in modules.** Collection operations are **module-qualified** (`List.map`, `Set.add`,
-`Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map` reuse one
-name across collections without overloading or type classes (which the MVP rules out). The modules
-(`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`; members paired in `MODULE_PRELUDES`) are
-**built-in namespaces only** — there is no `module` *declaration* syntax, no files/imports/visibility
-(deferred).
-Crucially, **no parser change was needed**: `Module.member` is parsed as the ordinary field-access node
-`Field { base: Var("List"), name: "map" }`; the checker and lowering recognize a base that is a known
-module (via `types::qualified_name`) and resolve the dotted member against the module instead of as
-record-field access. Casing disambiguates — `Upper.x` is a module member, `lower.x` is field access. A
-genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in `PRELUDE`), matching F#
-(`List.map` qualified, `abs` global). Remaining next layer: the full *user-defined* module system
-(declarations, files, imports, visibility).
+**Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
+`Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
+reuse one name across collections without overloading or type classes (which the MVP rules out). The
+built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`; members paired in
+`MODULE_PRELUDES`) and **user-declared in-file modules** (below) share one access syntax. The access
+mechanism needed **no parser change**: `Module.member` is parsed as the ordinary field-access node
+`Field { base: Var("List"), name: "map" }`; `types::qualified_name` recognizes an **uppercase** base
+(value identifiers are lowercase, so `Upper.x` is only ever module access — a record-field base is a
+lowercase value), and the checker + lowering resolve the dotted member against the module instead of as
+record-field access. A genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in
+`PRELUDE`), matching F# (`List.map` qualified, `abs` global).
+
+**In-file modules (implemented).** `module Name = <indented let bindings>` declares a namespace within
+a file (`Item::Module`):
+```
+module Geometry =
+  let pi = 3.14159
+  let area r = pi * r * r          # siblings visible unqualified inside
+let big = Geometry.area 10.0       # qualified outside
+```
+Members are typed in a cloned scope: each sees prior siblings **unqualified** (and qualified), but only
+`Name.member` escapes to the outer env — so the bare names are not visible after the module. Lowering
+flattens members to top-level defs/assignments with **mangled names** (`Geometry.area` → `Geometry_area`),
+rewriting bare sibling references to the same names (`cur_module` in the lowerer); partial application
+and the curry policy work unchanged (arity is registered under the qualified name). A module name can't
+shadow a built-in module or duplicate another. **MVP limits:** the body holds only `let` bindings
+(`type`/`measure`/`extern` inside a module are deferred), and there are no nested modules. Remaining next
+layer: the full *file-based* module system (one module per file, `import`, a resolver + dependency
+graph, visibility, multi-file LSP) — a separate, larger initiative.
 
 ## 7. Surface language (MVP)
 

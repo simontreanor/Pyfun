@@ -77,6 +77,9 @@ struct Lowerer {
     /// Set/Map-prelude helpers actually referenced (e.g. `_pf_set_add`), emitted on
     /// demand by [`collection_prelude`].
     needed_collection_helpers: BTreeSet<&'static str>,
+    /// While lowering an in-file `module`, its name + member names, so a bare
+    /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
+    cur_module: Option<(String, HashSet<String>)>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -141,6 +144,22 @@ impl Lowerer {
                         record_fields.insert(decl.name.clone(), names);
                     }
                 },
+                // A module's members register their arity under the qualified name
+                // (`Geometry.area`), matching how `Field` heads are looked up.
+                Item::Module { name, items, .. } => {
+                    for member in items {
+                        let arity = if !member.params.is_empty() {
+                            Some(member.params.len())
+                        } else if let ExprKind::Fn { params, .. } = &member.value.kind {
+                            Some(params.len())
+                        } else {
+                            None
+                        };
+                        if let Some(k) = arity {
+                            arities.insert(format!("{name}.{}", member.name), k);
+                        }
+                    }
+                }
                 Item::Measure { .. } | Item::Expr(_) => {}
             }
         }
@@ -176,6 +195,7 @@ impl Lowerer {
             user_defs,
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
+            cur_module: None,
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -219,6 +239,19 @@ impl Lowerer {
                 // (an extern's effect is purely at its reference sites).
                 Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
                 Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
+                // A module's members lower to flat top-level defs/assignments with
+                // mangled names (`Geometry.area` → `Geometry_area`); bare sibling
+                // references rewrite to the same names via `cur_module` (set in
+                // `lower_var`/`lower_call`).
+                Item::Module { name, items, .. } => {
+                    let members = items.iter().map(|m| m.name.clone()).collect();
+                    self.cur_module = Some((name.clone(), members));
+                    for member in items {
+                        let mangled = format!("{name}_{}", member.name);
+                        self.lower_binding_as(&mangled, member, &HashSet::new(), &mut code)?;
+                    }
+                    self.cur_module = None;
+                }
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
                     code.append(&mut stmts);
@@ -262,11 +295,23 @@ impl Lowerer {
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
+        self.lower_binding_as(&binding.name, binding, locals, out)
+    }
+
+    /// Lower a `let` binding, emitting it under `name` (so a module member can use
+    /// its mangled `Module_member` name instead of `binding.name`).
+    fn lower_binding_as(
+        &mut self,
+        name: &str,
+        binding: &LetBinding,
+        locals: &HashSet<String>,
+        out: &mut Vec<PyStmt>,
+    ) -> Result<(), LowerError> {
         if binding.params.is_empty() {
             let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
             out.append(&mut stmts);
             out.push(PyStmt::Assign {
-                target: binding.name.clone(),
+                target: name.to_string(),
                 value,
             });
         } else {
@@ -276,7 +321,7 @@ impl Lowerer {
             let inner = extend(locals, &names);
             let body = self.lower_return(&binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
-                name: binding.name.clone(),
+                name: name.to_string(),
                 params: names,
                 body,
                 is_async: false,
@@ -620,6 +665,18 @@ impl Lowerer {
         let head = flatten_app(expr, &mut args_ast);
 
         let arity = match &head.kind {
+            // A bare reference to a sibling member inside a module — its arity is
+            // registered under the qualified name (`Geometry.area`).
+            ExprKind::Var(name)
+                if !locals.contains(name)
+                    && self
+                        .cur_module
+                        .as_ref()
+                        .is_some_and(|(_, members)| members.contains(name)) =>
+            {
+                let module = &self.cur_module.as_ref().unwrap().0;
+                self.arities.get(&format!("{module}.{name}")).copied()
+            }
             ExprKind::Var(name) if !locals.contains(name) => self
                 .arities
                 .get(name)
@@ -654,6 +711,14 @@ impl Lowerer {
         }
         if name == "Some" || name == "None" {
             self.needs_option = true;
+        }
+        // A bare reference to a sibling member inside a module → its mangled
+        // top-level name (`pi` → `Geometry_pi`), unless shadowed by a local.
+        if !locals.contains(name)
+            && let Some((m, members)) = &self.cur_module
+            && members.contains(name)
+        {
+            return PyExpr::Name(format!("{m}_{name}"));
         }
         // A local parameter or a user top-level binding shadows a seeded name
         // (extern routing), so skip rerouting in that case. Module members
@@ -798,7 +863,8 @@ impl Lowerer {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_take")
             }
-            other => unreachable!("unknown module member {other}"),
+            // A user module member (`Geometry.area`) → its mangled top-level name.
+            other => PyExpr::Name(other.replace('.', "_")),
         }
     }
 
