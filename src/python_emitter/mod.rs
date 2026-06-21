@@ -101,6 +101,8 @@ pub enum PyExpr {
     Await(Box<PyExpr>),
     /// `not value`
     Not(Box<PyExpr>),
+    /// A list display `[a, b, c]`.
+    List(Vec<PyExpr>),
     /// The `None` literal — the unit value (e.g. the result of an assignment).
     NoneLit,
 }
@@ -353,6 +355,10 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.
         PyExpr::Not(inner) => format!("not {}", emit_expr(inner, 4)),
+        PyExpr::List(elems) => {
+            let elems: Vec<String> = elems.iter().map(expr).collect();
+            format!("[{}]", elems.join(", "))
+        }
         PyExpr::NoneLit => "None".to_string(),
     };
     if prec(e) < parent_prec {

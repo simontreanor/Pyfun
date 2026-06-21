@@ -67,6 +67,12 @@ const PROGRAMS: &[&str] = &[
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
     "type Option a = None | Some a\nlet unwrap o = match o with | Some v -> v | None -> 0",
+    // List literals: empty, simple, nested, and compound elements.
+    "let xs = [1, 2, 3]",
+    "let e = []",
+    "let m = [[1, 2], [3, 4]]",
+    "let c = [a + 1, f b, x]",
+    "let mapped = map f [1, 2, 3]",
     // Computation expressions.
     "let a = seq { yield 1 yield! xs }",
     "let a = result { let! x = m return x }",

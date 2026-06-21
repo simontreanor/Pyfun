@@ -68,6 +68,12 @@ struct Lowerer {
     /// Python modules an *used* extern needs imported (the first segment of a
     /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
     needed_imports: BTreeSet<String>,
+    /// Names of top-level `let` bindings, so a user definition shadows a seeded
+    /// name (prelude/extern/list helper) at lowering instead of being rerouted.
+    user_defs: HashSet<String>,
+    /// List-prelude helpers actually referenced, emitted on demand (like the
+    /// `Result` prelude). Stored as the Python helper names (e.g. `_pf_map`).
+    needed_list_helpers: BTreeSet<&'static str>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -88,6 +94,7 @@ impl Lowerer {
         let mut record_fields = std::collections::HashMap::new();
         let mut field_to_record = std::collections::HashMap::new();
         let mut extern_targets = std::collections::HashMap::new();
+        let mut user_defs = HashSet::new();
         for item in &module.items {
             match item {
                 Item::Extern(decl) => {
@@ -97,6 +104,7 @@ impl Lowerer {
                     extern_targets.insert(decl.name.clone(), decl.target.clone());
                 }
                 Item::Let(binding) => {
+                    user_defs.insert(binding.name.clone());
                     // A binding's callable arity is the number of parameters of the
                     // Python def/lambda it lowers to: its own `let` parameters, or —
                     // if it's a bare `let name = fun ... -> ...` — the lambda's. Extra
@@ -139,6 +147,13 @@ impl Lowerer {
         for (name, arity) in crate::types::PRELUDE {
             arities.entry((*name).to_string()).or_insert(*arity);
         }
+        // List prelude (`map`/`filter`/`fold`/`len`/`sum`/`rev`/`range`): same
+        // arity registration so partial application lowers correctly. `len`/`sum`
+        // map name-for-name onto Python builtins; the rest route to emitted
+        // helpers in `lower_var`. User definitions still take precedence.
+        for (name, arity) in crate::types::LIST_PRELUDE {
+            arities.entry((*name).to_string()).or_insert(*arity);
+        }
         Lowerer {
             arities,
             ctor_arity,
@@ -146,6 +161,8 @@ impl Lowerer {
             field_to_record,
             extern_targets,
             needed_imports: BTreeSet::new(),
+            user_defs,
+            needed_list_helpers: BTreeSet::new(),
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -213,6 +230,8 @@ impl Lowerer {
         if self.needs_result {
             body.extend(result_prelude());
         }
+        // List-prelude helpers referenced by the program (deterministic order).
+        body.extend(list_prelude(&self.needed_list_helpers));
         body.extend(classes);
         body.extend(code);
         Ok(PyModule { body })
@@ -322,7 +341,7 @@ impl Lowerer {
             ExprKind::Float(f) => Ok((vec![], PyExpr::Float(*f))),
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
-            ExprKind::Var(name) => Ok((vec![], self.lower_var(name))),
+            ExprKind::Var(name) => Ok((vec![], self.lower_var(name, locals))),
 
             ExprKind::Binary { op, lhs, rhs } => {
                 let (mut stmts, left) = self.lower_value(lhs, locals)?;
@@ -422,6 +441,17 @@ impl Lowerer {
 
             // Units are compile-time only: erase the annotation, keep the value.
             ExprKind::Annot { value, .. } => self.lower_value(value, locals),
+
+            ExprKind::List { elems } => {
+                let mut stmts = Vec::new();
+                let mut vals = Vec::with_capacity(elems.len());
+                for e in elems {
+                    let (s, v) = self.lower_value(e, locals)?;
+                    stmts.extend(s);
+                    vals.push(v);
+                }
+                Ok((stmts, PyExpr::List(vals)))
+            }
 
             ExprKind::Record { fields } => self.lower_record(fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
@@ -587,17 +617,29 @@ impl Lowerer {
     /// Lower a variable reference, special-casing data constructors: a nullary
     /// constructor used as a value becomes an instance (`Ctor()`), and any
     /// constructor name is mangled to dodge Python keywords (`None` → `None_`).
-    fn lower_var(&mut self, name: &str) -> PyExpr {
+    fn lower_var(&mut self, name: &str, locals: &HashSet<String>) -> PyExpr {
         if name == "Ok" || name == "Error" {
             self.needs_result = true;
         }
-        // An `extern` reference lowers to its dotted Python target (e.g. `math.sqrt`),
-        // recording any module that must be imported.
-        if let Some(target) = self.extern_targets.get(name).cloned() {
-            if target.len() > 1 {
-                self.needed_imports.insert(target[0].clone());
+        // A local parameter or a user top-level binding shadows any seeded name
+        // (extern / list-prelude routing), so skip rerouting in that case.
+        if !locals.contains(name) && !self.user_defs.contains(name) {
+            // An `extern` reference lowers to its dotted Python target (e.g.
+            // `math.sqrt`), recording any module that must be imported.
+            if let Some(target) = self.extern_targets.get(name).cloned() {
+                if target.len() > 1 {
+                    self.needed_imports.insert(target[0].clone());
+                }
+                return dotted_path(&target);
             }
-            return dotted_path(&target);
+            // A list-prelude function backed by an emitted helper (`map` → `_pf_map`).
+            if let Some(helper) = list_helper(name) {
+                self.needed_list_helpers.insert(helper);
+                if helper == "_pf_fold" {
+                    self.needs_functools = true; // `_pf_fold` uses functools.reduce
+                }
+                return PyExpr::Name(helper.to_string());
+            }
         }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
@@ -995,6 +1037,80 @@ fn result_prelude() -> Vec<PyStmt> {
             fields: vec!["_0".to_string()],
         },
     ]
+}
+
+/// The emitted-helper name for a list-prelude function, or `None` for ones that
+/// map directly onto a Python builtin (`len`/`sum`, handled as plain names).
+fn list_helper(name: &str) -> Option<&'static str> {
+    match name {
+        "map" => Some("_pf_map"),
+        "filter" => Some("_pf_filter"),
+        "fold" => Some("_pf_fold"),
+        "rev" => Some("_pf_rev"),
+        "range" => Some("_pf_range"),
+        _ => None,
+    }
+}
+
+/// The list-prelude helper definitions actually referenced (`DESIGN.md` §6). Each
+/// keeps eager-list semantics that Python's lazy `map`/`filter` would not: they
+/// force results into a `list`. `_pf_fold` reuses `functools.reduce` with an
+/// initial accumulator (a *total* left fold). Built from the IR (no string
+/// splicing); emitted in the helper-name's sorted order for deterministic output.
+fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+    // `func(args...)` where `func` is a bare name.
+    let call = |func: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Name(func.to_string())),
+        args,
+    };
+    let name = |n: &str| PyExpr::Name(n.to_string());
+    let def = |fn_name: &str, params: &[&str], ret: PyExpr| PyStmt::FuncDef {
+        name: fn_name.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body: vec![PyStmt::Return(ret)],
+        is_async: false,
+    };
+    used.iter()
+        .map(|&helper| match helper {
+            // _pf_map(f, xs) -> list(map(f, xs))
+            "_pf_map" => def(
+                "_pf_map",
+                &["f", "xs"],
+                call("list", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // _pf_filter(f, xs) -> list(filter(f, xs))
+            "_pf_filter" => def(
+                "_pf_filter",
+                &["f", "xs"],
+                call("list", vec![call("filter", vec![name("f"), name("xs")])]),
+            ),
+            // _pf_fold(f, acc, xs) -> functools.reduce(f, xs, acc)
+            "_pf_fold" => def(
+                "_pf_fold",
+                &["f", "acc", "xs"],
+                PyExpr::Call {
+                    func: Box::new(PyExpr::Attribute {
+                        value: Box::new(name("functools")),
+                        attr: "reduce".to_string(),
+                    }),
+                    args: vec![name("f"), name("xs"), name("acc")],
+                },
+            ),
+            // _pf_rev(xs) -> list(reversed(xs))
+            "_pf_rev" => def(
+                "_pf_rev",
+                &["xs"],
+                call("list", vec![call("reversed", vec![name("xs")])]),
+            ),
+            // _pf_range(lo, hi) -> list(range(lo, hi))
+            "_pf_range" => def(
+                "_pf_range",
+                &["lo", "hi"],
+                call("list", vec![call("range", vec![name("lo"), name("hi")])]),
+            ),
+            other => unreachable!("unknown list helper {other}"),
+        })
+        .collect()
 }
 
 /// A defensive error for a CE item the type checker should already have rejected.

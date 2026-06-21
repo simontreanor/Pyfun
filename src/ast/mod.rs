@@ -226,6 +226,10 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Annot { value, unit } => {
             format!("{}<{}>", print_expr(value), print_unit(unit))
         }
+        ExprKind::List { elems } => {
+            let elems: Vec<String> = elems.iter().map(print_expr).collect();
+            format!("[{}]", elems.join(", "))
+        }
         ExprKind::Record { fields } => {
             let fields: Vec<String> = fields.iter().map(print_field_init).collect();
             format!("{{ {} }}", fields.join(", "))

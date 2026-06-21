@@ -193,7 +193,25 @@ arrow carries `io` (the Python call is the effect, performed on full application
 ("pure up to its arguments", like `let pure`) — used for the likes of `math.sqrt`. Externs are
 erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
-`extern` type syntax can't yet express; collections and option/result helpers are the next layer.
+`extern` type syntax can't yet express.
+
+**Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
+Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
+like Pyfun records — there are no tuples, so commas are unambiguous). The big-O is Python's, *not*
+F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). So the
+linked-list idioms (`cons`/`head`/`tail`, `match`-on-cons) are a poor fit and are deferred along with
+list patterns; the bulk operations are the API. The list prelude (single source of truth
+`types::LIST_PRELUDE` + `seed_list_prelude`) is `map`/`filter`/`fold`/`len`/`sum`/`rev`/`range`.
+`len`/`sum` map name-for-name onto the Python builtins; the rest lower to small **emitted helpers**
+(`_pf_map` = `list(map(...))`, `_pf_fold` = `functools.reduce(...)`, etc.) emitted on demand like the
+`Result` prelude — wrappers are needed because Python's `map`/`filter` are lazy and we want eager
+lists, and because a first-class curried function must be a single callable (so partial application
+still lowers to `functools.partial`). The higher-order functions are **effect-polymorphic**: `map :
+(a ->{e} b) -> List a ->{e} List b`, so mapping an impure function makes the whole call `io` and that
+flows out (a single bound effect variable links the function arrow to the traversal arrow). A
+user-defined name shadows a list-prelude name at lowering (no rerouting). The lazy counterpart
+already exists as the `seq {}` computation expression (§8.1); `Array`/`Map`/`Set` and option/result
+helpers are the next layer.
 
 ## 7. Surface language (MVP)
 

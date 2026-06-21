@@ -131,7 +131,7 @@ a valid program runs silently — `run`'s observable value today is exit status 
 errors (e.g. the non-exhaustive-match guard). Covered by `tests/run.rs`.
 - **Effort/risk:** Low. **Status:** landed.
 
-### 9. Standard library / prelude — ✅ MVP prelude + general FFI (`extern`) landed
+### 9. Standard library / prelude — ✅ MVP prelude + general FFI (`extern`) + lists landed
 A set of built-in functions Pyfun programs can call. The MVP prelude has landed: `print : 'a ->
 unit` and unit-polymorphic `abs`/`min`/`max : int<'u> -> …`, each a typed view over a Python builtin
 (single source of truth `types::PRELUDE` + `seed_prelude`), plus a `unit` type. This made programs
@@ -146,9 +146,17 @@ application still lowers to `functools.partial`, and the boundary is effectful-b
 `extern` carries `io` (the third source after `print`/`<-`), `extern pure` opts out. This made the
 effect system's "Python boundary is effectful-by-default" rule (`DESIGN.md` §6) concrete. Covered by
 `tests/{typecheck,compile,roundtrip}.rs`.
-- **Still to do (a larger prelude):** collections (`List` type + literal syntax + map/filter/fold)
-  and option/result helpers — these need their own type/syntax design, not just more `extern`s.
-- **Effort/risk:** Medium. **Status:** MVP prelude + general FFI done; collections/helpers open.
+**Lists have landed.** `List a` is a built-in type lowering to a Python `list` (eager, dynamic-array
+big-O: O(1) index/`len`, O(n) prepend/concat), with `[1, 2, 3]` literal syntax. The list prelude is
+`map`/`filter`/`fold`/`len`/`sum`/`rev`/`range` (single source of truth `types::LIST_PRELUDE` +
+`seed_list_prelude`): `len`/`sum` map onto Python builtins, the rest lower to emitted helpers
+(`_pf_*`, on demand). `map`/`filter`/`fold` are **effect-polymorphic** (mapping an impure function is
+`io`). The lazy counterpart is the existing `seq {}` CE. `List` is reserved like `Result`/`Seq`. Note:
+`cons`/`head`/`tail` and list patterns in `match` are deferred (poor fit for a dynamic array). Covered
+by `tests/{typecheck,compile,roundtrip}.rs`.
+- **Still to do (a larger prelude):** `Array`/`Map`/`Set` (each its own type + functions + big-O),
+  option/result helpers, and a value-level library over `seq {}`.
+- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists done; other collections/helpers open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -168,12 +176,13 @@ All four language pillars beyond the MVP core are now done: **#1 (effects)**, **
 **#3 (mutability + blocks)**, **#4 (floats)** — on top of `run` + prelude + the general offside rule.
 The remaining work is breadth and polish, not new pillars. Highest leverage next:
 
-The general FFI surface (`extern`, #9) is now done — it was the highest-leverage piece and made the
-effect boundary concrete. Remaining, in rough priority:
+The general FFI surface (`extern`) and the eager `List` collection (both #9) are now done. Remaining,
+in rough priority:
 
-1. **Collections (#9 cont.)** — a `List` type + literal syntax (`[1; 2; 3]`) + polymorphic
-   `map`/`filter`/`fold`/`length`, with option/result helpers. The biggest remaining "library" piece;
-   needs its own type/syntax design (more than `extern` can express).
-2. **#10 (LSP)** — would let inferred effects/types surface on hover (the display half of #1).
+1. **#10 (LSP)** — would let inferred effects/types surface on hover (the display half of #1). The
+   span-carrying AST and diagnostics already exist as the foundation; highest payoff for usability.
+2. **More collections / prelude (#9 cont.)** — `Array`/`Map`/`Set` (each its own type + big-O),
+   option/result helpers, and a value-level library over the existing `seq {}` lazy type.
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
-   the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms).
+   the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
+   `tail` once a representation that honors their big-O is chosen).

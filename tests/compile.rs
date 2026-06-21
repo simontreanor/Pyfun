@@ -65,6 +65,51 @@ fn unused_extern_imports_nothing() {
 }
 
 #[test]
+fn list_literal_lowers_to_a_python_list() {
+    let py = pyfun::compile("let xs = [1, 2, 3]").unwrap();
+    assert!(py.contains("xs = [1, 2, 3]"), "{py}");
+}
+
+#[test]
+fn map_filter_lower_to_emitted_helpers() {
+    let py = pyfun::compile("let r = map (fun x -> x) (filter (fun x -> true) [1, 2])").unwrap();
+    assert!(py.contains("def _pf_map(f, xs):"), "{py}");
+    assert!(py.contains("return list(map(f, xs))"), "{py}");
+    assert!(py.contains("def _pf_filter(f, xs):"), "{py}");
+    assert!(py.contains("return list(filter(f, xs))"), "{py}");
+}
+
+#[test]
+fn len_and_sum_lower_to_python_builtins_without_helpers() {
+    let py = pyfun::compile("let n = len [1, 2]\nlet s = sum [1, 2]").unwrap();
+    assert!(py.contains("n = len([1, 2])"), "{py}");
+    assert!(py.contains("s = sum([1, 2])"), "{py}");
+    assert!(!py.contains("_pf_"), "no helpers needed: {py}");
+}
+
+#[test]
+fn fold_lowers_to_functools_reduce() {
+    let py = pyfun::compile("let t = fold (fun a b -> a + b) 0 [1, 2, 3]").unwrap();
+    assert!(py.starts_with("import functools\n"), "{py}");
+    assert!(py.contains("def _pf_fold(f, acc, xs):"), "{py}");
+    assert!(py.contains("return functools.reduce(f, xs, acc)"), "{py}");
+}
+
+#[test]
+fn unused_list_helpers_are_not_emitted() {
+    let py = pyfun::compile("let xs = [1, 2, 3]").unwrap();
+    assert!(!py.contains("_pf_"), "{py}");
+}
+
+#[test]
+fn a_user_definition_shadows_a_list_prelude_name() {
+    // Defining `map` yourself must not reroute references to the `_pf_map` helper.
+    let py = pyfun::compile("let map f = f\nlet r = map 1").unwrap();
+    assert!(!py.contains("_pf_map"), "{py}");
+    assert!(py.contains("def map(f):"), "{py}");
+}
+
+#[test]
 fn pipe_becomes_application() {
     let py = pyfun::compile("let id x = x\nlet r = 5 |> id").unwrap();
     assert!(py.contains("r = id(5)"), "{py}");
@@ -406,8 +451,10 @@ fn e2e_recursive_adt() {
     // A cons-list: length via recursion-free folding isn't available, but nested
     // construction and matching exercise recursive types end to end.
     run_and_check(
+        // `List` is now a built-in collection type, so this cons-list ADT uses a
+        // distinct name (`Lst`).
         "
-        type List a = Nil | Cons a (List a)
+        type Lst a = Nil | Cons a (Lst a)
         let head d xs = match xs with | Nil -> d | Cons h t -> h
         let r = head 0 (Cons 7 (Cons 8 Nil))
         ",
@@ -543,12 +590,35 @@ fn e2e_boolean_logic() {
 fn e2e_extern_calls_python() {
     run_and_check(
         "extern show: a -> string = str\n\
-         extern len: string -> int\n\
+         extern ord: string -> int\n\
          extern pure sqrt: float -> float = math.sqrt\n\
          let label = show 42\n\
-         let size = len \"hello\"\n\
+         let code = ord \"A\"\n\
          let root = sqrt 16.0",
-        &[("label", "42"), ("size", "5"), ("root", "4.0")],
+        &[("label", "42"), ("code", "65"), ("root", "4.0")],
+    );
+}
+
+#[test]
+fn e2e_list_functions() {
+    run_and_check(
+        "let xs = [1, 2, 3, 4]\n\
+         let doubled = map (fun x -> x * 2) xs\n\
+         let small = filter (fun x -> x < 3) xs\n\
+         let total = fold (fun a b -> a + b) 0 xs\n\
+         let n = len xs\n\
+         let s = sum xs\n\
+         let r = rev xs\n\
+         let q = range 1 4",
+        &[
+            ("doubled", "[2, 4, 6, 8]"),
+            ("small", "[1, 2]"),
+            ("total", "10"),
+            ("n", "4"),
+            ("s", "10"),
+            ("r", "[4, 3, 2, 1]"),
+            ("q", "[1, 2, 3]"),
+        ],
     );
 }
 

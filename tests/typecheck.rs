@@ -56,8 +56,10 @@ fn accepts_user_defined_adt() {
 
 #[test]
 fn accepts_parameterized_and_recursive_adts() {
+    // `List` is a built-in collection now, so the recursive cons-list ADT here is
+    // named `Lst`.
     let src = "type Either a b = Left a | Right b\n\
-               type List a = Nil | Cons a (List a)\n\
+               type Lst a = Nil | Cons a (Lst a)\n\
                let xs = Cons 1 (Cons 2 Nil)\n\
                let e = Left 1";
     assert!(pyfun::check(src).is_ok());
@@ -572,6 +574,68 @@ fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
                let r1 = twice inc 0\n\
                let r2 = twice log 0";
     assert!(pyfun::check(src).is_ok());
+}
+
+// ---------- lists (the eager `List` collection, `DESIGN.md` §6) ----------
+
+#[test]
+fn accepts_list_literal_and_functions() {
+    let src = "let xs = [1, 2, 3]\n\
+               let ys = map (fun x -> x + 1) xs\n\
+               let zs = filter (fun x -> x < 2) xs\n\
+               let t = fold (fun a b -> a + b) 0 xs\n\
+               let n = len xs\n\
+               let s = sum xs\n\
+               let r = rev xs\n\
+               let q = range 0 5";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn empty_list_is_polymorphic() {
+    // The same `[]`-derived helper is usable at two element types.
+    assert!(pyfun::check("let e = []\nlet a = len [1]\nlet b = len [\"x\"]").is_ok());
+}
+
+#[test]
+fn rejects_heterogeneous_list() {
+    assert_error_contains("let bad = [1, true]", "expected int, found bool");
+}
+
+#[test]
+fn rejects_len_on_a_non_list() {
+    // `len : List a -> int`, so an int argument is a type error.
+    assert_error_contains("let n = len 5", "List");
+}
+
+#[test]
+fn map_preserves_element_type_change() {
+    // `map (int -> string)` over a `List int` yields a `List string`, so summing
+    // the result (which needs `List int`) is a type error.
+    assert_error_contains(
+        "extern show: a -> string = str\nlet bad = sum (map show [1, 2])",
+        "string",
+    );
+}
+
+#[test]
+fn map_of_a_pure_function_stays_pure() {
+    assert!(pyfun::check("let pure inc xs = map (fun x -> x + 1) xs").is_ok());
+}
+
+#[test]
+fn map_of_an_impure_function_is_impure() {
+    // Effect polymorphism: mapping `print` makes the whole call `io`, so a `pure`
+    // binding must be rejected.
+    assert_error_contains(
+        "let pure shoutAll xs = map (fun x -> print x) xs",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn rejects_redefining_builtin_list() {
+    assert_error_contains("type List a = Empty | More a", "already defined");
 }
 
 // ---------- extern (typed Python imports, `DESIGN.md` §6) ----------

@@ -280,6 +280,23 @@ const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 /// call-site renaming is needed — the simplest honest interop surface.
 pub const PRELUDE: &[(&str, usize)] = &[("print", 1), ("abs", 1), ("min", 2), ("max", 2)];
 
+/// The list prelude (`DESIGN.md` §6): functions over the eager `List a` type
+/// (which lowers to a Python list — a dynamic array, so index/`len` are O(1),
+/// prepend is O(n)). Like [`PRELUDE`], the `(name, arity)` pairs are the single
+/// source of truth shared with [`seed_list_prelude`] (schemes) and lowering
+/// (arities, for partial application). `len`/`sum` map directly onto the Python
+/// builtins of the same name; the rest lower to small emitted helpers (which keep
+/// the eager-list semantics Python's lazy `map`/`filter` would not).
+pub const LIST_PRELUDE: &[(&str, usize)] = &[
+    ("map", 2),
+    ("filter", 2),
+    ("fold", 3),
+    ("len", 1),
+    ("sum", 1),
+    ("rev", 1),
+    ("range", 2),
+];
+
 /// The unit variable id used by the unit-polymorphic prelude numerics
 /// (`abs`/`min`/`max`). Reserved (below [`RESERVED_VARS`]) so a freshly allocated
 /// variable can never alias it and corrupt the seeded schemes.
@@ -383,6 +400,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     let mut env = Env::new();
     seed_builtin_types(&mut decls, &mut env);
     seed_prelude(&mut env);
+    seed_list_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -681,12 +699,100 @@ fn seed_prelude(env: &mut Env) {
     }
 }
 
+/// Seed the list prelude ([`LIST_PRELUDE`]) — functions over the eager `List a`.
+/// The higher-order ones (`map`/`filter`/`fold`) are **effect-polymorphic**: the
+/// effect of mapping is the effect of the supplied function (`map : (a ->{e} b) ->
+/// List a ->{e} List b`), so you can map an impure function and the impurity flows
+/// out (`DESIGN.md` §4). A single effect variable (id 0, bound in each scheme and
+/// refreshed at instantiation, like the type vars) links the function arrow to the
+/// traversal arrow.
+fn seed_list_prelude(env: &mut Env) {
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let int = || Ty::Int(Unit::dimensionless());
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let mono = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    // len : List a -> int   (pure)
+    env.insert(
+        "len".to_string(),
+        mono(vec![0], pure_fn(list(Ty::Var(0)), int())),
+    );
+    // sum : List int -> int   (pure; MVP keeps it int-only)
+    env.insert("sum".to_string(), mono(vec![], pure_fn(list(int()), int())));
+    // rev : List a -> List a   (pure)
+    env.insert(
+        "rev".to_string(),
+        mono(vec![0], pure_fn(list(Ty::Var(0)), list(Ty::Var(0)))),
+    );
+    // range : int -> int -> List int   (pure)
+    env.insert(
+        "range".to_string(),
+        mono(vec![], pure_fn(int(), pure_fn(int(), list(int())))),
+    );
+
+    // Effect-polymorphic schemes share one bound effect variable `e` (id 0).
+    let e = 0u32;
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    let arrow_e = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::var(e));
+    // map : (a ->{e} b) -> List a ->{e} List b
+    env.insert(
+        "map".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(Ty::Var(0), Ty::Var(1)),
+                arrow_e(list(Ty::Var(0)), list(Ty::Var(1))),
+            ),
+        ),
+    );
+    // filter : (a ->{e} bool) -> List a ->{e} List a
+    env.insert(
+        "filter".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                arrow_e(Ty::Var(0), Ty::Bool),
+                arrow_e(list(Ty::Var(0)), list(Ty::Var(0))),
+            ),
+        ),
+    );
+    // fold : (b ->{e} a ->{e} b) -> b -> List a ->{e} b
+    env.insert(
+        "fold".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(0))),
+                pure_fn(Ty::Var(0), arrow_e(list(Ty::Var(1)), Ty::Var(0))),
+            ),
+        ),
+    );
+}
+
 /// Seed the built-in computation-expression types `Async a`, `Seq a`, and
 /// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
 fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     decls.type_arity.insert("Async".to_string(), 1);
     decls.type_arity.insert("Seq".to_string(), 1);
     decls.type_arity.insert("Result".to_string(), 2);
+    // `List a` — the eager collection (lowers to a Python list). It has no
+    // constructors (list patterns in `match` are deferred), so no `type_ctors`.
+    decls.type_arity.insert("List".to_string(), 1);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(
@@ -1268,6 +1374,16 @@ impl Infer {
             }
 
             ExprKind::Ce { builder, items } => self.infer_ce(*builder, items, span, env),
+
+            ExprKind::List { elems } => {
+                // All elements share one type; an empty list is polymorphic.
+                let elem = self.fresh();
+                for e in elems {
+                    let t = self.infer_expr(e, env)?;
+                    self.unify(&elem, &t, e.span())?;
+                }
+                Ok(Ty::Con("List".to_string(), vec![self.apply(&elem)]))
+            }
 
             ExprKind::Record { fields } => self.infer_record(fields, span, env),
             ExprKind::RecordUpdate { base, fields } => {

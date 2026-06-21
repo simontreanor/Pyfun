@@ -237,6 +237,12 @@ pub enum ExprKind {
         unit: UnitExpr,
     },
 
+    /// A list literal: `[1, 2, 3]` (comma-separated, possibly empty). Lowers to a
+    /// Python `list`; its element type is inferred by unifying the elements.
+    List {
+        elems: Vec<Expr>,
+    },
+
     /// A record literal: `{ x = 1, y = 2 }`. The (nominal) record type is
     /// resolved from the set of field names.
     Record {

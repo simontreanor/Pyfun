@@ -141,7 +141,7 @@ impl<'a> Lexer<'a> {
     /// `and`/`or`/`in` — none of which can start an expression.
     fn upcoming_starts_stmt(&self) -> bool {
         let Some(c) = self.peek() else { return false };
-        if c.is_ascii_digit() || c == b'"' || c == b'(' || c == b'{' {
+        if c.is_ascii_digit() || c == b'"' || c == b'(' || c == b'{' || c == b'[' {
             return true;
         }
         if c == b'_' {
@@ -353,6 +353,8 @@ impl<'a> Lexer<'a> {
             b')' => Tok::RParen,
             b'{' => Tok::LBrace,
             b'}' => Tok::RBrace,
+            b'[' => Tok::LBracket,
+            b']' => Tok::RBracket,
             b',' => Tok::Comma,
             b':' => Tok::Colon,
             b'.' => Tok::Dot,
@@ -361,8 +363,8 @@ impl<'a> Lexer<'a> {
         // Track bracket nesting so the offside rule ignores line breaks inside
         // `(...)` / `{...}` (implicit line continuation).
         match tok {
-            Tok::LParen | Tok::LBrace => self.depth += 1,
-            Tok::RParen | Tok::RBrace => self.depth = self.depth.saturating_sub(1),
+            Tok::LParen | Tok::LBrace | Tok::LBracket => self.depth += 1,
+            Tok::RParen | Tok::RBrace | Tok::RBracket => self.depth = self.depth.saturating_sub(1),
             _ => {}
         }
         self.pos += 1;

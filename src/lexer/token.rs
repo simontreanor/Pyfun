@@ -70,6 +70,8 @@ pub enum Tok {
     RParen,     // )
     LBrace,     // {
     RBrace,     // }
+    LBracket,   // [
+    RBracket,   // ]
     Comma,      // ,
     Colon,      // :
     Dot,        // . (record field access)

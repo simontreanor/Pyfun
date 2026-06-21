@@ -679,9 +679,25 @@ impl Parser {
                 return Ok(inner);
             }
             Tok::LBrace => return self.parse_record(start),
+            Tok::LBracket => return self.parse_list(start),
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
+    }
+
+    /// Parse a list literal `[a, b, c]` — comma-separated, possibly empty, with an
+    /// optional trailing comma.
+    fn parse_list(&mut self, start: usize) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LBracket, "`[`")?;
+        let mut elems = Vec::new();
+        while !matches!(self.peek(), Tok::RBracket) {
+            elems.push(self.parse_expr()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBracket, "`]`")?;
+        Ok(self.mk(start, ExprKind::List { elems }))
     }
 
     /// Parse a record literal `{ x = 1, y = 2 }` or update `{ base with x = 3 }`.
@@ -935,6 +951,7 @@ fn starts_atom(tok: &Tok) -> bool {
             | Tok::Ident(_)
             | Tok::LParen
             | Tok::LBrace
+            | Tok::LBracket
     )
 }
 
@@ -994,6 +1011,8 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Gt => ">",
         Tok::LBrace => "{",
         Tok::RBrace => "}",
+        Tok::LBracket => "[",
+        Tok::RBracket => "]",
         Tok::True => "true",
         Tok::False => "false",
         Tok::Eq => "=",
