@@ -112,6 +112,9 @@ pub enum TypeExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetBinding {
     pub mutable: bool,
+    /// `let pure …` — an opt-in assertion that the binding introduces no effect
+    /// (no `io`). Checked in the type phase; erased at lowering.
+    pub pure: bool,
     pub name: String,
     pub params: Vec<String>,
     pub value: Expr,

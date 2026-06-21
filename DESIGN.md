@@ -61,13 +61,28 @@ Example diagnostics the compiler must produce (rustc-style, with spans, codes, a
 type mismatch (`add "hello" 5`), non-exhaustive `match` (missing `None` case), reassignment of an
 immutable binding.
 
-## 4. Effect system — first-class MVP goal
+## 4. Effect system — first-class MVP goal (implemented)
 
 Unlike F# (which has no real effect system, only computation expressions), Pyfun treats **purity
 and effects as part of the type system from the MVP.** This is a defining feature, not a
 later add-on, and it shapes inference and lowering — so it must be designed in from the start.
 
-Design intent (to be refined as the type checker takes shape):
+**Implemented (inference-first, zero pollution).** Function arrows (`Ty::Fun`) carry a latent
+[`Effect`] — one concrete label `io` (printing, mutation via `<-`) plus effect *variables* for
+polymorphism. Effects are **inferred and never written in ordinary code**: a pure function reads
+exactly as before (`let add a b = a + b`); `print : 'a ->{io} unit` and impurity **propagate
+automatically** (calling an impure function makes you impure). Defining a function is pure — its
+body's effect is the *latent* effect on its innermost arrow. Effect variables generalize/instantiate
+alongside type/unit/num variables, so higher-order functions stay effect-polymorphic (`let pure
+apply f x = f x` is pure *up to its argument*: `apply print` is impure at the call site, `apply`
+itself is not). The one **opt-in, definition-level** assertion is `let pure f … = …`, which is a
+compile error if the binding introduces `io`. Effects are **fully erased at lowering** (zero runtime
+residue, like units); `pure` produces no Python. The single source beyond `print` is `<-` (§3); the
+Python FFI boundary (§6) will be effectful-by-default when it lands. Surfacing inferred effects in
+`pyfun check`/hover output (beyond violation messages) and adding more labels (e.g. `async`) are
+later refinements; declared function types (`a -> b` in a `type`) are currently treated as pure.
+
+Original design intent (now realized):
 
 - **Pure by default.** A function with no observable side effects has a pure type. Purity is
   inferred, not just annotated, and propagates: a function that calls an impure function is impure
@@ -84,28 +99,15 @@ Design intent (to be refined as the type checker takes shape):
   types do. Decide early how (or whether) effect wrappers appear in emitted Python — the bias is
   toward zero-cost, readable output.
 
-**Resolved direction (2026-06-21): inference-first, zero syntactic pollution.** Effects follow the
-Koka/Flix/Unison model — **inferred, never written in ordinary code** — rather than effects-as-values
-(Haskell `IO`: `do`/`<-`/wrapper types) or effects-as-keywords (Rust/Python `async` *coloring*, the
-very pain we're avoiding). A pure function reads exactly as it does today (`let add a b = a + b`);
-`print : 'a ->{io} unit` and impurity propagate automatically. Effects surface only in (a) `pyfun
-check`/hover output — the Python gradual-typing mindset, where tooling reports the property and the
-source stays clean — and (b) error messages at a violation. Any *written* purity assertion, if we add
-one, is **definition-level and opt-in** (decorator-shaped, like `@property`), never expression-body
-syntax. Start coarse: one `io` label plus effect *variables* for polymorphism (so `compose`/`map`
-stay pure-polymorphic). Arrows (`Ty::Fun`) carry the latent effect; it generalizes/instantiates like
-the existing unit/num/comparison variables; it is **fully erased at lowering** (zero runtime residue,
-exactly like units).
+**Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
+written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or
+effects-as-keywords (Rust/Python `async` *coloring*, the very pain we avoid). The Python gradual-typing
+mindset: tooling reports the property, the source stays clean. This is why the only surface syntax is
+the opt-in, definition-level `let pure` assertion — never expression-body pollution.
 
-**Sequencing (decided): effects are deferred until there is something to track.** With only `print`
-effectful and no enforcement site today, effect inference would be pure infrastructure. It is bundled
-with **mutation (`let mut` + `<-`, §3/ROADMAP #3)** or **real Python FFI (§6)** — mutation is an
-`io`-style effect and the FFI boundary is effectful-by-default — so the guarantee has teeth on day
-one. "Effects + something that has effects," together.
-
-Still open (to resolve when building it): the exact discharge story (is `io` terminal until a runtime
-boundary?); whether `async`/`Async` joins the effect lattice or stays typed via its value form; and
-the precise ergonomics of the opt-in purity assertion.
+Still open: the exact discharge story (is `io` terminal until a runtime boundary?); whether
+`async`/`Async` joins the effect lattice or stays typed via its value form; effect annotations in
+declared function types; and surfacing inferred effects in `check`/hover output (an LSP, §10, fit).
 
 **Relationship to computation expressions (§8).** Effects and CEs are distinct but related:
 effects track side effects *in types*; CEs provide *monadic sugar*. They coexist (F# has CEs and

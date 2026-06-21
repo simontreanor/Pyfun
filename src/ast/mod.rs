@@ -130,6 +130,9 @@ fn print_let(binding: &LetBinding, indent: usize) -> String {
     if binding.mutable {
         s.push_str("mut ");
     }
+    if binding.pure {
+        s.push_str("pure ");
+    }
     s.push_str(&binding.name);
     for param in &binding.params {
         s.push(' ');

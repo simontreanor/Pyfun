@@ -278,7 +278,18 @@ impl Parser {
 
     fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {
         self.expect(&Tok::Let, "`let`")?;
-        let mutable = self.eat(&Tok::Mut);
+        // Optional `mut` / `pure` modifiers, in any order.
+        let mut mutable = false;
+        let mut pure = false;
+        loop {
+            if self.eat(&Tok::Mut) {
+                mutable = true;
+            } else if self.eat(&Tok::Pure) {
+                pure = true;
+            } else {
+                break;
+            }
+        }
         let name = self.parse_ident("binding name")?;
         let mut params = Vec::new();
         while let Tok::Ident(_) = self.peek() {
@@ -294,6 +305,7 @@ impl Parser {
         };
         Ok(LetBinding {
             mutable,
+            pure,
             name,
             params,
             value,
@@ -929,6 +941,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
     match tok {
         Tok::Let => "let",
         Tok::Mut => "mut",
+        Tok::Pure => "pure",
         Tok::If => "if",
         Tok::Then => "then",
         Tok::Else => "else",

@@ -7,31 +7,23 @@ design and [`GUIDE.md`](./GUIDE.md) for current status.
 
 ## Language features (the remaining vision)
 
-### 1. Effect inference (`DESIGN.md` §4) — deferred, bundled with #3/FFI (decided 2026-06-21)
-The last first-class showcase pillar. Today the type system tracks *what* values are (`int<m>`,
-`Option a`) but not *what a function does* — whether it prints, mutates, awaits, or can fail.
-Effect inference makes purity part of the type: a function is pure unless it performs an effect,
-and impurity propagates (a caller of an impure function is impure unless the effect is discharged).
-F# notably does *not* have this; it's where Pyfun would out-design its inspiration.
-- **Unlocks:** "this function is pure" guarantees; principled boundaries (the Python FFI becomes
-  effectful-by-default); ties into `async` (an `Async` effect).
-- **Decided direction (low-pollution).** Follow the **inference-first** model (Koka/Flix/Unison),
-  *not* effects-as-values (Haskell `IO`) or effects-as-keywords (Rust `async` coloring). Effects are
-  **inferred and never written in ordinary code** — a pure function looks exactly as it does today
-  (`let add a b = a + b`); `print : 'a ->{io} unit` propagates automatically. Effects surface only in
-  (a) `pyfun check`/hover output (like mypy reporting a type — the Python-gradual-typing mindset),
-  (b) error messages at a violation. Any *written* purity assertion, if added, is **definition-level
-  and opt-in** (decorator-shaped, like `@property`), never expression-body syntax. Start coarse: one
-  `io` label + effect *variables* for polymorphism (so `compose`/`map` stay pure-polymorphic). Fully
-  erased at lowering.
-- **Why deferred.** With only `print` to track and no enforcement site, effect inference today is
-  pure infrastructure. Holding it until **mutation (#3, `<-`)** or **real Python FFI** exists means
-  shipping it as one payoff-bearing unit where purity has teeth on day one (mutation is an `io`-style
-  effect; the FFI boundary is effectful-by-default). Do "effects + something that has effects"
-  together, not effects first.
-- **Effort/risk:** High and somewhat open-ended. The invasive part is mechanical: every `Ty::Fun`
-  arrow and every `infer_expr` rule gains an effect component, generalized/instantiated like the
-  existing unit/num/ord variables.
+### 1. Effect inference (`DESIGN.md` §4) — ✅ done (inference-first, with `let pure`)
+The last first-class showcase pillar, and where Pyfun out-designs F# (which has no effect system).
+The type system now tracks *what a function does*, not just what values are.
+- **Shipped (low-pollution, inference-first — Koka/Flix/Unison model).** Function arrows (`Ty::Fun`)
+  carry a latent `Effect` — one `io` label (printing, mutation via `<-`) plus effect *variables* for
+  polymorphism. Effects are **inferred and never written in ordinary code**: `let add a b = a + b`
+  is unchanged; `print : 'a ->{io} unit` and impurity **propagate automatically** through calls.
+  Defining a function is pure (its body's effect is latent on the innermost arrow); effect vars
+  generalize/instantiate alongside type/unit/num vars, so higher-order functions stay
+  effect-polymorphic. The one opt-in, definition-level assertion is **`let pure f … = …`** — a
+  compile error if the binding introduces `io` (effect variables are fine: "pure up to its
+  arguments", so `let pure apply f x = f x` is accepted while `apply print` is impure at the call
+  site). Implemented with an effect accumulator (`cur_eff`) + open-row effect unification; **fully
+  erased at lowering** (`pure` produces no Python). Covered across typecheck/compile/roundtrip tests.
+- **Still to do:** surface inferred effects in `pyfun check`/hover (an LSP fit, #10) beyond violation
+  messages; more labels (e.g. `async`); effect annotations in declared function types (currently
+  treated as pure); the Python FFI boundary becoming effectful-by-default once FFI (#9) lands.
 
 ### 2. Records — ✅ done (nominal MVP)
 Named-field product types: `type Point = { x: int, y: int }`, construction `{ x = 1, y = 2 }`,
@@ -165,13 +157,13 @@ infrastructure already exist as the foundation.
 
 ## Suggested sequencing
 
-The project is now *usable* and expressive: `run` + prelude + the general offside rule, plus
-**#2 (records)**, **#3 (mutability + blocks)**, and **#4 (floats)**. Highest leverage next:
+All four language pillars beyond the MVP core are now done: **#1 (effects)**, **#2 (records)**,
+**#3 (mutability + blocks)**, **#4 (floats)** — on top of `run` + prelude + the general offside rule.
+The remaining work is breadth and polish, not new pillars. Highest leverage next:
 
-1. **Broaden #9 (prelude + interop)** — collections and option/result helpers, plus name-aliased
-   Python imports, to flesh out the standard library and the general FFI surface.
-2. **#1 (effects)** — now unblocked: `<-` (from #3) is the first real `io` effect source, so effect
-   inference can land with teeth (FFI from #9 would add more). Inference-first, zero-pollution
-   (decided 2026-06-21; see #1 above).
+1. **Broaden #9 (prelude + interop / FFI)** — collections and option/result helpers, plus
+   name-aliased Python imports. The general FFI surface also makes the effect system's "Python
+   boundary is effectful-by-default" rule concrete (the next real `io` source after `print`/`<-`).
+2. **#10 (LSP)** — would let inferred effects/types surface on hover (the display half of #1).
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms).

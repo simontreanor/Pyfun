@@ -517,6 +517,63 @@ fn rejects_non_unit_intermediate_statement() {
     assert_error_contains("let f x =\n    x + 1\n    x", "must be `unit`");
 }
 
+// ---------- effects (DESIGN §4) ----------
+
+#[test]
+fn accepts_pure_binding_with_no_effects() {
+    assert!(pyfun::check("let pure add a b = a + b\nlet r = add 1 2").is_ok());
+    assert!(pyfun::check("let pure clamp lo hi x = max lo (min hi x)").is_ok());
+}
+
+#[test]
+fn rejects_pure_binding_that_prints() {
+    assert_error_contains(
+        "let pure greet n = print n",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn rejects_pure_binding_that_mutates() {
+    assert_error_contains(
+        "let pure f x =\n    let mut acc = x\n    acc <- acc + 1\n    acc",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn io_propagates_through_calls() {
+    // `bad` performs no io directly, but calls an impure helper → impure.
+    assert_error_contains(
+        "let shout n = print n\nlet pure bad n = shout n",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn pure_calling_a_pure_helper_is_ok() {
+    assert!(pyfun::check("let dbl x = x + x\nlet pure good x = dbl x").is_ok());
+}
+
+#[test]
+fn higher_order_function_is_effect_polymorphic() {
+    // `apply` itself introduces no io (pure up to its argument), so it may be
+    // declared `pure` even though `apply print` would be impure at the call site.
+    assert!(pyfun::check("let pure apply f x = f x\nlet r = apply print 5").is_ok());
+}
+
+#[test]
+fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
+    // Effect polymorphism: the same pure `twice` works with a pure or impure
+    // function (`log` prints then returns its argument, so it is `'a -> 'a` io).
+    let src = "let pure twice f x = f (f x)\n\
+               let inc a = a + 1\n\
+               let log a =\n    print a\n    a\n\
+               let r1 = twice inc 0\n\
+               let r2 = twice log 0";
+    assert!(pyfun::check(src).is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

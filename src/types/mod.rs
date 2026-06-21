@@ -137,6 +137,71 @@ impl Unit {
     }
 }
 
+/// An effect: what a function performs when called. The MVP tracks a single
+/// concrete label, `io` (printing, mutation via `<-`), plus a set of effect
+/// *variables* that make a function effect-polymorphic (its effect depends on its
+/// arguments). The empty effect is pure. Effects ride on function arrows and are
+/// **fully erased at lowering** (`DESIGN.md` §4).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Effect {
+    io: bool,
+    vars: std::collections::BTreeSet<u32>,
+}
+
+impl Effect {
+    fn pure() -> Effect {
+        Effect::default()
+    }
+
+    fn io() -> Effect {
+        Effect {
+            io: true,
+            vars: std::collections::BTreeSet::new(),
+        }
+    }
+
+    fn var(id: u32) -> Effect {
+        let mut vars = std::collections::BTreeSet::new();
+        vars.insert(id);
+        Effect { io: false, vars }
+    }
+
+    /// Union of two effects (used to accumulate the effect of an expression).
+    fn union(&self, other: &Effect) -> Effect {
+        Effect {
+            io: self.io || other.io,
+            vars: self.vars.union(&other.vars).copied().collect(),
+        }
+    }
+
+    /// `Some(v)` iff this is exactly one bare variable (no `io`) — the case that
+    /// unifies most-generally by binding `v`.
+    fn as_single_var(&self) -> Option<u32> {
+        if !self.io && self.vars.len() == 1 {
+            self.vars.iter().next().copied()
+        } else {
+            None
+        }
+    }
+}
+
+/// Substitute effect variables in `eff` according to `emap` (used by instantiation).
+fn subst_eff(eff: &Effect, emap: &HashMap<u32, Effect>) -> Effect {
+    let mut out = Effect {
+        io: eff.io,
+        vars: std::collections::BTreeSet::new(),
+    };
+    for v in &eff.vars {
+        match emap.get(v) {
+            Some(rep) => out = out.union(rep),
+            None => {
+                out.vars.insert(*v);
+            }
+        }
+    }
+    out
+}
+
 /// A monomorphic type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
@@ -156,8 +221,9 @@ pub enum Ty {
     Num(u32, Unit),
     /// A unification variable.
     Var(u32),
-    /// A function `arg -> result` (curried).
-    Fun(Box<Ty>, Box<Ty>),
+    /// A function `arg ->{effect} result` (curried). The [`Effect`] is the latent
+    /// effect performed when this arrow is applied.
+    Fun(Box<Ty>, Box<Ty>, Effect),
     /// An applied type constructor, e.g. `Option int`.
     Con(String, Vec<Ty>),
 }
@@ -180,6 +246,8 @@ struct Scheme {
     num_vars: Vec<u32>,
     /// Generalized type variables carrying the `comparison` constraint.
     ord_vars: Vec<u32>,
+    /// Generalized effect variables (for effect-polymorphic functions).
+    eff_vars: Vec<u32>,
     /// Whether this binding was declared `let mut` (so `<-` may reassign it).
     /// Mutable bindings are monomorphic (never generalized).
     mutable: bool,
@@ -193,6 +261,7 @@ impl Scheme {
             uvars: vec![],
             num_vars: vec![],
             ord_vars: vec![],
+            eff_vars: vec![],
             mutable: false,
             ty,
         }
@@ -283,7 +352,7 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
         match item {
             Item::Measure { .. } | Item::Type(_) => {} // handled by the pre-pass
             Item::Let(binding) => match inf.infer_binding(binding, &env) {
-                Ok(scheme) => {
+                Ok((scheme, _eff)) => {
                     env.insert(binding.name.clone(), scheme);
                 }
                 Err(e) => {
@@ -396,13 +465,15 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                         .into_iter()
                         .rev()
                         .fold(result_ty.clone(), |acc, f| {
-                            Ty::Fun(Box::new(f), Box::new(acc))
+                            // Constructing a value is pure.
+                            Ty::Fun(Box::new(f), Box::new(acc), Effect::pure())
                         });
                     let scheme = Scheme {
                         vars: (0..decl.params.len() as u32).collect(),
                         uvars: vec![],
                         num_vars: vec![],
                         ord_vars: vec![],
+                        eff_vars: vec![],
                         mutable: false,
                         ty: ctor_ty,
                     };
@@ -483,7 +554,7 @@ const RESERVED_VARS: u32 = 4;
 /// and returns `unit`; `abs`/`min`/`max` are polymorphic over the numeric base
 /// (`num`) *and* the unit, i.e. `num 'a => 'a<'u> -> …`.
 fn seed_prelude(env: &mut Env) {
-    // print : 'a -> unit
+    // print : 'a ->{io} unit  — the prelude's one effectful builtin.
     env.insert(
         "print".to_string(),
         Scheme {
@@ -491,8 +562,9 @@ fn seed_prelude(env: &mut Env) {
             uvars: vec![],
             num_vars: vec![],
             ord_vars: vec![],
+            eff_vars: vec![],
             mutable: false,
-            ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit)),
+            ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit), Effect::io()),
         },
     );
     let num_u = || Ty::Num(PRELUDE_NUMVAR, Unit::var(PRELUDE_UVAR));
@@ -501,19 +573,29 @@ fn seed_prelude(env: &mut Env) {
         uvars: vec![PRELUDE_UVAR],
         num_vars: vec![PRELUDE_NUMVAR],
         ord_vars: vec![],
+        eff_vars: vec![],
         mutable: false,
         ty,
     };
-    // abs : num 'a => 'a<'u> -> 'a<'u>
+    // abs : num 'a => 'a<'u> -> 'a<'u>  (pure)
     env.insert(
         "abs".to_string(),
-        scheme(Ty::Fun(Box::new(num_u()), Box::new(num_u()))),
+        scheme(Ty::Fun(
+            Box::new(num_u()),
+            Box::new(num_u()),
+            Effect::pure(),
+        )),
     );
-    // min / max : num 'a => 'a<'u> -> 'a<'u> -> 'a<'u>
+    // min / max : num 'a => 'a<'u> -> 'a<'u> -> 'a<'u>  (pure)
     let binary = || {
         Ty::Fun(
             Box::new(num_u()),
-            Box::new(Ty::Fun(Box::new(num_u()), Box::new(num_u()))),
+            Box::new(Ty::Fun(
+                Box::new(num_u()),
+                Box::new(num_u()),
+                Effect::pure(),
+            )),
+            Effect::pure(),
         )
     };
     for name in ["min", "max"] {
@@ -540,16 +622,22 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         uvars: vec![],
         num_vars: vec![],
         ord_vars: vec![],
+        eff_vars: vec![],
         mutable: false,
-        ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(result_ty.clone())),
+        ty: Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(result_ty.clone()),
+            Effect::pure(),
+        ),
     };
     let err = Scheme {
         vars: vec![0, 1],
         uvars: vec![],
         num_vars: vec![],
         ord_vars: vec![],
+        eff_vars: vec![],
         mutable: false,
-        ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty)),
+        ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty), Effect::pure()),
     };
     env.insert("Ok".to_string(), ok.clone());
     env.insert("Error".to_string(), err.clone());
@@ -577,9 +665,13 @@ fn resolve(
     span: Span,
 ) -> Result<Ty, TypeError> {
     match ty {
+        // A function type written in a declaration (e.g. an ADT/record field) has
+        // no effect syntax yet, so it is treated as pure. Effect annotations in
+        // declared types are a later refinement (`DESIGN.md` §4).
         TypeExpr::Fun(a, b) => Ok(Ty::Fun(
             Box::new(resolve(a, params, type_arity, span)?),
             Box::new(resolve(b, params, type_arity, span)?),
+            Effect::pure(),
         )),
         TypeExpr::Con(name, args) => {
             let no_args = |t: Ty| -> Result<Ty, TypeError> {
@@ -636,6 +728,12 @@ struct Infer {
     num_subst: HashMap<u32, NumRef>,
     /// Type variables carrying the `comparison` constraint (from `< > <= >=`).
     ord: HashSet<u32>,
+    /// Resolution of effect variables.
+    eff_subst: HashMap<u32, Effect>,
+    /// The effect accumulated for the expression currently being inferred. Saved
+    /// and reset around function bodies so a body's effect becomes the arrow's
+    /// latent effect rather than leaking into the enclosing expression.
+    cur_eff: Effect,
     next: u32,
     decls: Decls,
 }
@@ -676,12 +774,78 @@ impl Infer {
             Ty::Int(u) => Ty::Int(self.apply_unit(u)),
             Ty::Float(u) => Ty::Float(self.apply_unit(u)),
             Ty::Num(v, u) => self.num_ty(NumRef::Var(*v), self.apply_unit(u)),
-            Ty::Fun(a, b) => Ty::Fun(Box::new(self.apply(a)), Box::new(self.apply(b))),
+            Ty::Fun(a, b, eff) => Ty::Fun(
+                Box::new(self.apply(a)),
+                Box::new(self.apply(b)),
+                self.apply_eff(eff),
+            ),
             Ty::Con(name, args) => {
                 Ty::Con(name.clone(), args.iter().map(|a| self.apply(a)).collect())
             }
             other => other.clone(),
         }
+    }
+
+    /// Resolve an effect through the effect substitution, unioning bound vars.
+    fn apply_eff(&self, eff: &Effect) -> Effect {
+        let mut out = Effect {
+            io: eff.io,
+            vars: std::collections::BTreeSet::new(),
+        };
+        for v in &eff.vars {
+            match self.eff_subst.get(v) {
+                Some(bound) => out = out.union(&self.apply_eff(&bound.clone())),
+                None => {
+                    out.vars.insert(*v);
+                }
+            }
+        }
+        out
+    }
+
+    /// A fresh, open (polymorphic) effect variable.
+    fn fresh_eff(&mut self) -> Effect {
+        Effect::var(self.fresh_id())
+    }
+
+    /// Accumulate `eff` into the effect of the expression currently being inferred.
+    fn perform(&mut self, eff: &Effect) {
+        self.cur_eff = self.cur_eff.union(eff);
+    }
+
+    /// Unify two effects (latent effects of two arrows being unified). Binds a
+    /// bare effect variable most-generally; widens to the joined `io` otherwise;
+    /// fails only when two closed effects disagree on `io`.
+    fn unify_eff(&mut self, a: &Effect, b: &Effect) -> bool {
+        let a = self.apply_eff(a);
+        let b = self.apply_eff(b);
+        if a == b {
+            return true;
+        }
+        if let Some(v) = a.as_single_var()
+            && !b.vars.contains(&v)
+        {
+            self.eff_subst.insert(v, b);
+            return true;
+        }
+        if let Some(v) = b.as_single_var()
+            && !a.vars.contains(&v)
+        {
+            self.eff_subst.insert(v, a);
+            return true;
+        }
+        if a.vars.is_empty() && b.vars.is_empty() {
+            return false; // two closed effects, `io` differs
+        }
+        // Conservatively widen: close every involved variable to the joined `io`.
+        let joined = Effect {
+            io: a.io || b.io,
+            vars: std::collections::BTreeSet::new(),
+        };
+        for v in a.vars.iter().chain(b.vars.iter()) {
+            self.eff_subst.insert(*v, joined.clone());
+        }
+        true
     }
 
     fn apply_unit(&self, u: &Unit) -> Unit {
@@ -830,9 +994,18 @@ impl Infer {
         }
     }
 
-    fn infer_binding(&mut self, binding: &LetBinding, env: &Env) -> Result<Scheme, TypeError> {
-        let ty = if binding.params.is_empty() {
-            self.infer_expr(&binding.value, env)?
+    /// Infer a binding's scheme and its effect. The body's effect lands on the
+    /// innermost arrow (a function definition is itself pure) or, for a value
+    /// binding, is the binding's effect (and leaks to the enclosing scope, since
+    /// evaluating the binding performs it).
+    fn infer_binding(
+        &mut self,
+        binding: &LetBinding,
+        env: &Env,
+    ) -> Result<(Scheme, Effect), TypeError> {
+        let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+        let ty_res = if binding.params.is_empty() {
+            self.infer_expr(&binding.value, env)
         } else {
             let mut body_env = env.clone();
             let mut param_tys = Vec::with_capacity(binding.params.len());
@@ -841,15 +1014,40 @@ impl Infer {
                 param_tys.push(pty.clone());
                 body_env.insert(param.clone(), Scheme::mono(pty));
             }
-            let body_ty = self.infer_expr(&binding.value, &body_env)?;
-            param_tys
-                .into_iter()
-                .rev()
-                .fold(body_ty, |acc, p| Ty::Fun(Box::new(p), Box::new(acc)))
+            self.infer_expr(&binding.value, &body_env).map(|body_ty| {
+                // The innermost arrow (applied last) carries the body's effect;
+                // the outer, currying arrows are pure (they just build closures).
+                let mut ty = body_ty;
+                let mut eff = self.cur_eff.clone();
+                for p in param_tys.into_iter().rev() {
+                    ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
+                    eff = Effect::pure();
+                }
+                ty
+            })
         };
+        let body_eff = self.cur_eff.clone();
+        // Restore the enclosing effect: a function definition leaks nothing; a
+        // value binding's evaluation performs its effect.
+        self.cur_eff = if binding.params.is_empty() {
+            outer.union(&body_eff)
+        } else {
+            outer
+        };
+        let ty = ty_res?;
+
+        // `let pure` asserts the binding introduces no `io` of its own (effect
+        // variables — "pure up to its arguments" — are fine).
+        if binding.pure && self.apply_eff(&body_eff).io {
+            return Err(TypeError {
+                message: format!("`{}` is declared `pure` but performs `io`", binding.name),
+                span: binding.value.span(),
+            });
+        }
+
         // A `mut` binding is monomorphic (so a later `<-` can't change its type)
         // and cannot be a function — only a reassignable value.
-        if binding.mutable {
+        let scheme = if binding.mutable {
             if !binding.params.is_empty() {
                 return Err(TypeError {
                     message: format!(
@@ -861,10 +1059,11 @@ impl Infer {
             }
             let mut scheme = Scheme::mono(self.apply(&ty));
             scheme.mutable = true;
-            Ok(scheme)
+            scheme
         } else {
-            Ok(self.generalize(env, &ty))
-        }
+            self.generalize(env, &ty)
+        };
+        Ok((scheme, self.apply_eff(&body_eff)))
     }
 
     fn infer_expr(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
@@ -960,11 +1159,18 @@ impl Infer {
                     param_tys.push(pty.clone());
                     body_env.insert(param.clone(), Scheme::mono(pty));
                 }
+                // Defining a lambda is pure: capture the body's effect as the
+                // innermost arrow's latent effect rather than performing it here.
+                let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
                 let body_ty = self.infer_expr(body, &body_env)?;
-                Ok(param_tys
-                    .into_iter()
-                    .rev()
-                    .fold(body_ty, |acc, p| Ty::Fun(Box::new(p), Box::new(acc))))
+                let mut ty = body_ty;
+                let mut eff = self.cur_eff.clone();
+                for p in param_tys.into_iter().rev() {
+                    ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
+                    eff = Effect::pure();
+                }
+                self.cur_eff = outer;
+                Ok(ty)
             }
 
             ExprKind::App { func, arg } => self.infer_apply(func, arg, span, env),
@@ -1007,7 +1213,10 @@ impl Infer {
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(binding) => {
-                    let scheme = self.infer_binding(binding, &scope)?;
+                    // The binding's effect is accumulated into `cur_eff` by
+                    // `infer_binding` (for value bindings), so the block's effect
+                    // includes it.
+                    let (scheme, _eff) = self.infer_binding(binding, &scope)?;
                     scope.insert(binding.name.clone(), scheme);
                 }
                 BlockStmt::Expr(e) => {
@@ -1057,6 +1266,8 @@ impl Infer {
         let target_ty = self.instantiate(&scheme);
         let vt = self.infer_expr(value, env)?;
         self.unify(&target_ty, &vt, value.span())?;
+        // Reassignment is an `io` effect (mutation of observable state).
+        self.perform(&Effect::io());
         Ok(Ty::Unit)
     }
 
@@ -1091,11 +1302,12 @@ impl Infer {
             .collect();
         let empty_u = HashMap::new();
         let empty_n = HashMap::new();
+        let empty_e = HashMap::new();
         let record_ty = Ty::Con(name.to_string(), fresh);
         let fields = info
             .fields
             .iter()
-            .map(|(f, t)| (f.clone(), subst_all(t, &tmap, &empty_u, &empty_n)))
+            .map(|(f, t)| (f.clone(), subst_all(t, &tmap, &empty_u, &empty_n, &empty_e)))
             .collect();
         (record_ty, fields)
     }
@@ -1358,11 +1570,17 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
+        // The effects of evaluating `func` and `arg` are accumulated into
+        // `cur_eff` by their own inference; applying the arrow then performs its
+        // latent effect.
         let func_ty = self.infer_expr(func, env)?;
         let arg_ty = self.infer_expr(arg, env)?;
         let result = self.fresh();
-        let expected = Ty::Fun(Box::new(arg_ty), Box::new(result.clone()));
+        let latent = self.fresh_eff();
+        let expected = Ty::Fun(Box::new(arg_ty), Box::new(result.clone()), latent.clone());
         self.unify(&func_ty, &expected, span)?;
+        let latent = self.apply_eff(&latent);
+        self.perform(&latent);
         Ok(self.apply(&result))
     }
 
@@ -1534,9 +1752,21 @@ impl Infer {
                 }
                 Ok(())
             }
-            (Ty::Fun(a1, a2), Ty::Fun(b1, b2)) => {
+            (Ty::Fun(a1, a2, e1), Ty::Fun(b1, b2, e2)) => {
                 self.unify(a1, b1, span)?;
-                self.unify(a2, b2, span)
+                self.unify(a2, b2, span)?;
+                if self.unify_eff(e1, e2) {
+                    Ok(())
+                } else {
+                    Err(TypeError {
+                        message: format!(
+                            "effect mismatch: cannot unify {} with {}",
+                            show(&a),
+                            show(&b)
+                        ),
+                        span,
+                    })
+                }
             }
             (Ty::Con(n1, a1), Ty::Con(n2, a2)) if n1 == n2 && a1.len() == a2.len() => {
                 for (x, y) in a1.iter().zip(a2) {
@@ -1621,18 +1851,23 @@ impl Infer {
             .iter()
             .map(|v| (*v, self.fresh_id()))
             .collect();
+        let emap: HashMap<u32, Effect> = scheme
+            .eff_vars
+            .iter()
+            .map(|v| (*v, self.fresh_eff()))
+            .collect();
         // Carry the `comparison` constraint onto each fresh type variable.
         for v in &scheme.ord_vars {
             if let Some(Ty::Var(fresh)) = tmap.get(v) {
                 self.ord.insert(*fresh);
             }
         }
-        subst_all(&scheme.ty, &tmap, &umap, &nmap)
+        subst_all(&scheme.ty, &tmap, &umap, &nmap, &emap)
     }
 
     fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
         let ty = self.apply(ty);
-        let (env_t, env_u, env_n) = self.env_free_vars(env);
+        let (env_t, env_u, env_n, env_e) = self.env_free_vars(env);
         let mut vars = Vec::new();
         free_type_vars(&ty, &mut |v| {
             if !env_t.contains(&v) && !vars.contains(&v) {
@@ -1651,6 +1886,12 @@ impl Infer {
                 num_vars.push(v);
             }
         });
+        let mut eff_vars = Vec::new();
+        free_eff_vars(&ty, &mut |v| {
+            if !env_e.contains(&v) && !eff_vars.contains(&v) {
+                eff_vars.push(v);
+            }
+        });
         // A generalized type variable that carries `comparison` records it.
         let ord_vars: Vec<u32> = vars
             .iter()
@@ -1662,19 +1903,22 @@ impl Infer {
             uvars,
             num_vars,
             ord_vars,
+            eff_vars,
             mutable: false,
             ty,
         }
     }
 
-    fn env_free_vars(&self, env: &Env) -> (HashSet<u32>, HashSet<u32>, HashSet<u32>) {
+    fn env_free_vars(&self, env: &Env) -> (HashSet<u32>, HashSet<u32>, HashSet<u32>, HashSet<u32>) {
         let mut tys = HashSet::new();
         let mut units = HashSet::new();
         let mut nums = HashSet::new();
+        let mut effs = HashSet::new();
         for scheme in env.values() {
             let bound_t: HashSet<u32> = scheme.vars.iter().copied().collect();
             let bound_u: HashSet<u32> = scheme.uvars.iter().copied().collect();
             let bound_n: HashSet<u32> = scheme.num_vars.iter().copied().collect();
+            let bound_e: HashSet<u32> = scheme.eff_vars.iter().copied().collect();
             let applied = self.apply(&scheme.ty);
             free_type_vars(&applied, &mut |v| {
                 if !bound_t.contains(&v) {
@@ -1691,8 +1935,13 @@ impl Infer {
                     nums.insert(v);
                 }
             });
+            free_eff_vars(&applied, &mut |v| {
+                if !bound_e.contains(&v) {
+                    effs.insert(v);
+                }
+            });
         }
-        (tys, units, nums)
+        (tys, units, nums, effs)
     }
 }
 
@@ -1709,7 +1958,7 @@ fn split_fun(ty: &Ty, n: usize) -> (Vec<Ty>, Ty) {
     let mut cur = ty.clone();
     for _ in 0..n {
         match cur {
-            Ty::Fun(a, b) => {
+            Ty::Fun(a, b, _) => {
                 fields.push(*a);
                 cur = *b;
             }
@@ -1725,7 +1974,7 @@ fn split_fun(ty: &Ty, n: usize) -> (Vec<Ty>, Ty) {
 fn occurs(var: u32, ty: &Ty) -> bool {
     match ty {
         Ty::Var(n) => *n == var,
-        Ty::Fun(a, b) => occurs(var, a) || occurs(var, b),
+        Ty::Fun(a, b, _) => occurs(var, a) || occurs(var, b),
         Ty::Con(_, args) => args.iter().any(|a| occurs(var, a)),
         _ => false,
     }
@@ -1734,7 +1983,7 @@ fn occurs(var: u32, ty: &Ty) -> bool {
 fn free_type_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
         Ty::Var(n) => f(*n),
-        Ty::Fun(a, b) => {
+        Ty::Fun(a, b, _) => {
             free_type_vars(a, f);
             free_type_vars(b, f);
         }
@@ -1746,7 +1995,7 @@ fn free_type_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
 fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
         Ty::Int(u) | Ty::Float(u) | Ty::Num(_, u) => u.var_ids().into_iter().for_each(f),
-        Ty::Fun(a, b) => {
+        Ty::Fun(a, b, _) => {
             free_unit_vars(a, f);
             free_unit_vars(b, f);
         }
@@ -1758,7 +2007,7 @@ fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
 fn free_num_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     match ty {
         Ty::Num(v, _) => f(*v),
-        Ty::Fun(a, b) => {
+        Ty::Fun(a, b, _) => {
             free_num_vars(a, f);
             free_num_vars(b, f);
         }
@@ -1767,25 +2016,38 @@ fn free_num_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
     }
 }
 
+/// Collect the effect variables occurring in a type's arrows.
+fn free_eff_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
+    if let Ty::Fun(a, b, eff) = ty {
+        eff.vars.iter().for_each(|v| f(*v));
+        free_eff_vars(a, f);
+        free_eff_vars(b, f);
+    } else if let Ty::Con(_, args) = ty {
+        args.iter().for_each(|a| free_eff_vars(a, f));
+    }
+}
+
 fn subst_all(
     ty: &Ty,
     tmap: &HashMap<u32, Ty>,
     umap: &HashMap<u32, Unit>,
     nmap: &HashMap<u32, u32>,
+    emap: &HashMap<u32, Effect>,
 ) -> Ty {
     match ty {
         Ty::Var(n) => tmap.get(n).cloned().unwrap_or(Ty::Var(*n)),
         Ty::Int(u) => Ty::Int(u.subst(umap)),
         Ty::Float(u) => Ty::Float(u.subst(umap)),
         Ty::Num(v, u) => Ty::Num(*nmap.get(v).unwrap_or(v), u.subst(umap)),
-        Ty::Fun(a, b) => Ty::Fun(
-            Box::new(subst_all(a, tmap, umap, nmap)),
-            Box::new(subst_all(b, tmap, umap, nmap)),
+        Ty::Fun(a, b, eff) => Ty::Fun(
+            Box::new(subst_all(a, tmap, umap, nmap, emap)),
+            Box::new(subst_all(b, tmap, umap, nmap, emap)),
+            subst_eff(eff, emap),
         ),
         Ty::Con(name, args) => Ty::Con(
             name.clone(),
             args.iter()
-                .map(|a| subst_all(a, tmap, umap, nmap))
+                .map(|a| subst_all(a, tmap, umap, nmap, emap))
                 .collect(),
         ),
         other => other.clone(),
@@ -1842,12 +2104,18 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
                 out.push(')');
             }
         }
-        Ty::Fun(a, b) => {
+        Ty::Fun(a, b, eff) => {
             if atom {
                 out.push('(');
             }
             show_into(a, namer, out, true);
-            out.push_str(" -> ");
+            // Render the latent effect only when it is concretely `io`; a pure or
+            // purely-polymorphic arrow stays the familiar `->`.
+            if eff.io {
+                out.push_str(" ->{io} ");
+            } else {
+                out.push_str(" -> ");
+            }
             show_into(b, namer, out, false);
             if atom {
                 out.push(')');

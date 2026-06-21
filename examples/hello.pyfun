@@ -10,8 +10,11 @@ type Color = Red | Green | Blue
 # Records: named-field product types (nominal; field names are unique).
 type Point = { x: int, y: int }
 
-# Curried function: inferred type int -> int -> int.
-let add a b = a + b
+# Curried function: inferred type int -> int -> int. `pure` is an opt-in
+# assertion that the function performs no effects (no `io`); the compiler infers
+# effects everywhere and only checks them where you ask. Effects are erased at
+# lowering. (`let pure shout n = print n` would be a compile error.)
+let pure add a b = a + b
 
 # Partial application (functools.partial); full application (add(1, 4)).
 let inc = add 1

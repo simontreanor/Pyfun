@@ -150,6 +150,15 @@ fn nested_local_let_lowers_to_nested_assignments() {
 }
 
 #[test]
+fn pure_modifier_is_erased_at_lowering() {
+    // Effects (and the `pure` assertion) leave no runtime residue.
+    let py = pyfun::compile("let pure add a b = a + b\nlet r = add 1 2").unwrap();
+    assert!(py.contains("def add(a, b):"), "{py}");
+    assert!(!py.contains("pure"), "{py}");
+    assert!(!py.contains("io"), "{py}");
+}
+
+#[test]
 fn comparison_operators_lower_to_python() {
     let py =
         pyfun::compile("let a = 1 < 2\nlet b = 1 == 2\nlet c = 1 != 2\nlet d = 1 >= 2").unwrap();

@@ -50,6 +50,9 @@ const PROGRAMS: &[&str] = &[
     "let nested x =\n    let y =\n        let mut t = x\n        t <- t * 2\n        t\n    y",
     // Top-level mutable binding and reassignment (already-sequenced items).
     "let mut counter = 0\ncounter <- counter + 1",
+    // `pure` modifier (effect assertion).
+    "let pure add a b = a + b",
+    "let pure apply f x = f x",
     // Records: declaration, literal, functional update, field access.
     "type Point = { x: int, y: int }",
     "type Box a = { item: a, tag: string }",

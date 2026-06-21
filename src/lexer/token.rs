@@ -28,6 +28,7 @@ pub enum Tok {
     Ident(String),
     Let,
     Mut,
+    Pure,
     If,
     Then,
     Else,
@@ -92,6 +93,7 @@ impl Tok {
         Some(match ident {
             "let" => Tok::Let,
             "mut" => Tok::Mut,
+            "pure" => Tok::Pure,
             "if" => Tok::If,
             "then" => Tok::Then,
             "else" => Tok::Else,
