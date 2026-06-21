@@ -510,6 +510,14 @@ features, all reusing the existing front end:
   span) or a `Module` symbol (resolved by name against `definitions`). The walk
   tracks lexical scopes so an inner binding correctly shadows an outer one — every
   local binder now carries a span, so all are resolvable.
+- **Find-references** — every occurrence of the symbol under the cursor (the
+  inverse of go-to-definition, reusing the same resolver). The cursor may sit on a
+  *use* or the *definition/binder* itself: `symbol_at` maps the offset to a `Target`
+  (the narrowest enclosing reference / local-binder / definition span wins), then
+  `find_references` returns all references with that target plus, when the request's
+  `context.includeDeclaration` is set, the declaration(s). Works for both locals
+  (all binder spans are collected during the walk, so even an unused binder is
+  recognized) and module symbols.
 - **Completion** — in-scope module symbols (when the file parses) plus the always-
   available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins (`Ok`/`Error`, the
   builtin/reserved type names), and keywords, each tagged with a
@@ -522,11 +530,11 @@ The AST changes that enable local navigation: function/binding parameters are
 spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/structural
 equality is unaffected; lowering erases them (`param_names`).
 
-Deferred (next LSP slices, `ROADMAP` #10): find-references; incremental parsing /
-resilient recovery for half-typed files (today each change re-analyzes from scratch
-— fine at this size); and richer hover (docs, separate effect line). The
-`editors/vscode/` client is intentionally thin — all language smarts live in the
-Rust server.
+Deferred (next LSP slices, `ROADMAP` #10): incremental parsing / resilient recovery
+for half-typed files (today each change re-analyzes from scratch — fine at this
+size); rename (a natural extension of find-references); and richer hover (docs,
+separate effect line). The `editors/vscode/` client is intentionally thin — all
+language smarts live in the Rust server.
 
 ## 10. Scope & phases
 

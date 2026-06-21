@@ -80,6 +80,10 @@ impl Server {
                 let result = self.definition(msg);
                 vec![response(id, result)]
             }
+            Some("textDocument/references") => {
+                let result = self.references(msg);
+                vec![response(id, result)]
+            }
             Some("textDocument/completion") => {
                 let result = self.completion(msg);
                 vec![response(id, result)]
@@ -251,6 +255,49 @@ impl Server {
         }
     }
 
+    /// Find-references: every occurrence of the symbol under the cursor (a `Local`
+    /// binder or a `Module` symbol), returned as an array of `Location`s. Honours
+    /// the request's `context.includeDeclaration` (default `true`). The cursor may
+    /// sit on a use *or* the definition/binder itself.
+    fn references(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let position = params.and_then(|p| p.get("position"));
+        let (Some(uri), Some(position)) = (uri, position) else {
+            return Json::Array(vec![]);
+        };
+        let Some(text) = self.documents.get(uri) else {
+            return Json::Array(vec![]);
+        };
+        let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
+        let character = position
+            .get("character")
+            .and_then(Json::as_i64)
+            .unwrap_or(0) as u32;
+        let offset = position_to_byte(text, line, character);
+        // Default `includeDeclaration` to true when the client omits the context.
+        let include_declaration = params
+            .and_then(|p| p.get("context"))
+            .and_then(|c| c.get("includeDeclaration"))
+            .map(|v| v == &Json::Bool(true))
+            .unwrap_or(true);
+
+        let Ok(module) = crate::parse(text) else {
+            return Json::Array(vec![]);
+        };
+        let Some(symbol) = resolve::symbol_at(&module, offset) else {
+            return Json::Array(vec![]);
+        };
+        let locations = resolve::find_references(&module, &symbol, include_declaration)
+            .into_iter()
+            .map(|span| obj(vec![("uri", str(uri)), ("range", span_range(text, span))]))
+            .collect();
+        Json::Array(locations)
+    }
+
     /// Completion: module-level symbols (when the document parses) plus the always-
     /// available prelude, builtins, and keywords. The static set is the fallback
     /// while the file is mid-edit and does not yet parse.
@@ -342,6 +389,7 @@ fn initialize_result() -> Json {
                 ("textDocumentSync", int(1)), // 1 = Full
                 ("hoverProvider", Json::Bool(true)),
                 ("definitionProvider", Json::Bool(true)),
+                ("referencesProvider", Json::Bool(true)),
                 // An (empty) CompletionOptions object enables completion.
                 ("completionProvider", obj(vec![])),
             ]),
@@ -607,6 +655,23 @@ mod tests {
     }
 
     #[test]
+    fn references_lists_all_uses_and_the_declaration() {
+        let mut server = Server::default();
+        let uri = "file:///r.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let one = 1\nlet two = one + one")).unwrap());
+        // Request references from the definition name `one` (line 0, char 4).
+        let req = references_msg(uri, 0, 4, true);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let locs = out[0].get("result").unwrap().as_array().unwrap();
+        // Two uses + the declaration.
+        assert_eq!(locs.len(), 3);
+        // Excluding the declaration leaves the two uses.
+        let req = references_msg(uri, 0, 4, false);
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result").unwrap().as_array().unwrap().len(), 2);
+    }
+
+    #[test]
     fn completion_lists_user_symbols_and_prelude() {
         let mut server = Server::default();
         let uri = "file:///c.pyfun";
@@ -645,6 +710,30 @@ mod tests {
 
     fn hover_msg(uri: &str, line: i64, character: i64) -> String {
         pos_msg("textDocument/hover", uri, line, character)
+    }
+
+    /// A `textDocument/references` request with an `includeDeclaration` context.
+    fn references_msg(uri: &str, line: i64, character: i64, include_decl: bool) -> String {
+        obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/references")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(line)), ("character", int(character))]),
+                    ),
+                    (
+                        "context",
+                        obj(vec![("includeDeclaration", Json::Bool(include_decl))]),
+                    ),
+                ]),
+            ),
+        ])
+        .to_string()
     }
 
     /// A position-bearing request (hover/definition/completion) as JSON text.

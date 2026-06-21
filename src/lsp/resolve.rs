@@ -102,6 +102,11 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
 
 /// Collect every resolvable identifier reference in the module (see [`Reference`]).
 pub fn references(module: &Module) -> Vec<Reference> {
+    walk(module).refs
+}
+
+/// Walk the whole module, collecting references and local binder spans.
+fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
     for item in &module.items {
         match item {
@@ -110,7 +115,63 @@ pub fn references(module: &Module) -> Vec<Reference> {
             _ => {}
         }
     }
-    r.refs
+    r
+}
+
+/// Identify the symbol at byte `offset` — whether the cursor sits on a reference,
+/// a local binder, or a module-level definition name. Returns the symbol's
+/// [`Target`] identity (a local binder span, or a module symbol name), choosing the
+/// narrowest enclosing span so a precise name beats an enclosing declaration.
+pub fn symbol_at(module: &Module, offset: usize) -> Option<Target> {
+    let r = walk(module);
+    // Candidate (span, identity) pairs from references, local binders, and
+    // module-level definitions; the narrowest span containing the offset wins.
+    let mut candidates: Vec<(Span, Target)> = Vec::new();
+    for reference in &r.refs {
+        candidates.push((reference.span, reference.target.clone()));
+    }
+    for &span in &r.binders {
+        candidates.push((span, Target::Local(span)));
+    }
+    for sym in definitions(module) {
+        candidates.push((sym.span, Target::Module(sym.name)));
+    }
+    candidates
+        .into_iter()
+        .filter(|(span, _)| span.start <= offset && offset < span.end)
+        .min_by_key(|(span, _)| span.end - span.start)
+        .map(|(_, target)| target)
+}
+
+/// Every occurrence of `symbol` in the module: all references to it, plus its
+/// declaration(s) when `include_declaration` is set. Spans are de-duplicated and
+/// returned in source order.
+pub fn find_references(module: &Module, symbol: &Target, include_declaration: bool) -> Vec<Span> {
+    let mut spans: Vec<Span> = references(module)
+        .into_iter()
+        .filter(|r| &r.target == symbol)
+        .map(|r| r.span)
+        .collect();
+
+    if include_declaration {
+        match symbol {
+            // A local's declaration is its binder span (the `Target` itself).
+            Target::Local(span) => spans.push(*span),
+            // A module symbol may have one declaration (a `let`) — or, for a
+            // constructor sharing a type's decl span, more than one named match.
+            Target::Module(name) => {
+                for sym in definitions(module) {
+                    if &sym.name == name {
+                        spans.push(sym.span);
+                    }
+                }
+            }
+        }
+    }
+
+    spans.sort_by_key(|s| (s.start, s.end));
+    spans.dedup();
+    spans
 }
 
 #[derive(Default)]
@@ -119,6 +180,9 @@ struct Resolver {
     /// binder span.
     scopes: Vec<HashMap<String, Span>>,
     refs: Vec<Reference>,
+    /// Every local binder's span (params, block `let`s, pattern vars, CE `let`s),
+    /// so find-references can recognize the cursor sitting on a binder itself.
+    binders: Vec<Span>,
 }
 
 impl Resolver {
@@ -128,11 +192,24 @@ impl Resolver {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
 
+    /// Push a scope frame, recording its binder spans.
+    fn push_scope(&mut self, frame: HashMap<String, Span>) {
+        self.binders.extend(frame.values().copied());
+        self.scopes.push(frame);
+    }
+
+    /// Add one binding to the innermost scope (for the sequential binders of a
+    /// block or computation expression), recording its span.
+    fn bind_in_scope(&mut self, name: String, span: Span) {
+        self.binders.push(span);
+        self.scopes.last_mut().unwrap().insert(name, span);
+    }
+
     /// Walk a binding's value with its parameters in scope. The binding's own name
     /// is resolved as a module symbol (so a recursive call jumps to the
     /// definition), hence it is not added to the local scope here.
     fn walk_binding(&mut self, binding: &LetBinding) {
-        self.scopes.push(param_scope(binding));
+        self.push_scope(param_scope(binding));
         self.walk_expr(&binding.value);
         self.scopes.pop();
     }
@@ -151,7 +228,7 @@ impl Resolver {
                 }),
             },
             ExprKind::Fn { params, body } => {
-                self.scopes.push(
+                self.push_scope(
                     params
                         .iter()
                         .map(|p| (p.name.clone(), p.span.span()))
@@ -174,7 +251,7 @@ impl Resolver {
                 for MatchArm { pattern, body } in arms {
                     let mut bound = HashMap::new();
                     pattern_vars(pattern, &mut bound);
-                    self.scopes.push(bound);
+                    self.push_scope(bound);
                     self.walk_expr(body);
                     self.scopes.pop();
                 }
@@ -206,10 +283,7 @@ impl Resolver {
                             value,
                         } => {
                             self.walk_expr(value);
-                            self.scopes
-                                .last_mut()
-                                .unwrap()
-                                .insert(name.clone(), name_span.span());
+                            self.bind_in_scope(name.clone(), name_span.span());
                         }
                         CeItem::DoBang(e)
                         | CeItem::Return(e)
@@ -246,13 +320,10 @@ impl Resolver {
                             // The value sees the current scope (bindings are not
                             // recursive); the name then binds for later statements,
                             // pointing at its own precise name span.
-                            self.scopes.push(param_scope(binding));
+                            self.push_scope(param_scope(binding));
                             self.walk_expr(&binding.value);
                             self.scopes.pop();
-                            self.scopes
-                                .last_mut()
-                                .unwrap()
-                                .insert(binding.name.clone(), binding.name_span.span());
+                            self.bind_in_scope(binding.name.clone(), binding.name_span.span());
                         }
                         BlockStmt::Expr(e) => self.walk_expr(e),
                     }
@@ -351,6 +422,39 @@ mod tests {
         let refs = references(&m);
         // `y` resolves to its pattern binder.
         assert!(refs.iter().any(|r| matches!(r.target, Target::Local(_))));
+    }
+
+    #[test]
+    fn find_references_from_the_definition_name() {
+        // Clicking the top-level definition `one` finds its two uses + the
+        // declaration — the headline find-references case.
+        let src = "let one = 1\nlet two = one + one";
+        let m = module(src);
+        let def_off = src.find("one").unwrap() + 1; // inside the name span
+        let sym = symbol_at(&m, def_off).unwrap();
+        assert_eq!(sym, Target::Module("one".to_string()));
+        assert_eq!(find_references(&m, &sym, true).len(), 3);
+        assert_eq!(find_references(&m, &sym, false).len(), 2);
+    }
+
+    #[test]
+    fn find_references_on_a_parameter() {
+        // From a use of the parameter `x`, find both uses + its declaration.
+        let src = "let add x = x + x";
+        let m = module(src);
+        let sym = symbol_at(&m, src.rfind('x').unwrap()).unwrap();
+        assert!(matches!(sym, Target::Local(_)));
+        assert_eq!(find_references(&m, &sym, true).len(), 3);
+        assert_eq!(find_references(&m, &sym, false).len(), 2);
+    }
+
+    #[test]
+    fn symbol_at_recognizes_a_binder_under_the_cursor() {
+        // Cursor on the parameter binder itself (not a use) still identifies it.
+        let src = "let id x = x";
+        let m = module(src);
+        let binder_off = src.find(" x ").unwrap() + 1;
+        assert!(matches!(symbol_at(&m, binder_off), Some(Target::Local(_))));
     }
 
     #[test]

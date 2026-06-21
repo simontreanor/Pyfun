@@ -316,3 +316,52 @@ fn go_to_definition_resolves_a_parameter() {
     assert_eq!(start.get("line").unwrap().as_i64(), Some(0));
     assert_eq!(start.get("character").unwrap().as_i64(), Some(8));
 }
+
+#[test]
+fn serves_find_references() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    // `one` is defined on line 0 and used twice on line 1. Find-references from
+    // the definition name (line 0, char 4) returns 2 uses + the declaration.
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///r.pyfun","text":"let one = 1\nlet two = one + one"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///r.pyfun"},"position":{"line":0,"character":4},"context":{"includeDeclaration":true}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let refs = unframe(&out)
+        .into_iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("references response");
+    let locations = refs.get("result").unwrap().as_array().unwrap();
+    assert_eq!(locations.len(), 3, "locations: {locations:?}");
+    // Capabilities advertised the provider.
+    assert!(
+        locations
+            .iter()
+            .all(|l| l.get("uri").is_some() && l.get("range").is_some())
+    );
+}
