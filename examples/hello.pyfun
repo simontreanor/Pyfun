@@ -91,6 +91,17 @@ let area w h = w * h
 let floor = area 4<m> 5<m>            # int<m^2>
 # `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
+# Externs: typed imports of arbitrary Python callables (`DESIGN.md` §6). The
+# Pyfun name equals the Python name unless a `= target` clause gives a dotted
+# path (which is imported automatically). Type variables are bare lowercase, as
+# in `type` decls. The boundary is effectful-by-default — a plain `extern` is
+# `io` at full application — unless asserted `pure`; `math.sqrt` is pure.
+extern show: a -> string = str
+extern pure sqrt: float -> float = math.sqrt
+
+let label = show 42                  # "42"  (str(42))
+let root = sqrt 16.0                 # 4.0   (math.sqrt(16.0))
+
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
 #   pyfun run examples/hello.pyfun
 # Consecutive `print` statements are separated by Pyfun's offside rule (a line
@@ -126,3 +137,7 @@ print shifted.x                       # 10
 print (dot here)                      # 7
 print here                            # Point(3, 4)
 print (scaled 3 4)                    # 14   ((3 + 4) * 2, via local mutation)
+
+# Externs in action (call out to Python's str / math.sqrt).
+print label                           # 42
+print root                            # 4.0

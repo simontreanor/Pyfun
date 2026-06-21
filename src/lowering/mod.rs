@@ -22,11 +22,11 @@
 //! synthesize a partial application for an unknown callee. Feeding the type
 //! checker's results in here would make arity fully precise.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::parser::ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module,
-    Pattern, TypeDeclKind,
+    Pattern, TypeDeclKind, TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
 
@@ -62,6 +62,12 @@ struct Lowerer {
     /// Field name → owning record type (mirrors the type checker's registry), to
     /// resolve which class a `{ … }` literal or update constructs.
     field_to_record: std::collections::HashMap<String, String>,
+    /// `extern` name → its dotted Python target path (e.g. `["math", "sqrt"]`).
+    /// A reference to one lowers to the target rather than the Pyfun name.
+    extern_targets: std::collections::HashMap<String, Vec<String>>,
+    /// Python modules an *used* extern needs imported (the first segment of a
+    /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
+    needed_imports: BTreeSet<String>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -81,8 +87,15 @@ impl Lowerer {
         let mut ctor_arity = std::collections::HashMap::new();
         let mut record_fields = std::collections::HashMap::new();
         let mut field_to_record = std::collections::HashMap::new();
+        let mut extern_targets = std::collections::HashMap::new();
         for item in &module.items {
             match item {
+                Item::Extern(decl) => {
+                    // Arity drives full-vs-partial application, exactly like the
+                    // prelude: it is the number of leading arrows in the type.
+                    arities.insert(decl.name.clone(), arrow_arity(&decl.ty));
+                    extern_targets.insert(decl.name.clone(), decl.target.clone());
+                }
                 Item::Let(binding) => {
                     // A binding's callable arity is the number of parameters of the
                     // Python def/lambda it lowers to: its own `let` parameters, or —
@@ -131,6 +144,8 @@ impl Lowerer {
             ctor_arity,
             record_fields,
             field_to_record,
+            extern_targets,
+            needed_imports: BTreeSet::new(),
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -169,8 +184,9 @@ impl Lowerer {
         let mut code = Vec::new();
         for item in &module.items {
             match item {
-                // Measures and type declarations have no runtime code.
-                Item::Measure { .. } | Item::Type(_) => {}
+                // Measures, type declarations, and externs have no runtime code
+                // (an extern's effect is purely at its reference sites).
+                Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
                 Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
                 Item::Expr(expr) => {
                     let (mut stmts, value) = self.lower_value(expr, &HashSet::new())?;
@@ -189,6 +205,10 @@ impl Lowerer {
         let mut body = Vec::new();
         if self.needs_functools {
             body.push(PyStmt::Import("functools".to_string()));
+        }
+        // Modules needed by referenced `extern`s (sorted for deterministic output).
+        for module in &self.needed_imports {
+            body.push(PyStmt::Import(module.clone()));
         }
         if self.needs_result {
             body.extend(result_prelude());
@@ -571,6 +591,14 @@ impl Lowerer {
         if name == "Ok" || name == "Error" {
             self.needs_result = true;
         }
+        // An `extern` reference lowers to its dotted Python target (e.g. `math.sqrt`),
+        // recording any module that must be imported.
+        if let Some(target) = self.extern_targets.get(name).cloned() {
+            if target.len() > 1 {
+                self.needed_imports.insert(target[0].clone());
+            }
+            return dotted_path(&target);
+        }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
                 func: Box::new(PyExpr::Name(py_ctor_name(name))),
@@ -905,6 +933,29 @@ fn lower_binop(op: BinOp) -> PyBinOp {
         BinOp::And => PyBinOp::And,
         BinOp::Or => PyBinOp::Or,
     }
+}
+
+/// The number of leading arrows in a declared type — an `extern`'s callable arity,
+/// used (as for the prelude) to decide full vs partial application.
+fn arrow_arity(ty: &TypeExpr) -> usize {
+    match ty {
+        TypeExpr::Fun(_, ret) => 1 + arrow_arity(ret),
+        TypeExpr::Con(..) => 0,
+    }
+}
+
+/// Build a Python expression from a dotted path: `["math", "sqrt"]` → `math.sqrt`,
+/// a single segment → a bare name.
+fn dotted_path(segments: &[String]) -> PyExpr {
+    let mut iter = segments.iter();
+    let mut expr = PyExpr::Name(iter.next().expect("non-empty target").clone());
+    for seg in iter {
+        expr = PyExpr::Attribute {
+            value: Box::new(expr),
+            attr: seg.clone(),
+        };
+    }
+    expr
 }
 
 /// Mangle a constructor name to a valid, non-keyword Python identifier.

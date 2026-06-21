@@ -350,7 +350,8 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
 
     for item in &module.items {
         match item {
-            Item::Measure { .. } | Item::Type(_) => {} // handled by the pre-pass
+            // Measures, types, and externs are all handled by the pre-pass.
+            Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
             Item::Let(binding) => match inf.infer_binding(binding, &env) {
                 Ok((scheme, _eff)) => {
                     env.insert(binding.name.clone(), scheme);
@@ -539,7 +540,84 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
         }
     }
 
+    // Pass 3: `extern` declarations (typed Python imports — `DESIGN.md` §6).
+    // Resolved last so an extern may reference any user-declared type. Type
+    // variables are collected from the declared type (bare lowercase names, as in
+    // `type` decls) and generalized; the boundary is effectful-by-default, so the
+    // innermost arrow gets `io` unless the binding asserts `pure`.
+    for item in &module.items {
+        let Item::Extern(decl) = item else { continue };
+        let span = decl.span.span();
+        if env.contains_key(&decl.name) {
+            errors.push(TypeError {
+                message: format!("`{}` is already defined", decl.name),
+                span,
+            });
+            continue;
+        }
+        let mut var_map = HashMap::new();
+        collect_type_vars(&decl.ty, &mut var_map);
+        match resolve(&decl.ty, &var_map, &decls.type_arity, span) {
+            Ok(mut ty) => {
+                if !decl.pure {
+                    set_innermost_io(&mut ty);
+                }
+                env.insert(
+                    decl.name.clone(),
+                    Scheme {
+                        vars: (0..var_map.len() as u32).collect(),
+                        uvars: vec![],
+                        num_vars: vec![],
+                        ord_vars: vec![],
+                        eff_vars: vec![],
+                        mutable: false,
+                        ty,
+                    },
+                );
+            }
+            Err(e) => errors.push(e),
+        }
+    }
+
     (decls, env)
+}
+
+/// Collect the type variables of a declared type — bare lowercase names that are
+/// neither builtins nor (uppercase) type constructors — in order of first
+/// appearance, each mapped to a sequential id. Used to generalize `extern` types,
+/// which (unlike `type` declarations) have no explicit parameter list.
+fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
+    match ty {
+        TypeExpr::Fun(a, b) => {
+            collect_type_vars(a, map);
+            collect_type_vars(b, map);
+        }
+        TypeExpr::Con(name, args) => {
+            if args.is_empty()
+                && !BUILTIN_TYPES.contains(&name.as_str())
+                && name.chars().next().is_some_and(char::is_lowercase)
+            {
+                let next = map.len() as u32;
+                map.entry(name.clone()).or_insert(next);
+            }
+            for a in args {
+                collect_type_vars(a, map);
+            }
+        }
+    }
+}
+
+/// Set the innermost (rightmost) arrow's latent effect to `io`, so a *fully
+/// applied* `extern` performs the Python call's effect (partial applications stay
+/// pure — no call has happened yet). A non-function (value) extern is left pure.
+fn set_innermost_io(ty: &mut Ty) {
+    if let Ty::Fun(_, ret, eff) = ty {
+        if matches!(**ret, Ty::Fun(..)) {
+            set_innermost_io(ret);
+        } else {
+            *eff = Effect::io();
+        }
+    }
 }
 
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use

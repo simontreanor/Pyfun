@@ -37,9 +37,9 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding,
-    MatchArm, Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
-    VariantDecl,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, Item,
+    LetBinding, MatchArm, Module, NodeSpan, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
+    UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -162,6 +162,7 @@ impl Parser {
         match self.peek() {
             Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
+            Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
             _ => Ok(Item::Expr(self.parse_expr()?)),
         }
@@ -173,6 +174,36 @@ impl Parser {
         let name = self.parse_ident("measure name")?;
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(Item::Measure { name, span })
+    }
+
+    /// `extern [pure] name : type [= a.b.c]` — a typed import of a Python callable
+    /// or value (`DESIGN.md` §6). The optional `= …` clause gives the dotted Python
+    /// path; omitted, the target is the Pyfun name itself.
+    fn parse_extern(&mut self) -> Result<ExternDecl, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Extern, "`extern`")?;
+        let pure = self.eat(&Tok::Pure);
+        let name = self.parse_ident("extern name")?;
+        self.expect(&Tok::Colon, "`:`")?;
+        let ty = self.parse_type()?;
+        // Optional `= a.b.c` Python target; defaults to the Pyfun name.
+        let target = if self.eat(&Tok::Eq) {
+            let mut segs = vec![self.parse_ident("Python target")?];
+            while self.eat(&Tok::Dot) {
+                segs.push(self.parse_ident("Python attribute")?);
+            }
+            segs
+        } else {
+            vec![name.clone()]
+        };
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(ExternDecl {
+            pure,
+            name,
+            ty,
+            target,
+            span,
+        })
     }
 
     fn parse_type_decl(&mut self) -> Result<TypeDecl, ParseError> {
@@ -953,6 +984,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Yield => "yield",
         Tok::Do => "do",
         Tok::Measure => "measure",
+        Tok::Extern => "extern",
         Tok::Not => "not",
         Tok::And => "and",
         Tok::Or => "or",

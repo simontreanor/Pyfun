@@ -46,8 +46,28 @@ pub enum Item {
         span: NodeSpan,
     },
     Type(TypeDecl),
+    /// `extern [pure] name : type [= python.path]` — import a Python function or
+    /// value with a declared Pyfun type (`DESIGN.md` §6). The boundary is
+    /// effectful-by-default (`io` on the innermost arrow) unless `pure` is asserted.
+    Extern(ExternDecl),
     Let(LetBinding),
     Expr(Expr),
+}
+
+/// `extern [pure] name : type [= a.b.c]`.
+///
+/// `target` is the dotted Python path to reference (e.g. `["math", "sqrt"]`); when
+/// the `= …` clause is omitted it defaults to `[name]` (Pyfun name = Python name,
+/// the existing prelude convention). Type variables in `ty` are bare lowercase
+/// identifiers (as in `type` declarations); they are collected and generalized.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternDecl {
+    /// `extern pure …` — assert the boundary introduces no effect (no `io`).
+    pub pure: bool,
+    pub name: String,
+    pub ty: TypeExpr,
+    pub target: Vec<String>,
+    pub span: NodeSpan,
 }
 
 /// A surface unit expression, e.g. `<m/s^2>`, stored as `(measure, exponent)`

@@ -7,8 +7,8 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    BlockStmt, CeItem, Expr, ExprKind, FieldDecl, FieldInit, Item, LetBinding, MatchArm, Module,
-    Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
+    BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, Item, LetBinding,
+    MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -26,6 +26,7 @@ pub fn print_item(item: &Item) -> String {
     match item {
         Item::Measure { name, .. } => format!("measure {name}"),
         Item::Type(decl) => print_type_decl(decl),
+        Item::Extern(decl) => print_extern(decl),
         Item::Let(binding) => print_let(binding, 0),
         Item::Expr(expr) => print_expr(expr),
     }
@@ -84,6 +85,24 @@ fn print_type_decl(decl: &TypeDecl) -> String {
             let fields: Vec<String> = fields.iter().map(print_field_decl).collect();
             s.push_str(&format!("{{ {} }}", fields.join(", ")));
         }
+    }
+    s
+}
+
+/// Print an `extern` declaration. The `= target` clause is shown only when the
+/// Python target differs from the Pyfun name (so the name-equals-name common case
+/// reparses identically).
+fn print_extern(decl: &ExternDecl) -> String {
+    let mut s = String::from("extern ");
+    if decl.pure {
+        s.push_str("pure ");
+    }
+    s.push_str(&decl.name);
+    s.push_str(": ");
+    s.push_str(&print_type(&decl.ty));
+    if decl.target != [decl.name.clone()] {
+        s.push_str(" = ");
+        s.push_str(&decl.target.join("."));
     }
     s
 }

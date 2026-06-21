@@ -574,6 +574,62 @@ fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
     assert!(pyfun::check(src).is_ok());
 }
 
+// ---------- extern (typed Python imports, `DESIGN.md` §6) ----------
+
+#[test]
+fn accepts_extern_with_concrete_type() {
+    assert!(pyfun::check("extern pure sqrt: float -> float = math.sqrt\nlet r = sqrt 2.0").is_ok());
+}
+
+#[test]
+fn extern_type_is_generalized_over_its_variables() {
+    // `show : a -> string` must be usable at two different argument types.
+    let src = "extern show: a -> string = str\nlet a = show 1\nlet b = show true";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn extern_is_type_checked_at_the_call_site() {
+    assert_error_contains(
+        "extern pure sqrt: float -> float = math.sqrt\nlet bad = sqrt \"x\"",
+        "expected float, found string",
+    );
+}
+
+#[test]
+fn extern_boundary_is_effectful_by_default() {
+    // A plain `extern` is impure at full application, so a `pure` binding that
+    // calls it must be rejected.
+    assert_error_contains(
+        "extern readLine: string -> string\nlet pure ask q = readLine q",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn pure_extern_can_be_used_in_a_pure_binding() {
+    assert!(
+        pyfun::check("extern pure sqrt: float -> float = math.sqrt\nlet pure root x = sqrt x")
+            .is_ok()
+    );
+}
+
+#[test]
+fn partial_application_of_an_extern_is_pure() {
+    // The Python call only happens on full application, so a partial application
+    // performs no effect — usable inside a `pure` binding.
+    let src = "extern pow: float -> float -> float = math.pow\nlet pure twoTo = pow 2.0";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_extern_redefining_an_existing_name() {
+    assert_error_contains(
+        "extern print: string -> unit\nlet r = print \"hi\"",
+        "already defined",
+    );
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

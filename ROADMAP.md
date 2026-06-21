@@ -131,7 +131,7 @@ a valid program runs silently — `run`'s observable value today is exit status 
 errors (e.g. the non-exhaustive-match guard). Covered by `tests/run.rs`.
 - **Effort/risk:** Low. **Status:** landed.
 
-### 9. Standard library / prelude — ✅ started (MVP prelude landed)
+### 9. Standard library / prelude — ✅ MVP prelude + general FFI (`extern`) landed
 A set of built-in functions Pyfun programs can call. The MVP prelude has landed: `print : 'a ->
 unit` and unit-polymorphic `abs`/`min`/`max : int<'u> -> …`, each a typed view over a Python builtin
 (single source of truth `types::PRELUDE` + `seed_prelude`), plus a `unit` type. This made programs
@@ -139,9 +139,16 @@ observable and forced the first concrete slice of the **Python interop story** (
 Pyfun name = Python name, partial application via known arities). Shipping it surfaced that
 consecutive statements need separation, which prompted the **lightweight offside rule** (9b below).
 Covered by `tests/{typecheck,compile,roundtrip}.rs`.
-- **Still to do (a larger prelude):** collections, option/result helpers, and name-aliased imports
-  (`show` → Python `str`) — the general "import and type an arbitrary Python function" surface.
-- **Effort/risk:** Medium, partly a design exercise. **Status:** MVP slice done; broader prelude open.
+**The general FFI surface has landed (`extern`).** `extern [pure] name : type [= a.b.c]` imports an
+arbitrary Python callable/value at a declared Pyfun type: type variables generalize (`show : a ->
+string`), the optional dotted target is auto-imported (`= math.sqrt` emits `import math`), partial
+application still lowers to `functools.partial`, and the boundary is effectful-by-default — a plain
+`extern` carries `io` (the third source after `print`/`<-`), `extern pure` opts out. This made the
+effect system's "Python boundary is effectful-by-default" rule (`DESIGN.md` §6) concrete. Covered by
+`tests/{typecheck,compile,roundtrip}.rs`.
+- **Still to do (a larger prelude):** collections (`List` type + literal syntax + map/filter/fold)
+  and option/result helpers — these need their own type/syntax design, not just more `extern`s.
+- **Effort/risk:** Medium. **Status:** MVP prelude + general FFI done; collections/helpers open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -161,9 +168,12 @@ All four language pillars beyond the MVP core are now done: **#1 (effects)**, **
 **#3 (mutability + blocks)**, **#4 (floats)** — on top of `run` + prelude + the general offside rule.
 The remaining work is breadth and polish, not new pillars. Highest leverage next:
 
-1. **Broaden #9 (prelude + interop / FFI)** — collections and option/result helpers, plus
-   name-aliased Python imports. The general FFI surface also makes the effect system's "Python
-   boundary is effectful-by-default" rule concrete (the next real `io` source after `print`/`<-`).
+The general FFI surface (`extern`, #9) is now done — it was the highest-leverage piece and made the
+effect boundary concrete. Remaining, in rough priority:
+
+1. **Collections (#9 cont.)** — a `List` type + literal syntax (`[1; 2; 3]`) + polymorphic
+   `map`/`filter`/`fold`/`length`, with option/result helpers. The biggest remaining "library" piece;
+   needs its own type/syntax design (more than `extern` can express).
 2. **#10 (LSP)** — would let inferred effects/types surface on hover (the display half of #1).
 3. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms).

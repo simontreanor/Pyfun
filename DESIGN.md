@@ -77,10 +77,10 @@ alongside type/unit/num variables, so higher-order functions stay effect-polymor
 apply f x = f x` is pure *up to its argument*: `apply print` is impure at the call site, `apply`
 itself is not). The one **opt-in, definition-level** assertion is `let pure f … = …`, which is a
 compile error if the binding introduces `io`. Effects are **fully erased at lowering** (zero runtime
-residue, like units); `pure` produces no Python. The single source beyond `print` is `<-` (§3); the
-Python FFI boundary (§6) will be effectful-by-default when it lands. Surfacing inferred effects in
-`pyfun check`/hover output (beyond violation messages) and adding more labels (e.g. `async`) are
-later refinements; declared function types (`a -> b` in a `type`) are currently treated as pure.
+residue, like units); `pure` produces no Python. The sources beyond `print` are `<-` (§3) and the
+Python FFI boundary — a plain `extern` is effectful-by-default (§6), the third `io` source. Surfacing
+inferred effects in `pyfun check`/hover output (beyond violation messages) and adding more labels
+(e.g. `async`) are later refinements; declared function types (`a -> b` in a `type`) are still pure.
 
 Original design intent (now realized):
 
@@ -166,8 +166,34 @@ source of truth is `types::PRELUDE` (names + arities, read by lowering so a part
 `max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun
 names equal their Python names, so there is no call-site renaming — the simplest honest interop
 mapping. User definitions shadow prelude names. This is deliberately tiny; collections/option/
-result helpers and name-aliased imports (`show` → Python `str`) are the obvious next increments and
-are where the general "import and type an arbitrary Python function" story gets built out.
+result helpers are the obvious next increments.
+
+**`extern` — the general FFI surface (implemented).** The "import and type an arbitrary Python
+function" story is now a first-class declaration:
+
+```
+extern len : string -> int                  # Pyfun name = Python name
+extern show : a -> string = str             # aliased to a Python builtin
+extern pure sqrt : float -> float = math.sqrt   # dotted path; module auto-imported
+```
+
+`extern [pure] name : type [= a.b.c]` binds `name` to a Python callable (or value) at a declared
+Pyfun type. Type variables are bare lowercase identifiers (as in `type` declarations) and are
+generalized, so `show : a -> string` is polymorphic. The optional `= a.b.c` clause is the dotted
+Python target; omitted, it defaults to the Pyfun name (the prelude convention). A reference lowers
+directly to its target (`math.sqrt`), and any module prefix of a *used* extern is emitted as an
+`import` (deduplicated, sorted). Arity is the number of leading arrows, so partial application of an
+extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still
+type-checked at the boundary (`sqrt "x"` is rejected) — but only against the *declared* type; Pyfun
+trusts the annotation, which is where the §4 "effectful/unsafe at the boundary" relaxation bites.
+
+This makes the boundary's effectful-by-default rule (§4) concrete: a plain `extern`'s innermost
+arrow carries `io` (the Python call is the effect, performed on full application), so an impure
+`extern` cannot be called from a `let pure` binding. `extern pure` asserts the call is effect-free
+("pure up to its arguments", like `let pure`) — used for the likes of `math.sqrt`. Externs are
+erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
+(`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
+`extern` type syntax can't yet express; collections and option/result helpers are the next layer.
 
 ## 7. Surface language (MVP)
 

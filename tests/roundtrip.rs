@@ -79,6 +79,12 @@ const PROGRAMS: &[&str] = &[
     "let a = 2<m^2>",
     "let a = 9<kg m / s^2>",
     "let a = 7<1>",
+    // Externs (typed Python imports). The `= target` clause prints only when the
+    // Python target differs from the Pyfun name.
+    "extern len: string -> int",
+    "extern show: a -> string = str",
+    "extern pure sqrt: float -> float = math.sqrt",
+    "extern pure pow: float -> float -> float = math.pow",
 ];
 
 #[test]

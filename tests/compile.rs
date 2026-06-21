@@ -37,6 +37,34 @@ fn no_functools_import_when_unused() {
 }
 
 #[test]
+fn extern_lowers_to_its_python_target_with_import() {
+    let py =
+        pyfun::compile("extern pure sqrt: float -> float = math.sqrt\nlet r = sqrt 16.0").unwrap();
+    assert!(py.contains("import math"), "{py}");
+    assert!(py.contains("r = math.sqrt(16.0)"), "{py}");
+}
+
+#[test]
+fn extern_with_name_equal_target_needs_no_import() {
+    let py = pyfun::compile("extern show: a -> string = str\nlet r = show 42").unwrap();
+    assert!(!py.contains("import"), "{py}");
+    assert!(py.contains("r = str(42)"), "{py}");
+}
+
+#[test]
+fn partial_application_of_extern_uses_functools_partial() {
+    let py =
+        pyfun::compile("extern pow: float -> float -> float = math.pow\nlet sq = pow 2.0").unwrap();
+    assert!(py.contains("sq = functools.partial(math.pow, 2.0)"), "{py}");
+}
+
+#[test]
+fn unused_extern_imports_nothing() {
+    let py = pyfun::compile("extern pure sqrt: float -> float = math.sqrt\nlet r = 1").unwrap();
+    assert!(!py.contains("import math"), "{py}");
+}
+
+#[test]
 fn pipe_becomes_application() {
     let py = pyfun::compile("let id x = x\nlet r = 5 |> id").unwrap();
     assert!(py.contains("r = id(5)"), "{py}");
@@ -508,6 +536,19 @@ fn e2e_boolean_logic() {
     assert_eq!(
         stdout.lines().collect::<Vec<_>>(),
         ["True", "True", "True", "True", "False"]
+    );
+}
+
+#[test]
+fn e2e_extern_calls_python() {
+    run_and_check(
+        "extern show: a -> string = str\n\
+         extern len: string -> int\n\
+         extern pure sqrt: float -> float = math.sqrt\n\
+         let label = show 42\n\
+         let size = len \"hello\"\n\
+         let root = sqrt 16.0",
+        &[("label", "42"), ("size", "5"), ("root", "4.0")],
     );
 }
 
