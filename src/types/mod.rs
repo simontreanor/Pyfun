@@ -343,7 +343,7 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
 /// one of these names and resolve the dotted member against the prelude instead of
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
-pub const MODULES: &[&str] = &["List", "Set", "Map", "Option"];
+pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result"];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
 /// truth for seeding qualified schemes, registering arities, and editor completion.
@@ -352,6 +352,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Set", SET_PRELUDE),
     ("Map", MAP_PRELUDE),
     ("Option", OPTION_PRELUDE),
+    ("Result", RESULT_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -359,6 +360,20 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
 /// constructors themselves are global; these are the qualified combinators.
 pub const OPTION_PRELUDE: &[(&str, usize)] =
     &[("map", 2), ("withDefault", 2), ("isSome", 1), ("isNone", 1)];
+
+/// The `Result` module (`DESIGN.md` §6): combinators over the built-in `Result a e`
+/// type (constructors `Ok`/`Error`, used by the `result {}` CE). `Result.map`/
+/// `Result.mapError`/`Result.bind` are effect-polymorphic; `Result.toOption` bridges
+/// to `Option` (`Ok v → Some v`, `Error _ → None`).
+pub const RESULT_PRELUDE: &[(&str, usize)] = &[
+    ("map", 2),
+    ("mapError", 2),
+    ("bind", 2),
+    ("withDefault", 2),
+    ("isOk", 1),
+    ("isError", 1),
+    ("toOption", 1),
+];
 
 /// If `expr` is a built-in module member access `Module.member`, return its dotted
 /// name (e.g. `"List.map"`). Shared by the checker and lowering so both resolve
@@ -525,6 +540,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_set_prelude(&mut env);
     seed_map_prelude(&mut env);
     seed_option_prelude(&mut env);
+    seed_result_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -1021,6 +1037,84 @@ fn seed_option_prelude(env: &mut Env) {
     );
     put("isSome", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
     put("isNone", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
+}
+
+/// Seed the `Result` module ([`RESULT_PRELUDE`]) — combinators over the built-in
+/// `Result a e` (ok var 0, error var 1, mapped var 2). `Result.map`/`mapError`/
+/// `bind` are effect-polymorphic (one bound effect variable, id 0), like
+/// `List.map`/`Option.map`.
+fn seed_result_prelude(env: &mut Env) {
+    let res = |a: Ty, e: Ty| Ty::Con("Result".to_string(), vec![a, e]);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let a = || Ty::Var(0);
+    let e = || Ty::Var(1);
+    let m = || Ty::Var(2); // the mapped value/error variable
+    let scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, sch: Scheme| {
+        env.insert(format!("Result.{member}"), sch);
+    };
+    let ev = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(ev));
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![ev],
+        mutable: false,
+        ty,
+    };
+    // Result.map : (a ->{e} m) -> Result a e -> Result m e   (maps the Ok value)
+    put(
+        "map",
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(arrow_e(a(), m()), arrow_e(res(a(), e()), res(m(), e()))),
+        ),
+    );
+    // Result.mapError : (e ->{x} m) -> Result a e -> Result a m
+    put(
+        "mapError",
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(arrow_e(e(), m()), arrow_e(res(a(), e()), res(a(), m()))),
+        ),
+    );
+    // Result.bind : (a ->{x} Result m e) -> Result a e -> Result m e
+    put(
+        "bind",
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(
+                arrow_e(a(), res(m(), e())),
+                arrow_e(res(a(), e()), res(m(), e())),
+            ),
+        ),
+    );
+    // Result.withDefault : a -> Result a e -> a
+    put(
+        "withDefault",
+        scheme(vec![0, 1], pure_fn(a(), pure_fn(res(a(), e()), a()))),
+    );
+    put("isOk", scheme(vec![0, 1], pure_fn(res(a(), e()), Ty::Bool)));
+    put(
+        "isError",
+        scheme(vec![0, 1], pure_fn(res(a(), e()), Ty::Bool)),
+    );
+    // Result.toOption : Result a e -> Option a
+    put(
+        "toOption",
+        scheme(vec![0, 1], pure_fn(res(a(), e()), opt(a()))),
+    );
 }
 
 /// Seed the built-in computation-expression types `Async a`, `Seq a`, and

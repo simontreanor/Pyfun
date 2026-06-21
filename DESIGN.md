@@ -236,24 +236,27 @@ structural `__eq__`), so `Set Color` and `Map (Point) v` work and equal values c
 is itself unhashable raises at hash time, the same way Python rejects an unhashable key. `Array` is
 **deferred** as redundant — `List` already *is* a Python list (dynamic array).
 
-**Option — the built-in optional (implemented).** `Option a` (constructors `Some`/`None`) is seeded
-exactly like `Result`/`Ok`/`Error`: a reserved type with global constructors that lower to `Some` /
-`None_` classes (`None` is mangled off the Python keyword), emitted on demand. The `Option` module has
-`Option.map` (effect-polymorphic, like `List.map`), `Option.withDefault`, `Option.isSome`,
-`Option.isNone`. A user `type Option` is rejected (reserved). `Map.tryFind` returns it.
+**Option and Result — the built-in sum helpers (implemented).** `Option a` (constructors `Some`/`None`)
+is seeded exactly like `Result a e` (`Ok`/`Error`): a reserved type with global constructors that lower
+to `Some`/`None_` (resp. `Ok`/`Error`) classes (`None` is mangled off the Python keyword), emitted on
+demand. Each has a module of combinators: `Option.map`/`withDefault`/`isSome`/`isNone`, and
+`Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`. The mapping/binding ones are
+**effect-polymorphic** (like `List.map`). `Map.tryFind` returns an `Option`; `Result.toOption` bridges
+the two (`Ok v → Some v`, `Error _ → None`). A user `type Option`/`Result` is rejected (reserved).
 
 **Built-in modules.** Collection operations are **module-qualified** (`List.map`, `Set.add`,
 `Map.tryFind`, `Option.withDefault`). This is what lets `len`/`contains`/`map` reuse one name across
 collections without overloading or type classes (which the MVP rules out). The modules
-(`types::MODULES` = `List`/`Set`/`Map`/`Option`; members paired in `MODULE_PRELUDES`) are **built-in
-namespaces only** — there is no `module` *declaration* syntax, no files/imports/visibility (deferred).
+(`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`; members paired in `MODULE_PRELUDES`) are
+**built-in namespaces only** — there is no `module` *declaration* syntax, no files/imports/visibility
+(deferred).
 Crucially, **no parser change was needed**: `Module.member` is parsed as the ordinary field-access node
 `Field { base: Var("List"), name: "map" }`; the checker and lowering recognize a base that is a known
 module (via `types::qualified_name`) and resolve the dotted member against the module instead of as
 record-field access. Casing disambiguates — `Upper.x` is a module member, `lower.x` is field access. A
 genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in `PRELUDE`), matching F#
-(`List.map` qualified, `abs` global). Remaining next layer: `Result` helpers and a value-level library
-over the lazy `seq {}`.
+(`List.map` qualified, `abs` global). Remaining next layer: a value-level library over the lazy
+`seq {}`, and the full *user-defined* module system.
 
 ## 7. Surface language (MVP)
 

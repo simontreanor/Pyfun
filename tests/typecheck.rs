@@ -729,6 +729,37 @@ fn rejects_redefining_builtin_option() {
 }
 
 #[test]
+fn accepts_result_module() {
+    let src = "let r = Ok 1\n\
+               let a = Result.map (fun x -> x + 1) r\n\
+               let b = Result.mapError (fun e -> e) r\n\
+               let c = Result.bind (fun x -> Ok (x + 1)) r\n\
+               let d = Result.withDefault 0 r\n\
+               let e = Result.isOk r\n\
+               let f = Result.isError r\n\
+               let g = Result.toOption r";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn result_map_changes_the_ok_type() {
+    // `Result.map (int -> string)` over a `Result int e` yields `Result string e`,
+    // so a later int default is a type error.
+    assert_error_contains(
+        "extern show: a -> string = str\n\
+         let r = Ok 1\n\
+         let bad = Result.withDefault 0 (Result.map show r)",
+        "string",
+    );
+}
+
+#[test]
+fn result_to_option_bridges_to_option() {
+    // `Result.toOption : Result a e -> Option a`, consumed by the `Option` module.
+    assert!(pyfun::check("let v = Option.withDefault 0 (Result.toOption (Ok 1))").is_ok());
+}
+
+#[test]
 fn rejects_redefining_builtin_map_and_set() {
     assert_error_contains("type Set a = Empty", "already defined");
     assert_error_contains("type Map a = Empty", "already defined");

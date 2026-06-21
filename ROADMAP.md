@@ -160,12 +160,15 @@ no constructors. Keys/elements must be hashable at runtime — primitives and AD
 (generated structural `__hash__`). `cons`/`head`/
 `tail` + list patterns deferred; the lazy counterpart is the `seq {}` CE. Covered by
 `tests/{typecheck,compile,roundtrip,run}.rs` + `examples/hello.pyfun`.
+  The `Option` and `Result` modules have landed too: `Option.map`/`withDefault`/`isSome`/`isNone` and
+  `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption` (the map/bind ones
+  effect-poly; `Result.toOption` bridges to `Option`).
 - **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
-  Python dynamic array); `Result` helpers + a `Result` module; a value-level library over the lazy
-  `seq {}`; and the full *user-defined* module system (declarations, files, imports, visibility).
-  (Generated `__hash__` on ADT/record classes — letting them be set elements / map keys — is **done**.)
-- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + built-in
-  modules done; `Result` helpers / `seq` lib / user modules open.
+  Python dynamic array); a value-level library over the lazy `seq {}`; and the full *user-defined*
+  module system (declarations, files, imports, visibility). (Generated `__hash__` on ADT/record classes
+  — letting them be set elements / map keys — is **done**.)
+- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + results +
+  built-in modules + ADT `__hash__` done; `seq` lib / user modules open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -221,10 +224,9 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-def/find-refs/rename/completion/document-symbols over
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
-1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options + built-in modules landed; remaining:
-   `Result` helpers/module, a value-level library over the existing `seq {}` lazy type, a generated
-   and the full user-defined module system. `Array` deferred as redundant with `List`. (ADT/record
-   `__hash__` done.)
+1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results + built-in modules + ADT/record
+   `__hash__` landed; remaining: a value-level library over the existing `seq {}` lazy type, and the
+   full user-defined module system. `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).

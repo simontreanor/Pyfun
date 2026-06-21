@@ -751,6 +751,37 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_option_is_none")
             }
+            // Result (helpers inspect/construct `Ok`/`Error`, so flag the Result
+            // prelude; `toOption` also constructs `Some`/`None`).
+            "Result.map" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_map")
+            }
+            "Result.mapError" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_map_error")
+            }
+            "Result.bind" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_bind")
+            }
+            "Result.withDefault" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_with_default")
+            }
+            "Result.isOk" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_is_ok")
+            }
+            "Result.isError" => {
+                self.needs_result = true;
+                coll(self, "_pf_result_is_error")
+            }
+            "Result.toOption" => {
+                self.needs_result = true;
+                self.needs_option = true;
+                coll(self, "_pf_result_to_option")
+            }
             other => unreachable!("unknown module member {other}"),
         }
     }
@@ -1249,8 +1280,10 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
         left: Box::new(left),
         right: Box::new(right),
     };
-    // `isinstance(o, Some)` — the Option discriminant.
+    // `isinstance(x, Class)` — the Option/Result discriminants.
     let is_some = |o: &str| call("isinstance", vec![name(o), name("Some")]);
+    let is_ok = |r: &str| call("isinstance", vec![name(r), name("Ok")]);
+    let is_err = |r: &str| call("isinstance", vec![name(r), name("Error")]);
     let def1 = |fn_name: &str, params: &[&str], ret: PyExpr| PyStmt::FuncDef {
         name: fn_name.to_string(),
         params: params.iter().map(|p| p.to_string()).collect(),
@@ -1403,6 +1436,90 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
             "_pf_option_is_some" => def1(helper, &["o"], is_some("o")),
             // Option.isNone(o) -> not isinstance(o, Some)
             "_pf_option_is_none" => def1(helper, &["o"], PyExpr::Not(Box::new(is_some("o")))),
+            // Result.map(f, r) -> Ok(f(r._0)) if isinstance(r, Ok) else r  (Error passes through)
+            "_pf_result_map" => def(
+                helper,
+                &["f", "r"],
+                vec![
+                    PyStmt::If {
+                        test: is_ok("r"),
+                        body: vec![PyStmt::Return(call1(
+                            "Ok",
+                            PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![attr(name("r"), "_0")],
+                            },
+                        ))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("r")),
+                ],
+            ),
+            // Result.mapError(f, r) -> Error(f(r._0)) if isinstance(r, Error) else r
+            "_pf_result_map_error" => def(
+                helper,
+                &["f", "r"],
+                vec![
+                    PyStmt::If {
+                        test: is_err("r"),
+                        body: vec![PyStmt::Return(call1(
+                            "Error",
+                            PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![attr(name("r"), "_0")],
+                            },
+                        ))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("r")),
+                ],
+            ),
+            // Result.bind(f, r) -> f(r._0) if isinstance(r, Ok) else r
+            "_pf_result_bind" => def(
+                helper,
+                &["f", "r"],
+                vec![
+                    PyStmt::If {
+                        test: is_ok("r"),
+                        body: vec![PyStmt::Return(PyExpr::Call {
+                            func: Box::new(name("f")),
+                            args: vec![attr(name("r"), "_0")],
+                        })],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("r")),
+                ],
+            ),
+            // Result.withDefault(d, r) -> r._0 if isinstance(r, Ok) else d
+            "_pf_result_with_default" => def(
+                helper,
+                &["d", "r"],
+                vec![
+                    PyStmt::If {
+                        test: is_ok("r"),
+                        body: vec![PyStmt::Return(attr(name("r"), "_0"))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("d")),
+                ],
+            ),
+            // Result.isOk(r) -> isinstance(r, Ok)
+            "_pf_result_is_ok" => def1(helper, &["r"], is_ok("r")),
+            // Result.isError(r) -> isinstance(r, Error)
+            "_pf_result_is_error" => def1(helper, &["r"], is_err("r")),
+            // Result.toOption(r) -> Some(r._0) if isinstance(r, Ok) else None_()
+            "_pf_result_to_option" => def(
+                helper,
+                &["r"],
+                vec![
+                    PyStmt::If {
+                        test: is_ok("r"),
+                        body: vec![PyStmt::Return(call1("Some", attr(name("r"), "_0")))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(call0("None_")),
+                ],
+            ),
             other => unreachable!("unknown collection helper {other}"),
         })
         .collect()

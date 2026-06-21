@@ -165,6 +165,24 @@ fn unused_collection_helpers_are_not_emitted() {
 }
 
 #[test]
+fn result_map_lowers_to_a_helper_pulling_in_the_result_prelude() {
+    let py = pyfun::compile("let r = Result.map (fun x -> x) (Ok 1)").unwrap();
+    assert!(py.contains("class Ok:"), "{py}");
+    assert!(py.contains("def _pf_result_map(f, r):"), "{py}");
+    assert!(py.contains("return Ok(f(r._0))"), "{py}");
+}
+
+#[test]
+fn result_to_option_pulls_in_both_preludes() {
+    let py = pyfun::compile("let o = Result.toOption (Ok 1)").unwrap();
+    assert!(py.contains("class Ok:"), "Result prelude: {py}");
+    assert!(py.contains("class Some:"), "Option prelude: {py}");
+    assert!(py.contains("def _pf_result_to_option(r):"), "{py}");
+    assert!(py.contains("return Some(r._0)"), "{py}");
+    assert!(py.contains("return None_()"), "{py}");
+}
+
+#[test]
 fn if_in_value_position_is_a_conditional_expression() {
     let py = pyfun::compile("let r = if true then 1 else 2").unwrap();
     assert!(py.contains("r = 1 if True else 2"), "{py}");
@@ -745,6 +763,31 @@ fn e2e_adts_and_records_as_keys_and_elements() {
             ("hasGreen", "True"),
             ("v", "one"),
             ("npts", "2"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_result_module() {
+    run_and_check(
+        "let safeDiv a b = if b == 0 then Error \"div0\" else Ok (a // b)\n\
+         let r1 = safeDiv 10 2\n\
+         let r2 = safeDiv 10 0\n\
+         let a = Result.withDefault 0 (Result.map (fun x -> x + 1) r1)\n\
+         let b = Result.withDefault 0 r2\n\
+         let c = Result.isOk r1\n\
+         let d = Result.isError r2\n\
+         let e = Option.withDefault 0 (Result.toOption r1)\n\
+         let f = Result.withDefault 0 (Result.bind (fun x -> safeDiv x 3) r1)\n\
+         let g = Result.isError (Result.mapError (fun s -> s) r2)",
+        &[
+            ("a", "6"),
+            ("b", "0"),
+            ("c", "True"),
+            ("d", "True"),
+            ("e", "5"),
+            ("f", "1"),
+            ("g", "True"),
         ],
     );
 }
