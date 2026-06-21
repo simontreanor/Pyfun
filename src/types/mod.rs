@@ -313,6 +313,17 @@ pub struct TypeError {
     pub span: Span,
 }
 
+/// The inferred type of one expression node, rendered for display. Collected by
+/// [`check_collecting`] so an editor (the LSP, `DESIGN.md` §9) can show a type on
+/// hover — Pyfun types are inferred, never written, so this is the only way to see
+/// one without provoking an error. The rendered string includes latent effects
+/// (e.g. `string ->{io} unit`), since `show` prints them on arrows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeSpan {
+    pub span: Span,
+    pub ty: String,
+}
+
 impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
@@ -352,6 +363,27 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
+    let (errors, _types) = run(module, false);
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Type-check `module` and, in the same pass, collect the inferred type of every
+/// expression node for editor hover (`DESIGN.md` §9). Returns the (possibly empty)
+/// error list alongside a span→type table resolved against the final substitution.
+/// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
+/// even for a module that has type errors elsewhere.
+pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
+    run(module, true)
+}
+
+/// Shared core of [`check`] / [`check_collecting`]. When `record` is set, the
+/// inferencer accumulates a `(span, ty)` entry per expression node, which we
+/// resolve and render once inference is complete.
+fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
     let mut errors = Vec::new();
     let (decls, ctor_env) = build_decls(module, &mut errors);
 
@@ -361,6 +393,7 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
     let mut inf = Infer {
         decls,
         next: RESERVED_VARS,
+        record_types: record,
         ..Infer::default()
     };
     let mut env = ctor_env;
@@ -387,11 +420,22 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
         }
     }
 
-    if errors.is_empty() {
-        Ok(())
+    // Resolve every recorded type against the final substitution and render it
+    // (effects included). Done here, after inference, because a node's type may
+    // still hold unbound vars at the moment it was recorded.
+    let types = if record {
+        inf.recorded
+            .iter()
+            .map(|(span, ty)| TypeSpan {
+                span: *span,
+                ty: show(&inf.apply(ty)),
+            })
+            .collect()
     } else {
-        Err(errors)
-    }
+        Vec::new()
+    };
+
+    (errors, types)
 }
 
 /// Register measures and `type` declarations; build the constructor environment.
@@ -920,6 +964,12 @@ struct Infer {
     cur_eff: Effect,
     next: u32,
     decls: Decls,
+    /// When set, [`infer_expr`](Infer::infer_expr) records the inferred type of
+    /// every expression node into [`recorded`](Infer::recorded) for editor hover.
+    record_types: bool,
+    /// Collected `(span, ty)` pairs (unresolved — resolved in [`run`] once the
+    /// substitution is final). Empty unless `record_types` is set.
+    recorded: Vec<(Span, Ty)>,
 }
 
 impl Infer {
@@ -1229,6 +1279,13 @@ impl Infer {
             });
         }
 
+        // Record the binding's inferred type against its name span, so hovering a
+        // definition (e.g. a function name) shows its signature — the headline
+        // hover case, since Pyfun signatures are inferred, never written.
+        if self.record_types {
+            self.recorded.push((binding.name_span.span(), ty.clone()));
+        }
+
         // A `mut` binding is monomorphic (so a later `<-` can't change its type)
         // and cannot be a function — only a reassignable value.
         let scheme = if binding.mutable {
@@ -1250,7 +1307,19 @@ impl Infer {
         Ok((scheme, self.apply_eff(&body_eff)))
     }
 
+    /// Infer the type of `expr`, recording it for hover when `record_types` is
+    /// set. The recording happens here (around the real inference in
+    /// [`infer_expr_inner`](Infer::infer_expr_inner)) so every subexpression is
+    /// captured with a single hook, regardless of which arm produced it.
     fn infer_expr(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
+        let ty = self.infer_expr_inner(expr, env)?;
+        if self.record_types {
+            self.recorded.push((expr.span(), ty.clone()));
+        }
+        Ok(ty)
+    }
+
+    fn infer_expr_inner(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
         let span = expr.span();
         match &expr.kind {
             // Integer literals are polymorphic numerics (`num 'a => 'a`) so they

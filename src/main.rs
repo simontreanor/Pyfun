@@ -38,6 +38,7 @@ fn main() -> ExitCode {
             Some(path) => parse_only(path),
             None => fail("`parse` needs a file path"),
         },
+        Some("lsp") => lsp_server(),
         // Shorthand: a bare path means `compile <path>` to stdout.
         Some(path) => compile(path, None),
     }
@@ -51,7 +52,16 @@ fn help() {
     eprintln!("  pyfun compile <file.pyfun> [-o <out.py>]  type-check then lower to Python");
     eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
+    eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun <file.pyfun>                        shorthand for `compile`");
+}
+
+/// Run the language server, speaking LSP over stdin/stdout until `exit`.
+fn lsp_server() -> ExitCode {
+    match pyfun::lsp::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => fail(&format!("lsp server error: {e}")),
+    }
 }
 
 fn check(path: &str) -> ExitCode {

@@ -11,6 +11,7 @@ pub mod ast;
 pub mod diagnostics;
 pub mod lexer;
 pub mod lowering;
+pub mod lsp;
 pub mod parser;
 pub mod python_emitter;
 pub mod types;
@@ -40,6 +41,20 @@ pub fn format(source: &str) -> Result<String, CompileError> {
 pub fn check(source: &str) -> Result<(), Vec<types::TypeError>> {
     let module = parse(source).map_err(|e| vec![to_type_error(&e)])?;
     types::check(&module)
+}
+
+/// Analyze `source` for the editor (the LSP, `DESIGN.md` §9): return every
+/// diagnostic plus a span→type table for hover.
+///
+/// Unlike [`check`], this never short-circuits — a parse failure becomes a single
+/// diagnostic (with an empty hover table), and a module that type-checks with
+/// errors still yields whatever inferred types were recovered. This is the one
+/// entry point the LSP server needs.
+pub fn analyze(source: &str) -> (Vec<types::TypeError>, Vec<types::TypeSpan>) {
+    match parse(source) {
+        Ok(module) => types::check_collecting(&module),
+        Err(e) => (vec![to_type_error(&e)], Vec::new()),
+    }
 }
 
 /// Compile `source` all the way to Python source text.

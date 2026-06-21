@@ -136,6 +136,10 @@ pub struct LetBinding {
     /// (no `io`). Checked in the type phase; erased at lowering.
     pub pure: bool,
     pub name: String,
+    /// The span of the binding `name`, so an editor can hover the definition site
+    /// to see its inferred type (`NodeSpan` compares equal, so this is invisible
+    /// to structural/roundtrip equality).
+    pub name_span: NodeSpan,
     pub params: Vec<String>,
     pub value: Expr,
 }

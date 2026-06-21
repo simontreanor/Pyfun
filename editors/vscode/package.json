@@ -1,0 +1,46 @@
+{
+  "name": "pyfun",
+  "displayName": "Pyfun",
+  "description": "Pyfun language support: inline diagnostics and hover-for-type, backed by `pyfun lsp`.",
+  "version": "0.0.1",
+  "publisher": "pyfun",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:pyfun"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pyfun",
+        "aliases": [
+          "Pyfun",
+          "pyfun"
+        ],
+        "extensions": [
+          ".pyfun"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "configuration": {
+      "title": "Pyfun",
+      "properties": {
+        "pyfun.server.path": {
+          "type": "string",
+          "default": "pyfun",
+          "description": "Path to the `pyfun` executable used to launch the language server (`pyfun lsp`). Defaults to `pyfun` on PATH; during development point it at target/debug/pyfun."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

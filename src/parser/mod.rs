@@ -321,7 +321,9 @@ impl Parser {
                 break;
             }
         }
+        let name_start = self.cur_start();
         let name = self.parse_ident("binding name")?;
+        let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
         while let Tok::Ident(_) = self.peek() {
             params.push(self.parse_ident("parameter name")?);
@@ -338,6 +340,7 @@ impl Parser {
             mutable,
             pure,
             name,
+            name_span,
             params,
             value,
         })
