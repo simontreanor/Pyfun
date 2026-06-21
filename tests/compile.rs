@@ -72,7 +72,8 @@ fn list_literal_lowers_to_a_python_list() {
 
 #[test]
 fn map_filter_lower_to_emitted_helpers() {
-    let py = pyfun::compile("let r = map (fun x -> x) (filter (fun x -> true) [1, 2])").unwrap();
+    let py = pyfun::compile("let r = List.map (fun x -> x) (List.filter (fun x -> true) [1, 2])")
+        .unwrap();
     assert!(py.contains("def _pf_map(f, xs):"), "{py}");
     assert!(py.contains("return list(map(f, xs))"), "{py}");
     assert!(py.contains("def _pf_filter(f, xs):"), "{py}");
@@ -81,7 +82,7 @@ fn map_filter_lower_to_emitted_helpers() {
 
 #[test]
 fn len_and_sum_lower_to_python_builtins_without_helpers() {
-    let py = pyfun::compile("let n = len [1, 2]\nlet s = sum [1, 2]").unwrap();
+    let py = pyfun::compile("let n = List.len [1, 2]\nlet s = List.sum [1, 2]").unwrap();
     assert!(py.contains("n = len([1, 2])"), "{py}");
     assert!(py.contains("s = sum([1, 2])"), "{py}");
     assert!(!py.contains("_pf_"), "no helpers needed: {py}");
@@ -89,7 +90,7 @@ fn len_and_sum_lower_to_python_builtins_without_helpers() {
 
 #[test]
 fn fold_lowers_to_functools_reduce() {
-    let py = pyfun::compile("let t = fold (fun a b -> a + b) 0 [1, 2, 3]").unwrap();
+    let py = pyfun::compile("let t = List.fold (fun a b -> a + b) 0 [1, 2, 3]").unwrap();
     assert!(py.starts_with("import functools\n"), "{py}");
     assert!(py.contains("def _pf_fold(f, acc, xs):"), "{py}");
     assert!(py.contains("return functools.reduce(f, xs, acc)"), "{py}");
@@ -102,14 +103,6 @@ fn unused_list_helpers_are_not_emitted() {
 }
 
 #[test]
-fn a_user_definition_shadows_a_list_prelude_name() {
-    // Defining `map` yourself must not reroute references to the `_pf_map` helper.
-    let py = pyfun::compile("let map f = f\nlet r = map 1").unwrap();
-    assert!(!py.contains("_pf_map"), "{py}");
-    assert!(py.contains("def map(f):"), "{py}");
-}
-
-#[test]
 fn pipe_becomes_application() {
     let py = pyfun::compile("let id x = x\nlet r = 5 |> id").unwrap();
     assert!(py.contains("r = id(5)"), "{py}");
@@ -117,36 +110,38 @@ fn pipe_becomes_application() {
 
 #[test]
 fn empty_collections_lower_to_set_and_dict() {
-    let py = pyfun::compile("let s = set_empty\nlet m = map_empty").unwrap();
+    let py = pyfun::compile("let s = Set.empty\nlet m = Map.empty").unwrap();
     assert!(py.contains("s = set()"), "{py}");
     assert!(py.contains("m = dict()"), "{py}");
 }
 
 #[test]
 fn set_functions_lower_to_emitted_helpers() {
-    let py = pyfun::compile("let r = set_contains 1 (set_add 1 (set_of_list [2]))").unwrap();
+    let py = pyfun::compile("let r = Set.contains 1 (Set.add 1 (Set.ofList [2]))").unwrap();
     assert!(py.contains("def _pf_set_add(x, s):"), "{py}");
     assert!(py.contains("return s.union([x])"), "{py}");
     assert!(py.contains("def _pf_set_contains(x, s):"), "{py}");
     assert!(py.contains("return x in s"), "{py}");
+    // `Set.ofList` is a bare builtin, no helper.
+    assert!(py.contains("set([2])"), "{py}");
 }
 
 #[test]
-fn map_add_and_get_lower_to_emitted_helpers() {
+fn map_add_and_find_or_lower_to_emitted_helpers() {
     let py =
-        pyfun::compile("let m = map_add \"a\" 1 map_empty\nlet v = map_get \"a\" 0 m").unwrap();
+        pyfun::compile("let m = Map.add \"a\" 1 Map.empty\nlet v = Map.findOr \"a\" 0 m").unwrap();
     assert!(py.contains("def _pf_map_add(k, v, m):"), "{py}");
     assert!(
         py.contains("return dict(list(m.items()) + [[k, v]])"),
         "{py}"
     );
-    assert!(py.contains("def _pf_map_get(k, default, m):"), "{py}");
+    assert!(py.contains("def _pf_map_find_or(k, default, m):"), "{py}");
     assert!(py.contains("return m.get(k, default)"), "{py}");
 }
 
 #[test]
 fn map_remove_lowers_to_a_copy_and_pop() {
-    let py = pyfun::compile("let m = map_remove \"a\" map_empty").unwrap();
+    let py = pyfun::compile("let m = Map.remove \"a\" Map.empty").unwrap();
     assert!(py.contains("def _pf_map_remove(k, m):"), "{py}");
     assert!(py.contains("r = dict(m)"), "{py}");
     assert!(py.contains("r.pop(k, None)"), "{py}");
@@ -154,16 +149,19 @@ fn map_remove_lowers_to_a_copy_and_pop() {
 }
 
 #[test]
-fn unused_collection_helpers_are_not_emitted() {
-    let py = pyfun::compile("let s = set_empty").unwrap();
-    assert!(!py.contains("_pf_"), "{py}");
+fn try_find_lowers_to_an_option_and_pulls_in_the_option_prelude() {
+    let py = pyfun::compile("let v = Map.tryFind \"a\" Map.empty").unwrap();
+    assert!(py.contains("class Some:"), "{py}");
+    assert!(py.contains("class None_:"), "{py}");
+    assert!(py.contains("def _pf_map_try_find(k, m):"), "{py}");
+    assert!(py.contains("return Some(m.get(k))"), "{py}");
+    assert!(py.contains("return None_()"), "{py}");
 }
 
 #[test]
-fn a_user_definition_shadows_a_collection_prelude_name() {
-    let py = pyfun::compile("let set_size n = n\nlet r = set_size 1").unwrap();
-    assert!(!py.contains("_pf_set_size"), "{py}");
-    assert!(py.contains("def set_size(n):"), "{py}");
+fn unused_collection_helpers_are_not_emitted() {
+    let py = pyfun::compile("let s = Set.empty").unwrap();
+    assert!(!py.contains("_pf_"), "{py}");
 }
 
 #[test]
@@ -185,26 +183,26 @@ fn exhaustive_match_without_wildcard_keeps_a_runtime_guard() {
 
 #[test]
 fn adt_lowers_to_classes_with_match_args() {
-    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
-    assert!(py.contains("class Some:"), "{py}");
+    // A user-defined ADT (Option/Some/None are now built-in, so use a fresh type).
+    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
+    assert!(py.contains("class Has:"), "{py}");
     assert!(py.contains("__match_args__ = ('_0',)"), "{py}");
-    // `None` is mangled to dodge the Python keyword, and is a nullary instance.
-    assert!(py.contains("class None_:"), "{py}");
-    assert!(py.contains("x = Some(1)"), "{py}");
+    assert!(py.contains("class Empty:"), "{py}");
+    assert!(py.contains("x = Has(1)"), "{py}");
 }
 
 #[test]
 fn adt_classes_get_a_repr() {
-    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
+    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
     assert!(py.contains("def __repr__(self):"), "{py}");
     // Nullary uses the bare class name; a field uses `!r`.
-    assert!(py.contains("return \"None_\""), "{py}");
-    assert!(py.contains("return f\"Some({self._0!r})\""), "{py}");
+    assert!(py.contains("return \"Empty\""), "{py}");
+    assert!(py.contains("return f\"Has({self._0!r})\""), "{py}");
 }
 
 #[test]
 fn adt_classes_get_structural_eq() {
-    let py = pyfun::compile("type Option a = None | Some a\nlet x = Some 1").unwrap();
+    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
     assert!(py.contains("def __eq__(self, other):"), "{py}");
     assert!(
         py.contains("type(self) is type(other) and self.__dict__ == other.__dict__"),
@@ -334,7 +332,7 @@ fn prelude_partial_application_uses_partial() {
 
 #[test]
 fn unknown_constructor_is_rejected() {
-    let err = pyfun::compile("let f o = match o with | Some v -> v | None -> 0").unwrap_err();
+    let err = pyfun::compile("let f o = match o with | Nope v -> v").unwrap_err();
     assert!(err.to_string().contains("unknown constructor"), "{err}");
 }
 
@@ -420,7 +418,6 @@ fn e2e_match_in_value_position_is_hoisted() {
 fn e2e_adt_construction_and_match() {
     run_and_check(
         "
-        type Option a = None | Some a
         type Color = Red | Green | Blue
         let unwrap o = match o with | Some v -> v | None -> 0
         let r1 = unwrap (Some 5)
@@ -577,8 +574,7 @@ fn e2e_prelude_print_and_numerics() {
         return;
     };
     let program = pyfun::compile(
-        "type Option a = None | Some a\n\
-         let a = 3\n\
+        "let a = 3\n\
          let b = 10\n\
          print (min a b)\n\
          print (max a b)\n\
@@ -600,8 +596,7 @@ fn e2e_comparison_and_structural_equality() {
         return;
     };
     let program = pyfun::compile(
-        "type Option a = None | Some a\n\
-         print (1 < 2)\n\
+        "print (1 < 2)\n\
          print (\"a\" < \"b\")\n\
          print (3 == 3)\n\
          print (Some 1 == Some 1)\n\
@@ -654,13 +649,13 @@ fn e2e_extern_calls_python() {
 fn e2e_list_functions() {
     run_and_check(
         "let xs = [1, 2, 3, 4]\n\
-         let doubled = map (fun x -> x * 2) xs\n\
-         let small = filter (fun x -> x < 3) xs\n\
-         let total = fold (fun a b -> a + b) 0 xs\n\
-         let n = len xs\n\
-         let s = sum xs\n\
-         let r = rev xs\n\
-         let q = range 1 4",
+         let doubled = List.map (fun x -> x * 2) xs\n\
+         let small = List.filter (fun x -> x < 3) xs\n\
+         let total = List.fold (fun a b -> a + b) 0 xs\n\
+         let n = List.len xs\n\
+         let s = List.sum xs\n\
+         let r = List.rev xs\n\
+         let q = List.range 1 4",
         &[
             ("doubled", "[2, 4, 6, 8]"),
             ("small", "[1, 2]"),
@@ -676,13 +671,13 @@ fn e2e_list_functions() {
 #[test]
 fn e2e_set_functions() {
     run_and_check(
-        "let s = set_of_list [1, 2, 3, 3]\n\
-         let n = set_size s\n\
-         let has = set_contains 2 s\n\
-         let u = set_size (set_union s (set_of_list [3, 4]))\n\
-         let i = set_size (set_inter s (set_of_list [3, 4]))\n\
-         let d = set_size (set_diff s (set_of_list [3, 4]))\n\
-         let e = set_size set_empty",
+        "let s = Set.ofList [1, 2, 3, 3]\n\
+         let n = Set.len s\n\
+         let has = Set.contains 2 s\n\
+         let u = Set.len (Set.union s (Set.ofList [3, 4]))\n\
+         let i = Set.len (Set.intersect s (Set.ofList [3, 4]))\n\
+         let d = Set.len (Set.difference s (Set.ofList [3, 4]))\n\
+         let e = Set.len Set.empty",
         &[
             ("n", "3"),
             ("has", "True"),
@@ -697,20 +692,44 @@ fn e2e_set_functions() {
 #[test]
 fn e2e_map_functions() {
     run_and_check(
-        "let m = map_add \"a\" 1 (map_add \"b\" 2 map_empty)\n\
-         let v = map_get \"a\" 0 m\n\
-         let dflt = map_get \"z\" 99 m\n\
-         let sz = map_size m\n\
-         let mc = map_contains \"b\" m\n\
-         let rm = map_size (map_remove \"b\" m)\n\
-         let ks = len (map_keys m)",
+        "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\
+         let found = Map.findOr \"a\" 0 m\n\
+         let dflt = Map.findOr \"z\" 99 m\n\
+         let sz = Map.len m\n\
+         let mc = Map.contains \"b\" m\n\
+         let rm = Map.len (Map.remove \"b\" m)\n\
+         let ks = List.len (Map.keys m)\n\
+         let hit = Option.withDefault 0 (Map.tryFind \"a\" m)\n\
+         let miss = Option.withDefault 0 (Map.tryFind \"z\" m)",
         &[
-            ("v", "1"),
+            ("found", "1"),
             ("dflt", "99"),
             ("sz", "2"),
             ("mc", "True"),
             ("rm", "1"),
             ("ks", "2"),
+            ("hit", "1"),
+            ("miss", "0"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_option_module() {
+    run_and_check(
+        "let some = Some 5\n\
+         let none = None\n\
+         let a = Option.withDefault 0 some\n\
+         let b = Option.withDefault 0 none\n\
+         let c = Option.isSome some\n\
+         let d = Option.isNone none\n\
+         let e = Option.map (fun x -> x + 1) some",
+        &[
+            ("a", "5"),
+            ("b", "0"),
+            ("c", "True"),
+            ("d", "True"),
+            ("e", "Some(6)"),
         ],
     );
 }

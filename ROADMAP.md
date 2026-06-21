@@ -146,25 +146,25 @@ application still lowers to `functools.partial`, and the boundary is effectful-b
 `extern` carries `io` (the third source after `print`/`<-`), `extern pure` opts out. This made the
 effect system's "Python boundary is effectful-by-default" rule (`DESIGN.md` §6) concrete. Covered by
 `tests/{typecheck,compile,roundtrip}.rs`.
-**Lists have landed.** `List a` is a built-in type lowering to a Python `list` (eager, dynamic-array
-big-O: O(1) index/`len`, O(n) prepend/concat), with `[1, 2, 3]` literal syntax. The list prelude is
-`map`/`filter`/`fold`/`len`/`sum`/`rev`/`range` (single source of truth `types::LIST_PRELUDE` +
-`seed_list_prelude`): `len`/`sum` map onto Python builtins, the rest lower to emitted helpers
-(`_pf_*`, on demand). `map`/`filter`/`fold` are **effect-polymorphic** (mapping an impure function is
-`io`). The lazy counterpart is the existing `seq {}` CE. `List` is reserved like `Result`/`Seq`. Note:
-`cons`/`head`/`tail` and list patterns in `match` are deferred (poor fit for a dynamic array). Covered
-by `tests/{typecheck,compile,roundtrip}.rs`.
-**Sets and maps have landed.** `Set a` / `Map k v` are built-in types lowering to a Python `set` /
-`dict`, built entirely from pure `set_*` / `map_*` prelude functions — **no new syntax** (`{…}` is
-records/CEs) and no constructors, so they were a pure types + lowering addition (the non-literal half
-of the `List` story), needing only one IR addition (an `in` operator). Names are prefixed because the
-MVP has no overloading/modules; `map_get key default m` is a total `dict.get` (no `option` type);
-there's no `map_of_list` (no tuples). Keys/elements must be hashable at runtime (primitives are; ADTs
-not yet — they'd need a generated `__hash__`). Covered by `tests/{typecheck,compile}.rs`.
+**Lists, sets, maps, and options have landed — as built-in modules.** `List a` / `Set a` / `Map k v`
+lower to a Python `list` / `set` / `dict`; `Option a` (`Some`/`None`) is seeded like `Result`. Their
+operations are **module-qualified** (`List.map`, `Set.add`, `Map.tryFind`, `Option.withDefault`) —
+which is what lets `len`/`contains`/`map` reuse one name across collections without overloading. The
+modules are **built-in namespaces only** (no `module` declarations / files / imports — deferred), and
+needed **no parser change**: `Module.member` reuses the field-access node, disambiguated by casing
+(`Upper.x` = module member, `lower.x` = field access) and resolved in the checker + lowering via
+`types::qualified_name`. Single source of truth `MODULES` + `MODULE_PRELUDES`. `List.map`/`filter`/`fold`
+and `Option.map` are **effect-polymorphic**; `Map.tryFind` returns `Option`; `Map.findOr` is a total
+`dict.get`. Lists keep `[1,2,3]` literals; the hashed collections have no literals (`{…}` is taken) and
+no constructors. Keys/elements must be hashable at runtime (primitives are; ADTs not yet). `cons`/`head`/
+`tail` + list patterns deferred; the lazy counterpart is the `seq {}` CE. Covered by
+`tests/{typecheck,compile,roundtrip,run}.rs` + `examples/hello.pyfun`.
 - **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
-  Python dynamic array); option/result helpers; a value-level library over the lazy `seq {}`; and a
-  generated `__hash__` on ADT classes (to let them be set elements / map keys).
-- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps done; helpers/`seq` lib open.
+  Python dynamic array); `Result` helpers + a `Result` module; a value-level library over the lazy
+  `seq {}`; a generated `__hash__` on ADT classes (to let them be set elements / map keys); and the
+  full *user-defined* module system (declarations, files, imports, visibility).
+- **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + built-in
+  modules done; `Result` helpers / `seq` lib / user modules open.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
@@ -220,9 +220,10 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 (diagnostics + hover-for-type/effect + go-to-def/find-refs/rename/completion/document-symbols over
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
-1. **Prelude breadth (#9 cont.)** — sets/maps landed; remaining: option/result helpers, a value-level
-   library over the existing `seq {}` lazy type, and a generated `__hash__` on ADTs (so they can be
-   set elements / map keys). `Array` deferred as redundant with `List`.
+1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options + built-in modules landed; remaining:
+   `Result` helpers/module, a value-level library over the existing `seq {}` lazy type, a generated
+   `__hash__` on ADTs (so they can be set elements / map keys), and the full user-defined module
+   system. `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
    the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
    `tail` once a representation that honors their big-O is chosen).

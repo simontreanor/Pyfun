@@ -201,41 +201,57 @@ Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separa
 like Pyfun records — there are no tuples, so commas are unambiguous). The big-O is Python's, *not*
 F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). So the
 linked-list idioms (`cons`/`head`/`tail`, `match`-on-cons) are a poor fit and are deferred along with
-list patterns; the bulk operations are the API. The list prelude (single source of truth
-`types::LIST_PRELUDE` + `seed_list_prelude`) is `map`/`filter`/`fold`/`len`/`sum`/`rev`/`range`.
-`len`/`sum` map name-for-name onto the Python builtins; the rest lower to small **emitted helpers**
-(`_pf_map` = `list(map(...))`, `_pf_fold` = `functools.reduce(...)`, etc.) emitted on demand like the
-`Result` prelude — wrappers are needed because Python's `map`/`filter` are lazy and we want eager
-lists, and because a first-class curried function must be a single callable (so partial application
-still lowers to `functools.partial`). The higher-order functions are **effect-polymorphic**: `map :
-(a ->{e} b) -> List a ->{e} List b`, so mapping an impure function makes the whole call `io` and that
-flows out (a single bound effect variable links the function arrow to the traversal arrow). A
-user-defined name shadows a list-prelude name at lowering (no rerouting). The lazy counterpart
-already exists as the `seq {}` computation expression (§8.1).
+list patterns; the bulk operations are the API. The list operations are
+`List.map`/`List.filter`/`List.fold`/`List.len`/`List.sum`/`List.rev`/`List.range` — **module-
+qualified** (see *Built-in modules* below), single source of truth `types::LIST_PRELUDE` +
+`seed_list_prelude`. `List.len`/`List.sum` map name-for-name onto the Python builtins; the rest lower
+to small **emitted helpers** (`_pf_map` = `list(map(...))`, `_pf_fold` = `functools.reduce(...)`, etc.)
+emitted on demand like the `Result` prelude — wrappers are needed because Python's `map`/`filter` are
+lazy and we want eager lists, and because a first-class curried function must be a single callable (so
+partial application still lowers to `functools.partial`). The higher-order functions are
+**effect-polymorphic**: `List.map : (a ->{e} b) -> List a ->{e} List b`, so mapping an impure function
+makes the whole call `io` and that flows out (a single bound effect variable links the function arrow
+to the traversal arrow). The lazy counterpart already exists as the `seq {}` computation expression
+(§8.1).
 
 **Sets and maps — the hashed collections (implemented).** `Set a` and `Map k v` are built-in types
 that **lower to a Python `set` / `dict`**. They have **no literal syntax** (`{…}` is already records
-and CE builders) and **no constructors** — they are built entirely from prelude functions, so adding
-them needed no lexer/parser/AST changes, only new seeded schemes + emitted helpers (the non-literal
-half of the `List` story). The two preludes (single source of truth `types::SET_PRELUDE` /
-`MAP_PRELUDE` + `seed_set_prelude` / `seed_map_prelude`) are all **pure** (unlike `List`'s
-higher-order trio, none take a function): `set_empty`/`set_add`/`set_remove`/`set_contains`/`set_size`/
-`set_union`/`set_inter`/`set_diff`/`set_of_list`/`set_to_list`, and `map_empty`/`map_add`/`map_remove`/
-`map_contains`/`map_get`/`map_size`/`map_keys`/`map_values`. Each lowers to a small **emitted helper**
-(`_pf_set_add` = `s.union([x])`, `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) — wrappers so
-the curried function is one callable (partial application → `functools.partial`); the nullary
-`set_empty`/`map_empty` lower directly to `set()`/`dict()`. The collections are **immutable-style**:
-every operation returns a fresh container. **Design constraints in an MVP without overloading,
-modules, tuples, or `option`:** names are **prefixed** (`set_*`/`map_*`) because a global `add`/`len`
-would collide across collections (no overloading or module qualification); there is **no
-`map_of_list`** (no tuples to express a pair list — build with `map_empty` + `map_add`); and `map_get
-key default m` is a **total lookup with a fallback** (`dict.get`) rather than returning an `option`
-Pyfun does not have. Element/key types are **unconstrained polymorphic** but must be **hashable at
-runtime** — Pyfun primitives are; ADT instances are not yet (they have structural `__eq__` but no
-`__hash__`), so a future `__hash__` on generated classes would let ADTs be keys/elements. `Array` is
-**deferred** as redundant — `List` already *is* a Python list (dynamic array). A user-defined name
-shadows a collection-prelude name at lowering (no rerouting), like the list prelude. Remaining next
-layer: option/result helpers and a value-level library over the lazy `seq {}`.
+and CE builders) and **no constructors** — built entirely from module functions, so adding them needed
+no lexer/parser/AST changes, only seeded schemes + emitted helpers. The two modules (single source of
+truth `types::SET_PRELUDE` / `MAP_PRELUDE` + `seed_set_prelude` / `seed_map_prelude`) are all **pure**
+(unlike `List`'s higher-order trio, none take a function):
+`Set.empty`/`Set.add`/`Set.remove`/`Set.contains`/`Set.len`/`Set.union`/`Set.intersect`/
+`Set.difference`/`Set.ofList`/`Set.toList`, and `Map.empty`/`Map.add`/`Map.remove`/`Map.contains`/
+`Map.findOr`/`Map.tryFind`/`Map.len`/`Map.keys`/`Map.values`. `Set.len`/`Set.ofList`/`Set.toList`/
+`Map.len` route to bare Python builtins (`len`/`set`/`list`); the nullary `Set.empty`/`Map.empty` lower
+to `set()`/`dict()`; the rest lower to small **emitted helpers** (`_pf_set_add` = `s.union([x])`,
+`_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) so the curried function is one callable (partial
+application → `functools.partial`). The collections are **immutable-style**: every operation returns a
+fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
+`Map.tryFind key m : Option v` is the optional form. There is **no `Map.ofList`** (no tuples to express
+a pair list — build with `Map.empty` + `Map.add`). Element/key types are **unconstrained polymorphic**
+but must be **hashable at runtime** — Pyfun primitives are; ADT instances are not yet (structural
+`__eq__`, no `__hash__`), so a future generated `__hash__` would let ADTs be keys/elements. `Array` is
+**deferred** as redundant — `List` already *is* a Python list (dynamic array).
+
+**Option — the built-in optional (implemented).** `Option a` (constructors `Some`/`None`) is seeded
+exactly like `Result`/`Ok`/`Error`: a reserved type with global constructors that lower to `Some` /
+`None_` classes (`None` is mangled off the Python keyword), emitted on demand. The `Option` module has
+`Option.map` (effect-polymorphic, like `List.map`), `Option.withDefault`, `Option.isSome`,
+`Option.isNone`. A user `type Option` is rejected (reserved). `Map.tryFind` returns it.
+
+**Built-in modules.** Collection operations are **module-qualified** (`List.map`, `Set.add`,
+`Map.tryFind`, `Option.withDefault`). This is what lets `len`/`contains`/`map` reuse one name across
+collections without overloading or type classes (which the MVP rules out). The modules
+(`types::MODULES` = `List`/`Set`/`Map`/`Option`; members paired in `MODULE_PRELUDES`) are **built-in
+namespaces only** — there is no `module` *declaration* syntax, no files/imports/visibility (deferred).
+Crucially, **no parser change was needed**: `Module.member` is parsed as the ordinary field-access node
+`Field { base: Var("List"), name: "map" }`; the checker and lowering recognize a base that is a known
+module (via `types::qualified_name`) and resolve the dotted member against the module instead of as
+record-field access. Casing disambiguates — `Upper.x` is a module member, `lower.x` is field access. A
+genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in `PRELUDE`), matching F#
+(`List.map` qualified, `abs` global). Remaining next layer: `Result` helpers and a value-level library
+over the lazy `seq {}`.
 
 ## 7. Surface language (MVP)
 

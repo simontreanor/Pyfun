@@ -48,8 +48,8 @@ fn accepts_match_over_int_literals() {
 
 #[test]
 fn accepts_user_defined_adt() {
-    let src = "type Option a = None | Some a\n\
-               let unwrap o = match o with | Some v -> v | None -> 0\n\
+    // `Option`/`Some`/`None` are built-in (no user declaration needed).
+    let src = "let unwrap o = match o with | Some v -> v | None -> 0\n\
                let r = unwrap (Some 5)";
     assert!(pyfun::check(src).is_ok());
 }
@@ -116,14 +116,15 @@ fn rejects_match_arm_result_mismatch() {
 #[test]
 fn rejects_unknown_constructor() {
     assert_error_contains(
-        "let f o = match o with | Some v -> v | None -> 0",
-        "unknown constructor `Some`",
+        "let f o = match o with | Nope v -> v",
+        "unknown constructor `Nope`",
     );
 }
 
 #[test]
 fn rejects_non_exhaustive_adt_match() {
-    let src = "type Option a = None | Some a\nlet f o = match o with | Some v -> v";
+    // `Option` is built-in; matching only `Some` misses `None`.
+    let src = "let f o = match o with | Some v -> v";
     assert_error_contains(src, "non-exhaustive match: missing `None`");
 }
 
@@ -135,7 +136,7 @@ fn rejects_non_exhaustive_int_match() {
 #[test]
 fn rejects_constructor_used_at_wrong_type() {
     // `Some` produces an `Option`, not an `int`.
-    let src = "type Option a = None | Some a\nlet r = (Some 1) + 1";
+    let src = "let r = (Some 1) + 1";
     assert_error_contains(src, "expected int, found Option");
 }
 
@@ -342,7 +343,7 @@ fn rejects_equality_across_different_types() {
 
 #[test]
 fn accepts_structural_equality_of_adts() {
-    let src = "type Option a = None | Some a\nlet r = Some 1 == Some 2";
+    let src = "let r = Some 1 == Some 2";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -581,20 +582,20 @@ fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
 #[test]
 fn accepts_list_literal_and_functions() {
     let src = "let xs = [1, 2, 3]\n\
-               let ys = map (fun x -> x + 1) xs\n\
-               let zs = filter (fun x -> x < 2) xs\n\
-               let t = fold (fun a b -> a + b) 0 xs\n\
-               let n = len xs\n\
-               let s = sum xs\n\
-               let r = rev xs\n\
-               let q = range 0 5";
+               let ys = List.map (fun x -> x + 1) xs\n\
+               let zs = List.filter (fun x -> x < 2) xs\n\
+               let t = List.fold (fun a b -> a + b) 0 xs\n\
+               let n = List.len xs\n\
+               let s = List.sum xs\n\
+               let r = List.rev xs\n\
+               let q = List.range 0 5";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn empty_list_is_polymorphic() {
     // The same `[]`-derived helper is usable at two element types.
-    assert!(pyfun::check("let e = []\nlet a = len [1]\nlet b = len [\"x\"]").is_ok());
+    assert!(pyfun::check("let e = []\nlet a = List.len [1]\nlet b = List.len [\"x\"]").is_ok());
 }
 
 #[test]
@@ -604,23 +605,23 @@ fn rejects_heterogeneous_list() {
 
 #[test]
 fn rejects_len_on_a_non_list() {
-    // `len : List a -> int`, so an int argument is a type error.
-    assert_error_contains("let n = len 5", "List");
+    // `List.len : List a -> int`, so an int argument is a type error.
+    assert_error_contains("let n = List.len 5", "List");
 }
 
 #[test]
 fn map_preserves_element_type_change() {
-    // `map (int -> string)` over a `List int` yields a `List string`, so summing
-    // the result (which needs `List int`) is a type error.
+    // `List.map (int -> string)` over a `List int` yields a `List string`, so
+    // summing the result (which needs `List int`) is a type error.
     assert_error_contains(
-        "extern show: a -> string = str\nlet bad = sum (map show [1, 2])",
+        "extern show: a -> string = str\nlet bad = List.sum (List.map show [1, 2])",
         "string",
     );
 }
 
 #[test]
 fn map_of_a_pure_function_stays_pure() {
-    assert!(pyfun::check("let pure inc xs = map (fun x -> x + 1) xs").is_ok());
+    assert!(pyfun::check("let pure inc xs = List.map (fun x -> x + 1) xs").is_ok());
 }
 
 #[test]
@@ -628,7 +629,7 @@ fn map_of_an_impure_function_is_impure() {
     // Effect polymorphism: mapping `print` makes the whole call `io`, so a `pure`
     // binding must be rejected.
     assert_error_contains(
-        "let pure shoutAll xs = map (fun x -> print x) xs",
+        "let pure shoutAll xs = List.map (fun x -> print x) xs",
         "declared `pure` but performs `io`",
     );
 }
@@ -642,46 +643,59 @@ fn rejects_redefining_builtin_list() {
 
 #[test]
 fn accepts_set_functions() {
-    let src = "let s = set_of_list [1, 2, 3]\n\
-               let s2 = set_add 4 s\n\
-               let s3 = set_remove 1 s2\n\
-               let has = set_contains 2 s3\n\
-               let n = set_size s3\n\
-               let u = set_union s s2\n\
-               let i = set_inter s s2\n\
-               let d = set_diff s s2\n\
-               let xs = set_to_list (set_union s set_empty)";
+    let src = "let s = Set.ofList [1, 2, 3]\n\
+               let s2 = Set.add 4 s\n\
+               let s3 = Set.remove 1 s2\n\
+               let has = Set.contains 2 s3\n\
+               let n = Set.len s3\n\
+               let u = Set.union s s2\n\
+               let i = Set.intersect s s2\n\
+               let d = Set.difference s s2\n\
+               let xs = Set.toList (Set.union s Set.empty)";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn accepts_map_functions() {
-    let src = "let m = map_add \"a\" 1 (map_add \"b\" 2 map_empty)\n\
-               let v = map_get \"a\" 0 m\n\
-               let m2 = map_remove \"b\" m\n\
-               let has = map_contains \"a\" m2\n\
-               let n = map_size m2\n\
-               let ks = map_keys m\n\
-               let vs = map_values m";
+    let src = "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\
+               let v = Map.findOr \"a\" 0 m\n\
+               let o = Map.tryFind \"a\" m\n\
+               let m2 = Map.remove \"b\" m\n\
+               let has = Map.contains \"a\" m2\n\
+               let n = Map.len m2\n\
+               let ks = Map.keys m\n\
+               let vs = Map.values m";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn set_element_type_is_enforced() {
-    // `set_add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
+    // `Set.add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
     assert_error_contains(
-        "let bad = set_add \"x\" (set_of_list [1, 2])",
+        "let bad = Set.add \"x\" (Set.ofList [1, 2])",
         "expected string, found int",
     );
 }
 
 #[test]
-fn map_get_default_must_match_the_value_type() {
-    // `map_get : k -> v -> Map k v -> v`; an int default against a string-valued
+fn map_find_or_default_must_match_the_value_type() {
+    // `Map.findOr : k -> v -> Map k v -> v`; an int default against a string-valued
     // map is a type error.
     assert_error_contains(
-        "let m = map_add \"a\" \"x\" map_empty\nlet bad = map_get \"a\" 0 m",
+        "let m = Map.add \"a\" \"x\" Map.empty\nlet bad = Map.findOr \"a\" 0 m",
         "string",
+    );
+}
+
+#[test]
+fn try_find_returns_an_option() {
+    // `Map.tryFind : k -> Map k v -> Option v`, so `Option.withDefault` accepts it.
+    assert!(
+        pyfun::check(
+            "let m = Map.add \"a\" 1 Map.empty\n\
+             let v = Option.withDefault 0 (Map.tryFind \"a\" m)"
+        )
+        .is_ok()
     );
 }
 
@@ -690,12 +704,28 @@ fn empty_collections_are_polymorphic() {
     // The generalized nullary values work at independent element/key types.
     assert!(
         pyfun::check(
-            "let a = set_size (set_add 1 set_empty)\n\
-             let b = set_size (set_add \"x\" set_empty)\n\
-             let c = map_size (map_add 1 true map_empty)"
+            "let a = Set.len (Set.add 1 Set.empty)\n\
+             let b = Set.len (Set.add \"x\" Set.empty)\n\
+             let c = Map.len (Map.add 1 true Map.empty)"
         )
         .is_ok()
     );
+}
+
+#[test]
+fn bare_module_name_is_an_error() {
+    // A module is not a value; using it without a member is a clear error.
+    assert_error_contains("let x = List", "`List` is a module");
+}
+
+#[test]
+fn unknown_module_member_is_rejected() {
+    assert_error_contains("let x = List.nope [1]", "not a member");
+}
+
+#[test]
+fn rejects_redefining_builtin_option() {
+    assert_error_contains("type Option a = None | Some a", "already defined");
 }
 
 #[test]

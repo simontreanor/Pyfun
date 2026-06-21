@@ -36,7 +36,7 @@ fn run_executes_a_valid_program() {
     // No prelude/`print` yet, so a valid program runs silently and exits 0.
     let file = write_temp(
         "valid",
-        "let add a b = a + b\nlet r = add 1 2\ntype Option a = None | Some a\nlet x = Some r",
+        "let add a b = a + b\nlet r = add 1 2\nlet x = Some r",
     );
     let status = Command::new(pyfun_bin())
         .arg("run")
@@ -57,8 +57,7 @@ fn run_propagates_a_python_runtime_error() {
     // `Some None` hits the emitted runtime guard, so Python exits non-zero.
     let file = write_temp(
         "runtime_error",
-        "type Option a = None | Some a\n\
-         let deep o = match o with | Some (Some x) -> x | None -> 0\n\
+        "let deep o = match o with | Some (Some x) -> x | None -> 0\n\
          let boom = deep (Some None)",
     );
     let status = Command::new(pyfun_bin())

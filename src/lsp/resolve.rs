@@ -311,7 +311,13 @@ impl Resolver {
                     self.walk_expr(&f.value);
                 }
             }
-            ExprKind::Field { base, .. } => self.walk_expr(base),
+            ExprKind::Field { base, .. } => {
+                // `Module.member` (built-in modules) is a qualified name, not a
+                // reference to a local/definition — don't resolve the module base.
+                if crate::types::qualified_name(expr).is_none() {
+                    self.walk_expr(base);
+                }
+            }
             ExprKind::Block { stmts } => {
                 self.scopes.push(HashMap::new());
                 for stmt in stmts {

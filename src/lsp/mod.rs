@@ -490,14 +490,11 @@ impl Server {
         for (name, _) in crate::types::PRELUDE {
             push(&mut items, name, KIND_FUNCTION);
         }
-        for (name, _) in crate::types::LIST_PRELUDE {
-            push(&mut items, name, KIND_FUNCTION);
-        }
-        for (name, _) in crate::types::SET_PRELUDE
-            .iter()
-            .chain(crate::types::MAP_PRELUDE)
-        {
-            push(&mut items, name, KIND_FUNCTION);
+        // Module members are offered fully qualified (`List.map`, `Set.add`, …).
+        for (module, members) in crate::types::MODULE_PRELUDES {
+            for (member, _) in *members {
+                push(&mut items, &format!("{module}.{member}"), KIND_FUNCTION);
+            }
         }
         for name in BUILTIN_CTORS {
             push(&mut items, name, KIND_CONSTRUCTOR);
@@ -616,11 +613,12 @@ fn symbol_kind(kind: resolve::SymbolKind) -> i64 {
 }
 
 /// Reserved data constructors always in scope (`DESIGN.md` §8.1, `result`).
-const BUILTIN_CTORS: &[&str] = &["Ok", "Error"];
+const BUILTIN_CTORS: &[&str] = &["Ok", "Error", "Some", "None"];
 
 /// Built-in and reserved type names.
 const BUILTIN_TYPES: &[&str] = &[
     "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List", "Set", "Map",
+    "Option",
 ];
 
 /// Pyfun keywords (and contextual builder/CE words) offered as completions.
@@ -1003,7 +1001,14 @@ mod tests {
             .filter_map(|i| i.get("label").and_then(Json::as_str))
             .collect();
         assert!(labels.contains(&"foo"), "user symbol missing: {labels:?}");
-        assert!(labels.contains(&"map"), "list prelude missing");
+        assert!(
+            labels.contains(&"List.map"),
+            "qualified list member missing"
+        );
+        assert!(
+            labels.contains(&"Map.tryFind"),
+            "qualified map member missing"
+        );
         assert!(labels.contains(&"print"), "prelude missing");
         assert!(labels.contains(&"match"), "keyword missing");
         assert!(labels.contains(&"List"), "builtin type missing");

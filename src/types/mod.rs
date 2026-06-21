@@ -297,44 +297,82 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("range", 2),
 ];
 
-/// The set prelude (`DESIGN.md` §6): functions over the built-in `Set a` (which
-/// lowers to a Python `set`). Like [`LIST_PRELUDE`], the `(name, arity)` pairs are
-/// the single source of truth shared with [`seed_set_prelude`] (schemes) and
-/// lowering (arities + emitted helpers). All are pure. Names are prefixed (`set_*`)
-/// because Pyfun has no overloading or module qualification, so a global `add`
-/// would collide across collections. Elements must be hashable at runtime (Pyfun
-/// primitives are); element types are otherwise unconstrained. `set_empty` is a
-/// nullary value (arity 0, lowers to `set()`).
+/// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
+/// to a Python `set`), accessed qualified (`Set.add`). Like [`LIST_PRELUDE`], the
+/// `(member, arity)` pairs are the single source of truth shared with
+/// [`seed_set_prelude`] (schemes) and lowering (arities + emitted helpers). All are
+/// pure. Module qualification ([`MODULES`]) is what lets `len`/`contains`/… reuse
+/// one name across collections without overloading. Elements must be hashable at
+/// runtime (Pyfun primitives are); element types are otherwise unconstrained.
+/// `Set.empty` is a nullary value (arity 0, lowers to `set()`).
 pub const SET_PRELUDE: &[(&str, usize)] = &[
-    ("set_empty", 0),
-    ("set_add", 2),
-    ("set_remove", 2),
-    ("set_contains", 2),
-    ("set_size", 1),
-    ("set_union", 2),
-    ("set_inter", 2),
-    ("set_diff", 2),
-    ("set_of_list", 1),
-    ("set_to_list", 1),
+    ("empty", 0),
+    ("add", 2),
+    ("remove", 2),
+    ("contains", 2),
+    ("len", 1),
+    ("union", 2),
+    ("intersect", 2),
+    ("difference", 2),
+    ("ofList", 1),
+    ("toList", 1),
 ];
 
-/// The map prelude (`DESIGN.md` §6): functions over the built-in `Map k v` (which
-/// lowers to a Python `dict`). Single source of truth shared with
-/// [`seed_map_prelude`] + lowering, all pure, `map_*`-prefixed (see [`SET_PRELUDE`]).
-/// Keys must be hashable at runtime. `map_get key default m` is a total lookup with
-/// a fallback (`dict.get`) — Pyfun has no `option` type yet. `map_empty` is a
-/// nullary value (arity 0, lowers to `dict()`). No `map_of_list` (Pyfun has no
-/// tuples to express a pair list); build with `map_empty` + `map_add`.
+/// The `Map` module (`DESIGN.md` §6): members of the built-in `Map k v` (which
+/// lowers to a Python `dict`), accessed qualified (`Map.add`). Single source of
+/// truth shared with [`seed_map_prelude`] + lowering, all pure. Keys must be
+/// hashable at runtime. `Map.findOr key default m` is a total lookup with a
+/// fallback (`dict.get`); `Map.tryFind key m : Option v` is the optional form.
+/// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). No `Map.ofList`
+/// (Pyfun has no tuples to express a pair list); build with `Map.empty` + `Map.add`.
 pub const MAP_PRELUDE: &[(&str, usize)] = &[
-    ("map_empty", 0),
-    ("map_add", 3),
-    ("map_remove", 2),
-    ("map_contains", 2),
-    ("map_get", 3),
-    ("map_size", 1),
-    ("map_keys", 1),
-    ("map_values", 1),
+    ("empty", 0),
+    ("add", 3),
+    ("remove", 2),
+    ("contains", 2),
+    ("findOr", 3),
+    ("tryFind", 2),
+    ("len", 1),
+    ("keys", 1),
+    ("values", 1),
 ];
+
+/// The built-in module namespaces. A `Module.member` reference is parsed as the
+/// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
+/// no parser change was needed); the checker and lowering recognize a base that is
+/// one of these names and resolve the dotted member against the prelude instead of
+/// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
+/// `lower.x` is record-field access.
+pub const MODULES: &[&str] = &["List", "Set", "Map", "Option"];
+
+/// Pairs each module with its members (`(member, arity)`), the single source of
+/// truth for seeding qualified schemes, registering arities, and editor completion.
+pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
+    ("List", LIST_PRELUDE),
+    ("Set", SET_PRELUDE),
+    ("Map", MAP_PRELUDE),
+    ("Option", OPTION_PRELUDE),
+];
+
+/// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
+/// (constructors `Some`/`None`, seeded like `Result`'s `Ok`/`Error`). The
+/// constructors themselves are global; these are the qualified combinators.
+pub const OPTION_PRELUDE: &[(&str, usize)] =
+    &[("map", 2), ("withDefault", 2), ("isSome", 1), ("isNone", 1)];
+
+/// If `expr` is a built-in module member access `Module.member`, return its dotted
+/// name (e.g. `"List.map"`). Shared by the checker and lowering so both resolve
+/// qualified references the same way.
+pub fn qualified_name(expr: &Expr) -> Option<String> {
+    if let ExprKind::Field { base, name } = &expr.kind
+        && let ExprKind::Var(m) = &base.kind
+        && MODULES.contains(&m.as_str())
+    {
+        Some(format!("{m}.{name}"))
+    } else {
+        None
+    }
+}
 
 /// The unit variable id used by the unit-polymorphic prelude numerics
 /// (`abs`/`min`/`max`). Reserved (below [`RESERVED_VARS`]) so a freshly allocated
@@ -486,6 +524,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_list_prelude(&mut env);
     seed_set_prelude(&mut env);
     seed_map_prelude(&mut env);
+    seed_option_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -804,21 +843,24 @@ fn seed_list_prelude(env: &mut Env) {
         mutable: false,
         ty,
     };
-    // len : List a -> int   (pure)
+    // List.len : List a -> int   (pure)
     env.insert(
-        "len".to_string(),
+        "List.len".to_string(),
         mono(vec![0], pure_fn(list(Ty::Var(0)), int())),
     );
-    // sum : List int -> int   (pure; MVP keeps it int-only)
-    env.insert("sum".to_string(), mono(vec![], pure_fn(list(int()), int())));
-    // rev : List a -> List a   (pure)
+    // List.sum : List int -> int   (pure; MVP keeps it int-only)
     env.insert(
-        "rev".to_string(),
+        "List.sum".to_string(),
+        mono(vec![], pure_fn(list(int()), int())),
+    );
+    // List.rev : List a -> List a   (pure)
+    env.insert(
+        "List.rev".to_string(),
         mono(vec![0], pure_fn(list(Ty::Var(0)), list(Ty::Var(0)))),
     );
-    // range : int -> int -> List int   (pure)
+    // List.range : int -> int -> List int   (pure)
     env.insert(
-        "range".to_string(),
+        "List.range".to_string(),
         mono(vec![], pure_fn(int(), pure_fn(int(), list(int())))),
     );
 
@@ -834,9 +876,9 @@ fn seed_list_prelude(env: &mut Env) {
         ty,
     };
     let arrow_e = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::var(e));
-    // map : (a ->{e} b) -> List a ->{e} List b
+    // List.map : (a ->{e} b) -> List a ->{e} List b
     env.insert(
-        "map".to_string(),
+        "List.map".to_string(),
         eff_scheme(
             vec![0, 1],
             pure_fn(
@@ -845,9 +887,9 @@ fn seed_list_prelude(env: &mut Env) {
             ),
         ),
     );
-    // filter : (a ->{e} bool) -> List a ->{e} List a
+    // List.filter : (a ->{e} bool) -> List a ->{e} List a
     env.insert(
-        "filter".to_string(),
+        "List.filter".to_string(),
         eff_scheme(
             vec![0],
             pure_fn(
@@ -856,9 +898,9 @@ fn seed_list_prelude(env: &mut Env) {
             ),
         ),
     );
-    // fold : (b ->{e} a ->{e} b) -> b -> List a ->{e} b
+    // List.fold : (b ->{e} a ->{e} b) -> b -> List a ->{e} b
     env.insert(
-        "fold".to_string(),
+        "List.fold".to_string(),
         eff_scheme(
             vec![0, 1],
             pure_fn(
@@ -869,7 +911,8 @@ fn seed_list_prelude(env: &mut Env) {
     );
 }
 
-/// Seed the set prelude ([`SET_PRELUDE`]) — pure functions over `Set a` (var 0).
+/// Seed the `Set` module ([`SET_PRELUDE`]) — pure functions over `Set a` (var 0),
+/// under qualified keys (`Set.add`).
 fn seed_set_prelude(env: &mut Env) {
     let set = |t: Ty| Ty::Con("Set".to_string(), vec![t]);
     let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
@@ -886,26 +929,27 @@ fn seed_set_prelude(env: &mut Env) {
         mutable: false,
         ty,
     };
-    let mut put = |name: &str, ty: Ty| {
-        env.insert(name.to_string(), scheme(ty));
+    let mut put = |member: &str, ty: Ty| {
+        env.insert(format!("Set.{member}"), scheme(ty));
     };
-    put("set_empty", set(a()));
-    put("set_add", pure_fn(a(), pure_fn(set(a()), set(a()))));
-    put("set_remove", pure_fn(a(), pure_fn(set(a()), set(a()))));
-    put("set_contains", pure_fn(a(), pure_fn(set(a()), Ty::Bool)));
-    put("set_size", pure_fn(set(a()), int()));
-    put("set_union", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
-    put("set_inter", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
-    put("set_diff", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
-    put("set_of_list", pure_fn(list(a()), set(a())));
-    put("set_to_list", pure_fn(set(a()), list(a())));
+    put("empty", set(a()));
+    put("add", pure_fn(a(), pure_fn(set(a()), set(a()))));
+    put("remove", pure_fn(a(), pure_fn(set(a()), set(a()))));
+    put("contains", pure_fn(a(), pure_fn(set(a()), Ty::Bool)));
+    put("len", pure_fn(set(a()), int()));
+    put("union", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("intersect", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("difference", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
+    put("ofList", pure_fn(list(a()), set(a())));
+    put("toList", pure_fn(set(a()), list(a())));
 }
 
-/// Seed the map prelude ([`MAP_PRELUDE`]) — pure functions over `Map k v`
-/// (key var 0, value var 1).
+/// Seed the `Map` module ([`MAP_PRELUDE`]) — pure functions over `Map k v`
+/// (key var 0, value var 1), under qualified keys (`Map.add`).
 fn seed_map_prelude(env: &mut Env) {
     let map = |k: Ty, v: Ty| Ty::Con("Map".to_string(), vec![k, v]);
     let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
     let int = || Ty::Int(Unit::dimensionless());
     let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
     let k = || Ty::Var(0);
@@ -921,17 +965,62 @@ fn seed_map_prelude(env: &mut Env) {
         ty,
     };
     let mv = || map(k(), v());
-    let mut put = |name: &str, ty: Ty| {
-        env.insert(name.to_string(), scheme(ty));
+    let mut put = |member: &str, ty: Ty| {
+        env.insert(format!("Map.{member}"), scheme(ty));
     };
-    put("map_empty", mv());
-    put("map_add", pure_fn(k(), pure_fn(v(), pure_fn(mv(), mv()))));
-    put("map_remove", pure_fn(k(), pure_fn(mv(), mv())));
-    put("map_contains", pure_fn(k(), pure_fn(mv(), Ty::Bool)));
-    put("map_get", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
-    put("map_size", pure_fn(mv(), int()));
-    put("map_keys", pure_fn(mv(), list(k())));
-    put("map_values", pure_fn(mv(), list(v())));
+    put("empty", mv());
+    put("add", pure_fn(k(), pure_fn(v(), pure_fn(mv(), mv()))));
+    put("remove", pure_fn(k(), pure_fn(mv(), mv())));
+    put("contains", pure_fn(k(), pure_fn(mv(), Ty::Bool)));
+    put("findOr", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
+    put("tryFind", pure_fn(k(), pure_fn(mv(), opt(v()))));
+    put("len", pure_fn(mv(), int()));
+    put("keys", pure_fn(mv(), list(k())));
+    put("values", pure_fn(mv(), list(v())));
+}
+
+/// Seed the `Option` module ([`OPTION_PRELUDE`]) — combinators over the built-in
+/// `Option a` (var 0). `Option.map` is effect-polymorphic like `List.map` (a single
+/// bound effect variable, id 0, links the function arrow to the call), so mapping an
+/// impure function over an option is `io`.
+fn seed_option_prelude(env: &mut Env) {
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let a = || Ty::Var(0);
+    let b = || Ty::Var(1);
+    let scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, sch: Scheme| {
+        env.insert(format!("Option.{member}"), sch);
+    };
+    // Option.map : (a ->{e} b) -> Option a ->{e} Option b
+    let e = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
+    put(
+        "map",
+        Scheme {
+            vars: vec![0, 1],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![e],
+            mutable: false,
+            ty: pure_fn(arrow_e(a(), b()), arrow_e(opt(a()), opt(b()))),
+        },
+    );
+    put(
+        "withDefault",
+        scheme(vec![0], pure_fn(a(), pure_fn(opt(a()), a()))),
+    );
+    put("isSome", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
+    put("isNone", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
 }
 
 /// Seed the built-in computation-expression types `Async a`, `Seq a`, and
@@ -944,15 +1033,22 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     // constructors (list patterns in `match` are deferred), so no `type_ctors`.
     decls.type_arity.insert("List".to_string(), 1);
     // `Set a` / `Map k v` — the hashed collections (lower to Python `set`/`dict`).
-    // Built purely from the `set_*` / `map_*` prelude (no constructors, no literal
+    // Built purely from the `Set.*` / `Map.*` modules (no constructors, no literal
     // syntax — `{…}` is records/CEs).
     decls.type_arity.insert("Set".to_string(), 1);
     decls.type_arity.insert("Map".to_string(), 2);
+    // `Option a` — the built-in optional type (constructors `Some`/`None`), seeded
+    // like `Result`. Reserved, so a user `type Option` is an error.
+    decls.type_arity.insert("Option".to_string(), 1);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(
         "Result".to_string(),
         vec!["Ok".to_string(), "Error".to_string()],
+    );
+    decls.type_ctors.insert(
+        "Option".to_string(),
+        vec!["Some".to_string(), "None".to_string()],
     );
 
     let result_ty = Ty::Con("Result".to_string(), vec![Ty::Var(0), Ty::Var(1)]);
@@ -992,6 +1088,47 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         CtorInfo {
             scheme: err,
             arity: 1,
+        },
+    );
+
+    // `Option a` with constructors `Some : a -> Option a` and `None : Option a`.
+    let option_ty = Ty::Con("Option".to_string(), vec![Ty::Var(0)]);
+    let some = Scheme {
+        vars: vec![0],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty: Ty::Fun(
+            Box::new(Ty::Var(0)),
+            Box::new(option_ty.clone()),
+            Effect::pure(),
+        ),
+    };
+    let none = Scheme {
+        vars: vec![0],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty: option_ty,
+    };
+    env.insert("Some".to_string(), some.clone());
+    env.insert("None".to_string(), none.clone());
+    decls.ctors.insert(
+        "Some".to_string(),
+        CtorInfo {
+            scheme: some,
+            arity: 1,
+        },
+    );
+    decls.ctors.insert(
+        "None".to_string(),
+        CtorInfo {
+            scheme: none,
+            arity: 0,
         },
     );
 }
@@ -1446,6 +1583,10 @@ impl Infer {
 
             ExprKind::Var(name) => match env.get(name) {
                 Some(scheme) => Ok(self.instantiate(scheme)),
+                None if MODULES.contains(&name.as_str()) => Err(TypeError {
+                    message: format!("`{name}` is a module; use `{name}.member`"),
+                    span,
+                }),
                 None => Err(TypeError {
                     message: format!("unbound name `{name}`"),
                     span,
@@ -1575,7 +1716,20 @@ impl Infer {
             ExprKind::RecordUpdate { base, fields } => {
                 self.infer_record_update(base, fields, span, env)
             }
-            ExprKind::Field { base, name } => self.infer_field(base, name, span, env),
+            ExprKind::Field { base, name } => {
+                // `Module.member` (built-in modules) resolves against the qualified
+                // prelude; otherwise it is ordinary record-field access.
+                if let Some(q) = qualified_name(expr) {
+                    return match env.get(&q) {
+                        Some(scheme) => Ok(self.instantiate(scheme)),
+                        None => Err(TypeError {
+                            message: format!("`{name}` is not a member of the built-in module"),
+                            span,
+                        }),
+                    };
+                }
+                self.infer_field(base, name, span, env)
+            }
 
             ExprKind::Block { stmts } => self.infer_block(stmts, env),
             ExprKind::Assign { target, value } => self.infer_assign(target, value, span, env),

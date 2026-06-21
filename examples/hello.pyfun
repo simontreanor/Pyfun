@@ -3,8 +3,7 @@
 #   pyfun compile examples/hello.pyfun     (emit Python)
 #   pyfun run     examples/hello.pyfun     (run it)
 
-# Algebraic data types: a parameterized sum and a plain enum.
-type Option a = None | Some a
+# Algebraic data types: a plain enum. (`Option a = None | Some a` is built in.)
 type Color = Red | Green | Blue
 
 # Records: named-field product types (nominal; field names are unique).
@@ -103,14 +102,22 @@ let label = show 42                  # "42"  (str(42))
 let root = sqrt 16.0                 # 4.0   (math.sqrt(16.0))
 
 # Lists: the eager `List a` collection (lowers to a Python list). Literals are
-# comma-separated `[a, b, c]`. The prelude has `map`/`filter`/`fold`/`len`/`sum`/
-# `rev`/`range`; the higher-order ones are effect-polymorphic (mapping an impure
-# function makes the call impure). `len`/`sum` map onto the Python builtins.
+# comma-separated `[a, b, c]`. Collection functions are module-qualified
+# (`List.map`, `Set.add`, `Map.tryFind`) — the module disambiguates a shared name
+# like `len`, so no overloading is needed. The higher-order list ops are
+# effect-polymorphic (mapping an impure function makes the call impure).
 let ns = [1, 2, 3, 4, 5]
-let squares = map (fun x -> x * x) ns        # [1, 4, 9, 16, 25]
-let bigs = filter (fun x -> x > 2) ns        # [3, 4, 5]
-let total = fold (fun a b -> a + b) 0 ns     # 15
-let count = len ns                           # 5
+let squares = List.map (fun x -> x * x) ns   # [1, 4, 9, 16, 25]
+let bigs = List.filter (fun x -> x > 2) ns   # [3, 4, 5]
+let total = List.fold (fun a b -> a + b) 0 ns # 15
+let count = List.len ns                      # 5
+
+# Sets and maps lower to Python `set` / `dict`; `Map.tryFind` returns the built-in
+# `Option`, consumed with the `Option` module.
+let uniq = Set.ofList [1, 1, 2, 3]           # {1, 2, 3}
+let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
+let ada = Option.withDefault 0 (Map.tryFind "ada" scores)   # 10
+let nobody = Option.withDefault 0 (Map.tryFind "x" scores)  # 0
 
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
 #   pyfun run examples/hello.pyfun
@@ -157,3 +164,8 @@ print squares                         # [1, 4, 9, 16, 25]
 print bigs                            # [3, 4, 5]
 print total                           # 15
 print count                           # 5
+
+# Sets, maps, and options in action.
+print (Set.len uniq)                  # 3
+print ada                             # 10
+print nobody                          # 0
