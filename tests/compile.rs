@@ -173,6 +173,30 @@ fn result_map_lowers_to_a_helper_pulling_in_the_result_prelude() {
 }
 
 #[test]
+fn seq_map_filter_lower_to_pythons_lazy_builtins() {
+    // Unlike `List.map` (eager, wrapped in `_pf_map`), `Seq.map`/`filter` route to
+    // Python's own lazy builtins with no wrapper.
+    let py =
+        pyfun::compile("let r = Seq.map (fun x -> x) (Seq.filter (fun x -> true) (Seq.range 0 3))")
+            .unwrap();
+    assert!(py.contains("map(lambda x: x"), "{py}");
+    assert!(py.contains("filter(lambda x: True"), "{py}");
+    assert!(py.contains("range(0, 3)"), "{py}");
+    assert!(
+        !py.contains("_pf_map"),
+        "Seq.map must not use the eager helper: {py}"
+    );
+}
+
+#[test]
+fn seq_take_lowers_to_itertools_islice() {
+    let py = pyfun::compile("let r = Seq.take 2 (Seq.range 0 9)").unwrap();
+    assert!(py.contains("import itertools"), "{py}");
+    assert!(py.contains("def _pf_seq_take(n, xs):"), "{py}");
+    assert!(py.contains("return itertools.islice(xs, n)"), "{py}");
+}
+
+#[test]
 fn result_to_option_pulls_in_both_preludes() {
     let py = pyfun::compile("let o = Result.toOption (Ok 1)").unwrap();
     assert!(py.contains("class Ok:"), "Result prelude: {py}");
@@ -763,6 +787,23 @@ fn e2e_adts_and_records_as_keys_and_elements() {
             ("hasGreen", "True"),
             ("v", "one"),
             ("npts", "2"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_seq_module_is_lazy() {
+    // `Seq.range 0 1000000` then `take`/`map` forces only a handful of elements —
+    // laziness, not a million-element materialization.
+    run_and_check(
+        "let nats = Seq.range 0 1000000\n\
+         let squares = Seq.toList (Seq.take 5 (Seq.map (fun x -> x * x) nats))\n\
+         let evens = Seq.toList (Seq.take 3 (Seq.filter (fun x -> x // 2 * 2 == x) nats))\n\
+         let total = Seq.fold (fun acc x -> acc + x) 0 (Seq.ofList [1, 2, 3, 4])",
+        &[
+            ("squares", "[0, 1, 4, 9, 16]"),
+            ("evens", "[0, 2, 4]"),
+            ("total", "10"),
         ],
     );
 }

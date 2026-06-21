@@ -760,6 +760,34 @@ fn result_to_option_bridges_to_option() {
 }
 
 #[test]
+fn accepts_seq_module() {
+    let src = "let s = Seq.ofList [1, 2, 3]\n\
+               let a = Seq.map (fun x -> x + 1) s\n\
+               let b = Seq.filter (fun x -> x < 2) s\n\
+               let c = Seq.take 2 s\n\
+               let d = Seq.fold (fun acc x -> acc + x) 0 s\n\
+               let e = Seq.toList (Seq.range 0 5)";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn seq_take_returns_a_seq_not_a_list() {
+    // `Seq.take : int -> Seq a -> Seq a`; the result is still lazy, so `List.len`
+    // (which needs a `List`) is a type error until `Seq.toList` forces it.
+    assert_error_contains("let bad = List.len (Seq.take 2 (Seq.range 0 9))", "List");
+}
+
+#[test]
+fn seq_and_list_are_distinct_types() {
+    // The same member name resolves per-module: `Seq.map` keeps a `Seq`, so feeding
+    // it to a `List` consumer is a type error.
+    assert_error_contains(
+        "let bad = List.len (Seq.map (fun x -> x) (Seq.range 0 3))",
+        "List",
+    );
+}
+
+#[test]
 fn rejects_redefining_builtin_map_and_set() {
     assert_error_contains("type Set a = Empty", "already defined");
     assert_error_contains("type Map a = Empty", "already defined");

@@ -343,7 +343,7 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
 /// one of these names and resolve the dotted member against the prelude instead of
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
-pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result"];
+pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result", "Seq"];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
 /// truth for seeding qualified schemes, registering arities, and editor completion.
@@ -353,6 +353,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Map", MAP_PRELUDE),
     ("Option", OPTION_PRELUDE),
     ("Result", RESULT_PRELUDE),
+    ("Seq", SEQ_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -373,6 +374,21 @@ pub const RESULT_PRELUDE: &[(&str, usize)] = &[
     ("isOk", 1),
     ("isError", 1),
     ("toOption", 1),
+];
+
+/// The `Seq` module (`DESIGN.md` §6): the **lazy** counterpart to `List`, over the
+/// built-in `Seq a` produced by the `seq {}` CE (a Python iterator/generator).
+/// `Seq.map`/`filter`/`take`/`range` are lazy (Python's lazy `map`/`filter`/
+/// `islice`/`range`); `Seq.fold`/`toList` force the sequence. `Seq.map`/`filter`/
+/// `fold` are effect-polymorphic. NB Python iterators are **single-pass**.
+pub const SEQ_PRELUDE: &[(&str, usize)] = &[
+    ("map", 2),
+    ("filter", 2),
+    ("take", 2),
+    ("fold", 3),
+    ("toList", 1),
+    ("ofList", 1),
+    ("range", 2),
 ];
 
 /// If `expr` is a built-in module member access `Module.member`, return its dotted
@@ -541,6 +557,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_map_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
+    seed_seq_prelude(&mut env);
 
     for item in &module.items {
         if let Item::Measure { name, span } = item
@@ -1114,6 +1131,82 @@ fn seed_result_prelude(env: &mut Env) {
     put(
         "toOption",
         scheme(vec![0, 1], pure_fn(res(a(), e()), opt(a()))),
+    );
+}
+
+/// Seed the `Seq` module ([`SEQ_PRELUDE`]) — the lazy counterpart to `List` over
+/// `Seq a` (var 0, mapped var 1). `Seq.map`/`filter`/`fold` are effect-polymorphic
+/// (one bound effect variable, id 0), like `List.map`.
+fn seed_seq_prelude(env: &mut Env) {
+    let seq = |t: Ty| Ty::Con("Seq".to_string(), vec![t]);
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let int = || Ty::Int(Unit::dimensionless());
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let a = || Ty::Var(0);
+    let b = || Ty::Var(1);
+    let mono = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let ev = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(ev));
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![ev],
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, sch: Scheme| {
+        env.insert(format!("Seq.{member}"), sch);
+    };
+    // Seq.map : (a ->{e} b) -> Seq a ->{e} Seq b   (lazy, but the effect still flows)
+    put(
+        "map",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), b()), arrow_e(seq(a()), seq(b()))),
+        ),
+    );
+    // Seq.filter : (a ->{e} bool) -> Seq a ->{e} Seq a
+    put(
+        "filter",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), seq(a()))),
+        ),
+    );
+    // Seq.take : int -> Seq a -> Seq a
+    put(
+        "take",
+        mono(vec![0], pure_fn(int(), pure_fn(seq(a()), seq(a())))),
+    );
+    // Seq.fold : (b ->{e} a ->{e} b) -> b -> Seq a ->{e} b   (forces the sequence)
+    put(
+        "fold",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(a(), arrow_e(b(), a())),
+                pure_fn(a(), arrow_e(seq(b()), a())),
+            ),
+        ),
+    );
+    // Seq.toList : Seq a -> List a   (forces)
+    put("toList", mono(vec![0], pure_fn(seq(a()), list(a()))));
+    // Seq.ofList : List a -> Seq a
+    put("ofList", mono(vec![0], pure_fn(list(a()), seq(a()))));
+    // Seq.range : int -> int -> Seq int
+    put(
+        "range",
+        mono(vec![], pure_fn(int(), pure_fn(int(), seq(int())))),
     );
 }
 

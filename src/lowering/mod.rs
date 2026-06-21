@@ -782,6 +782,22 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_result_to_option")
             }
+            // Seq — the lazy module. Map/filter/range/iter/list are Python's own lazy
+            // builtins (no wrappers needed, unlike the eager `List`); fold reuses the
+            // list `_pf_fold` (reduce); take needs `itertools.islice`.
+            "Seq.map" => bare("map"),
+            "Seq.filter" => bare("filter"),
+            "Seq.ofList" => bare("iter"),
+            "Seq.toList" => bare("list"),
+            "Seq.range" => bare("range"),
+            "Seq.fold" => {
+                self.needs_functools = true;
+                list(self, "_pf_fold")
+            }
+            "Seq.take" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_take")
+            }
             other => unreachable!("unknown module member {other}"),
         }
     }
@@ -1519,6 +1535,18 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     },
                     PyStmt::Return(call0("None_")),
                 ],
+            ),
+            // Seq.take(n, xs) -> itertools.islice(xs, n)  (reorders args; stays lazy)
+            "_pf_seq_take" => def1(
+                helper,
+                &["n", "xs"],
+                PyExpr::Call {
+                    func: Box::new(PyExpr::Attribute {
+                        value: Box::new(name("itertools")),
+                        attr: "islice".to_string(),
+                    }),
+                    args: vec![name("xs"), name("n")],
+                },
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

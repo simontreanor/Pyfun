@@ -244,10 +244,20 @@ demand. Each has a module of combinators: `Option.map`/`withDefault`/`isSome`/`i
 **effect-polymorphic** (like `List.map`). `Map.tryFind` returns an `Option`; `Result.toOption` bridges
 the two (`Ok v → Some v`, `Error _ → None`). A user `type Option`/`Result` is rejected (reserved).
 
+**Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
+`Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
+`take`/`range` are **lazy** (they route to Python's own lazy `map`/`filter`/`itertools.islice`/`range`,
+*not* the eager `_pf_*` wrappers `List` uses); `Seq.fold`/`toList` force the sequence (`Seq.fold` reuses
+the list `_pf_fold` = `reduce`; `Seq.toList` = `list`). `Seq.ofList` = `iter`. `Seq.map`/`filter`/`fold`
+are effect-polymorphic like `List.map` — since the effect system can't model *deferred* effects, the
+function's effect is attributed at the call (sound, slightly conservative for the lazy ops). Caveat:
+Python iterators are **single-pass**, unlike F#'s re-enumerable `seq` — consistent with the one-shot
+generator the `seq {}` CE already produces.
+
 **Built-in modules.** Collection operations are **module-qualified** (`List.map`, `Set.add`,
-`Map.tryFind`, `Option.withDefault`). This is what lets `len`/`contains`/`map` reuse one name across
-collections without overloading or type classes (which the MVP rules out). The modules
-(`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`; members paired in `MODULE_PRELUDES`) are
+`Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map` reuse one
+name across collections without overloading or type classes (which the MVP rules out). The modules
+(`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`; members paired in `MODULE_PRELUDES`) are
 **built-in namespaces only** — there is no `module` *declaration* syntax, no files/imports/visibility
 (deferred).
 Crucially, **no parser change was needed**: `Module.member` is parsed as the ordinary field-access node
@@ -255,8 +265,8 @@ Crucially, **no parser change was needed**: `Module.member` is parsed as the ord
 module (via `types::qualified_name`) and resolve the dotted member against the module instead of as
 record-field access. Casing disambiguates — `Upper.x` is a module member, `lower.x` is field access. A
 genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in `PRELUDE`), matching F#
-(`List.map` qualified, `abs` global). Remaining next layer: a value-level library over the lazy
-`seq {}`, and the full *user-defined* module system.
+(`List.map` qualified, `abs` global). Remaining next layer: the full *user-defined* module system
+(declarations, files, imports, visibility).
 
 ## 7. Surface language (MVP)
 
