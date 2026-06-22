@@ -253,8 +253,17 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
    modules + ADT/record `__hash__` + **tuples** + the tuple-enabled stdlib (`List.zip`,
-   `Map.ofList`/`toList`) landed; remaining: the full *file-based* module system (multi-file, `import`,
-   resolver, multi-file LSP). `Array` deferred as redundant with `List`.
+   `Map.ofList`/`toList`) landed. `Array` deferred as redundant with `List`.
+   **File-based modules (Phase 2) are now SCOPED** — see `DESIGN.md` §6.1. Decisions (all
+   Python-natural): explicit `import Geometry` + qualified `Geometry.area` (reuses `qualified_name`, no
+   parser change for access); **parallel `.py` output** (un-mangled names, `geometry.area`, real Python
+   `import`); **all public** (no `pub`); a small **implicit-recursion** precursor (function bindings see
+   themselves like Python `def`; TCO deferred — CPython has none, use `List`/`Seq` combinators for
+   stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
+   declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
+   values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
+   types/ctors deferred). Seven ordered slices (0 = implicit recursion, independent). This is the next
+   build target.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

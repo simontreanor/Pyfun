@@ -303,9 +303,92 @@ flattens members to top-level defs/assignments with **mangled names** (`Geometry
 rewriting bare sibling references to the same names (`cur_module` in the lowerer); partial application
 and the curry policy work unchanged (arity is registered under the qualified name). A module name can't
 shadow a built-in module or duplicate another. **MVP limits:** the body holds only `let` bindings
-(`type`/`measure`/`extern` inside a module are deferred), and there are no nested modules. Remaining next
-layer: the full *file-based* module system (one module per file, `import`, a resolver + dependency
-graph, visibility, multi-file LSP) — a separate, larger initiative.
+(`type`/`measure`/`extern` inside a module are deferred), and there are no nested modules. The next
+layer is the full *file-based* module system, scoped in §6.1.
+
+### 6.1 File-based modules (Phase 2 — scoped, not yet built)
+
+One module per file, referenced with an explicit `import`, compiled to a tree of readable Python files.
+The design optimizes for **Python familiarity** (the §7.1 theme): explicit imports, real Python modules,
+no enforced visibility. All four shaping decisions were taken deliberately:
+
+- **Explicit `import`, qualified use.** `import Geometry` declares the dependency edge; members are used
+  qualified, `Geometry.area`. This is the core Python idiom (`import foo; foo.bar()`) and **reuses the
+  existing access machinery unchanged** — `Geometry.area` is already the `Field { base: Var("Geometry"),
+  name: "area" }` node that `types::qualified_name` resolves off an uppercase base. The *access* needs no
+  parser change; only the `import` *statement* is new (`Item::Import`, a new `import` keyword, parsed at
+  the top of the file before other items — matching Python and the existing declare-before-use rule).
+  `from X import y` / `open` (unqualified import) are **deferred** (`open`-everything maps to Python's
+  discouraged `import *`).
+- **Parallel `.py` output.** Each `foo.pyfun` compiles to a sibling `foo.py` with a real `import`; member
+  names stay **un-mangled** (`area`, not `Geometry_area` — the mangling is an in-file-module workaround we
+  drop here), and a cross-module reference `Geometry.area` lowers to Python `geometry.area`. This matches
+  Python expectations and the "readable Python / direct ecosystem interop" ethos, and enables
+  Python↔Pyfun interop (a Python program can `import` a compiled Pyfun module and vice-versa).
+- **All public.** Every top-level binding is exported; no `pub` keyword — Python has no enforced private
+  (`_underscore` is convention only). Visibility control is **deferred**.
+- **Implicit recursion** (a small, independent precursor slice): a *function* binding (`let f x = …`) is
+  in scope in its own body, like Python's `def` — no `rec` keyword. A plain value binding still cannot
+  self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in Python). Mechanism:
+  pre-bind `f : α` (fresh) before inferring the body, unify, then generalize (standard monomorphic-
+  recursion HM); lowering is unchanged (Python functions are already recursive). **Tail-call optimization
+  is deferred** — CPython does no TCO and caps recursion (~1000 frames), so deep recursion can
+  `RecursionError`, exactly like hand-written Python; the **stack-safe path is the `List`/`Seq`
+  combinators** (they lower to Python's iterative `reduce`/`map`). A future slice may rewrite
+  self-tail-calls to a `while` loop in the emitted Python (the F#/Scala move; output stays readable).
+
+**Module identity.** Source files are lowercase (`geometry.pyfun`), avoiding case-insensitive-filesystem
+pitfalls; the **module name is the stem with its first letter uppercased** (`Geometry`), per Pyfun's
+uppercase-identifier rule for types/modules; the emitted file keeps the lowercase stem (`geometry.py`).
+Resolution maps `import Geometry` → `geometry.pyfun` by lowercasing. (Multi-word/snake_case stems and
+nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
+
+**Resolution & ordering.** A new multi-file **driver** (a `src/project`-style module): from an entry file,
+parse it, follow `import` edges (resolved relative to the entry's directory = the source root), and build
+a dependency **graph**. The graph must be **acyclic** — a cycle is an error (Python tolerates import
+cycles only fragilely; F# forbids them, and this is the cross-file face of declare-before-use). A
+topological sort gives the compile/emit order. So "a module may only use modules declared before it"
+falls out for free — no separate mechanism, and there is **no mutual recursion across modules** (merge
+the files, as in F#).
+
+**Cross-module checking.** Each module is type-checked in topological order, its env seeded with every
+imported module's **exported value schemes** under their qualified keys (`env.insert("Geometry.area",
+scheme)`) — reusing the qualified-key env the checker already uses for built-in/in-file modules. A
+module's interface for the MVP is its top-level **`let` values only**; **cross-module types / ctors /
+records / measures / externs are deferred** (qualified type names `Geometry.Shape`, qualified ctor
+patterns `Geometry.Circle r`, and cross-module field resolution are their own follow-on — this mirrors
+the in-file-module `let`-only limit). Using a name a module does not export is a "module `Geometry` has no
+member `x`" error.
+
+**Output & the shared runtime.** Each module lowers independently to its own `.py`; a cross-module
+`Geometry.area` emits `geometry.area` (attribute access), with `import geometry` hoisted to the file
+header. **One correctness constraint forces a shared runtime module:** the built-in `Option`/`Result`
+constructors lower to *nominal* Python classes (`Some`/`None_`/`Ok`/`Error`); if each file defined its
+own, an `Option` value crossing a module boundary would fail the receiver's `isinstance` checks. So those
+classes are hoisted into a generated **`_pyfun_rt.py`** that every module imports (`from _pyfun_rt import
+Some, None_, Ok, Error`). `List`/`Set`/`Map`/tuples need no runtime — they are native `list`/`set`/`dict`/
+`tuple`. The pure `_pf_*` helpers may stay per-file for the MVP (duplication is bloat, not bug);
+de-duplicating them into `_pyfun_rt.py` is a follow-on. **Single-file `compile`/`run` output is
+unchanged** (classes still inlined) — the runtime module appears only for a multi-file program.
+
+**CLI.** `pyfun {check,compile,run} entry.pyfun` operate over the whole graph: `check` checks all modules;
+`compile -o <dir>` emits the `.py` tree (+ `_pyfun_rt.py`) into `<dir>`; `run` materializes the tree to a
+temp dir and executes `python entry.py` with the dir on the path. A file with **no imports behaves exactly
+as today** (full back-compat).
+
+**LSP.** The MVP gains **minimal import awareness** — the analyzer resolves an imported file's export
+interface so a multi-module file type-checks cleanly (no spurious "unbound `Geometry.area`"). **Rich
+cross-file navigation is deferred**: workspace symbols, go-to-definition / find-references / rename across
+files, and a project-wide cache are a substantial follow-on (today's per-URI, version-cached analysis
+stays the core).
+
+**Deferred (explicit non-goals for the first cut):** `from X import y` / `open`; visibility (`pub`);
+cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
+de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ordered):** (0) implicit
+recursion [independent precursor]; (1) `import` syntax + AST + pretty-print + roundtrip; (2) multi-file
+driver: graph, cycle/missing-file errors, topo sort; (3) cross-module value checking; (4) shared
+`_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
+`-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.
 
 ## 7. Surface language (MVP)
 
