@@ -1,8 +1,8 @@
 {
   "name": "pyfun",
   "displayName": "Pyfun",
-  "description": "Pyfun language support: inline diagnostics and hover-for-type, backed by `pyfun lsp`.",
-  "version": "0.0.1",
+  "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
+  "version": "0.0.2",
   "publisher": "pyfun",
   "repository": {
     "type": "git",
@@ -31,6 +31,13 @@
           ".pyfun"
         ],
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pyfun",
+        "scopeName": "source.pyfun",
+        "path": "./pyfun.tmLanguage.json"
       }
     ],
     "configuration": {
