@@ -295,6 +295,17 @@ pub fn print_pattern(pattern: &Pattern) -> String {
             let args: Vec<String> = args.iter().map(print_pattern).collect();
             format!("({} {})", name, args.join(" "))
         }
+        Pattern::Record { fields } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| match &f.pattern {
+                    // Print the `{ x }` shorthand back as shorthand.
+                    Pattern::Var { name, .. } if *name == f.name => f.name.clone(),
+                    p => format!("{} = {}", f.name, print_pattern(p)),
+                })
+                .collect();
+            format!("{{ {} }}", parts.join(", "))
+        }
     }
 }
 

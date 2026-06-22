@@ -38,6 +38,12 @@ const PROGRAMS: &[&str] = &[
     "let describe n = match n with | 0 -> \"zero\" | _ -> \"many\"",
     "let unwrap o = match o with | Some v -> v | None -> 0",
     "let nested = match p with | Pair (Some a) b -> a | _ -> b",
+    // Record patterns: shorthand, explicit, subset, and nested sub-patterns. The
+    // `{ x }` shorthand must print back as shorthand (not `{ x = x }`).
+    "let f p = match p with | { x, y } -> x",
+    "let f p = match p with | { x = a, y = b } -> a",
+    "let f p = match p with | { x = 0, y } -> y | { x } -> x",
+    "let f b = match b with | { item = Some n } -> n | _ -> 0",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.

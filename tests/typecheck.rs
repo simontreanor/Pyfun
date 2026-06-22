@@ -453,6 +453,111 @@ fn rejects_field_declared_twice_in_one_record() {
     assert_error_contains("type P = { x: int, x: int }", "field `x` is declared twice");
 }
 
+// ---------- record patterns ----------
+
+#[test]
+fn accepts_record_pattern_match() {
+    // `{ x, y }` shorthand binds both fields; field types flow into the body.
+    let src = "type Point = { x: int, y: int }\n\
+               let sumxy p =\n\
+               \x20 match p with\n\
+               \x20 | { x, y } -> x + y";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn record_pattern_binds_fields_at_their_types() {
+    // The bound `n` is an `int`, so `n + 1` checks; the catch-all is exhaustive.
+    let src = "type Box = { item: int }\n\
+               let f b =\n\
+               \x20 match b with\n\
+               \x20 | { item = n } -> n + 1";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn record_pattern_may_mention_a_subset_of_fields() {
+    let src = "type Point = { x: int, y: int }\n\
+               let onlyx p =\n\
+               \x20 match p with\n\
+               \x20 | { x } -> x";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn irrefutable_record_pattern_is_exhaustive() {
+    // A record pattern whose fields are all irrefutable is itself a catch-all.
+    let src = "type Point = { x: int, y: int }\n\
+               let f p =\n\
+               \x20 match p with\n\
+               \x20 | { x = a, y = b } -> a + b";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_refutable_record_pattern_without_wildcard() {
+    // Shallow exhaustiveness: refutable record patterns don't cover the type.
+    assert_error_contains(
+        "type Point = { x: int, y: int }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { x = 0 } -> 1\n\
+         \x20 | { x = 1 } -> 2",
+        "non-exhaustive",
+    );
+}
+
+#[test]
+fn rejects_unknown_field_in_pattern() {
+    // `x` resolves the owner record; `z` is then rejected against it.
+    assert_error_contains(
+        "type Point = { x: int, y: int }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { x = 0, z = 1 } -> 1\n\
+         \x20 | _ -> 0",
+        "has no field `z`",
+    );
+}
+
+#[test]
+fn rejects_record_pattern_with_no_known_field() {
+    // When even the first field is unknown, the owner can't be resolved.
+    assert_error_contains(
+        "type Point = { x: int, y: int }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { z = 0 } -> 1\n\
+         \x20 | _ -> 0",
+        "unknown record field `z`",
+    );
+}
+
+#[test]
+fn rejects_field_matched_twice_in_pattern() {
+    assert_error_contains(
+        "type Point = { x: int, y: int }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { x = 0, x = 1 } -> 1\n\
+         \x20 | _ -> 0",
+        "matched twice",
+    );
+}
+
+#[test]
+fn rejects_record_pattern_field_type_mismatch() {
+    // `x : int`, so a `true` sub-pattern is a type error.
+    assert_error_contains(
+        "type Point = { x: int, y: int }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { x = true } -> 1\n\
+         \x20 | _ -> 0",
+        "int",
+    );
+}
+
 #[test]
 fn rejects_update_of_unrelated_field() {
     // `y` belongs to a different record than `Point`, so the update mixes types.

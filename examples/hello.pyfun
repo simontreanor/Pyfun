@@ -164,6 +164,16 @@ print (dot here)                      # 7
 print here                            # Point(3, 4)
 print (scaled 3 4)                    # 14   ((3 + 4) * 2, via local mutation)
 
+# Record patterns: destructure in `match`. `{ x }` shorthand binds the field; a
+# pattern may name a subset of fields, and `{ x, y }` is an exhaustive catch-all.
+let describe p =
+  match p with
+  | { x = 0, y = 0 } -> "origin"
+  | { x = 0 } -> "y-axis"
+  | { x, y } -> "elsewhere"
+print (describe { x = 0, y = 0 })     # origin
+print (describe here)                 # elsewhere
+
 # Externs in action (call out to Python's str / math.sqrt).
 print label                           # 42
 print root                            # 4.0

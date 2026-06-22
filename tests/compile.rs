@@ -312,6 +312,55 @@ fn record_field_access_lowers_to_attribute() {
 }
 
 #[test]
+fn record_pattern_lowers_to_keyword_class_pattern() {
+    let py = pyfun::compile(
+        "type Point = { x: int, y: int }\n\
+         let f p = match p with | { x = 0, y } -> y | { x } -> x",
+    )
+    .unwrap();
+    // Keyword class patterns name a subset of fields, in source order.
+    assert!(py.contains("case Point(x=0, y=y):"), "{py}");
+    assert!(py.contains("case Point(x=x):"), "{py}");
+}
+
+#[test]
+fn e2e_record_pattern_match() {
+    run_and_check(
+        "
+        type Point = { x: int, y: int }
+        let classify p =
+          match p with
+          | { x = 0, y = 0 } -> 1
+          | { x = 0 } -> 2
+          | { x, y } -> x + y
+        let a = classify { x = 0, y = 0 }
+        let b = classify { x = 0, y = 9 }
+        let c = classify { x = 3, y = 4 }
+        ",
+        &[("a", "1"), ("b", "2"), ("c", "7")],
+    );
+}
+
+#[test]
+fn e2e_nested_record_and_constructor_pattern() {
+    // A constructor sub-pattern inside a record pattern binds through both levels.
+    run_and_check(
+        "
+        type Box = { item: Option int, tag: bool }
+        let f b =
+          match b with
+          | { item = Some n, tag = true } -> n
+          | { item = Some n } -> n + 100
+          | _ -> 0
+        let a = f { item = Some 5, tag = true }
+        let b = f { item = Some 5, tag = false }
+        let c = f { item = None, tag = true }
+        ",
+        &[("a", "5"), ("b", "105"), ("c", "0")],
+    );
+}
+
+#[test]
 fn block_body_lowers_to_statement_sequence() {
     let py = pyfun::compile(
         "let sum3 a b c =\n    let mut acc = 0\n    acc <- acc + a\n    acc <- acc + b\n    acc",

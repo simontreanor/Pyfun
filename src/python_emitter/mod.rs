@@ -61,6 +61,12 @@ pub enum PyPattern {
     Literal(PyExpr),
     /// `case Name(arg, ...)` — a class pattern with positional sub-patterns.
     Class { name: String, args: Vec<PyPattern> },
+    /// `case Name(field=pat, ...)` — a class pattern with keyword sub-patterns,
+    /// used for record patterns (which name a subset of fields, in any order).
+    ClassKw {
+        name: String,
+        fields: Vec<(String, PyPattern)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -312,6 +318,13 @@ fn pattern(pat: &PyPattern) -> String {
         PyPattern::Class { name, args } => {
             let args: Vec<String> = args.iter().map(pattern).collect();
             format!("{name}({})", args.join(", "))
+        }
+        PyPattern::ClassKw { name, fields } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(f, p)| format!("{f}={}", pattern(p)))
+                .collect();
+            format!("{name}({})", parts.join(", "))
         }
     }
 }

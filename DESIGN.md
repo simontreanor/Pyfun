@@ -518,8 +518,14 @@ Decisions (all ✅ implemented):
    lookahead) or update (`{ expr with … }`). `.field` is a postfix that binds tighter than application
    (`f p.x` is `f (p.x)`).
 
-Deferred: record *patterns* in `match`, derived ordering on records, and lifting the unique-field-name
-restriction.
+**Record patterns** in `match` are supported: `match p with | { x = 0, y } -> …`. The form is `{ name =
+pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. The owning record type is
+resolved from the (globally unique) field names, so a pattern may name a **subset** of fields (omitted
+fields go unmatched). They lower to Python keyword class patterns (`case Point(x=0, y=y):`). A record
+pattern whose fields are all irrefutable acts as a catch-all for exhaustiveness; refutable ones still
+need a `_` (the exhaustiveness check is shallow).
+
+Deferred: derived ordering on records, and lifting the unique-field-name restriction.
 
 ## 9. Project layout (planned Rust crate)
 

@@ -382,6 +382,11 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
                 pattern_vars(arg, out);
             }
         }
+        Pattern::Record { fields } => {
+            for f in fields {
+                pattern_vars(&f.pattern, out);
+            }
+        }
         Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
     }
 }

@@ -887,6 +887,19 @@ impl Lowerer {
                     args: lowered,
                 }
             }
+            Pattern::Record { fields } => {
+                // Records lower to a class named after the record type; the field
+                // names match its attributes, so emit a keyword class pattern.
+                let record = self.field_to_record[&fields[0].name].clone();
+                let lowered = fields
+                    .iter()
+                    .map(|f| (f.name.clone(), self.lower_pattern(&f.pattern)))
+                    .collect();
+                PyPattern::ClassKw {
+                    name: record,
+                    fields: lowered,
+                }
+            }
         }
     }
 
@@ -1631,14 +1644,26 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
     match pattern {
         Pattern::Var { name, .. } => vec![name.clone()],
         Pattern::Ctor { args, .. } => args.iter().flat_map(pattern_bindings).collect(),
+        Pattern::Record { fields } => fields
+            .iter()
+            .flat_map(|f| pattern_bindings(&f.pattern))
+            .collect(),
         _ => vec![],
     }
 }
 
-/// A `match` is exhaustive at lowering time only if some arm is irrefutable.
+/// A `match` is exhaustive at lowering time only if some arm is irrefutable (a
+/// wildcard, a variable, or a record pattern with all-irrefutable fields).
 fn has_catch_all(arms: &[crate::parser::ast::MatchArm]) -> bool {
-    arms.iter()
-        .any(|arm| matches!(arm.pattern, Pattern::Wildcard | Pattern::Var { .. }))
+    arms.iter().any(|arm| is_irrefutable(&arm.pattern))
+}
+
+fn is_irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard | Pattern::Var { .. } => true,
+        Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
+        Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
+    }
 }
 
 fn non_exhaustive_guard() -> PyCase {

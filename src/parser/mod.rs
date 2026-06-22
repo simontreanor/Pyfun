@@ -37,9 +37,9 @@ pub mod ast;
 
 use crate::lexer::{Span, Tok, Token};
 use ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, Item,
-    LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
-    UnitExpr, VariantDecl,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
+    FieldPattern, Item, LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, TypeDecl,
+    TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -1029,8 +1029,43 @@ impl Parser {
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(inner)
             }
+            Tok::LBrace => self.parse_record_pattern(),
             _ => Err(self.error("expected a pattern")),
         }
+    }
+
+    /// Parse `{ name [= pattern] (, name [= pattern])* }` — a record pattern.
+    /// A bare `name` is shorthand for `name = name` (binds the field to a
+    /// same-named variable).
+    fn parse_record_pattern(&mut self) -> Result<Pattern, ParseError> {
+        self.expect(&Tok::LBrace, "`{`")?;
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::RBrace) {
+            let start = self.cur_start();
+            let name = self.parse_ident("field name")?;
+            let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+            let pattern = if self.eat(&Tok::Eq) {
+                self.parse_pattern()?
+            } else {
+                Pattern::Var {
+                    name: name.clone(),
+                    span: name_span,
+                }
+            };
+            fields.push(FieldPattern {
+                name,
+                name_span,
+                pattern,
+            });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        if fields.is_empty() {
+            return Err(self.error("a record pattern needs at least one field"));
+        }
+        Ok(Pattern::Record { fields })
     }
 
     fn parse_ident(&mut self, what: &str) -> Result<String, ParseError> {
@@ -1072,7 +1107,13 @@ fn starts_atom(tok: &Tok) -> bool {
 fn starts_atom_pattern(tok: &Tok) -> bool {
     matches!(
         tok,
-        Tok::Underscore | Tok::Ident(_) | Tok::Int(_) | Tok::True | Tok::False | Tok::LParen
+        Tok::Underscore
+            | Tok::Ident(_)
+            | Tok::Int(_)
+            | Tok::True
+            | Tok::False
+            | Tok::LParen
+            | Tok::LBrace
     )
 }
 

@@ -386,6 +386,22 @@ pub enum Pattern {
         name: String,
         args: Vec<Pattern>,
     },
+    /// `{ x = p, y }` — a record pattern. The owning record type is resolved from
+    /// the (globally unique) field names. May mention a subset of fields; an
+    /// omitted field is left unmatched. `{ x }` shorthand binds field `x` to the
+    /// variable `x` (a `Var` sub-pattern).
+    Record {
+        fields: Vec<FieldPattern>,
+    },
+}
+
+/// One `name [= pattern]` entry in a record pattern. Shorthand `{ x }` carries a
+/// `Pattern::Var { name: "x" }` so it binds the field to a same-named variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldPattern {
+    pub name: String,
+    pub name_span: NodeSpan,
+    pub pattern: Pattern,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

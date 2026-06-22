@@ -233,7 +233,8 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
    `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
-   the #2/#3 follow-ups (record patterns; blocks in `match`/`if` arms; list patterns + `cons`/`head`/
-   `tail` once a representation that honors their big-O is chosen).
+   the #2/#3 follow-ups (record patterns **landed** — `{ x = 0, y } ->`, subset fields, keyword
+   class-pattern lowering, irrefutable-catch-all exhaustiveness; remaining: blocks in `match`/`if`
+   arms; list patterns + `cons`/`head`/`tail` once a representation that honors their big-O is chosen).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

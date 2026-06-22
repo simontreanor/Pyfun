@@ -840,6 +840,18 @@ fn set_innermost_io(ty: &mut Ty) {
     }
 }
 
+/// A pattern is irrefutable (matches every value of its type) when it binds
+/// without testing: a wildcard, a variable, or a record pattern all of whose
+/// field sub-patterns are themselves irrefutable. Such an arm is a catch-all, so
+/// a `match` containing one is exhaustive.
+fn is_irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard | Pattern::Var { .. } => true,
+        Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
+        Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
+    }
+}
+
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
 /// type vars 0 and 1, and the prelude numerics use unit var [`PRELUDE_UVAR`] (2)
 /// and `num` var [`PRELUDE_NUMVAR`] (3). Inference must start allocating fresh ids
@@ -2422,6 +2434,32 @@ impl Infer {
                 }
                 Ok(())
             }
+            Pattern::Record { fields } => {
+                let owner = self.record_of_field(&fields[0].name, span)?;
+                let (record_ty, field_tys) = self.instantiate_record(&owner);
+                self.unify(&record_ty, scrut_ty, span)?;
+                let mut seen: HashSet<String> = HashSet::new();
+                for fp in fields {
+                    if !seen.insert(fp.name.clone()) {
+                        return Err(TypeError {
+                            message: format!("field `{}` is matched twice", fp.name),
+                            span,
+                        });
+                    }
+                    let Some((_, fty)) = field_tys.iter().find(|(n, _)| n == &fp.name) else {
+                        return Err(TypeError {
+                            message: format!("record `{owner}` has no field `{}`", fp.name),
+                            span,
+                        });
+                    };
+                    let fty = fty.clone();
+                    if self.record_types {
+                        self.recorded.push((fp.name_span.span(), fty.clone()));
+                    }
+                    self.bind_pattern(&fp.pattern, &fty, span, env)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2433,10 +2471,7 @@ impl Infer {
         arms: &[MatchArm],
         span: Span,
     ) -> Result<(), TypeError> {
-        if arms
-            .iter()
-            .any(|a| matches!(a.pattern, Pattern::Wildcard | Pattern::Var { .. }))
-        {
+        if arms.iter().any(|a| is_irrefutable(&a.pattern)) {
             return Ok(());
         }
         let missing = match self.apply(scrut_ty) {
