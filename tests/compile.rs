@@ -626,6 +626,31 @@ fn unknown_constructor_is_rejected() {
 // ---------- end-to-end execution ----------
 
 #[test]
+fn recursive_call_lowers_to_a_direct_call() {
+    let py = pyfun::compile("let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)").unwrap();
+    assert!(py.contains("def fact(n):"), "{py}");
+    // The self-call is a full application (arity known), not a functools.partial.
+    assert!(py.contains("fact(n - 1)"), "{py}");
+}
+
+#[test]
+fn e2e_recursive_functions() {
+    run_and_check(
+        "
+        let fact n =
+          if n == 0 then 1
+          else n * fact (n - 1)
+        let fib n =
+          if n < 2 then n
+          else fib (n - 1) + fib (n - 2)
+        let a = fact 6
+        let b = fib 10
+        ",
+        &[("a", "720"), ("b", "55")],
+    );
+}
+
+#[test]
 fn e2e_currying_full_partial_and_over_application() {
     run_and_check(
         "

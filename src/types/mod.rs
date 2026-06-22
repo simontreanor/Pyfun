@@ -1836,6 +1836,16 @@ impl Infer {
             self.infer_expr(&binding.value, env)
         } else {
             let mut body_env = env.clone();
+            // Self-recursion: a function binding is in scope inside its own body
+            // (like Python's `def`), so a recursive call resolves. Monomorphic
+            // recursion — the name gets one fresh type that is unified with the
+            // binding's eventual function type once the body is inferred. A plain
+            // value binding is *not* made self-visible (only the `params` branch is
+            // reached here, so `let x = x` still errors as unbound — matching Python,
+            // where `x = x` is a module-level NameError). Mutual recursion across
+            // bindings is not supported (declare-before-use; `DESIGN.md` §6.1).
+            let self_ty = self.fresh();
+            body_env.insert(binding.name.clone(), Scheme::mono(self_ty.clone()));
             let mut param_tys = Vec::with_capacity(binding.params.len());
             for param in &binding.params {
                 let pty = self.fresh();
@@ -1845,17 +1855,21 @@ impl Infer {
                 }
                 body_env.insert(param.name.clone(), Scheme::mono(pty));
             }
-            self.infer_expr(&binding.value, &body_env).map(|body_ty| {
-                // The innermost arrow (applied last) carries the body's effect;
-                // the outer, currying arrows are pure (they just build closures).
-                let mut ty = body_ty;
-                let mut eff = self.cur_eff.clone();
-                for p in param_tys.into_iter().rev() {
-                    ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
-                    eff = Effect::pure();
-                }
-                ty
-            })
+            self.infer_expr(&binding.value, &body_env)
+                .and_then(|body_ty| {
+                    // The innermost arrow (applied last) carries the body's effect;
+                    // the outer, currying arrows are pure (they just build closures).
+                    let mut ty = body_ty;
+                    let mut eff = self.cur_eff.clone();
+                    for p in param_tys.into_iter().rev() {
+                        ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
+                        eff = Effect::pure();
+                    }
+                    // Tie the recursive knot: the name as used in the body *is* this
+                    // function. Monomorphic, so no polymorphic recursion.
+                    self.unify(&self_ty, &ty, binding.value.span())?;
+                    Ok(ty)
+                })
         };
         let body_eff = self.cur_eff.clone();
         // Restore the enclosing effect: a function definition leaks nothing; a

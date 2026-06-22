@@ -19,6 +19,13 @@ let pure add a b = a + b
 let inc = add 1
 let five = 4 |> inc
 
+# Recursion is implicit: a function is in scope in its own body, like Python's
+# `def` (no `rec` keyword). Deep recursion shares Python's stack limit; use the
+# `List`/`Seq` combinators for stack-safe bulk work.
+let fact n =
+  if n == 0 then 1
+  else n * fact (n - 1)
+
 # `id` is polymorphic: 'a -> 'a, instantiated afresh at each use.
 let id x = x
 
@@ -201,6 +208,7 @@ let entries = Map.toList byName               # [("ada", 36), ("alan", 41)]
 # break back to the left margin), not braces or semicolons. Units erase, so the
 # printed numbers are plain Python numbers.
 print answer                         # 42
+print (fact 5)                       # 120  (recursive)
 print seven                          # 7
 print (rank Green)                   # 2
 print floor                          # 20

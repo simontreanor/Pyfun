@@ -327,8 +327,8 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   Python↔Pyfun interop (a Python program can `import` a compiled Pyfun module and vice-versa).
 - **All public.** Every top-level binding is exported; no `pub` keyword — Python has no enforced private
   (`_underscore` is convention only). Visibility control is **deferred**.
-- **Implicit recursion** (a small, independent precursor slice): a *function* binding (`let f x = …`) is
-  in scope in its own body, like Python's `def` — no `rec` keyword. A plain value binding still cannot
+- **Implicit recursion** (landed — slice 0, independent of the rest): a *function* binding (`let f x =
+  …`) is in scope in its own body, like Python's `def` — no `rec` keyword. A plain value binding still cannot
   self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in Python). Mechanism:
   pre-bind `f : α` (fresh) before inferring the body, unify, then generalize (standard monomorphic-
   recursion HM); lowering is unchanged (Python functions are already recursive). **Tail-call optimization
@@ -385,7 +385,7 @@ stays the core).
 **Deferred (explicit non-goals for the first cut):** `from X import y` / `open`; visibility (`pub`);
 cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
 de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ordered):** (0) implicit
-recursion [independent precursor]; (1) `import` syntax + AST + pretty-print + roundtrip; (2) multi-file
+recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort; (3) cross-module value checking; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.

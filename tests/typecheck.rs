@@ -49,6 +49,57 @@ fn accepts_higher_order_composition() {
     assert!(pyfun::check("let compose = fun f g x -> f (g x)\nlet twice f x = f (f x)").is_ok());
 }
 
+// ---------- recursion (implicit, function bindings only) ----------
+
+#[test]
+fn function_binding_is_in_scope_in_its_own_body() {
+    // A `let f x = …` sees itself, like Python's `def` — no `rec` keyword.
+    assert!(
+        pyfun::check("let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\nlet r = fact 5")
+            .is_ok()
+    );
+}
+
+#[test]
+fn recursive_function_has_the_expected_type() {
+    // The recursive call constrains the argument, so `fact` is `int -> int`; calling
+    // it on a bool is a type error.
+    assert_error_contains(
+        "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\nlet bad = fact true",
+        "expected int, found bool",
+    );
+}
+
+#[test]
+fn value_binding_still_cannot_self_refer() {
+    // Only *function* bindings are made self-visible; a plain value `let x = x` is
+    // still unbound (as `x = x` is a NameError at Python's module level).
+    assert_error_contains("let x = x + 1", "unbound name `x`");
+}
+
+#[test]
+fn recursion_does_not_break_let_generalization() {
+    // A recursive (monomorphic) function and an ordinary polymorphic one coexist.
+    assert!(
+        pyfun::check(
+            "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\n\
+             let id x = x\nlet a = id 1\nlet b = id true\nlet c = fact 4"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn mutual_recursion_across_bindings_is_unbound() {
+    // Declare-before-use: `isEven` cannot see the later `isOdd` (no mutual recursion;
+    // `DESIGN.md` §6.1).
+    assert_error_contains(
+        "let isEven n = if n == 0 then true else isOdd (n - 1)\n\
+         let isOdd n = if n == 0 then false else isEven (n - 1)",
+        "unbound name `isOdd`",
+    );
+}
+
 #[test]
 fn accepts_partial_application_and_pipe() {
     assert!(pyfun::check("let add a b = a + b\nlet inc = add 1\nlet r = 5 |> inc").is_ok());
