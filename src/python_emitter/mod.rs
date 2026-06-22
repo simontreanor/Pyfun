@@ -14,6 +14,11 @@ pub struct PyModule {
 pub enum PyStmt {
     /// `import <module>`
     Import(String),
+    /// `nonlocal a, b` — declare captured names from an enclosing *function* scope
+    /// that this function reassigns.
+    Nonlocal(Vec<String>),
+    /// `global a, b` — declare module-level names that this function reassigns.
+    Global(Vec<String>),
     /// `target = value`
     Assign { target: String, value: PyExpr },
     /// `return value`
@@ -197,6 +202,8 @@ fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
 fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
     match stmt {
         PyStmt::Import(module) => line(out, depth, &format!("import {module}")),
+        PyStmt::Nonlocal(names) => line(out, depth, &format!("nonlocal {}", names.join(", "))),
+        PyStmt::Global(names) => line(out, depth, &format!("global {}", names.join(", "))),
         PyStmt::Assign { target, value } => {
             line(out, depth, &format!("{target} = {}", expr(value)));
         }

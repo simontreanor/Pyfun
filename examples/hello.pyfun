@@ -35,6 +35,17 @@ let scaled a b =
   acc <- acc * 2
   acc
 
+# A closure that reassigns a captured `mut` — `tally` mutates `running` across
+# calls. The compiler emits Python's `nonlocal`/`global` so the capture is correct
+# (F# auto-boxes a captured mutable into a reference cell; same idea).
+let accumulate =
+  let mut running = 0
+  let tally x =
+    running <- running + x
+    running
+  let first = tally 10
+  tally 5                             # 15  (10 then +5)
+
 # A block in a `match` arm (opened after `->`).
 let describeSign n =
   match n with
@@ -199,6 +210,7 @@ print shifted.x                       # 10
 print (dot here)                      # 7
 print here                            # Point(3, 4)
 print (scaled 3 4)                    # 14   ((3 + 4) * 2, via local mutation)
+print accumulate                      # 15   (closure capturing a mutable)
 
 # Record patterns: destructure in `match`. `{ x }` shorthand binds the field; a
 # pattern may name a subset of fields, and `{ x, y }` is an exhaustive catch-all.

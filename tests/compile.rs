@@ -406,6 +406,72 @@ fn top_level_assignment_lowers_to_plain_assign() {
 }
 
 #[test]
+fn closure_reassigning_a_module_mut_emits_global() {
+    // The enclosing block inlines at module level, so the captured `n` is global.
+    let py = pyfun::compile(
+        "let counter =\n  let mut n = 0\n  let bump x =\n    n <- n + x\n    n\n  bump 5",
+    )
+    .unwrap();
+    assert!(py.contains("def bump(x):"), "{py}");
+    assert!(py.contains("global n"), "{py}");
+    assert!(!py.contains("nonlocal"), "{py}");
+}
+
+#[test]
+fn closure_reassigning_an_enclosing_fn_mut_emits_nonlocal() {
+    let py = pyfun::compile(
+        "let make base =\n  let mut n = base\n  let bump x =\n    n <- n + x\n    n\n  bump 5",
+    )
+    .unwrap();
+    assert!(py.contains("def make(base):"), "{py}");
+    assert!(py.contains("nonlocal n"), "{py}");
+    assert!(!py.contains("global"), "{py}");
+}
+
+#[test]
+fn local_only_mut_needs_no_capture_declaration() {
+    let py =
+        pyfun::compile("let scaled a b =\n  let mut acc = a\n  acc <- acc + b\n  acc").unwrap();
+    assert!(!py.contains("nonlocal"), "{py}");
+    assert!(!py.contains("global"), "{py}");
+}
+
+#[test]
+fn e2e_closure_reassigns_captured_mut() {
+    // `global` path: the accumulator persists across calls (5 then +3 = 8).
+    run_and_check(
+        "
+        let counter =
+          let mut n = 0
+          let bump x =
+            n <- n + x
+            n
+          let a = bump 5
+          bump 3
+        ",
+        &[("counter", "8")],
+    );
+}
+
+#[test]
+fn e2e_nonlocal_closure_in_a_function() {
+    // `nonlocal` path: a fresh accumulator per `make` call.
+    run_and_check(
+        "
+        let make base =
+          let mut n = base
+          let bump x =
+            n <- n + x
+            n
+          let a = bump 5
+          bump 3
+        let r = make 100
+        ",
+        &[("r", "108")],
+    );
+}
+
+#[test]
 fn nested_local_let_lowers_to_nested_assignments() {
     let py = pyfun::compile(
         "let f x =\n    let y =\n        let mut t = x\n        t <- t + 1\n        t\n    y",

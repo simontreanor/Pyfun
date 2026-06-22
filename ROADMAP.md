@@ -68,7 +68,11 @@ reassigning a non-`mut` binding is a compile error.
   tokens; parser uses `parse_block_or_expr`; lowering/typing were already position-agnostic; the
   pretty-printer gained an offside `print_layout`/`print_body` path since blocks can't be
   parenthesized).
-- **Still to do:** `nonlocal` for a closure that reassigns an outer `mut` (cross-function mutation).
+- **Closure capture of a reassigned `mut` — ✅ done:** a closure that `<-`-reassigns a captured `mut`
+  now emits `nonlocal` (enclosing function) or `global` (module-level) instead of silently
+  miscompiling to a Python `UnboundLocalError`. `lower_fn_body` + `scan_scope` detect captured
+  reassignments; classification uses a `fn_local_stack`. Mirrors F# 4.0's auto-ref-cell for captured
+  mutables.
 
 ### 4. Float arithmetic / numeric constraint — ✅ done (`DESIGN.md` §7.1)
 Python-familiar numerics via a single closed built-in constraint. Both steps shipped:
@@ -251,7 +255,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
-   Remaining in this band: list patterns + `cons`/`head`/`tail` (awaiting a big-O-honest
-   representation), `nonlocal` for closures reassigning an outer `mut`.
+   Closure capture of a reassigned `mut` (`nonlocal`/`global`) **landed**. Remaining in this band:
+   list patterns + `cons`/`head`/`tail` (awaiting a big-O-honest representation).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

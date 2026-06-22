@@ -54,7 +54,11 @@ What the compiler enforces, mirroring (and exceeding) F#:
 - **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
   binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
   cannot take parameters. Reassignment requires statement **sequencing**, which Pyfun gets from
-  indentation **blocks** (an indented `let … =` body); see §7's offside note.
+  indentation **blocks** (an indented `let … =` body); see §7's offside note. A closure that
+  reassigns a `mut` captured from an enclosing scope lowers with a `nonlocal` (enclosing function) or
+  `global` (module-level) declaration — Python otherwise treats the assigned name as a fresh local and
+  the closure would miscompile. This mirrors F# 4.0, which auto-boxes a captured mutable into a
+  reference cell (Python's `nonlocal`/cell mechanism is the same idea).
 - **Effect discipline** — first-class (see §4).
 
 Example diagnostics the compiler must produce (rustc-style, with spans, codes, and `help` notes):

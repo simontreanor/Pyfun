@@ -80,6 +80,11 @@ struct Lowerer {
     /// While lowering an in-file `module`, its name + member names, so a bare
     /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
     cur_module: Option<(String, HashSet<String>)>,
+    /// Stack of enclosing *function* scopes (one frame of bound names per nested
+    /// function; empty at module level). Used to classify a captured-and-reassigned
+    /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
+    /// (module-level) when emitting a closure.
+    fn_local_stack: Vec<HashSet<String>>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -196,6 +201,7 @@ impl Lowerer {
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             cur_module: None,
+            fn_local_stack: Vec::new(),
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -319,7 +325,7 @@ impl Lowerer {
             // so they count as locals when resolving names in its body.
             let names = param_names(&binding.params);
             let inner = extend(locals, &names);
-            let body = self.lower_return(&binding.value, &inner)?;
+            let body = self.lower_fn_body(&names, &binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
                 name: name.to_string(),
                 params: names,
@@ -328,6 +334,52 @@ impl Lowerer {
             });
         }
         Ok(())
+    }
+
+    /// Lower a function body in tail position, prefixing `global`/`nonlocal`
+    /// declarations for any `mut` bindings the body reassigns (`<-`) but does not
+    /// itself declare — i.e. captured from an enclosing scope. A captured name found
+    /// in an enclosing *function* scope is `nonlocal`; otherwise it is module-level,
+    /// so `global` (Python's rule: assigning a name makes it local unless declared).
+    fn lower_fn_body(
+        &mut self,
+        params: &[String],
+        body: &Expr,
+        inner: &HashSet<String>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let mut assigned = HashSet::new();
+        let mut bound: HashSet<String> = params.iter().cloned().collect();
+        scan_scope(body, &mut assigned, &mut bound);
+        // Captured = reassigned here but not bound here.
+        let mut nonlocals: Vec<String> = Vec::new();
+        let mut globals: Vec<String> = Vec::new();
+        for name in &assigned {
+            if bound.contains(name) {
+                continue;
+            }
+            if self.fn_local_stack.iter().any(|f| f.contains(name)) {
+                nonlocals.push(name.clone());
+            } else {
+                globals.push(name.clone());
+            }
+        }
+        nonlocals.sort();
+        globals.sort();
+
+        self.fn_local_stack.push(bound);
+        let lowered = self.lower_return(body, inner);
+        self.fn_local_stack.pop();
+        let mut stmts = lowered?;
+
+        let mut decls = Vec::new();
+        if !globals.is_empty() {
+            decls.push(PyStmt::Global(globals));
+        }
+        if !nonlocals.is_empty() {
+            decls.push(PyStmt::Nonlocal(nonlocals));
+        }
+        decls.append(&mut stmts);
+        Ok(decls)
     }
 
     /// Lower `expr` in tail position, producing statements that end by returning
@@ -483,7 +535,7 @@ impl Lowerer {
                 } else {
                     // Body needs statements: emit a named nested def and use it.
                     let name = self.fresh_fn();
-                    let def_body = self.lower_return(body, &inner)?;
+                    let def_body = self.lower_fn_body(&names, body, &inner)?;
                     let def = PyStmt::FuncDef {
                         name: name.clone(),
                         params: names,
@@ -1672,6 +1724,86 @@ fn is_irrefutable(pattern: &Pattern) -> bool {
         Pattern::Wildcard | Pattern::Var { .. } => true,
         Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
+    }
+}
+
+/// Walk a function body's *own* scope (not descending into nested functions),
+/// collecting `<-` reassignment targets into `assigned` and `let`-bound names into
+/// `bound`. Python has no block scope, so `if`/`match`/nested blocks are the same
+/// function scope; a nested `fun`, a parameterized `let` (a nested function), and a
+/// CE (its own generator/coroutine) introduce new scopes and are not entered.
+fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Assign { target, value } => {
+            assigned.insert(target.clone());
+            scan_scope(value, assigned, bound);
+        }
+        ExprKind::Block { stmts } => {
+            for stmt in stmts {
+                match stmt {
+                    BlockStmt::Let(b) => {
+                        bound.insert(b.name.clone());
+                        // A value binding's RHS is in this scope; a nested function's
+                        // body (params > 0) is its own scope — don't enter it.
+                        if b.params.is_empty() {
+                            scan_scope(&b.value, assigned, bound);
+                        }
+                    }
+                    BlockStmt::Expr(e) => scan_scope(e, assigned, bound),
+                }
+            }
+        }
+        ExprKind::If { cond, then, else_ } => {
+            scan_scope(cond, assigned, bound);
+            scan_scope(then, assigned, bound);
+            scan_scope(else_, assigned, bound);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            scan_scope(scrutinee, assigned, bound);
+            for arm in arms {
+                scan_scope(&arm.body, assigned, bound);
+            }
+        }
+        ExprKind::App { func, arg } => {
+            scan_scope(func, assigned, bound);
+            scan_scope(arg, assigned, bound);
+        }
+        ExprKind::Pipe { lhs, rhs } => {
+            scan_scope(lhs, assigned, bound);
+            scan_scope(rhs, assigned, bound);
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            scan_scope(lhs, assigned, bound);
+            scan_scope(rhs, assigned, bound);
+        }
+        ExprKind::Unary { expr, .. } => scan_scope(expr, assigned, bound),
+        ExprKind::Annot { value, .. } => scan_scope(value, assigned, bound),
+        ExprKind::List { elems } => {
+            for e in elems {
+                scan_scope(e, assigned, bound);
+            }
+        }
+        ExprKind::Record { fields } => {
+            for f in fields {
+                scan_scope(&f.value, assigned, bound);
+            }
+        }
+        ExprKind::RecordUpdate { base, fields } => {
+            scan_scope(base, assigned, bound);
+            for f in fields {
+                scan_scope(&f.value, assigned, bound);
+            }
+        }
+        ExprKind::Field { base, .. } => scan_scope(base, assigned, bound),
+        // New scopes (not entered) and leaves.
+        ExprKind::Fn { .. }
+        | ExprKind::Ce { .. }
+        | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Unit
+        | ExprKind::Var(_) => {}
     }
 }
 
