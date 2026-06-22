@@ -11,7 +11,14 @@ let client;
 function activate(context) {
   // The server command is configurable so a checkout can point at
   // target/debug/pyfun without installing anything on PATH.
-  const command = workspace.getConfiguration("pyfun").get("server.path", "pyfun");
+  const configured = workspace
+    .getConfiguration("pyfun")
+    .get("server.path", "pyfun");
+  // VS Code only expands ${workspaceFolder} in launch.json / tasks.json, not in
+  // arbitrary setting values — so expand it ourselves, letting a committed path
+  // like "${workspaceFolder}/target/debug/pyfun.exe" stay machine-independent.
+  const root = workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+  const command = configured.replace(/\$\{workspace(?:Folder|Root)\}/g, root);
 
   const serverOptions = {
     run: { command, args: ["lsp"], transport: TransportKind.stdio },
