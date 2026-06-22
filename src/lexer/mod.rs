@@ -132,9 +132,16 @@ impl<'a> Lexer<'a> {
                 }
                 continue;
             }
-            // An `=` at bracket depth 0 (a `let` binding's `=`) primes a block to
-            // open if its body begins on a deeper line.
-            if self.depth == 0 && matches!(self.out.last().map(|t| &t.tok), Some(Tok::Eq)) {
+            // A block-opening token at bracket depth 0 primes a block to open if the
+            // body begins on a deeper line: a `let` binding's `=`, a `match` arm or
+            // lambda `->`, or an `if`'s `then`/`else`. (Inline bodies cross no
+            // newline, so the priming lapses and no block opens.)
+            if self.depth == 0
+                && matches!(
+                    self.out.last().map(|t| &t.tok),
+                    Some(Tok::Eq | Tok::Arrow | Tok::Then | Tok::Else)
+                )
+            {
                 self.pending_block = true;
             }
         }

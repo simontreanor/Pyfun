@@ -416,13 +416,7 @@ impl Parser {
             params.push(self.parse_param()?);
         }
         self.expect(&Tok::Eq, "`=`")?;
-        // The body is either an inline expression or an indented block (opened by
-        // the lexer's offside rule as a leading `Indent`).
-        let value = if matches!(self.peek(), Tok::Indent) {
-            self.parse_block()?
-        } else {
-            self.parse_expr()?
-        };
+        let value = self.parse_block_or_expr()?;
         Ok(LetBinding {
             mutable,
             pure,
@@ -431,6 +425,17 @@ impl Parser {
             params,
             value,
         })
+    }
+
+    /// Parse a body that is either an indented block (the lexer opened one as a
+    /// leading `Indent`) or an inline expression. Used wherever a block may open:
+    /// a `let` body, a `match` arm, an `if` branch, a lambda body.
+    fn parse_block_or_expr(&mut self) -> Result<Expr, ParseError> {
+        if matches!(self.peek(), Tok::Indent) {
+            self.parse_block()
+        } else {
+            self.parse_expr()
+        }
     }
 
     /// Parse an indented block `Indent stmt (Sep stmt)* Dedent`. A block with a
@@ -511,7 +516,7 @@ impl Parser {
             params.push(self.parse_param()?);
         }
         self.expect(&Tok::Arrow, "`->`")?;
-        let body = Box::new(self.parse_expr()?);
+        let body = Box::new(self.parse_block_or_expr()?);
         Ok(self.mk(start, ExprKind::Fn { params, body }))
     }
 
@@ -530,9 +535,9 @@ impl Parser {
         self.expect(&Tok::If, "`if`")?;
         let cond = Box::new(self.parse_expr()?);
         self.expect(&Tok::Then, "`then`")?;
-        let then = Box::new(self.parse_expr()?);
+        let then = Box::new(self.parse_block_or_expr()?);
         self.expect(&Tok::Else, "`else`")?;
-        let else_ = Box::new(self.parse_expr()?);
+        let else_ = Box::new(self.parse_block_or_expr()?);
         Ok(self.mk(start, ExprKind::If { cond, then, else_ }))
     }
 
@@ -545,7 +550,7 @@ impl Parser {
         while self.eat(&Tok::Bar) {
             let pattern = self.parse_pattern()?;
             self.expect(&Tok::Arrow, "`->`")?;
-            let body = self.parse_expr()?;
+            let body = self.parse_block_or_expr()?;
             arms.push(MatchArm { pattern, body });
         }
         if arms.is_empty() {

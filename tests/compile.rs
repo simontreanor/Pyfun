@@ -526,6 +526,49 @@ fn e2e_if_and_match() {
 }
 
 #[test]
+fn e2e_blocks_in_match_arms_and_if_branches() {
+    // Multi-statement blocks (with local `let` and `<-`) in arm and branch
+    // positions, lowered to flat Python statement sequences.
+    run_and_check(
+        "
+        let classify n =
+          match n with
+          | 0 ->
+              let base = 100
+              base
+          | _ ->
+              let mut acc = n
+              acc <- acc * 2
+              acc
+        let absdiff a b =
+          if a > b then
+              let d = a - b
+              d
+          else
+              let d = b - a
+              d
+        let r1 = classify 0
+        let r2 = classify 5
+        let r3 = absdiff 3 10
+        ",
+        &[("r1", "100"), ("r2", "10"), ("r3", "7")],
+    );
+}
+
+#[test]
+fn e2e_block_in_lambda_body() {
+    run_and_check(
+        "
+        let doubler = fun x ->
+          let y = x + x
+          y
+        let r = doubler 21
+        ",
+        &[("r", "42")],
+    );
+}
+
+#[test]
 fn e2e_division_operators_match_python() {
     // `/` is true division (float), `//` floors (int) — like Python 3.
     run_and_check("let q = 7 / 2", &[("q", "3.5")]);

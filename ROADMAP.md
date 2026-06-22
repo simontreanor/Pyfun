@@ -63,8 +63,12 @@ reassigning a non-`mut` binding is a compile error.
     local mutation. The indentation-aware pretty-printer round-trips blocks.
 - **Carrier for effects (#1):** `<-` is the first real `io`-style effect source beyond `print`, so
   effect inference can now be bundled here (decided 2026-06-21).
-- **Still to do:** blocks in `match`-arm / `then` / `else` positions (only `let` bodies open blocks
-  today); `nonlocal` for a closure that reassigns an outer `mut` (cross-function mutation).
+- **Blocks in every tail position — ✅ done:** blocks now open after `=`/`->`/`then`/`else`, so
+  `match` arms, `if` branches, and lambda bodies take multi-statement blocks (lexer primes on those
+  tokens; parser uses `parse_block_or_expr`; lowering/typing were already position-agnostic; the
+  pretty-printer gained an offside `print_layout`/`print_body` path since blocks can't be
+  parenthesized).
+- **Still to do:** `nonlocal` for a closure that reassigns an outer `mut` (cross-function mutation).
 
 ### 4. Float arithmetic / numeric constraint — ✅ done (`DESIGN.md` §7.1)
 Python-familiar numerics via a single closed built-in constraint. Both steps shipped:
@@ -235,8 +239,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness **landed** — full Maranget usefulness with
    witnesses; remaining: user CE builders, derived measures), plus the #2/#3 follow-ups (record
-   patterns **landed** — `{ x = 0, y } ->`, subset fields, keyword class-pattern lowering; remaining:
-   blocks in `match`/`if` arms; list patterns + `cons`/`head`/`tail` once a representation that honors
-   their big-O is chosen).
+   patterns **landed**; blocks in `match`/`if`/lambda positions **landed**; remaining: list patterns +
+   `cons`/`head`/`tail` once a representation that honors their big-O is chosen).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

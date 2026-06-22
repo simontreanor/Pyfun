@@ -320,20 +320,24 @@ identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors i
 block structure by a layout rule, not semicolons or braces. At lexing time a layout stack of block
 columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
 synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates two statements.
-- The **one block opener** is an indented `let … =` body (an `=` at bracket depth 0 primes it). The
-  top level is the outermost (implicit) block.
+- A block opens after any **tail-position keyword** at bracket depth 0: a `let … =` body, a `match`
+  arm or lambda `->`, or an `if`'s `then`/`else`. (An inline body crosses no newline, so the priming
+  lapses and no block opens.) The top level is the outermost (implicit) block.
 - A line on the current block's column starts a **new statement** (`Sep`) *unless* it leads with a
   continuation token (an infix operator, `|`, `then`/`else`/`with`/`and`/`or`/`in`) — none of which
   can begin a statement. A line indented *past* the block continues the current statement. So
   consecutive statements (`print a` then `print b`) are distinct, while multi-line `match`/`if` and
   CE blocks stay together.
-- A **block** (an indented `let` body) is a sequence of statements — local `let`/`let mut`, `<-`
-  reassignments, expression statements — whose final expression is its value. A single-expression
+- A **block** (any indented tail-position body) is a sequence of statements — local `let`/`let mut`,
+  `<-` reassignments, expression statements — whose final expression is its value. A single-expression
   block is unwrapped, so existing one-expression bodies keep their plain form. This is what gives
-  mutability (§3) the statement sequencing it needs. Blocks lower to flat Python statement sequences.
+  mutability (§3) the statement sequencing it needs. Blocks lower to flat Python statement sequences;
+  in `match`-arm / `if`-branch / lambda positions the lowering recurses into the body, which already
+  handled blocks, so they "just work". Because a block can't be parenthesized (the offside rule is off
+  inside brackets), the canonical pretty-printer renders block-bearing `if`/`match`/`fun` with offside
+  indentation rather than the inline parenthesized form.
 
-Blocks currently open only after `=`; opening them in `match`-arm / `then` / `else` positions is a
-later refinement. The rule is orthogonal to the brace-delimited CEs and records (§8.1).
+The rule is orthogonal to the brace-delimited CEs and records (§8.1).
 
 ### 7.1 Numbers & arithmetic — Python-familiar (implemented)
 

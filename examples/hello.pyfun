@@ -25,7 +25,8 @@ let id x = x
 # Expression-oriented `if`; the condition must be a bool.
 let pick b = if b then 1 else 0
 
-# Blocks: an indented `let` body is a sequence of statements ending in the value.
+# Blocks: an indented body is a sequence of statements ending in the value. They
+# open after `=` (a `let` body), `->` (a `match` arm or lambda), and `then`/`else`.
 # `let mut` + `<-` give local mutation; reassigning a plain `let` is a compile
 # error (immutable by default). Lowers to a flat Python statement sequence.
 let scaled a b =
@@ -33,6 +34,14 @@ let scaled a b =
   acc <- acc + b
   acc <- acc * 2
   acc
+
+# A block in a `match` arm (opened after `->`).
+let describeSign n =
+  match n with
+  | 0 -> "zero"
+  | _ ->
+      let positive = n > 0
+      if positive then "positive" else "negative"
 
 # Exhaustive pattern matching over an ADT (checked at compile time).
 let unwrap o =
@@ -192,3 +201,8 @@ print nobody                          # 0
 # In-file module members.
 print floorArea                       # 20
 print diag                            # 25
+
+# A block-bodied `match` arm.
+print (describeSign 0)                # zero
+print (describeSign 7)                # positive
+print (describeSign (0 - 3))          # negative

@@ -37,7 +37,7 @@ pub fn print_item(item: &Item) -> String {
             s.push_str(&lines.join("\n"));
             s
         }
-        Item::Expr(expr) => print_expr(expr),
+        Item::Expr(expr) => print_layout(expr, 0),
     }
 }
 
@@ -166,14 +166,74 @@ fn print_let(binding: &LetBinding, indent: usize) -> String {
         s.push(' ');
         s.push_str(&param.name);
     }
-    if let ExprKind::Block { stmts } = &binding.value.kind {
-        s.push_str(" =\n");
-        s.push_str(&print_block(stmts, indent + 1));
-    } else {
-        s.push_str(" = ");
-        s.push_str(&print_expr(&binding.value));
-    }
+    s.push_str(" =");
+    s.push_str(&print_body(&binding.value, indent));
     s
+}
+
+/// Does an expression contain an indented block in a tail position (so it can't
+/// be rendered inline / parenthesized)? Blocks only ever open in tail positions
+/// of `let`/`fun`/`if`/`match`, so this spine is exhaustive.
+fn needs_block(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Block { .. } => true,
+        ExprKind::If { then, else_, .. } => needs_block(then) || needs_block(else_),
+        ExprKind::Match { arms, .. } => arms.iter().any(|a| needs_block(&a.body)),
+        ExprKind::Fn { body, .. } => needs_block(body),
+        _ => false,
+    }
+}
+
+/// Print the body following a `=` / `->` / `then` / `else`. A body that needs a
+/// block goes on deeper lines via [`print_layout`]; an ordinary body stays inline
+/// (preceded by a space). The return value includes its leading separator.
+fn print_body(expr: &Expr, indent: usize) -> String {
+    if needs_block(expr) {
+        format!("\n{}", print_layout(expr, indent + 1))
+    } else {
+        format!(" {}", print_expr(expr))
+    }
+}
+
+/// Render an expression at column `indent` (every line padded, first included),
+/// using the offside layout for blocks and the `if`/`match`/`fun` that contain
+/// them. Anything block-free falls back to the inline [`print_expr`] form, which
+/// parenthesizes for unambiguous reparsing.
+fn print_layout(expr: &Expr, indent: usize) -> String {
+    let pad = "    ".repeat(indent);
+    if !needs_block(expr) {
+        return format!("{pad}{}", print_expr(expr));
+    }
+    match &expr.kind {
+        ExprKind::Block { stmts } => print_block(stmts, indent),
+        ExprKind::If { cond, then, else_ } => format!(
+            "{pad}if {} then{}\n{pad}else{}",
+            print_expr(cond),
+            print_body(then, indent),
+            print_body(else_, indent),
+        ),
+        ExprKind::Match { scrutinee, arms } => {
+            let mut s = format!("{pad}match {} with", print_expr(scrutinee));
+            for arm in arms {
+                s.push_str(&format!(
+                    "\n{pad}| {} ->{}",
+                    print_pattern(&arm.pattern),
+                    print_body(&arm.body, indent),
+                ));
+            }
+            s
+        }
+        ExprKind::Fn { params, body } => {
+            let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            format!(
+                "{pad}fun {} ->{}",
+                names.join(" "),
+                print_body(body, indent)
+            )
+        }
+        // Unreachable: `needs_block` is true only for the arms above.
+        _ => format!("{pad}{}", print_expr(expr)),
+    }
 }
 
 /// Print block statements, one per line, each indented `indent` levels.

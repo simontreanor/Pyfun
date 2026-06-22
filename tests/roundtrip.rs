@@ -48,6 +48,14 @@ const PROGRAMS: &[&str] = &[
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.
     "let classify n =\n  match n with\n  | 0 -> \"zero\"\n  | _ -> \"many\"",
+    // Blocks in match arms / if branches / lambda bodies (opened after `->`,
+    // `then`/`else`). A single-statement block is unwrapped, so only multi-stmt
+    // bodies stay blocks; the printer renders them with offside layout.
+    "let f n =\n  match n with\n  | 0 ->\n      let x = 1\n      x\n  | _ -> 0",
+    "let f c =\n  if c then\n      let x = 1\n      x\n  else 0",
+    "let f c =\n  if c then 1\n  else\n      let y = 2\n      y",
+    "let g = fun x ->\n  let y = x\n  y",
+    "let f n =\n  match n with\n  | 0 ->\n      let a = 1\n      a\n  | _ ->\n      let b = 2\n      b",
     // Offside rule: consecutive bare statements are separate items.
     "print a\nprint b",
     // Blocks: indented `let` bodies with local bindings, sequencing, and `<-`.
