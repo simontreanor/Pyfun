@@ -572,6 +572,17 @@ impl Lowerer {
                 Ok((stmts, PyExpr::List(vals)))
             }
 
+            ExprKind::Tuple { elems } => {
+                let mut stmts = Vec::new();
+                let mut vals = Vec::with_capacity(elems.len());
+                for e in elems {
+                    let (s, v) = self.lower_value(e, locals)?;
+                    stmts.extend(s);
+                    vals.push(v);
+                }
+                Ok((stmts, PyExpr::Tuple(vals)))
+            }
+
             ExprKind::Record { fields } => self.lower_record(fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
                 self.lower_record_update(base, fields, locals)
@@ -953,6 +964,10 @@ impl Lowerer {
                     fields: lowered,
                 }
             }
+            Pattern::Tuple { elems } => {
+                let lowered = elems.iter().map(|e| self.lower_pattern(e)).collect();
+                PyPattern::Sequence(lowered)
+            }
         }
     }
 
@@ -1273,7 +1288,7 @@ fn lower_binop(op: BinOp) -> PyBinOp {
 fn arrow_arity(ty: &TypeExpr) -> usize {
     match ty {
         TypeExpr::Fun(_, ret) => 1 + arrow_arity(ret),
-        TypeExpr::Con(..) => 0,
+        TypeExpr::Con(..) | TypeExpr::Tuple(_) => 0,
     }
 }
 
@@ -1709,6 +1724,7 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
             .iter()
             .flat_map(|f| pattern_bindings(&f.pattern))
             .collect(),
+        Pattern::Tuple { elems } => elems.iter().flat_map(pattern_bindings).collect(),
         _ => vec![],
     }
 }
@@ -1723,6 +1739,7 @@ fn is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => true,
         Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
+        Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
         Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
     }
 }
@@ -1778,7 +1795,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         }
         ExprKind::Unary { expr, .. } => scan_scope(expr, assigned, bound),
         ExprKind::Annot { value, .. } => scan_scope(value, assigned, bound),
-        ExprKind::List { elems } => {
+        ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {
                 scan_scope(e, assigned, bound);
             }

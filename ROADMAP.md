@@ -250,12 +250,14 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
-   modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
-   `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
+   modules + ADT/record `__hash__` + **tuples** landed; remaining: the full *file-based* module system
+   (multi-file, `import`, resolver, multi-file LSP), and the tuple-enabled stdlib follow-ons
+   (`Map.ofList`/`toList`, `List.zip`). `Array` deferred as redundant with `List`.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
-   Closure capture of a reassigned `mut` (`nonlocal`/`global`) **landed**. Remaining in this band:
+   Closure capture of a reassigned `mut` (`nonlocal`/`global`) **landed**. **Tuples** (structural
+   `(a, b)` literals/patterns/types, deep-exhaustive) **landed**. Remaining in this band:
    list patterns + `cons`/`head`/`tail` (awaiting a big-O-honest representation).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

@@ -317,7 +317,7 @@ impl Resolver {
                 self.scopes.pop();
             }
             ExprKind::Annot { value, .. } => self.walk_expr(value),
-            ExprKind::List { elems } => {
+            ExprKind::List { elems } | ExprKind::Tuple { elems } => {
                 for e in elems {
                     self.walk_expr(e);
                 }
@@ -389,6 +389,11 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
         Pattern::Record { fields } => {
             for f in fields {
                 pattern_vars(&f.pattern, out);
+            }
+        }
+        Pattern::Tuple { elems } => {
+            for e in elems {
+                pattern_vars(e, out);
             }
         }
         Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}

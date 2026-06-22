@@ -72,6 +72,8 @@ pub enum PyPattern {
         name: String,
         fields: Vec<(String, PyPattern)>,
     },
+    /// `case (a, b)` — a sequence pattern, used for tuple patterns.
+    Sequence(Vec<PyPattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -114,6 +116,8 @@ pub enum PyExpr {
     Not(Box<PyExpr>),
     /// A list display `[a, b, c]`.
     List(Vec<PyExpr>),
+    /// A tuple display `(a, b, c)` (always two or more elements in Pyfun).
+    Tuple(Vec<PyExpr>),
     /// The `None` literal — the unit value (e.g. the result of an assignment).
     NoneLit,
 }
@@ -333,6 +337,10 @@ fn pattern(pat: &PyPattern) -> String {
                 .collect();
             format!("{name}({})", parts.join(", "))
         }
+        PyPattern::Sequence(elems) => {
+            let elems: Vec<String> = elems.iter().map(pattern).collect();
+            format!("({})", elems.join(", "))
+        }
     }
 }
 
@@ -404,6 +412,10 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         PyExpr::List(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();
             format!("[{}]", elems.join(", "))
+        }
+        PyExpr::Tuple(elems) => {
+            let elems: Vec<String> = elems.iter().map(expr).collect();
+            format!("({})", elems.join(", "))
         }
         PyExpr::NoneLit => "None".to_string(),
     };

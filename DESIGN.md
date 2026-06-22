@@ -202,7 +202,7 @@ erased to nothing themselves; only their reference sites and imports survive low
 
 **Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
-like Pyfun records — there are no tuples, so commas are unambiguous). The big-O is Python's, *not*
+like Pyfun records and tuples). The big-O is Python's, *not*
 F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). So the
 linked-list idioms (`cons`/`head`/`tail`, `match`-on-cons) are a poor fit and are deferred along with
 list patterns; the bulk operations are the API. The list operations are
@@ -218,6 +218,22 @@ makes the whole call `io` and that flows out (a single bound effect variable lin
 to the traversal arrow). The lazy counterpart already exists as the `seq {}` computation expression
 (§8.1).
 
+**Tuples — the structural product (implemented).** `(a, b, c)` is a tuple: an anonymous, **structural**
+product of two or more values — Pyfun's first structural type (records are nominal, resolved by a field
+registry; a tuple type is just its element list, `Ty::Tuple(Vec<Ty>)`, unified element-wise by arity
+then pairwise). The surface forms are symmetric: literal `(a, b)` (`ExprKind::Tuple`), pattern `(a, b)`
+(`Pattern::Tuple`), and type annotation `(a, b)` (`TypeExpr::Tuple`), all printed and displayed with
+parentheses. **Disambiguation is by precedent, no new tokens:** `()` is the unit value (not a 0-tuple —
+unit *is* the empty product), `(x)` is grouping (not a 1-tuple), and `(a, b)` (a comma after the first
+element) is a tuple — so a tuple always has ≥2 elements. The parser checks for a comma after the first
+parenthesized element in all three positions (expression, pattern, type). Tuples **lower ~1:1 to Python
+tuples** (`PyExpr::Tuple` → `(a, b)`; `Pattern::Tuple` → a sequence pattern `case (a, b):` via
+`PyPattern::Sequence`). A tuple is a **single-constructor** type, so a tuple pattern of variables is
+exhaustive on its own, and **deep exhaustiveness recurses into the element columns** (`Tag::Tuple(arity)`
+in the Maranget matrix), reporting witnesses like `` `(false, _)` is not matched ``. Tuples unblock
+multi-value return and pair lists; the stdlib follow-ons that need them (`Map.ofList`/`toList`,
+`List.zip`) are not yet added.
+
 **Sets and maps — the hashed collections (implemented).** `Set a` and `Map k v` are built-in types
 that **lower to a Python `set` / `dict`**. They have **no literal syntax** (`{…}` is already records
 and CE builders) and **no constructors** — built entirely from module functions, so adding them needed
@@ -232,8 +248,9 @@ to `set()`/`dict()`; the rest lower to small **emitted helpers** (`_pf_set_add` 
 `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) so the curried function is one callable (partial
 application → `functools.partial`). The collections are **immutable-style**: every operation returns a
 fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
-`Map.tryFind key m : Option v` is the optional form. There is **no `Map.ofList`** (no tuples to express
-a pair list — build with `Map.empty` + `Map.add`). Element/key types are **unconstrained polymorphic**
+`Map.tryFind key m : Option v` is the optional form. There is **no `Map.ofList`** yet (tuples now exist,
+so a `(k, v)` pair list is expressible — the conversion functions are a pending follow-on; build with
+`Map.empty` + `Map.add` today). Element/key types are **unconstrained polymorphic**
 but must be **hashable at runtime** — Pyfun primitives are, and ADT/record values are too: generated
 classes get a structural `__hash__` (a tuple of the type and field values, consistent with the
 structural `__eq__`), so `Set Color` and `Map (Point) v` work and equal values collapse. A field that

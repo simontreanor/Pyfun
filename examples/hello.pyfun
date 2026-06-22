@@ -121,6 +121,19 @@ let addOpt a b =
     return x + y
   }
 
+# Tuples: structural (anonymous) products, `(a, b, c)`. `()` is unit and `(x)` is
+# grouping, so a tuple has two or more elements. They lower ~1:1 to Python tuples
+# and destructure in `match` (a single variable pattern is exhaustive).
+let pairUp a b = (a, b)
+let origin = (0, 0)
+let swap p =
+  match p with
+  | (a, b) -> (b, a)
+let labelled = (1, "one", true)              # (int, string, bool)
+let firstOf t =
+  match t with
+  | (a, _, _) -> a
+
 # Units of measure: dimensional analysis at compile time, erased at runtime.
 measure m
 measure s
@@ -249,3 +262,9 @@ print (describeSign (0 - 3))          # negative
 # A user-defined computation expression (the Maybe monad).
 print (addOpt (Some 3) (Some 4))      # Some(7)
 print (addOpt (Some 3) None)          # None_  (short-circuits)
+
+# Tuples: construction, destructuring, and the Python tuple they become.
+print (pairUp 1 2)                     # (1, 2)
+print origin                          # (0, 0)
+print (swap (1, 2))                   # (2, 1)
+print (firstOf labelled)              # 1

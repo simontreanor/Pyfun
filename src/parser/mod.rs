@@ -401,9 +401,20 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                let inner = self.parse_type()?;
+                let first = self.parse_type()?;
+                if self.eat(&Tok::Comma) {
+                    let mut elems = vec![first];
+                    loop {
+                        elems.push(self.parse_type()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen, "`)`")?;
+                    return Ok(TypeExpr::Tuple(elems));
+                }
                 self.expect(&Tok::RParen, "`)`")?;
-                Ok(inner)
+                Ok(first)
             }
             _ => Err(self.error("expected a type")),
         }
@@ -801,14 +812,25 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                // `()` is the unit value; `(expr)` is grouping.
+                // `()` is the unit value; `(expr)` is grouping; `(a, b)` is a tuple.
                 if self.eat(&Tok::RParen) {
                     return Ok(self.mk(start, ExprKind::Unit));
                 }
-                let inner = self.parse_expr()?;
+                let first = self.parse_expr()?;
+                if self.eat(&Tok::Comma) {
+                    let mut elems = vec![first];
+                    loop {
+                        elems.push(self.parse_expr()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen, "`)`")?;
+                    return Ok(self.mk(start, ExprKind::Tuple { elems }));
+                }
                 self.expect(&Tok::RParen, "`)`")?;
                 // Keep the inner node's own (paren-free) span.
-                return Ok(inner);
+                return Ok(first);
             }
             Tok::LBrace => return self.parse_record(start),
             Tok::LBracket => return self.parse_list(start),
@@ -1067,9 +1089,20 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                let inner = self.parse_pattern()?;
+                let first = self.parse_pattern()?;
+                if self.eat(&Tok::Comma) {
+                    let mut elems = vec![first];
+                    loop {
+                        elems.push(self.parse_pattern()?);
+                        if !self.eat(&Tok::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&Tok::RParen, "`)`")?;
+                    return Ok(Pattern::Tuple { elems });
+                }
                 self.expect(&Tok::RParen, "`)`")?;
-                Ok(inner)
+                Ok(first)
             }
             Tok::LBrace => self.parse_record_pattern(),
             _ => Err(self.error("expected a pattern")),

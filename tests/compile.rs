@@ -330,6 +330,51 @@ fn record_pattern_lowers_to_keyword_class_pattern() {
 }
 
 #[test]
+fn tuple_literal_lowers_to_python_tuple() {
+    let py = pyfun::compile("let pair = (1, 2)\nlet triple = (1, true, 3)").unwrap();
+    assert!(py.contains("pair = (1, 2)"), "{py}");
+    assert!(py.contains("triple = (1, True, 3)"), "{py}");
+}
+
+#[test]
+fn tuple_pattern_lowers_to_sequence_pattern() {
+    let py = pyfun::compile("let swap p = match p with | (a, b) -> (b, a)").unwrap();
+    assert!(py.contains("case (a, b):"), "{py}");
+    assert!(py.contains("return (b, a)"), "{py}");
+}
+
+#[test]
+fn e2e_tuple_construct_and_destructure() {
+    run_and_check(
+        "
+        let swap p =
+          match p with
+          | (a, b) -> (b, a)
+        let fst t =
+          match t with
+          | (a, _) -> a
+        let pair = (10, 20)
+        let s = swap pair
+        let first = fst pair
+        ",
+        &[("s", "(20, 10)"), ("first", "10")],
+    );
+}
+
+#[test]
+fn e2e_nested_tuple_pattern() {
+    run_and_check(
+        "
+        let f t =
+          match t with
+          | ((a, b), c) -> a + b + c
+        let r = f ((1, 2), 3)
+        ",
+        &[("r", "6")],
+    );
+}
+
+#[test]
 fn e2e_record_pattern_match() {
     run_and_check(
         "

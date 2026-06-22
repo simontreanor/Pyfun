@@ -1,5 +1,7 @@
 # Rust / Cargo
 /target
+# Secondary target dir used while the LSP server holds a lock on /target.
+/target-test
 
 # Cargo.lock is committed for binaries (this crate ships a `pyfun` bin).
 

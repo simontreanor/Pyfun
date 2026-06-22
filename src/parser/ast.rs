@@ -133,6 +133,8 @@ pub enum TypeExpr {
     Con(String, Vec<TypeExpr>),
     /// A function type `arg -> result`.
     Fun(Box<TypeExpr>, Box<TypeExpr>),
+    /// A tuple type `(a, b)` — a structural product of two or more types.
+    Tuple(Vec<TypeExpr>),
 }
 
 /// `let [mut] name params... = value`.
@@ -271,6 +273,14 @@ pub enum ExprKind {
         elems: Vec<Expr>,
     },
 
+    /// A tuple literal: `(a, b, c)` — a structural (anonymous) product of two or
+    /// more values. `()` is the unit value (not a 0-tuple) and `(x)` is grouping
+    /// (not a 1-tuple), so a tuple always has at least two elements. Lowers ~1:1 to
+    /// a Python tuple.
+    Tuple {
+        elems: Vec<Expr>,
+    },
+
     /// A record literal: `{ x = 1, y = 2 }`. The (nominal) record type is
     /// resolved from the set of field names.
     Record {
@@ -405,6 +415,11 @@ pub enum Pattern {
     /// variable `x` (a `Var` sub-pattern).
     Record {
         fields: Vec<FieldPattern>,
+    },
+    /// `(a, b)` — a tuple pattern (two or more sub-patterns). Irrefutable iff every
+    /// element is; lowers to a Python sequence pattern `case (a, b):`.
+    Tuple {
+        elems: Vec<Pattern>,
     },
 }
 

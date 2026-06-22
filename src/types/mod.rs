@@ -226,6 +226,8 @@ pub enum Ty {
     Fun(Box<Ty>, Box<Ty>, Effect),
     /// An applied type constructor, e.g. `Option int`.
     Con(String, Vec<Ty>),
+    /// A tuple type `(a, b)` — a structural product of two or more types.
+    Tuple(Vec<Ty>),
 }
 
 /// The resolved base of a numeric type: a concrete `int`/`float`, or a `num`
@@ -856,6 +858,11 @@ fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
             collect_type_vars(a, map);
             collect_type_vars(b, map);
         }
+        TypeExpr::Tuple(elems) => {
+            for e in elems {
+                collect_type_vars(e, map);
+            }
+        }
         TypeExpr::Con(name, args) => {
             if args.is_empty()
                 && !BUILTIN_TYPES.contains(&name.as_str())
@@ -892,6 +899,8 @@ enum Tag {
     Int(i64),
     Sum(String),
     Record(String),
+    /// A tuple's single implicit constructor, carrying its arity.
+    Tuple(usize),
 }
 
 /// A witness value produced when a `match` is non-exhaustive — a constructor
@@ -1456,6 +1465,13 @@ fn resolve(
             Box::new(resolve(b, params, type_arity, span)?),
             Effect::pure(),
         )),
+        TypeExpr::Tuple(elems) => {
+            let resolved: Result<Vec<Ty>, TypeError> = elems
+                .iter()
+                .map(|e| resolve(e, params, type_arity, span))
+                .collect();
+            Ok(Ty::Tuple(resolved?))
+        }
         TypeExpr::Con(name, args) => {
             let no_args = |t: Ty| -> Result<Ty, TypeError> {
                 if args.is_empty() {
@@ -1571,6 +1587,7 @@ impl Infer {
             Ty::Con(name, args) => {
                 Ty::Con(name.clone(), args.iter().map(|a| self.apply(a)).collect())
             }
+            Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|a| self.apply(a)).collect()),
             other => other.clone(),
         }
     }
@@ -2020,6 +2037,12 @@ impl Infer {
                     self.unify(&elem, &t, e.span())?;
                 }
                 Ok(Ty::Con("List".to_string(), vec![self.apply(&elem)]))
+            }
+
+            ExprKind::Tuple { elems } => {
+                let tys: Result<Vec<Ty>, TypeError> =
+                    elems.iter().map(|e| self.infer_expr(e, env)).collect();
+                Ok(Ty::Tuple(tys?))
             }
 
             ExprKind::Record { fields } => self.infer_record(fields, span, env),
@@ -2521,6 +2544,14 @@ impl Infer {
                 }
                 Ok(())
             }
+            Pattern::Tuple { elems } => {
+                let elem_tys: Vec<Ty> = elems.iter().map(|_| self.fresh()).collect();
+                self.unify(&Ty::Tuple(elem_tys.clone()), scrut_ty, span)?;
+                for (sub, ety) in elems.iter().zip(&elem_tys) {
+                    self.bind_pattern(sub, ety, span, env)?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2628,6 +2659,7 @@ impl Infer {
                 .field_owner
                 .get(&fields[0].name)
                 .map(|owner| Tag::Record(owner.clone())),
+            Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
         }
     }
 
@@ -2637,6 +2669,10 @@ impl Infer {
     fn ctor_signature(&self, ty: &Ty) -> Option<Vec<Tag>> {
         match ty {
             Ty::Bool => Some(vec![Tag::Bool(true), Tag::Bool(false)]),
+            // A tuple has one implicit constructor, so the column is "complete"
+            // once a tuple pattern is present; exhaustiveness recurses into the
+            // element columns (like records).
+            Ty::Tuple(elems) => Some(vec![Tag::Tuple(elems.len())]),
             Ty::Con(name, _) => {
                 if let Some(ctors) = self.decls.type_ctors.get(name) {
                     (!ctors.is_empty()).then(|| ctors.iter().map(|c| Tag::Sum(c.clone())).collect())
@@ -2657,6 +2693,7 @@ impl Infer {
             Tag::Bool(_) | Tag::Int(_) => 0,
             Tag::Sum(name) => self.decls.ctors[name].arity,
             Tag::Record(name) => self.decls.records[name].fields.len(),
+            Tag::Tuple(n) => *n,
         }
     }
 
@@ -2677,6 +2714,10 @@ impl Infer {
                 let _ = self.unify(&record_ty, ty, Span::new(0, 0));
                 fields.iter().map(|(_, t)| self.apply(t)).collect()
             }
+            Tag::Tuple(_) => match self.apply(ty) {
+                Ty::Tuple(elems) => elems,
+                _ => Vec::new(),
+            },
         }
     }
 
@@ -2716,6 +2757,7 @@ impl Infer {
                 }
                 Some(slots)
             }
+            Pattern::Tuple { elems } => (*tag == Tag::Tuple(elems.len())).then(|| elems.clone()),
         }
     }
 
@@ -2748,6 +2790,14 @@ impl Infer {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{{ {parts} }}")
+            }
+            Wit::Con(Tag::Tuple(_), args) => {
+                let parts = args
+                    .iter()
+                    .map(|a| self.render_witness(a, false))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({parts})")
             }
         }
     }
@@ -2822,6 +2872,12 @@ impl Infer {
                 }
             }
             (Ty::Con(n1, a1), Ty::Con(n2, a2)) if n1 == n2 && a1.len() == a2.len() => {
+                for (x, y) in a1.iter().zip(a2) {
+                    self.unify(x, y, span)?;
+                }
+                Ok(())
+            }
+            (Ty::Tuple(a1), Ty::Tuple(a2)) if a1.len() == a2.len() => {
                 for (x, y) in a1.iter().zip(a2) {
                     self.unify(x, y, span)?;
                 }
@@ -3028,7 +3084,7 @@ fn occurs(var: u32, ty: &Ty) -> bool {
     match ty {
         Ty::Var(n) => *n == var,
         Ty::Fun(a, b, _) => occurs(var, a) || occurs(var, b),
-        Ty::Con(_, args) => args.iter().any(|a| occurs(var, a)),
+        Ty::Con(_, args) | Ty::Tuple(args) => args.iter().any(|a| occurs(var, a)),
         _ => false,
     }
 }
@@ -3040,7 +3096,7 @@ fn free_type_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
             free_type_vars(a, f);
             free_type_vars(b, f);
         }
-        Ty::Con(_, args) => args.iter().for_each(|a| free_type_vars(a, f)),
+        Ty::Con(_, args) | Ty::Tuple(args) => args.iter().for_each(|a| free_type_vars(a, f)),
         _ => {}
     }
 }
@@ -3052,7 +3108,7 @@ fn free_unit_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
             free_unit_vars(a, f);
             free_unit_vars(b, f);
         }
-        Ty::Con(_, args) => args.iter().for_each(|a| free_unit_vars(a, f)),
+        Ty::Con(_, args) | Ty::Tuple(args) => args.iter().for_each(|a| free_unit_vars(a, f)),
         _ => {}
     }
 }
@@ -3064,7 +3120,7 @@ fn free_num_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
             free_num_vars(a, f);
             free_num_vars(b, f);
         }
-        Ty::Con(_, args) => args.iter().for_each(|a| free_num_vars(a, f)),
+        Ty::Con(_, args) | Ty::Tuple(args) => args.iter().for_each(|a| free_num_vars(a, f)),
         _ => {}
     }
 }
@@ -3075,7 +3131,7 @@ fn free_eff_vars(ty: &Ty, f: &mut impl FnMut(u32)) {
         eff.vars.iter().for_each(|v| f(*v));
         free_eff_vars(a, f);
         free_eff_vars(b, f);
-    } else if let Ty::Con(_, args) = ty {
+    } else if let Ty::Con(_, args) | Ty::Tuple(args) = ty {
         args.iter().for_each(|a| free_eff_vars(a, f));
     }
 }
@@ -3100,6 +3156,12 @@ fn subst_all(
         Ty::Con(name, args) => Ty::Con(
             name.clone(),
             args.iter()
+                .map(|a| subst_all(a, tmap, umap, nmap, emap))
+                .collect(),
+        ),
+        Ty::Tuple(elems) => Ty::Tuple(
+            elems
+                .iter()
                 .map(|a| subst_all(a, tmap, umap, nmap, emap))
                 .collect(),
         ),
@@ -3173,6 +3235,18 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
             if atom {
                 out.push(')');
             }
+        }
+        // A tuple type is self-delimiting (its own parens), matching the literal
+        // and annotation surface syntax `(a, b)`.
+        Ty::Tuple(elems) => {
+            out.push('(');
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                show_into(e, namer, out, false);
+            }
+            out.push(')');
         }
     }
 }

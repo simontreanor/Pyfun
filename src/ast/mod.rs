@@ -143,6 +143,10 @@ fn print_type(ty: &TypeExpr) -> String {
             let args: Vec<String> = args.iter().map(print_type_atom).collect();
             format!("{name} {}", args.join(" "))
         }
+        TypeExpr::Tuple(elems) => {
+            let elems: Vec<String> = elems.iter().map(print_type).collect();
+            format!("({})", elems.join(", "))
+        }
     }
 }
 
@@ -151,6 +155,8 @@ fn print_type(ty: &TypeExpr) -> String {
 fn print_type_atom(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Con(name, args) if args.is_empty() => name.clone(),
+        // A tuple is already self-delimiting (its own parens).
+        TypeExpr::Tuple(_) => print_type(ty),
         _ => format!("({})", print_type(ty)),
     }
 }
@@ -306,6 +312,10 @@ pub fn print_expr(expr: &Expr) -> String {
             let elems: Vec<String> = elems.iter().map(print_expr).collect();
             format!("[{}]", elems.join(", "))
         }
+        ExprKind::Tuple { elems } => {
+            let elems: Vec<String> = elems.iter().map(print_expr).collect();
+            format!("({})", elems.join(", "))
+        }
         ExprKind::Record { fields } => {
             let fields: Vec<String> = fields.iter().map(print_field_init).collect();
             format!("{{ {} }}", fields.join(", "))
@@ -371,6 +381,10 @@ pub fn print_pattern(pattern: &Pattern) -> String {
                 })
                 .collect();
             format!("{{ {} }}", parts.join(", "))
+        }
+        Pattern::Tuple { elems } => {
+            let elems: Vec<String> = elems.iter().map(print_pattern).collect();
+            format!("({})", elems.join(", "))
         }
     }
 }

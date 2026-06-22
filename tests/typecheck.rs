@@ -900,6 +900,64 @@ fn rejects_heterogeneous_list() {
     assert_error_contains("let bad = [1, true]", "expected int, found bool");
 }
 
+// ---------- tuples ----------
+
+#[test]
+fn accepts_tuple_construct_and_destructure() {
+    let src = "let pair = (1, true)\n\
+               let swap p = match p with | (a, b) -> (b, a)\n\
+               let s = swap pair";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn tuple_elements_keep_their_own_types() {
+    // The first element is int, the second string; using the second as a number
+    // is an error.
+    assert_error_contains(
+        "let t = (1, \"x\")\nlet bad = (match t with | (a, b) -> b) + 1",
+        "string",
+    );
+}
+
+#[test]
+fn rejects_tuple_arity_mismatch() {
+    // A 2-tuple cannot unify with a 3-tuple.
+    assert_error_contains(
+        "let f p = match p with | (a, b) -> a\nlet bad = f (1, 2, 3)",
+        "found",
+    );
+}
+
+#[test]
+fn tuple_type_displays_with_parentheses() {
+    // A pair of ints prints as `(int, int)`.
+    assert_error_contains("let bad = (1, 2) + 3", "(int, int)");
+}
+
+#[test]
+fn tuple_match_is_exhaustive_without_wildcard() {
+    // A single tuple pattern of variables covers all values (one constructor).
+    assert!(pyfun::check("let fst p = match p with | (a, b) -> a").is_ok());
+}
+
+#[test]
+fn rejects_non_exhaustive_tuple_match_with_witness() {
+    // Deep exhaustiveness recurses into element columns and reports a witness.
+    assert_error_contains(
+        "let f p = match p with | (true, b) -> b",
+        "`(false, _)` is not matched",
+    );
+}
+
+#[test]
+fn accepts_tuple_in_record_field_and_extern() {
+    let src = "type Pair = { both: (int, string) }\n\
+               extern pure mk : a -> b -> (a, b) = builtins.tuple\n\
+               let p = { both = (1, \"x\") }";
+    assert!(pyfun::check(src).is_ok());
+}
+
 #[test]
 fn rejects_len_on_a_non_list() {
     // `List.len : List a -> int`, so an int argument is a type error.

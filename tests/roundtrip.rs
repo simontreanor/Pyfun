@@ -91,6 +91,20 @@ const PROGRAMS: &[&str] = &[
     "let m = [[1, 2], [3, 4]]",
     "let c = [a + 1, f b, x]",
     "let mapped = map f [1, 2, 3]",
+    // Tuple literals (2+ elements), nesting, compound elements; `()` stays unit and
+    // `(x)` stays grouping (no 0- or 1-tuples).
+    "let pair = (1, 2)",
+    "let triple = (1, \"a\", true)",
+    "let nested = ((1, 2), 3)",
+    "let mixed = (f a, x + 1, [1, 2])",
+    "let grouped = (x + 1)",
+    // Tuple patterns in match arms, including nested ones.
+    "let swap p = match p with | (a, b) -> (b, a)",
+    "let fst t = match t with | (a, _) -> a",
+    "let deep p = match p with | ((a, b), c) -> a",
+    // Tuple types in declarations and externs.
+    "type Pair = { both: (int, string) }",
+    "extern pure mk: a -> b -> (a, b) = builtins.tuple",
     // Computation expressions (built-in builders).
     "let a = seq { yield 1 yield! xs }",
     "let a = result { let! x = m return x }",
