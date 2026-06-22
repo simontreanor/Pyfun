@@ -161,8 +161,8 @@ Treat interop type-mapping and FFI surfaces as load-bearing architecture.
 
 **The prelude (first realized interop surface).** A small set of built-in functions gives programs
 something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorphic numerics
-`abs`/`min`/`max : int<'u> -> …`, plus a `unit` type (one value, lowers to Python `None` — the
-honest result of an effectful call). Each is a *typed view over a Python builtin*: the single
+`abs`/`min`/`max : int<'u> -> …`, plus a `unit` type whose one value is written `()` (both lower to
+Python `None` — the honest result of an effectful call). Each is a *typed view over a Python builtin*: the single
 source of truth is `types::PRELUDE` (names + arities, read by lowering so a partial application like
 `max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun
 names equal their Python names, so there is no call-site renaming — the simplest honest interop
@@ -452,7 +452,7 @@ The protocol (F#'s, lowercased and keyword-safe); a builder need only define wha
 
 `Builder { let! … }` is told from `Some { x = 1 }` (a constructor applied to a record) by one-token
 lookahead: a CE body starts with a CE keyword, a record with `ident =`. `delay` receives a thunk
-`'t -> m a` (force by applying to any value).
+`unit -> m a` (force it with the unit value: `let delay f = f ()`).
 
 The three built-ins and how they lower to Python:
 

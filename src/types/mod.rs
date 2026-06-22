@@ -1843,6 +1843,7 @@ impl Infer {
             ExprKind::Float(_) => Ok(Ty::Float(Unit::dimensionless())),
             ExprKind::Str(_) => Ok(Ty::Str),
             ExprKind::Bool(_) => Ok(Ty::Bool),
+            ExprKind::Unit => Ok(Ty::Unit),
 
             ExprKind::Var(name) => match env.get(name) {
                 Some(scheme) => Ok(self.instantiate(scheme)),

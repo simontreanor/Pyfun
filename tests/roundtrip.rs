@@ -15,6 +15,10 @@ const PROGRAMS: &[&str] = &[
     "let pi = 3.14",
     "let greeting = \"hello\\nworld\"",
     "let yes = true",
+    // The unit value `()`.
+    "let nothing = ()",
+    "let noop x = ()",
+    "let force f = f ()",
     "let add a b = a + b",
     "let r = 1 + 2 * 3 - 4 / 2",
     "let r = 7 // 2",

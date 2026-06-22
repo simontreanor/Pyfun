@@ -234,7 +234,11 @@ impl Resolver {
 
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
-            ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Str(_) | ExprKind::Bool(_) => {}
+            ExprKind::Int(_)
+            | ExprKind::Float(_)
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Unit => {}
             ExprKind::Var(name) => match self.lookup(name) {
                 Some(span) => self.refs.push(Reference {
                     span: expr.span(),

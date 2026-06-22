@@ -406,6 +406,7 @@ impl Lowerer {
             ExprKind::Float(f) => Ok((vec![], PyExpr::Float(*f))),
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
+            ExprKind::Unit => Ok((vec![], PyExpr::NoneLit)),
             ExprKind::Var(name) => Ok((vec![], self.lower_var(name, locals))),
 
             ExprKind::Binary { op, lhs, rhs } => {

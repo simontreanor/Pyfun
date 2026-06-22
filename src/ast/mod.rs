@@ -259,6 +259,7 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Float(f) => format!("{f:?}"),
         ExprKind::Str(s) => print_string(s),
         ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Unit => "()".to_string(),
         ExprKind::Var(name) => name.clone(),
 
         ExprKind::Fn { params, body } => {

@@ -24,6 +24,12 @@ fn full_application_is_a_direct_call() {
 }
 
 #[test]
+fn unit_literal_lowers_to_none() {
+    let py = pyfun::compile("let nothing = ()").unwrap();
+    assert!(py.contains("nothing = None"), "{py}");
+}
+
+#[test]
 fn partial_application_uses_functools_partial() {
     let py = pyfun::compile("let add a b = a + b\nlet inc = add 1").unwrap();
     assert!(py.starts_with("import functools\n"), "{py}");

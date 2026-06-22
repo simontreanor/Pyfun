@@ -26,6 +26,19 @@ fn accepts_basic_and_curried_functions() {
 }
 
 #[test]
+fn accepts_unit_literal() {
+    assert!(pyfun::check("let nothing = ()").is_ok());
+    // A thunk forced with unit, as a CE `delay` would be written.
+    assert!(pyfun::check("let force f = f ()").is_ok());
+}
+
+#[test]
+fn rejects_unit_in_arithmetic() {
+    // `()` has type `unit`, which is not numeric.
+    assert_error_contains("let bad = () + 1", "unit");
+}
+
+#[test]
 fn let_generalization_makes_bindings_polymorphic() {
     // `id` must be usable at two different types in the same program.
     assert!(pyfun::check("let id x = x\nlet a = id 1\nlet b = id true").is_ok());

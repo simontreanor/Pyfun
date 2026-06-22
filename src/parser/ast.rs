@@ -200,6 +200,9 @@ pub enum ExprKind {
     Float(f64),
     Str(String),
     Bool(bool),
+    /// The unit value `()` — the sole inhabitant of the `unit` type (lowers to
+    /// Python `None`).
+    Unit,
     Var(String),
 
     /// `fun a b -> body`

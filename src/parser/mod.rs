@@ -790,6 +790,10 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
+                // `()` is the unit value; `(expr)` is grouping.
+                if self.eat(&Tok::RParen) {
+                    return Ok(self.mk(start, ExprKind::Unit));
+                }
                 let inner = self.parse_expr()?;
                 self.expect(&Tok::RParen, "`)`")?;
                 // Keep the inner node's own (paren-free) span.
