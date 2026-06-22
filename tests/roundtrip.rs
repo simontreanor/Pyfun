@@ -103,12 +103,17 @@ const PROGRAMS: &[&str] = &[
     "let a = Some { x = 1 }",
     // Units of measure.
     "measure m",
+    // Derived-measure aliases (`measure N = <unit body>`, no `<>` brackets).
+    "measure kg\nmeasure m\nmeasure s\nmeasure N = kg m / s^2",
+    "measure m\nmeasure s\nmeasure Hz = 1 / s\nmeasure Speed = m / s",
     "measure m\nmeasure s\nlet speed = 100<m> / 10<s>",
     "let a = 5<m>",
     "let a = 3<m/s>",
     "let a = 2<m^2>",
     "let a = 9<kg m / s^2>",
     "let a = 7<1>",
+    // Denominator-only unit: `</s>` prints (and reparses) as `1/s`.
+    "let a = 5</s>",
     // Externs (typed Python imports). The `= target` clause prints only when the
     // Python target differs from the Pyfun name.
     "extern len: string -> int",

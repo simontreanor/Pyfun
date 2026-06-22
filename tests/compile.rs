@@ -723,6 +723,25 @@ fn e2e_units_compute_after_erasure() {
 }
 
 #[test]
+fn e2e_derived_measure_aliases_erase() {
+    // Aliases are pure compile-time machinery; like base units they vanish at
+    // runtime, leaving plain Python numbers.
+    run_and_check(
+        "
+        measure kg
+        measure m
+        measure s
+        measure N = kg m / s^2
+        measure Pa = N / m^2
+        let force = 10<N>
+        let area = 2<m^2>
+        let pressure = force / area
+        ",
+        &[("force", "10"), ("pressure", "5.0")],
+    );
+}
+
+#[test]
 fn e2e_result_ce_binds_and_short_circuits() {
     // Extract the result via a match so the assertions compare plain ints.
     run_and_check(

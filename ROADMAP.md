@@ -126,10 +126,16 @@ roundtrip tests; `hello.pyfun` shows a `Maybe` monad.
 - **Effort/risk:** was Medium–high. **Status:** landed via desugaring (the elegant path — reuses
   inference + lowering wholesale).
 
-### 7. Derived-measure aliases
-You can declare base measures (`measure m`) but not named derived ones (`measure N = kg m / s^2`).
-This adds measure *expressions* in declarations so compound units can be named.
-- **Effort/risk:** Low–medium; a measure-expression parser plus alias expansion in the unit resolver.
+### 7. Derived-measure aliases — ✅ done
+`measure N = kg m / s^2` names a compound of base measures; aliases may build on earlier aliases
+(`measure Pa = N / m^2`). `Item::Measure.definition: Option<UnitExpr>`; resolved at `build_decls` into
+`Decls::measure_aliases` (expansion over base measures) via the shared `resolve_unit_against`, used by
+both alias declaration and `<…>` annotations — so an alias expands and `<N>` unifies with `<kg m /
+s^2>`. The type *displays* expanded (no abbreviation/conversion tracking — F#'s richer model stays out
+of scope). The body reuses the unit grammar (`parse_unit_body`, factored out; now also accepts `1/s`,
+which fixed a latent denominator-only roundtrip). Aliases must precede use. Covered by typecheck/
+compile/roundtrip; `hello.pyfun` shows newton/pascal.
+- **Effort/risk:** was Low–medium. **Status:** landed.
 
 ## Tooling & consolidation (make it usable, not just correct)
 
@@ -242,10 +248,10 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
    modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
    `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
-2. **#5–#7** — lower-stakes polish (deep exhaustiveness **landed** — full Maranget usefulness with
-   witnesses; user-defined CE builders **landed** — module-based, desugared; remaining: derived
-   measures), plus the #2/#3 follow-ups (record patterns **landed**; blocks in `match`/`if`/lambda
-   positions **landed**; remaining: list patterns + `cons`/`head`/`tail` once a representation that
-   honors their big-O is chosen).
+2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
+   user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
+   follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
+   Remaining in this band: list patterns + `cons`/`head`/`tail` (awaiting a big-O-honest
+   representation), `nonlocal` for closures reassigning an outer `mut`.
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

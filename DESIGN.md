@@ -508,6 +508,14 @@ Design intent:
   numbers. No runtime unit objects.
 - **MVP standard units:** a small SI base set + dimensionless, with **user-definable measures**
   (`type m`-style measure declarations). Keep the built-in set small (§11).
+- **Derived-measure aliases (implemented):** `measure N = kg m / s^2` names a compound of base
+  measures; aliases may build on earlier aliases (`measure Pa = N / m^2`). An alias **expands** to its
+  base-measure unit at declaration time (stored in `Decls::measure_aliases`) and is substituted
+  wherever it appears — so `<N>` and `<kg m / s^2>` are the *same* type and unify. Consequence: the
+  inferred-type display shows the **expanded** form (`int<kg m/s^2>`, not `int<N>`) — there is no
+  abbreviation/conversion tracking (F#'s richer model is out of scope). The alias body reuses the unit
+  grammar (now also accepting `1/s` for a dimensionless numerator); aliases, like `let`s, must be
+  declared before use.
 - Open questions: measure-generic functions (unit polymorphism) in the MVP vs. later; how units
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).

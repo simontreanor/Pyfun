@@ -40,9 +40,13 @@ pub struct Module {
 /// A top-level item: a measure/type declaration, a binding, or a bare expression.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
-    /// `measure name` — declares a base unit of measure (`DESIGN.md` §8.2).
+    /// `measure name` declares a base unit of measure; `measure name = <unit>`
+    /// (e.g. `measure N = kg m / s^2`) declares a **derived alias** that expands to
+    /// a compound of base measures (`DESIGN.md` §8.2). `definition` is `None` for a
+    /// base measure, `Some(body)` for an alias.
     Measure {
         name: String,
+        definition: Option<UnitExpr>,
         span: NodeSpan,
     },
     Type(TypeDecl),

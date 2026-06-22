@@ -24,7 +24,12 @@ pub fn print_module(module: &Module) -> String {
 /// Render a single top-level item.
 pub fn print_item(item: &Item) -> String {
     match item {
-        Item::Measure { name, .. } => format!("measure {name}"),
+        Item::Measure {
+            name, definition, ..
+        } => match definition {
+            Some(body) => format!("measure {name} = {}", print_unit(body)),
+            None => format!("measure {name}"),
+        },
         Item::Type(decl) => print_type_decl(decl),
         Item::Extern(decl) => print_extern(decl),
         Item::Let(binding) => print_let(binding, 0),

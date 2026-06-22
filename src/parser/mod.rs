@@ -263,8 +263,19 @@ impl Parser {
         let start = self.cur_start();
         self.expect(&Tok::Measure, "`measure`")?;
         let name = self.parse_ident("measure name")?;
+        // `measure N = kg m / s^2` declares a derived alias; bare `measure m` a base
+        // measure. The alias body is a unit expression without the `<>` brackets.
+        let definition = if self.eat(&Tok::Eq) {
+            Some(self.parse_unit_body()?)
+        } else {
+            None
+        };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
-        Ok(Item::Measure { name, span })
+        Ok(Item::Measure {
+            name,
+            definition,
+            span,
+        })
     }
 
     /// `extern [pure] name : type [= a.b.c]` — a typed import of a Python callable
@@ -888,24 +899,34 @@ impl Parser {
     /// Parse `<unit>`, e.g. `<m>`, `<m s>`, `<m/s^2>`, or `<1>` (dimensionless).
     fn parse_unit_annotation(&mut self) -> Result<UnitExpr, ParseError> {
         self.expect(&Tok::Lt, "`<`")?;
-        if matches!(self.peek(), Tok::Int(1)) {
-            self.bump();
-            self.expect(&Tok::Gt, "`>`")?;
-            return Ok(UnitExpr {
-                factors: Vec::new(),
-            });
-        }
+        let unit = self.parse_unit_body()?;
+        self.expect(&Tok::Gt, "`>`")?;
+        Ok(unit)
+    }
+
+    /// Parse the body of a unit expression (without the surrounding `<>`): numerator
+    /// factors, an optional `/` then denominator factors. A leading `1` is the
+    /// empty numerator — bare `1` is dimensionless, `1/s` is "per second". Shared by
+    /// `<…>` annotations and `measure N = …` aliases.
+    fn parse_unit_body(&mut self) -> Result<UnitExpr, ParseError> {
         let mut factors = Vec::new();
-        while matches!(self.peek(), Tok::Ident(_)) {
-            factors.push(self.parse_unit_factor(1)?);
+        // `1` stands for an empty numerator (so it also leads `1/s`); otherwise
+        // collect numerator factors.
+        let unit_numerator = matches!(self.peek(), Tok::Int(1));
+        if unit_numerator {
+            self.bump();
+        } else {
+            while matches!(self.peek(), Tok::Ident(_)) {
+                factors.push(self.parse_unit_factor(1)?);
+            }
         }
         if self.eat(&Tok::Slash) {
             while matches!(self.peek(), Tok::Ident(_)) {
                 factors.push(self.parse_unit_factor(-1)?);
             }
         }
-        self.expect(&Tok::Gt, "`>`")?;
-        if factors.is_empty() {
+        // Valid: `1` (dimensionless), `m…`, `m…/s…`, `1/s…`. A bare empty body is not.
+        if !unit_numerator && factors.is_empty() {
             return Err(self.error("expected a unit (e.g. `m`, `m/s`, or `1`)"));
         }
         Ok(UnitExpr { factors })

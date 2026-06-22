@@ -363,6 +363,62 @@ fn rejects_adding_different_units() {
     );
 }
 
+// ---------- derived-measure aliases ----------
+
+#[test]
+fn accepts_derived_measure_alias() {
+    // `N` expands to `kg m / s^2`; `force / area` is dimensionally `N / m^2`.
+    let src = "measure kg\nmeasure m\nmeasure s\n\
+               measure N = kg m / s^2\n\
+               let force = 10<N>\n\
+               let area = 2<m^2>\n\
+               let pressure = force // area";
+    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::check(src).err());
+}
+
+#[test]
+fn alias_unifies_with_its_expansion() {
+    // A value in `<N>` and one in `<kg m / s^2>` have the same dimension.
+    let src = "measure kg\nmeasure m\nmeasure s\n\
+               measure N = kg m / s^2\n\
+               let a = 1<N>\n\
+               let b = 1<kg m / s^2>\n\
+               let same = a == b";
+    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::check(src).err());
+}
+
+#[test]
+fn alias_can_reference_another_alias() {
+    let src = "measure kg\nmeasure m\nmeasure s\n\
+               measure N = kg m / s^2\n\
+               measure Pa = N / m^2\n\
+               let p = 5<Pa>";
+    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::check(src).err());
+}
+
+#[test]
+fn derived_measure_dimension_mismatch_shows_expansion() {
+    // The alias displays expanded (no abbreviation tracking in the MVP).
+    assert_error_contains(
+        "measure kg\nmeasure m\nmeasure s\nmeasure N = kg m / s^2\nlet bad = 1<N> + 1<m>",
+        "expected int<kg m/s^2>, found int<m>",
+    );
+}
+
+#[test]
+fn rejects_unknown_measure_in_alias_body() {
+    assert_error_contains("measure m\nmeasure Bad = m / xyz", "unknown measure `xyz`");
+}
+
+#[test]
+fn rejects_alias_used_before_definition() {
+    // Measures, like `let`s, must be declared before use.
+    assert_error_contains(
+        "measure m\nmeasure s\nmeasure Speed = Accel s\nmeasure Accel = m / s^2",
+        "unknown measure `Accel`",
+    );
+}
+
 #[test]
 fn rejects_unit_result_used_at_wrong_unit() {
     // speed is m/s, so adding metres is a dimension error. Uses `//` so the

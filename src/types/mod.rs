@@ -462,7 +462,11 @@ struct Decls {
     type_arity: HashMap<String, usize>,
     ctors: HashMap<String, CtorInfo>,
     type_ctors: HashMap<String, Vec<String>>,
+    /// Known measure names — both base measures and derived aliases.
     measures: HashSet<String>,
+    /// Derived measures (`measure N = kg m / s^2`) → their expansion over base
+    /// measures. A name in `measures` but not here is a base measure.
+    measure_aliases: HashMap<String, Unit>,
     /// Record types by name.
     records: HashMap<String, RecordInfo>,
     /// Field name → owning record type. Field names are globally unique (the
@@ -570,6 +574,26 @@ fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
     (errors, types)
 }
 
+/// Resolve a surface unit expression to a [`Unit`] over base measures, expanding
+/// any derived-measure aliases. Shared by alias declaration (`measure N = …`) and
+/// `<…>` annotations, so an alias resolves the same way wherever it appears.
+fn resolve_unit_against(unit: &UnitExpr, decls: &Decls, span: Span) -> Result<Unit, TypeError> {
+    let mut u = Unit::dimensionless();
+    for (name, exp) in &unit.factors {
+        if let Some(alias) = decls.measure_aliases.get(name) {
+            u = u.mul(&alias.pow(*exp));
+        } else if decls.measures.contains(name) {
+            u = u.mul(&Unit::base(name).pow(*exp));
+        } else {
+            return Err(TypeError {
+                message: format!("unknown measure `{name}`"),
+                span,
+            });
+        }
+    }
+    Ok(u)
+}
+
 /// Register measures and `type` declarations; build the constructor environment.
 fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     let mut decls = Decls::default();
@@ -584,13 +608,33 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_seq_prelude(&mut env);
 
     for item in &module.items {
-        if let Item::Measure { name, span } = item
-            && !decls.measures.insert(name.clone())
+        if let Item::Measure {
+            name,
+            definition,
+            span,
+        } = item
         {
-            errors.push(TypeError {
-                message: format!("measure `{name}` is already defined"),
-                span: span.span(),
-            });
+            if decls.measures.contains(name) {
+                errors.push(TypeError {
+                    message: format!("measure `{name}` is already defined"),
+                    span: span.span(),
+                });
+                continue;
+            }
+            // A derived alias must resolve (against measures declared before it)
+            // before it joins the known set; a base measure just joins.
+            if let Some(body) = definition {
+                match resolve_unit_against(body, &decls, span.span()) {
+                    Ok(unit) => {
+                        decls.measure_aliases.insert(name.clone(), unit);
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        continue;
+                    }
+                }
+            }
+            decls.measures.insert(name.clone());
         }
     }
 
@@ -2220,17 +2264,7 @@ impl Infer {
     }
 
     fn resolve_unit_expr(&self, unit: &UnitExpr, span: Span) -> Result<Unit, TypeError> {
-        let mut u = Unit::dimensionless();
-        for (name, exp) in &unit.factors {
-            if !self.decls.measures.contains(name) {
-                return Err(TypeError {
-                    message: format!("unknown measure `{name}`"),
-                    span,
-                });
-            }
-            u = u.mul(&Unit::base(name).pow(*exp));
-        }
-        Ok(u)
+        resolve_unit_against(unit, &self.decls, span)
     }
 
     fn infer_ce(

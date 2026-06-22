@@ -113,6 +113,16 @@ let addOpt a b =
 # Units of measure: dimensional analysis at compile time, erased at runtime.
 measure m
 measure s
+measure kg
+
+# Derived-measure aliases name a compound of base units (and may build on each
+# other). They expand to base units, so `<N>` and `<kg m / s^2>` are the same type.
+measure N = kg m / s^2               # newton
+measure Pa = N / m^2                 # pascal, built on N
+
+let push = 10<N>
+let panel = 2<m^2>
+let stress = push / panel            # float<Pa>, dimensionally N/m^2
 
 let distance = 100<m>
 let elapsed = 10<s>
@@ -164,6 +174,7 @@ print (rank Green)                   # 2
 print floor                          # 20
 print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
+print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
 
 # Comparison (`comparison 'a => …`) and equality (`'a -> 'a -> bool`, structural

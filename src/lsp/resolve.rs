@@ -89,7 +89,7 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                     }
                 }
             }
-            Item::Measure { name, span } => out.push(Symbol {
+            Item::Measure { name, span, .. } => out.push(Symbol {
                 name: name.clone(),
                 span: span.span(),
                 kind: SymbolKind::Measure,
