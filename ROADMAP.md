@@ -115,11 +115,16 @@ None }` are recognized as complete without a `_`; a non-exhaustive `match` repor
 (`` `None` ``, `` `Some false` ``, `` `{ x = _, y = true }` ``). Infinite types (`int`/`string`) and
 unmatchable `Con`s still need a wildcard. Lowering keeps its defensive `case _: raise` guard.
 
-### 6. User-defined computation expressions
-Today `async`/`seq`/`result` are the only builders, hard-coded. F#'s real power is letting *users*
-define builders (a `Bind`/`Return` protocol) so anyone can build their own monadic DSL.
-- **Effort/risk:** Medium–high; requires general builder resolution and type-directed desugaring
-  instead of the current fixed lowering.
+### 6. User-defined computation expressions — ✅ done
+A builder is any in-file `module` providing the protocol functions; `Builder { … }` (an uppercase
+module name before `{`) desugars (`src/desugar.rs`) to calls on `bind`/`return_`/`returnFrom`/`yield_`/
+`yieldFrom`/`combine`/`delay`/`zero`, after which ordinary HM inference and lowering handle it — the
+type-directedness falls out of inferring the desugared calls, so no per-builder rules were needed. The
+three built-ins keep their bespoke native lowering. Parser disambiguates `Maybe { let! … }` (a CE) from
+`Some { x = 1 }` (a ctor applied to a record) by CE-keyword lookahead. Covered by typecheck/compile/
+roundtrip tests; `hello.pyfun` shows a `Maybe` monad.
+- **Effort/risk:** was Medium–high. **Status:** landed via desugaring (the elegant path — reuses
+  inference + lowering wholesale).
 
 ### 7. Derived-measure aliases
 You can declare base measures (`measure m`) but not named derived ones (`measure N = kg m / s^2`).
@@ -238,8 +243,9 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
    `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
 2. **#5–#7** — lower-stakes polish (deep exhaustiveness **landed** — full Maranget usefulness with
-   witnesses; remaining: user CE builders, derived measures), plus the #2/#3 follow-ups (record
-   patterns **landed**; blocks in `match`/`if`/lambda positions **landed**; remaining: list patterns +
-   `cons`/`head`/`tail` once a representation that honors their big-O is chosen).
+   witnesses; user-defined CE builders **landed** — module-based, desugared; remaining: derived
+   measures), plus the #2/#3 follow-ups (record patterns **landed**; blocks in `match`/`if`/lambda
+   positions **landed**; remaining: list patterns + `cons`/`head`/`tail` once a representation that
+   honors their big-O is chosen).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

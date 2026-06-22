@@ -503,7 +503,7 @@ impl Lowerer {
 
             ExprKind::App { .. } | ExprKind::Pipe { .. } => self.lower_application(expr, locals),
 
-            ExprKind::Ce { builder, items } => self.lower_ce(*builder, items, locals),
+            ExprKind::Ce { builder, items } => self.lower_ce(builder, items, expr.span(), locals),
 
             // Units are compile-time only: erase the annotation, keep the value.
             ExprKind::Annot { value, .. } => self.lower_value(value, locals),
@@ -907,8 +907,9 @@ impl Lowerer {
 
     fn lower_ce(
         &mut self,
-        builder: CeBuilder,
+        builder: &CeBuilder,
         items: &[CeItem],
+        span: crate::lexer::Span,
         locals: &HashSet<String>,
     ) -> Lowered {
         match builder {
@@ -918,6 +919,13 @@ impl Lowerer {
                 self.lower_result_ce(items, locals)
             }
             CeBuilder::Async => self.lower_async(items, locals),
+            // A user builder desugars to plain calls; lower the desugared form.
+            // (Any structural error was already reported during type-checking.)
+            CeBuilder::User(name) => {
+                let expr = crate::desugar::desugar_ce(name, items, span)
+                    .map_err(|(message, _)| LowerError { message })?;
+                self.lower_value(&expr, locals)
+            }
         }
     }
 

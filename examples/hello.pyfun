@@ -94,6 +94,22 @@ let computed =
     return x + 1
   }
 
+# User-defined CE builders: any in-file `module` providing `bind`/`return_` (and
+# `yield_`/`combine`/`delay`/… for sequence builders) is a builder. `Maybe { … }`
+# desugars to `Maybe.bind`/`Maybe.return_` calls — ordinary inference does the rest.
+module Maybe =
+  let bind m f =
+    match m with
+    | Some x -> f x
+    | None -> None
+  let return_ x = Some x
+let addOpt a b =
+  Maybe {
+    let! x = a
+    let! y = b
+    return x + y
+  }
+
 # Units of measure: dimensional analysis at compile time, erased at runtime.
 measure m
 measure s
@@ -206,3 +222,7 @@ print diag                            # 25
 print (describeSign 0)                # zero
 print (describeSign 7)                # positive
 print (describeSign (0 - 3))          # negative
+
+# A user-defined computation expression (the Maybe monad).
+print (addOpt (Some 3) (Some 4))      # Some(7)
+print (addOpt (Some 3) None)          # None_  (short-circuits)

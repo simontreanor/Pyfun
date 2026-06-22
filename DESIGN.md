@@ -429,12 +429,30 @@ compile-time machinery erased at runtime). They are an intentional, bounded exce
 F# CEs desugar `builder { ... }` into calls on a *builder* with methods like `Bind`, `Return`,
 `ReturnFrom`, `Zero`, `Combine`, `Delay`, `For`, `While`. Pyfun follows the same model:
 
-- **Build a general CE desugaring pass** (the `builder { e }` → bind/return/… transform) so the
-  mechanism generalizes later — but **ship only three built-in builders in the MVP**. User-defined
-  builders are **post-MVP**. This keeps scope bounded while proving the feature.
-- The desugaring is **type-directed in spirit** (the builder determines `Bind`'s type), but with
-  only three known builders the MVP can desugar against fixed, known signatures rather than a
-  general builder-resolution algorithm.
+- The three built-ins (`async`/`seq`/`result`) keep **bespoke native lowerings** (await / generators /
+  railway) — a generic bind/return desugar can't produce those idiomatically.
+- **User-defined builders are now supported** (`src/desugar.rs`). A builder is an in-file `module`
+  providing the protocol functions; `Builder { … }` (an uppercase module name before `{`) desugars to
+  calls on them, after which ordinary HM inference and lowering take over — no per-builder type rules
+  or codegen. The desugaring is type-directed *for free*: the builder's `bind`/`return_` signatures
+  determine the types via normal inference on the desugared calls.
+
+The protocol (F#'s, lowercased and keyword-safe); a builder need only define what its bodies use:
+
+| item            | desugaring                                           |
+|-----------------|------------------------------------------------------|
+| `let! x = e` …  | `B.bind e (fun x -> …)`                              |
+| `do! e` …       | `B.bind e (fun _ -> …)`   (trailing `do! e` → `e`)   |
+| `let x = e` …   | `(fun x -> …) e`                                     |
+| `return e`      | `B.return_ e`        (must be last)                  |
+| `return! e`     | `B.returnFrom e`     (must be last)                  |
+| `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
+| `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+| (empty)         | `B.zero`                                             |
+
+`Builder { let! … }` is told from `Some { x = 1 }` (a constructor applied to a record) by one-token
+lookahead: a CE body starts with a CE keyword, a record with `ident =`. `delay` receives a thunk
+`'t -> m a` (force by applying to any value).
 
 The three built-ins and how they lower to Python:
 

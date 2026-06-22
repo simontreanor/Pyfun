@@ -1965,7 +1965,7 @@ impl Infer {
                 Ok(self.apply(&result))
             }
 
-            ExprKind::Ce { builder, items } => self.infer_ce(*builder, items, span, env),
+            ExprKind::Ce { builder, items } => self.infer_ce(builder, items, span, env),
 
             ExprKind::List { elems } => {
                 // All elements share one type; an empty list is polymorphic.
@@ -2234,7 +2234,7 @@ impl Infer {
 
     fn infer_ce(
         &mut self,
-        builder: CeBuilder,
+        builder: &CeBuilder,
         items: &[CeItem],
         span: Span,
         env: &Env,
@@ -2243,6 +2243,13 @@ impl Infer {
             CeBuilder::Seq => self.infer_seq(items, span, env),
             CeBuilder::Result => self.infer_monad(items, span, env, "Result", true),
             CeBuilder::Async => self.infer_monad(items, span, env, "Async", false),
+            // A user builder desugars to plain calls on its module's protocol
+            // functions; ordinary inference takes it from there.
+            CeBuilder::User(name) => {
+                let expr = crate::desugar::desugar_ce(name, items, span)
+                    .map_err(|(message, span)| TypeError { message, span })?;
+                self.infer_expr(&expr, env)
+            }
         }
     }
 

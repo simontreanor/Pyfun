@@ -305,17 +305,22 @@ pub struct FieldInit {
     pub value: Expr,
 }
 
-/// The three built-in computation-expression builders.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A computation-expression builder: one of the three built-ins (each with a
+/// bespoke native Python lowering) or a user-defined builder named by an in-file
+/// `module` (desugared to that module's `bind`/`return_`/`yield_`/… functions).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CeBuilder {
     Async,
     Seq,
     Result,
+    /// A user builder, named by an (uppercase) module.
+    User(String),
 }
 
 impl CeBuilder {
-    /// The builder keyword, if `name` is one (builder names are contextual, not
-    /// reserved words).
+    /// The built-in builder keyword, if `name` is one (builder names are
+    /// contextual, not reserved words). User builders are resolved by the parser
+    /// from an uppercase name, not here.
     pub fn from_name(name: &str) -> Option<CeBuilder> {
         match name {
             "async" => Some(CeBuilder::Async),
@@ -325,11 +330,12 @@ impl CeBuilder {
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             CeBuilder::Async => "async",
             CeBuilder::Seq => "seq",
             CeBuilder::Result => "result",
+            CeBuilder::User(name) => name,
         }
     }
 }

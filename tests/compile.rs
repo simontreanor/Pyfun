@@ -750,6 +750,63 @@ fn e2e_async_ce_produces_a_coroutine() {
 }
 
 #[test]
+fn e2e_user_monad_ce_binds_and_short_circuits() {
+    // A user-defined `Maybe` builder desugars to bind/return_ calls and runs.
+    run_and_check(
+        "
+        module Maybe =
+          let bind m f = match m with | Some x -> f x | None -> None
+          let return_ x = Some x
+        let safe a b =
+          Maybe {
+            let! x = a
+            let! y = b
+            return x + y
+          }
+        let unwrap m = match m with | Some n -> n | None -> 0
+        let r1 = unwrap (safe (Some 3) (Some 4))
+        let r2 = unwrap (safe (Some 3) None)
+        ",
+        &[("r1", "7"), ("r2", "0")],
+    );
+}
+
+#[test]
+fn e2e_user_yield_ce_combines_via_delay() {
+    // A yield builder exercising yield_/combine/delay (here, summation).
+    run_and_check(
+        "
+        module Sum =
+          let yield_ x = x
+          let combine a b = a + b
+          let delay f = f 0
+        let total =
+          Sum {
+            yield 1
+            yield 2
+            yield 3
+            yield 4
+          }
+        ",
+        &[("total", "10")],
+    );
+}
+
+#[test]
+fn user_ce_lowers_to_plain_calls() {
+    let py = pyfun::compile(
+        "
+        module M =
+          let bind m f = f m
+          let return_ x = x
+        let r = M { let! x = 3  return x }
+        ",
+    )
+    .unwrap();
+    assert!(py.contains("r = M_bind(3, lambda x: M_return_(x))"), "{py}");
+}
+
+#[test]
 fn e2e_prelude_print_and_numerics() {
     // Bare `print` statements (separated by the offside rule) and the numeric
     // builtins run end to end and produce observable output.

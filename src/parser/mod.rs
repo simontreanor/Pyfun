@@ -87,6 +87,10 @@ impl Parser {
         &self.tokens[(self.pos + 1).min(self.tokens.len() - 1)].tok
     }
 
+    fn peek3(&self) -> &Tok {
+        &self.tokens[(self.pos + 2).min(self.tokens.len() - 1)].tok
+    }
+
     fn span(&self) -> Span {
         self.tokens[self.pos].span
     }
@@ -773,6 +777,14 @@ impl Parser {
                     self.bump(); // builder name
                     return self.parse_ce(builder, start);
                 }
+                // A user builder: an uppercase (module) name immediately before a
+                // `{` whose first token starts a CE item. The CE-keyword lookahead
+                // distinguishes `Maybe { let! … }` (a CE) from `Some { x = 1 }`
+                // (a constructor applied to a record literal).
+                if is_upper(&name) && *self.peek2() == Tok::LBrace && starts_ce_item(self.peek3()) {
+                    self.bump(); // builder name
+                    return self.parse_ce(CeBuilder::User(name), start);
+                }
                 self.bump();
                 ExprKind::Var(name)
             }
@@ -1120,6 +1132,13 @@ fn starts_atom_pattern(tok: &Tok) -> bool {
             | Tok::LParen
             | Tok::LBrace
     )
+}
+
+/// Does this token begin a computation-expression item (`let`/`let!`, `do!`,
+/// `return`/`return!`, `yield`/`yield!`)? Used to tell a user CE (`Maybe { let!
+/// … }`) from a constructor applied to a record (`Some { x = 1 }`).
+fn starts_ce_item(tok: &Tok) -> bool {
+    matches!(tok, Tok::Let | Tok::Return | Tok::Yield | Tok::Do)
 }
 
 fn starts_type_atom(tok: &Tok) -> bool {

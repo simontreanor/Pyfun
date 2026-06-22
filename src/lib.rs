@@ -8,6 +8,7 @@
 //! pretty-printer ([`ast`]) drives the parse→print→parse roundtrip tests.
 
 pub mod ast;
+pub mod desugar;
 pub mod diagnostics;
 pub mod lexer;
 pub mod lowering;

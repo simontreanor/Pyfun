@@ -87,10 +87,16 @@ const PROGRAMS: &[&str] = &[
     "let m = [[1, 2], [3, 4]]",
     "let c = [a + 1, f b, x]",
     "let mapped = map f [1, 2, 3]",
-    // Computation expressions.
+    // Computation expressions (built-in builders).
     "let a = seq { yield 1 yield! xs }",
     "let a = result { let! x = m return x }",
     "let a = async { let! x = m do! n return! r }",
+    // User-defined CE builders (an uppercase module name before `{`). The CE-item
+    // lookahead keeps `Some { x = 1 }` (a record argument) parsing as application.
+    "let a = Maybe { let! x = m return x }",
+    "let a = Build { yield 1 yield 2 }",
+    "let a = M { let x = 1 do! e return! r }",
+    "let a = Some { x = 1 }",
     // Units of measure.
     "measure m",
     "measure m\nmeasure s\nlet speed = 100<m> / 10<s>",

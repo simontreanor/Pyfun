@@ -255,6 +255,68 @@ fn rejects_seq_with_return() {
     );
 }
 
+// ---------- user-defined CE builders ----------
+
+const MAYBE_BUILDER: &str = "module Maybe =\n\
+    \x20 let bind m f = match m with | Some x -> f x | None -> None\n\
+    \x20 let return_ x = Some x\n\
+    \x20 let returnFrom m = m\n";
+
+#[test]
+fn accepts_user_monad_ce() {
+    let src = format!(
+        "{MAYBE_BUILDER}\
+         let safe a b =\n\
+         \x20 Maybe {{\n\
+         \x20 \x20 let! x = a\n\
+         \x20 \x20 let! y = b\n\
+         \x20 \x20 return x + y\n\
+         \x20 }}"
+    );
+    assert!(pyfun::check(&src).is_ok(), "{:?}", pyfun::check(&src).err());
+}
+
+#[test]
+fn user_ce_threads_types_through_bind() {
+    // `bind`/`return_` pin the result type: `safe : Option int -> Option int -> Option int`.
+    let src = format!(
+        "{MAYBE_BUILDER}\
+         let safe a b =\n\
+         \x20 Maybe {{\n\
+         \x20 \x20 let! x = a\n\
+         \x20 \x20 return x + 1\n\
+         \x20 }}\n\
+         let bad = safe (Some true) None"
+    );
+    // `x + 1` forces `x : int`, so `Some true` is a type error.
+    assert_error_contains(&src, "int");
+}
+
+#[test]
+fn rejects_user_ce_missing_builder_member() {
+    let src = "module Bad =\n\
+        \x20 let return_ x = Some x\n\
+        let r =\n\
+        \x20 Bad {\n\
+        \x20 \x20 let! x = Some 1\n\
+        \x20 \x20 return x\n\
+        \x20 }";
+    assert_error_contains(src, "`bind` is not a member of `Bad`");
+}
+
+#[test]
+fn rejects_user_ce_return_before_end() {
+    let src = format!(
+        "{MAYBE_BUILDER}\
+         let r =\n\
+         \x20 Maybe {{\n\
+         \x20 \x20 return 1\n\
+         \x20 \x20 return 2\n\
+         \x20 }}"
+    );
+    assert_error_contains(&src, "must be the final item");
+}
+
 #[test]
 fn rejects_binding_wrong_monad() {
     // `let!` in an async block must bind an Async, not a Seq.
