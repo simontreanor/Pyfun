@@ -22,6 +22,34 @@ client only launches it and wires up document sync.
 All of the above run over **resilient analysis**: the lexer and parser both
 recover, so a half-typed file still hovers, navigates, and completes.
 
+## Install (to just use it)
+
+If you only want the extension working in your editor — not to hack on the
+client — build a `.vsix` and install it. This is more reliable than the F5
+dev-host flow below.
+
+```bash
+cargo build                      # produces target/debug/pyfun(.exe) — the server
+cd editors/vscode
+npm install
+npx @vscode/vsce package         # produces pyfun-<version>.vsix
+```
+
+Then install with the CLI of the VS Code variant you actually run — use
+`code-insiders` for Insiders, `code` for stable. **Use the `bin/code(.cmd)` CLI
+wrapper, not the GUI `code.exe`** (the latter just launches the app instead of
+installing). A raw folder copy into the extensions directory does **not** work:
+VS Code only loads extensions registered in its `extensions/extensions.json`
+manifest, which `--install-extension` updates.
+
+```bash
+code-insiders --install-extension pyfun-0.0.1.vsix --force
+```
+
+Point the extension at the built server via a setting (see below), then reload
+the window. An already-running window won't pick up a newly installed extension
+until **Developer: Reload Window**.
+
 ## Setup (development)
 
 The extension shells out to a `pyfun` executable. From the repo root:

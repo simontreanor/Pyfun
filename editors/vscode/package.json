@@ -4,7 +4,11 @@
   "description": "Pyfun language support: inline diagnostics and hover-for-type, backed by `pyfun lsp`.",
   "version": "0.0.1",
   "publisher": "pyfun",
-  "license": "SEE LICENSE IN ../../LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simontreanor/Pyfun.git",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
