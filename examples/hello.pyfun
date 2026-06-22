@@ -187,6 +187,14 @@ let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 let ada = Option.withDefault 0 (Map.tryFind "ada" scores)   # 10
 let nobody = Option.withDefault 0 (Map.tryFind "x" scores)  # 0
 
+# `List.zip` pairs two lists into a list of tuples; `Map.ofList` builds a map from
+# that pair list (and `Map.toList` is its inverse) — both ride on tuples.
+let names = ["ada", "alan"]
+let ages = [36, 41]
+let byName = Map.ofList (List.zip names ages)
+let adaAge = Option.withDefault 0 (Map.tryFind "ada" byName)  # 36
+let entries = Map.toList byName               # [("ada", 36), ("alan", 41)]
+
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
 #   pyfun run examples/hello.pyfun
 # Consecutive `print` statements are separated by Pyfun's offside rule (a line
@@ -249,6 +257,8 @@ print count                           # 5
 print (Set.len uniq)                  # 3
 print ada                             # 10
 print nobody                          # 0
+print adaAge                          # 36   (zip -> Map.ofList -> tryFind)
+print entries                         # [('ada', 36), ('alan', 41)]
 
 # In-file module members.
 print floorArea                       # 20

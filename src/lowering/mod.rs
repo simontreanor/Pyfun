@@ -839,6 +839,7 @@ impl Lowerer {
             }
             "List.rev" => list(self, "_pf_rev"),
             "List.range" => list(self, "_pf_range"),
+            "List.zip" => list(self, "_pf_zip"),
             // Set
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
@@ -863,6 +864,9 @@ impl Lowerer {
             }
             "Map.keys" => coll(self, "_pf_map_keys"),
             "Map.values" => coll(self, "_pf_map_values"),
+            // `dict([(k, v), ...])` builds straight from a list of pair tuples.
+            "Map.ofList" => bare("dict"),
+            "Map.toList" => coll(self, "_pf_map_to_list"),
             // Option (helpers construct `Some`/`None`, so flag the Option prelude)
             "Option.map" => {
                 self.needs_option = true;
@@ -1417,6 +1421,12 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["lo", "hi"],
                 call("list", vec![call("range", vec![name("lo"), name("hi")])]),
             ),
+            // _pf_zip(xs, ys) -> list(zip(xs, ys))  (a list of (x, y) tuples)
+            "_pf_zip" => def(
+                "_pf_zip",
+                &["xs", "ys"],
+                call("list", vec![call("zip", vec![name("xs"), name("ys")])]),
+            ),
             other => unreachable!("unknown list helper {other}"),
         })
         .collect()
@@ -1570,6 +1580,12 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 helper,
                 &["m"],
                 call("list", vec![method(name("m"), "values", vec![])]),
+            ),
+            // Map.toList(m) -> list(m.items())  (a list of (k, v) tuples)
+            "_pf_map_to_list" => def1(
+                helper,
+                &["m"],
+                call("list", vec![method(name("m"), "items", vec![])]),
             ),
             // Option.map(f, o) -> Some(f(o._0)) if isinstance(o, Some) else None_()
             "_pf_option_map" => def(

@@ -165,6 +165,35 @@ fn try_find_lowers_to_an_option_and_pulls_in_the_option_prelude() {
 }
 
 #[test]
+fn list_zip_lowers_to_a_zip_helper() {
+    let py = pyfun::compile("let ps = List.zip [1, 2] [3, 4]").unwrap();
+    assert!(py.contains("def _pf_zip(xs, ys):"), "{py}");
+    assert!(py.contains("return list(zip(xs, ys))"), "{py}");
+}
+
+#[test]
+fn map_of_list_lowers_to_dict_and_to_list_to_items() {
+    // `Map.ofList` is a bare `dict` over the pair list; `Map.toList` is a helper.
+    let py = pyfun::compile("let m = Map.ofList [(1, 2)]\nlet ps = Map.toList m").unwrap();
+    assert!(py.contains("m = dict([(1, 2)])"), "{py}");
+    assert!(py.contains("def _pf_map_to_list(m):"), "{py}");
+    assert!(py.contains("return list(m.items())"), "{py}");
+}
+
+#[test]
+fn e2e_zip_into_a_map_and_back() {
+    run_and_check(
+        "
+        let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])
+        let a = Option.withDefault 0 (Map.tryFind \"a\" m)
+        let n = Map.len m
+        let pairs = Map.toList m
+        ",
+        &[("a", "1"), ("n", "2"), ("pairs", "[('a', 1), ('b', 2)]")],
+    );
+}
+
+#[test]
 fn unused_collection_helpers_are_not_emitted() {
     let py = pyfun::compile("let s = Set.empty").unwrap();
     assert!(!py.contains("_pf_"), "{py}");

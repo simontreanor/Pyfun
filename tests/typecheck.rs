@@ -1024,6 +1024,31 @@ fn accepts_map_functions() {
 }
 
 #[test]
+fn list_zip_pairs_elements_into_tuples() {
+    // `List.zip : List a -> List b -> List (a, b)`. Destructuring a zipped pair
+    // recovers both element types.
+    let src = "let ps = List.zip [1, 2] [\"a\", \"b\"]\n\
+               let firsts = List.map (fun p -> match p with | (n, s) -> n) ps\n\
+               let total = List.sum firsts";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn map_of_list_and_to_list_round_trip_through_pairs() {
+    // `Map.ofList : List (k, v) -> Map k v` and `Map.toList` its inverse.
+    let src = "let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])\n\
+               let v = Option.withDefault 0 (Map.tryFind \"a\" m)\n\
+               let pairs = Map.toList m";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_map_of_list_from_a_non_pair_list() {
+    // `Map.ofList` needs a list of pairs, not a list of ints.
+    assert_error_contains("let bad = Map.ofList [1, 2, 3]", "found int");
+}
+
+#[test]
 fn set_element_type_is_enforced() {
     // `Set.add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
     assert_error_contains(

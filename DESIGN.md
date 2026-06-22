@@ -206,7 +206,7 @@ like Pyfun records and tuples). The big-O is Python's, *not*
 F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). So the
 linked-list idioms (`cons`/`head`/`tail`, `match`-on-cons) are a poor fit and are deferred along with
 list patterns; the bulk operations are the API. The list operations are
-`List.map`/`List.filter`/`List.fold`/`List.len`/`List.sum`/`List.rev`/`List.range` — **module-
+`List.map`/`List.filter`/`List.fold`/`List.len`/`List.sum`/`List.rev`/`List.range`/`List.zip` — **module-
 qualified** (see *Built-in modules* below), single source of truth `types::LIST_PRELUDE` +
 `seed_list_prelude`. `List.len`/`List.sum` map name-for-name onto the Python builtins; the rest lower
 to small **emitted helpers** (`_pf_map` = `list(map(...))`, `_pf_fold` = `functools.reduce(...)`, etc.)
@@ -231,8 +231,9 @@ tuples** (`PyExpr::Tuple` → `(a, b)`; `Pattern::Tuple` → a sequence pattern 
 `PyPattern::Sequence`). A tuple is a **single-constructor** type, so a tuple pattern of variables is
 exhaustive on its own, and **deep exhaustiveness recurses into the element columns** (`Tag::Tuple(arity)`
 in the Maranget matrix), reporting witnesses like `` `(false, _)` is not matched ``. Tuples unblock
-multi-value return and pair lists; the stdlib follow-ons that need them (`Map.ofList`/`toList`,
-`List.zip`) are not yet added.
+multi-value return and pair lists; the stdlib follow-ons that need them — `List.zip : List a -> List b ->
+List (a, b)` and `Map.ofList`/`Map.toList` (to/from a `List (k, v)`) — have landed (see the list and map
+sections above).
 
 **Sets and maps — the hashed collections (implemented).** `Set a` and `Map k v` are built-in types
 that **lower to a Python `set` / `dict`**. They have **no literal syntax** (`{…}` is already records
@@ -248,9 +249,10 @@ to `set()`/`dict()`; the rest lower to small **emitted helpers** (`_pf_set_add` 
 `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) so the curried function is one callable (partial
 application → `functools.partial`). The collections are **immutable-style**: every operation returns a
 fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
-`Map.tryFind key m : Option v` is the optional form. There is **no `Map.ofList`** yet (tuples now exist,
-so a `(k, v)` pair list is expressible — the conversion functions are a pending follow-on; build with
-`Map.empty` + `Map.add` today). Element/key types are **unconstrained polymorphic**
+`Map.tryFind key m : Option v` is the optional form. `Map.ofList : List (k, v) -> Map k v` and
+`Map.toList : Map k v -> List (k, v)` convert to/from a list of key/value **tuples** (`Map.ofList` lowers
+to a bare `dict(pairs)`; `Map.toList` to `list(m.items())`), mirroring `Set.ofList`/`toList`. Element/key
+types are **unconstrained polymorphic**
 but must be **hashable at runtime** — Pyfun primitives are, and ADT/record values are too: generated
 classes get a structural `__hash__` (a tuple of the type and field values, consistent with the
 structural `__eq__`), so `Set Color` and `Map (Point) v` work and equal values collapse. A field that

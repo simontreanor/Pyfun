@@ -175,7 +175,9 @@ needed **no parser change**: `Module.member` reuses the field-access node, disam
 (`Upper.x` = module member, `lower.x` = field access) and resolved in the checker + lowering via
 `types::qualified_name`. Single source of truth `MODULES` + `MODULE_PRELUDES`. `List.map`/`filter`/`fold`
 and `Option.map` are **effect-polymorphic**; `Map.tryFind` returns `Option`; `Map.findOr` is a total
-`dict.get`. Lists keep `[1,2,3]` literals; the hashed collections have no literals (`{…}` is taken) and
+`dict.get`. `List.zip : List a -> List b -> List (a, b)` and `Map.ofList`/`Map.toList` (to/from a
+`List (k, v)`) bridge through **tuples**. Lists keep `[1,2,3]` literals; the hashed collections have no
+literals (`{…}` is taken) and
 no constructors. Keys/elements must be hashable at runtime — primitives and ADT/record values both are
 (generated structural `__hash__`). `cons`/`head`/
 `tail` + list patterns deferred; the lazy counterpart is the `seq {}` CE. Covered by
@@ -250,9 +252,9 @@ The general FFI surface (`extern`) and the eager `List` collection (both #9), an
 resilient, cached analysis + a VS Code client) are now done. Remaining, in rough priority:
 
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
-   modules + ADT/record `__hash__` + **tuples** landed; remaining: the full *file-based* module system
-   (multi-file, `import`, resolver, multi-file LSP), and the tuple-enabled stdlib follow-ons
-   (`Map.ofList`/`toList`, `List.zip`). `Array` deferred as redundant with `List`.
+   modules + ADT/record `__hash__` + **tuples** + the tuple-enabled stdlib (`List.zip`,
+   `Map.ofList`/`toList`) landed; remaining: the full *file-based* module system (multi-file, `import`,
+   resolver, multi-file LSP). `Array` deferred as redundant with `List`.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

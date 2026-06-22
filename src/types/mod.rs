@@ -297,6 +297,7 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("sum", 1),
     ("rev", 1),
     ("range", 2),
+    ("zip", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -325,8 +326,9 @@ pub const SET_PRELUDE: &[(&str, usize)] = &[
 /// truth shared with [`seed_map_prelude`] + lowering, all pure. Keys must be
 /// hashable at runtime. `Map.findOr key default m` is a total lookup with a
 /// fallback (`dict.get`); `Map.tryFind key m : Option v` is the optional form.
-/// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). No `Map.ofList`
-/// (Pyfun has no tuples to express a pair list); build with `Map.empty` + `Map.add`.
+/// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). `Map.ofList`/
+/// `Map.toList` convert to/from a `List (k, v)` of key/value tuples (now that
+/// tuples exist), mirroring `Set.ofList`/`toList`.
 pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("empty", 0),
     ("add", 3),
@@ -337,6 +339,8 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("len", 1),
     ("keys", 1),
     ("values", 1),
+    ("ofList", 1),
+    ("toList", 1),
 ];
 
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
@@ -1025,6 +1029,20 @@ fn seed_list_prelude(env: &mut Env) {
         "List.range".to_string(),
         mono(vec![], pure_fn(int(), pure_fn(int(), list(int())))),
     );
+    // List.zip : List a -> List b -> List (a, b)   (pure)
+    env.insert(
+        "List.zip".to_string(),
+        mono(
+            vec![0, 1],
+            pure_fn(
+                list(Ty::Var(0)),
+                pure_fn(
+                    list(Ty::Var(1)),
+                    list(Ty::Tuple(vec![Ty::Var(0), Ty::Var(1)])),
+                ),
+            ),
+        ),
+    );
 
     // Effect-polymorphic schemes share one bound effect variable `e` (id 0).
     let e = 0u32;
@@ -1139,6 +1157,10 @@ fn seed_map_prelude(env: &mut Env) {
     put("len", pure_fn(mv(), int()));
     put("keys", pure_fn(mv(), list(k())));
     put("values", pure_fn(mv(), list(v())));
+    // Map.ofList : List (k, v) -> Map k v ; Map.toList : Map k v -> List (k, v)
+    let pair = || list(Ty::Tuple(vec![k(), v()]));
+    put("ofList", pure_fn(pair(), mv()));
+    put("toList", pure_fn(mv(), pair()));
 }
 
 /// Seed the `Option` module ([`OPTION_PRELUDE`]) — combinators over the built-in
