@@ -125,12 +125,73 @@ fn rejects_unknown_constructor() {
 fn rejects_non_exhaustive_adt_match() {
     // `Option` is built-in; matching only `Some` misses `None`.
     let src = "let f o = match o with | Some v -> v";
-    assert_error_contains(src, "non-exhaustive match: missing `None`");
+    assert_error_contains(src, "non-exhaustive match: `None` is not matched");
 }
 
 #[test]
 fn rejects_non_exhaustive_int_match() {
     assert_error_contains("let f n = match n with | 0 -> 1", "add a wildcard");
+}
+
+// ---------- deep (nested) exhaustiveness ----------
+
+#[test]
+fn accepts_deep_exhaustive_nested_adt() {
+    // Covering every nested combination is exhaustive without a wildcard.
+    let src = "let f o =\n\
+               \x20 match o with\n\
+               \x20 | Some true -> 1\n\
+               \x20 | Some false -> 2\n\
+               \x20 | None -> 3";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_deep_exhaustive_record_with_nested_ctors() {
+    // The motivating case: `{ item = Some n } | { item = None }` is complete.
+    let src = "type Box = { item: Option int }\n\
+               let f b =\n\
+               \x20 match b with\n\
+               \x20 | { item = Some n } -> n\n\
+               \x20 | { item = None } -> 0";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn reports_nested_witness_for_missing_inner_constructor() {
+    // Missing `Some false` — the witness names the precise nested hole.
+    assert_error_contains(
+        "let f o =\n\
+         \x20 match o with\n\
+         \x20 | Some true -> 1\n\
+         \x20 | None -> 2",
+        "`Some false` is not matched",
+    );
+}
+
+#[test]
+fn reports_record_witness_for_missing_field_combination() {
+    assert_error_contains(
+        "type P = { x: bool, y: bool }\n\
+         let f p =\n\
+         \x20 match p with\n\
+         \x20 | { x = true, y = true } -> 1\n\
+         \x20 | { x = true, y = false } -> 2\n\
+         \x20 | { x = false, y = true } -> 3",
+        "`{ x = false, y = false }` is not matched",
+    );
+}
+
+#[test]
+fn deep_check_still_requires_wildcard_for_open_inner_type() {
+    // The inner `int` is infinite, so listing some literals isn't exhaustive.
+    assert_error_contains(
+        "let f o =\n\
+         \x20 match o with\n\
+         \x20 | Some 0 -> 1\n\
+         \x20 | None -> 2",
+        "non-exhaustive",
+    );
 }
 
 #[test]

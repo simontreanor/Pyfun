@@ -840,16 +840,35 @@ fn set_innermost_io(ty: &mut Ty) {
     }
 }
 
-/// A pattern is irrefutable (matches every value of its type) when it binds
-/// without testing: a wildcard, a variable, or a record pattern all of whose
-/// field sub-patterns are themselves irrefutable. Such an arm is a catch-all, so
-/// a `match` containing one is exhaustive.
-fn is_irrefutable(pattern: &Pattern) -> bool {
-    match pattern {
-        Pattern::Wildcard | Pattern::Var { .. } => true,
-        Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
-        Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
-    }
+/// A head constructor in the exhaustiveness matrix: a boolean/integer literal, a
+/// sum-type constructor, or a record type (its single implicit constructor).
+#[derive(Clone, PartialEq)]
+enum Tag {
+    Bool(bool),
+    Int(i64),
+    Sum(String),
+    Record(String),
+}
+
+/// A witness value produced when a `match` is non-exhaustive — a constructor
+/// applied to sub-witnesses, or `_` for "any value". Rendered into the diagnostic.
+#[derive(Clone)]
+enum Wit {
+    Wild,
+    Con(Tag, Vec<Wit>),
+}
+
+/// The default matrix: rows whose first column is a wildcard/variable, with that
+/// column dropped. Used when the present constructors don't cover the type, so a
+/// wildcard could match an absent constructor and only the catch-all rows remain.
+fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
+    matrix
+        .iter()
+        .filter_map(|row| {
+            let (head, rest) = row.split_first().expect("non-empty row");
+            matches!(head, Pattern::Wildcard | Pattern::Var { .. }).then(|| rest.to_vec())
+        })
+        .collect()
 }
 
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
@@ -2463,72 +2482,231 @@ impl Infer {
         }
     }
 
-    /// Shallow exhaustiveness: an irrefutable arm covers everything; otherwise the
-    /// head constructor set must be complete for the scrutinee's type.
+    /// Deep exhaustiveness via Maranget's usefulness algorithm ("Warnings for
+    /// pattern matching", JFP 2007). A `match` is exhaustive iff a wildcard row is
+    /// *not* useful against the matrix of arm patterns — i.e. there is no value the
+    /// wildcard would catch that no arm already does. The check recurses into
+    /// nested sub-patterns, so e.g. `{ item = Some n } | { item = None }` is
+    /// recognized as complete. When it isn't, the algorithm yields a concrete
+    /// witness value (`Some _`, `None`, `{ x = 0, y = _ }`, …) for the diagnostic.
     fn check_exhaustive(
-        &self,
+        &mut self,
         scrut_ty: &Ty,
         arms: &[MatchArm],
         span: Span,
     ) -> Result<(), TypeError> {
-        if arms.iter().any(|a| is_irrefutable(&a.pattern)) {
+        let matrix: Vec<Vec<Pattern>> = arms.iter().map(|a| vec![a.pattern.clone()]).collect();
+        let types = vec![self.apply(scrut_ty)];
+        let Some(witness) = self.useful(&matrix, &types) else {
             return Ok(());
+        };
+        let pat = self.render_witness(&witness[0], false);
+        let message = if pat == "_" {
+            "non-exhaustive match: add a wildcard `_` arm".to_string()
+        } else {
+            format!("non-exhaustive match: `{pat}` is not matched")
+        };
+        Err(TypeError { message, span })
+    }
+
+    /// Is a wildcard row useful against `matrix` over the column `types`? `Some`
+    /// returns a witness row (one [`Wit`] per column) exposing an uncovered value;
+    /// `None` means every value is already matched. Each matrix row has the same
+    /// width as `types`.
+    fn useful(&mut self, matrix: &[Vec<Pattern>], types: &[Ty]) -> Option<Vec<Wit>> {
+        if types.is_empty() {
+            // Width 0: a wildcard row is useful only when no arm row remains.
+            return matrix.is_empty().then(Vec::new);
         }
-        let missing = match self.apply(scrut_ty) {
-            Ty::Bool => {
-                let mut has_true = false;
-                let mut has_false = false;
-                for arm in arms {
-                    if let Pattern::Bool(b) = arm.pattern {
-                        if b {
-                            has_true = true;
-                        } else {
-                            has_false = true;
-                        }
+        let col_ty = self.apply(&types[0]);
+        let rest = &types[1..];
+        let present = self.present_tags(matrix);
+        let full_sig = self.ctor_signature(&col_ty);
+        let complete = full_sig
+            .as_ref()
+            .is_some_and(|sig| sig.iter().all(|t| present.contains(t)));
+
+        if complete {
+            // The column's constructors are all present: a wildcard is useful only
+            // if some constructor specializes to a useful sub-problem.
+            for tag in full_sig.unwrap() {
+                let arg_tys = self.tag_field_types(&col_ty, &tag);
+                let arity = arg_tys.len();
+                let spec = self.specialize(matrix, &tag, arity);
+                let mut sub_types = arg_tys;
+                sub_types.extend_from_slice(rest);
+                if let Some(mut w) = self.useful(&spec, &sub_types) {
+                    let tail = w.split_off(arity);
+                    let mut row = vec![Wit::Con(tag, w)];
+                    row.extend(tail);
+                    return Some(row);
+                }
+            }
+            None
+        } else {
+            // The signature is incomplete (or the type is infinite): a wildcard can
+            // pick an absent constructor, so only the default rows matter.
+            let def = default_matrix(matrix);
+            let w = self.useful(&def, rest)?;
+            let head = match &full_sig {
+                Some(sig) => match sig.iter().find(|t| !present.contains(t)) {
+                    Some(tag) => Wit::Con(tag.clone(), vec![Wit::Wild; self.tag_arity(tag)]),
+                    None => Wit::Wild,
+                },
+                None => Wit::Wild,
+            };
+            let mut row = vec![head];
+            row.extend(w);
+            Some(row)
+        }
+    }
+
+    /// The distinct head constructors appearing in a matrix's first column.
+    fn present_tags(&self, matrix: &[Vec<Pattern>]) -> Vec<Tag> {
+        let mut out: Vec<Tag> = Vec::new();
+        for row in matrix {
+            if let Some(tag) = row.first().and_then(|p| self.pattern_tag(p))
+                && !out.contains(&tag)
+            {
+                out.push(tag);
+            }
+        }
+        out
+    }
+
+    /// The head constructor of a pattern, or `None` for a wildcard/variable.
+    fn pattern_tag(&self, pat: &Pattern) -> Option<Tag> {
+        match pat {
+            Pattern::Wildcard | Pattern::Var { .. } => None,
+            Pattern::Bool(b) => Some(Tag::Bool(*b)),
+            Pattern::Int(n) => Some(Tag::Int(*n)),
+            Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
+            Pattern::Record { fields } => self
+                .decls
+                .field_owner
+                .get(&fields[0].name)
+                .map(|owner| Tag::Record(owner.clone())),
+        }
+    }
+
+    /// The complete set of constructors for a column type, or `None` when the type
+    /// is infinite (`int`/`string`/…) or has no matchable constructors — in which
+    /// case only a wildcard can be exhaustive.
+    fn ctor_signature(&self, ty: &Ty) -> Option<Vec<Tag>> {
+        match ty {
+            Ty::Bool => Some(vec![Tag::Bool(true), Tag::Bool(false)]),
+            Ty::Con(name, _) => {
+                if let Some(ctors) = self.decls.type_ctors.get(name) {
+                    (!ctors.is_empty()).then(|| ctors.iter().map(|c| Tag::Sum(c.clone())).collect())
+                } else {
+                    self.decls
+                        .records
+                        .contains_key(name)
+                        .then(|| vec![Tag::Record(name.clone())])
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// The number of sub-patterns a constructor binds (its arity).
+    fn tag_arity(&self, tag: &Tag) -> usize {
+        match tag {
+            Tag::Bool(_) | Tag::Int(_) => 0,
+            Tag::Sum(name) => self.decls.ctors[name].arity,
+            Tag::Record(name) => self.decls.records[name].fields.len(),
+        }
+    }
+
+    /// The types of a constructor's arguments at the given column type (its type
+    /// parameters pinned by unifying the constructor's result with the column).
+    fn tag_field_types(&mut self, ty: &Ty, tag: &Tag) -> Vec<Ty> {
+        match tag {
+            Tag::Bool(_) | Tag::Int(_) => Vec::new(),
+            Tag::Sum(name) => {
+                let info = self.decls.ctors[name].clone();
+                let cty = self.instantiate(&info.scheme);
+                let (fields, result) = split_fun(&cty, info.arity);
+                let _ = self.unify(&result, ty, Span::new(0, 0));
+                fields.iter().map(|f| self.apply(f)).collect()
+            }
+            Tag::Record(name) => {
+                let (record_ty, fields) = self.instantiate_record(name);
+                let _ = self.unify(&record_ty, ty, Span::new(0, 0));
+                fields.iter().map(|(_, t)| self.apply(t)).collect()
+            }
+        }
+    }
+
+    /// Specialize a matrix by a constructor `tag` of the given `arity`: rows headed
+    /// by `tag` keep their sub-patterns (records expand to all fields positionally,
+    /// absent ones as wildcards); wildcard rows expand to `arity` wildcards; rows
+    /// headed by another constructor are dropped. The first column is replaced by
+    /// the `arity` new columns.
+    fn specialize(&self, matrix: &[Vec<Pattern>], tag: &Tag, arity: usize) -> Vec<Vec<Pattern>> {
+        let mut out = Vec::new();
+        for row in matrix {
+            let (head, rest) = row.split_first().expect("non-empty row");
+            if let Some(mut expanded) = self.row_head(head, tag, arity) {
+                expanded.extend_from_slice(rest);
+                out.push(expanded);
+            }
+        }
+        out
+    }
+
+    /// The sub-patterns a row's head contributes when specializing by `tag`, or
+    /// `None` if the head is a different constructor (the row drops out).
+    fn row_head(&self, pat: &Pattern, tag: &Tag, arity: usize) -> Option<Vec<Pattern>> {
+        match pat {
+            Pattern::Wildcard | Pattern::Var { .. } => Some(vec![Pattern::Wildcard; arity]),
+            Pattern::Bool(b) => (*tag == Tag::Bool(*b)).then(Vec::new),
+            Pattern::Int(n) => (*tag == Tag::Int(*n)).then(Vec::new),
+            Pattern::Ctor { name, args } => (*tag == Tag::Sum(name.clone())).then(|| args.clone()),
+            Pattern::Record { fields } => {
+                let Tag::Record(rname) = tag else { return None };
+                let order = &self.decls.records[rname].fields;
+                let mut slots = vec![Pattern::Wildcard; order.len()];
+                for fp in fields {
+                    if let Some(idx) = order.iter().position(|(n, _)| n == &fp.name) {
+                        slots[idx] = fp.pattern.clone();
                     }
                 }
-                let mut miss = Vec::new();
-                if !has_true {
-                    miss.push("true".to_string());
+                Some(slots)
+            }
+        }
+    }
+
+    /// Render a witness value as a Pyfun pattern for a diagnostic. `atom` requests
+    /// parenthesization where a constructor application would bind too loosely.
+    fn render_witness(&self, w: &Wit, atom: bool) -> String {
+        match w {
+            Wit::Wild => "_".to_string(),
+            Wit::Con(Tag::Bool(b), _) => b.to_string(),
+            Wit::Con(Tag::Int(n), _) => n.to_string(),
+            Wit::Con(Tag::Sum(name), args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let inner = args
+                        .iter()
+                        .map(|a| self.render_witness(a, true))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let s = format!("{name} {inner}");
+                    if atom { format!("({s})") } else { s }
                 }
-                if !has_false {
-                    miss.push("false".to_string());
-                }
-                miss
             }
-            Ty::Con(name, _) if self.decls.type_ctors.contains_key(&name) => {
-                let covered: HashSet<&str> = arms
+            Wit::Con(Tag::Record(name), args) => {
+                let order = &self.decls.records[name].fields;
+                let parts = order
                     .iter()
-                    .filter_map(|a| match &a.pattern {
-                        Pattern::Ctor { name, .. } => Some(name.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-                self.decls.type_ctors[&name]
-                    .iter()
-                    .filter(|c| !covered.contains(c.as_str()))
-                    .cloned()
-                    .collect()
+                    .zip(args)
+                    .map(|((f, _), a)| format!("{f} = {}", self.render_witness(a, false)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{{ {parts} }}")
             }
-            _ => {
-                return Err(TypeError {
-                    message: "non-exhaustive match: add a wildcard `_` arm".to_string(),
-                    span,
-                });
-            }
-        };
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            let names = missing
-                .iter()
-                .map(|m| format!("`{m}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(TypeError {
-                message: format!("non-exhaustive match: missing {names}"),
-                span,
-            })
         }
     }
 

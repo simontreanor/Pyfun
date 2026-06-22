@@ -361,6 +361,24 @@ fn e2e_nested_record_and_constructor_pattern() {
 }
 
 #[test]
+fn e2e_deep_exhaustive_match_without_wildcard() {
+    // Deep exhaustiveness accepts this (every nested case covered), and it runs.
+    run_and_check(
+        "
+        let f o =
+          match o with
+          | Some true -> 1
+          | Some false -> 2
+          | None -> 3
+        let a = f (Some true)
+        let b = f (Some false)
+        let c = f None
+        ",
+        &[("a", "1"), ("b", "2"), ("c", "3")],
+    );
+}
+
+#[test]
 fn block_body_lowers_to_statement_sequence() {
     let py = pyfun::compile(
         "let sum3 a b c =\n    let mut acc = 0\n    acc <- acc + a\n    acc <- acc + b\n    acc",

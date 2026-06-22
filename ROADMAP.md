@@ -103,12 +103,13 @@ b` gets parens). Covered across lexer/parser/typecheck/compile/roundtrip tests.
 
 ## Polish on existing features
 
-### 5. Deep exhaustiveness
-Current match exhaustiveness is *shallow* — it checks only the top-level constructor set, so
-`match o with | Some (Some x) -> … | None -> …` is accepted even though `Some None` is unhandled
-(the runtime guard catches it). Deep exhaustiveness analyzes nested patterns fully.
-- **Effort/risk:** Medium; the classic usefulness-of-pattern-matrices algorithm. Pure checker work,
-  no new syntax.
+### 5. Deep exhaustiveness — DONE
+Match exhaustiveness now analyzes nested patterns fully via Maranget's usefulness algorithm
+(`check_exhaustive`: matrix `useful` + `specialize`/`default_matrix` in `src/types/`), replacing the
+old shallow head-constructor scan. `Some true | Some false | None` and `{ item = Some n } | { item =
+None }` are recognized as complete without a `_`; a non-exhaustive `match` reports a concrete witness
+(`` `None` ``, `` `Some false` ``, `` `{ x = _, y = true }` ``). Infinite types (`int`/`string`) and
+unmatchable `Con`s still need a wildcard. Lowering keeps its defensive `case _: raise` guard.
 
 ### 6. User-defined computation expressions
 Today `async`/`seq`/`result` are the only builders, hard-coded. F#'s real power is letting *users*
@@ -232,9 +233,10 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
    modules + ADT/record `__hash__` landed; remaining: the full *file-based* module system (multi-file,
    `import`, resolver, multi-file LSP). `Array` deferred as redundant with `List`.
-2. **#5–#7** — lower-stakes polish (deep exhaustiveness, user CE builders, derived measures), plus
-   the #2/#3 follow-ups (record patterns **landed** — `{ x = 0, y } ->`, subset fields, keyword
-   class-pattern lowering, irrefutable-catch-all exhaustiveness; remaining: blocks in `match`/`if`
-   arms; list patterns + `cons`/`head`/`tail` once a representation that honors their big-O is chosen).
+2. **#5–#7** — lower-stakes polish (deep exhaustiveness **landed** — full Maranget usefulness with
+   witnesses; remaining: user CE builders, derived measures), plus the #2/#3 follow-ups (record
+   patterns **landed** — `{ x = 0, y } ->`, subset fields, keyword class-pattern lowering; remaining:
+   blocks in `match`/`if` arms; list patterns + `cons`/`head`/`tail` once a representation that honors
+   their big-O is chosen).
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.

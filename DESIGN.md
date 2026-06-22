@@ -522,8 +522,14 @@ Decisions (all ✅ implemented):
 pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. The owning record type is
 resolved from the (globally unique) field names, so a pattern may name a **subset** of fields (omitted
 fields go unmatched). They lower to Python keyword class patterns (`case Point(x=0, y=y):`). A record
-pattern whose fields are all irrefutable acts as a catch-all for exhaustiveness; refutable ones still
-need a `_` (the exhaustiveness check is shallow).
+pattern whose fields are all irrefutable acts as a catch-all for exhaustiveness.
+
+**Exhaustiveness is deep.** The checker uses Maranget's usefulness algorithm (matrix specialization),
+not a top-level constructor scan, so it recurses into nested patterns: `Some true | Some false | None`
+and `{ item = Some n } | { item = None }` are recognized as complete without a `_`. When a `match` is
+non-exhaustive it reports a concrete witness — `` `None` ``, `` `Some false` ``, `` `{ x = _, y = true
+} ` `` — naming an uncovered value. Infinite types (`int`, `string`) and types without matchable
+constructors are exhaustive only via a wildcard arm.
 
 Deferred: derived ordering on records, and lifting the unique-field-name restriction.
 
