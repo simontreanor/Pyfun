@@ -378,16 +378,26 @@ generalizes against an env of closed schemes, so its own scheme is closed (no fr
 the `ModuleExports` map through the topological order, seeding each module from only the modules it
 actually imports (so an unimported module's members stay invisible), and returns errors grouped by module.
 
-**Output & the shared runtime.** Each module lowers independently to its own `.py`; a cross-module
-`Geometry.area` emits `geometry.area` (attribute access), with `import geometry` hoisted to the file
-header. **One correctness constraint forces a shared runtime module:** the built-in `Option`/`Result`
+**Output & the shared runtime** (landed — slice 4, `lowering::lower_in_project` + `project::compile`).
+Each module lowers independently to its own `.py`; a cross-module `Geometry.area` emits `geometry.area`
+(attribute access), with `import geometry` hoisted to the file header (reusing the lowerer's
+`needed_imports` set), and imported members keep **un-mangled** names (a file module is lowered as an
+ordinary top-level program — the `Geometry_area` mangling is only for *in-file* `module` declarations).
+**One correctness constraint forces a shared runtime module:** the built-in `Option`/`Result`
 constructors lower to *nominal* Python classes (`Some`/`None_`/`Ok`/`Error`); if each file defined its
-own, an `Option` value crossing a module boundary would fail the receiver's `isinstance` checks. So those
-classes are hoisted into a generated **`_pyfun_rt.py`** that every module imports (`from _pyfun_rt import
-Some, None_, Ok, Error`). `List`/`Set`/`Map`/tuples need no runtime — they are native `list`/`set`/`dict`/
-`tuple`. The pure `_pf_*` helpers may stay per-file for the MVP (duplication is bloat, not bug);
-de-duplicating them into `_pyfun_rt.py` is a follow-on. **Single-file `compile`/`run` output is
-unchanged** (classes still inlined) — the runtime module appears only for a multi-file program.
+own, an `Option` value crossing a module boundary would fail the receiver's `isinstance`/`match` checks.
+So those classes are hoisted into a generated **`_pyfun_rt.py`** that every module needing them imports
+(`from _pyfun_rt import Some, None_` / `Ok, Error`). `List`/`Set`/`Map`/tuples need no runtime — they are
+native `list`/`set`/`dict`/`tuple`. The pure `_pf_*` helpers stay per-file for the MVP (duplication is
+bloat, not bug); de-duplicating them into `_pyfun_rt.py` is a follow-on. **Single-file `compile`/`run`
+output is unchanged** (`lowering::lower` still inlines the classes) — the runtime module appears only for
+a multi-file program, and only when some module actually uses `Option`/`Result`. *Implementation:* the
+`Lowerer` gained an `imported_modules` set (drives the `geometry.area` routing) and a `use_runtime` flag
+(emit `from _pyfun_rt import …` vs inline); `lower_in_project(module, ctx)` sets them and threads
+`ctx.member_arities` (the imported functions' arities) into the arity table so a **cross-module partial
+application still lowers to `functools.partial`**. `project::compile` builds each module's `ImportContext`
+from its imports, emits `<name>.py` per module, and appends `_pyfun_rt.py` (via `runtime_module()`) iff
+any module used the nominal classes.
 
 **CLI.** `pyfun {check,compile,run} entry.pyfun` operate over the whole graph: `check` checks all modules;
 `compile -o <dir>` emits the `.py` tree (+ `_pyfun_rt.py`) into `<dir>`; `run` materializes the tree to a
@@ -408,7 +418,8 @@ driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`,
 DFS so the graph logic is filesystem-free and unit-testable; `build_from_path` is the `.pyfun`-file
 wrapper]; (3) cross-module value checking [**done** — `types::check_module` (seeded env + exported
 schemes) + `project::check` over the topo order]; (4) shared
-`_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
+`_pyfun_rt.py` + cross-module lowering + parallel-file emit [**done** — `lowering::lower_in_project` +
+`lowering::runtime_module` + `project::compile`]; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.
 
 ## 7. Surface language (MVP)

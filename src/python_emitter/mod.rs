@@ -14,6 +14,9 @@ pub struct PyModule {
 pub enum PyStmt {
     /// `import <module>`
     Import(String),
+    /// `from <module> import a, b` — used for the shared runtime
+    /// (`from _pyfun_rt import Some, None_`) in multi-file projects.
+    ImportFrom { module: String, names: Vec<String> },
     /// `nonlocal a, b` — declare captured names from an enclosing *function* scope
     /// that this function reassigns.
     Nonlocal(Vec<String>),
@@ -206,6 +209,13 @@ fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
 fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
     match stmt {
         PyStmt::Import(module) => line(out, depth, &format!("import {module}")),
+        PyStmt::ImportFrom { module, names } => {
+            line(
+                out,
+                depth,
+                &format!("from {module} import {}", names.join(", ")),
+            );
+        }
         PyStmt::Nonlocal(names) => line(out, depth, &format!("nonlocal {}", names.join(", "))),
         PyStmt::Global(names) => line(out, depth, &format!("global {}", names.join(", "))),
         PyStmt::Assign { target, value } => {

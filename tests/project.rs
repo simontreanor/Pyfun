@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use pyfun::project::{self, ProjectError};
 
@@ -59,5 +60,186 @@ fn a_missing_imported_file_is_reported() {
             assert_eq!(importer.as_deref(), Some("Main"));
         }
         other => panic!("expected a missing-module error, got {other:?}"),
+    }
+}
+
+// ---------- slice 4: multi-file lowering & emit ----------
+
+/// Build a project from in-memory `(name, source)` files (entry first by
+/// convention) and compile it to its emitted Python files.
+fn compile(entry: &str, files: &[(&str, &str)]) -> Vec<(String, String)> {
+    let owned: Vec<(String, String)> = files
+        .iter()
+        .map(|(n, s)| (n.to_string(), s.to_string()))
+        .collect();
+    let project = project::build(entry, |name| {
+        owned
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, s)| s.clone())
+    })
+    .unwrap();
+    assert!(
+        project::check(&project).is_empty(),
+        "project should type-check"
+    );
+    project::compile(&project).unwrap().files
+}
+
+/// The emitted source of a particular file, or panic.
+fn file<'a>(files: &'a [(String, String)], name: &str) -> &'a str {
+    files
+        .iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, s)| s.as_str())
+        .unwrap_or_else(|| panic!("no emitted file `{name}` in {:?}", names(files)))
+}
+
+fn names(files: &[(String, String)]) -> Vec<&str> {
+    files.iter().map(|(n, _)| n.as_str()).collect()
+}
+
+#[test]
+fn each_module_emits_its_own_file_with_unmangled_names() {
+    let files = compile(
+        "Main",
+        &[
+            ("Main", "import Geometry\nlet floor = Geometry.area 4 5"),
+            ("Geometry", "let area w h = w * h"),
+        ],
+    );
+    assert_eq!(names(&files), ["geometry.py", "main.py"]);
+    // The imported module's top-level names are un-mangled real Python defs.
+    assert!(file(&files, "geometry.py").contains("def area(w, h):"));
+}
+
+#[test]
+fn a_cross_module_call_imports_and_qualifies() {
+    let files = compile(
+        "Main",
+        &[
+            ("Main", "import Geometry\nlet floor = Geometry.area 4 5"),
+            ("Geometry", "let area w h = w * h"),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("import geometry"), "{main}");
+    assert!(main.contains("floor = geometry.area(4, 5)"), "{main}");
+}
+
+#[test]
+fn a_cross_module_partial_application_still_curries() {
+    // Geometry.area's arity is threaded through, so a partial application lowers
+    // to functools.partial rather than a wrong one-arg call.
+    let files = compile(
+        "Main",
+        &[
+            ("Main", "import Geometry\nlet scale = Geometry.area 2"),
+            ("Geometry", "let area w h = w * h"),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(
+        main.contains("scale = functools.partial(geometry.area, 2)"),
+        "{main}"
+    );
+}
+
+#[test]
+fn option_classes_come_from_the_shared_runtime() {
+    // Both the producer and the consumer import Some/None_ from _pyfun_rt, so an
+    // Option value crossing the boundary is one type (isinstance-compatible).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Store\nlet found = Option.isSome (Store.lookup 1)",
+            ),
+            ("Store", "let lookup k = Some k"),
+        ],
+    );
+    assert!(names(&files).contains(&"_pyfun_rt.py"));
+    assert!(file(&files, "store.py").contains("from _pyfun_rt import Some, None_"));
+    assert!(file(&files, "main.py").contains("from _pyfun_rt import Some, None_"));
+    // The classes are defined exactly once, in the runtime.
+    assert!(file(&files, "_pyfun_rt.py").contains("class Some"));
+    assert!(!file(&files, "store.py").contains("class Some"));
+}
+
+#[test]
+fn no_runtime_file_when_no_option_or_result_is_used() {
+    let files = compile(
+        "Main",
+        &[
+            ("Main", "import Geometry\nlet floor = Geometry.area 4 5"),
+            ("Geometry", "let area w h = w * h"),
+        ],
+    );
+    assert!(
+        !names(&files).contains(&"_pyfun_rt.py"),
+        "{:?}",
+        names(&files)
+    );
+}
+
+/// Materialize the compiled files into `dir` and run `python <entry>.py` from
+/// there, returning stdout. Returns `None` if no interpreter is on PATH.
+fn run_project(dir: &Scratch, files: &[(String, String)], entry_py: &str) -> Option<String> {
+    let python = ["python", "python3"]
+        .into_iter()
+        .find(|c| Command::new(c).arg("--version").output().is_ok())?;
+    for (name, source) in files {
+        dir.write(name, source);
+    }
+    let output = Command::new(python)
+        .arg(entry_py)
+        .current_dir(&dir.0)
+        .output()
+        .expect("run python");
+    assert!(
+        output.status.success(),
+        "python failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Some(String::from_utf8(output.stdout).expect("utf-8 stdout"))
+}
+
+#[test]
+fn e2e_runs_a_cross_module_program() {
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Geometry\nlet floor = Geometry.area 4 5\nprint floor",
+            ),
+            ("Geometry", "let area w h = w * h"),
+        ],
+    );
+    let dir = Scratch::new("e2e_cross");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "20");
+    }
+}
+
+#[test]
+fn e2e_an_option_crosses_the_module_boundary() {
+    // The decisive runtime test: an Option built in Store and inspected in Main
+    // must match against the *same* Some class — only possible via the shared
+    // runtime. A per-file class would make `Option.isSome` see a foreign type.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Store\nlet hit = Option.withDefault 0 (Store.lookup 7)\nprint hit",
+            ),
+            ("Store", "let lookup k = Some k"),
+        ],
+    );
+    let dir = Scratch::new("e2e_option");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "7");
     }
 }

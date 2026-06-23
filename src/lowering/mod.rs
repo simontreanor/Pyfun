@@ -22,7 +22,7 @@
 //! synthesize a partial application for an unknown callee. Feeding the type
 //! checker's results in here would make arity fully precise.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::parser::ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module,
@@ -42,10 +42,60 @@ impl std::fmt::Display for LowerError {
     }
 }
 
-/// Lower a whole module to a Python module.
+/// Lower a whole (single-file) module to a Python module — the `Option`/`Result`
+/// classes are inlined, the original behavior.
 pub fn lower(module: &Module) -> Result<PyModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.lower_module(module)
+}
+
+/// Per-module context for multi-file lowering (`DESIGN.md` §6.1): the names of
+/// the file modules this module imports (so `Geometry.area` lowers to Python
+/// `geometry.area` with `import geometry` hoisted) and the arities of their
+/// exported members (so a *partial* application of an imported curried function
+/// still lowers to `functools.partial`).
+#[derive(Default)]
+pub struct ImportContext {
+    /// Imported file-module names (`Geometry`).
+    pub modules: HashSet<String>,
+    /// Qualified member name (`Geometry.area`) → its arity.
+    pub member_arities: HashMap<String, usize>,
+}
+
+/// A module lowered as part of a multi-file project.
+pub struct LoweredModule {
+    pub py: PyModule,
+    /// Whether this module emitted a `from _pyfun_rt import …` (so the driver
+    /// knows the shared runtime file is needed).
+    pub uses_runtime: bool,
+}
+
+/// Lower a module as one node of a multi-file project (`DESIGN.md` §6.1).
+///
+/// Unlike [`lower`], the nominal `Option`/`Result` classes are **not** inlined:
+/// a module that needs them imports them from the shared `_pyfun_rt.py`
+/// ([`runtime_module`]) so that an `Option`/`Result` value crossing a module
+/// boundary stays `isinstance`-compatible. Cross-module references route through
+/// `ctx`.
+pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredModule, LowerError> {
+    let mut lowerer = Lowerer::new(module);
+    lowerer.imported_modules = ctx.modules.clone();
+    lowerer.use_runtime = true;
+    for (name, arity) in &ctx.member_arities {
+        lowerer.arities.entry(name.clone()).or_insert(*arity);
+    }
+    let py = lowerer.lower_module(module)?;
+    let uses_runtime = lowerer.needs_result || lowerer.needs_option;
+    Ok(LoweredModule { py, uses_runtime })
+}
+
+/// The shared runtime module (`_pyfun_rt.py`): the nominal `Ok`/`Error`/`Some`/
+/// `None_` classes every project module imports, so those values are
+/// `isinstance`-compatible across files (`DESIGN.md` §6.1).
+pub fn runtime_module() -> PyModule {
+    let mut body = result_prelude();
+    body.extend(option_prelude());
+    PyModule { body }
 }
 
 struct Lowerer {
@@ -80,6 +130,13 @@ struct Lowerer {
     /// While lowering an in-file `module`, its name + member names, so a bare
     /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
     cur_module: Option<(String, HashSet<String>)>,
+    /// Names of imported *file* modules (`Geometry`), set for multi-file lowering.
+    /// A `Geometry.member` reference routes to Python `geometry.member` (vs the
+    /// `Geometry_member` mangling used for in-file `module` declarations).
+    imported_modules: HashSet<String>,
+    /// Whether to import the nominal `Option`/`Result` classes from the shared
+    /// `_pyfun_rt.py` (multi-file projects) instead of inlining them (single file).
+    use_runtime: bool,
     /// Stack of enclosing *function* scopes (one frame of bound names per nested
     /// function; empty at module level). Used to classify a captured-and-reassigned
     /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
@@ -203,6 +260,8 @@ impl Lowerer {
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             cur_module: None,
+            imported_modules: HashSet::new(),
+            use_runtime: false,
             fn_local_stack: Vec::new(),
             tmp_counter: 0,
             fn_counter: 0,
@@ -283,11 +342,30 @@ impl Lowerer {
         for module in &self.needed_imports {
             body.push(PyStmt::Import(module.clone()));
         }
+        // In a multi-file project the nominal classes live in the shared runtime
+        // (`_pyfun_rt.py`) so they are one type across files; a single file inlines
+        // them as before. Imported *before* the `import geometry` lines below would
+        // also be fine, but grouping the runtime import with the other froms reads
+        // cleanly; emitted after plain `import`s.
         if self.needs_result {
-            body.extend(result_prelude());
+            if self.use_runtime {
+                body.push(PyStmt::ImportFrom {
+                    module: "_pyfun_rt".to_string(),
+                    names: vec!["Ok".to_string(), "Error".to_string()],
+                });
+            } else {
+                body.extend(result_prelude());
+            }
         }
         if self.needs_option {
-            body.extend(option_prelude());
+            if self.use_runtime {
+                body.push(PyStmt::ImportFrom {
+                    module: "_pyfun_rt".to_string(),
+                    names: vec!["Some".to_string(), "None_".to_string()],
+                });
+            } else {
+                body.extend(option_prelude());
+            }
         }
         // List-prelude helpers referenced by the program (deterministic order).
         body.extend(list_prelude(&self.needed_list_helpers));
@@ -934,8 +1012,23 @@ impl Lowerer {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_take")
             }
-            // A user module member (`Geometry.area`) → its mangled top-level name.
-            other => PyExpr::Name(other.replace('.', "_")),
+            // A user module member (`Geometry.area`). An imported *file* module
+            // lowers to Python attribute access on the imported module
+            // (`geometry.area`, with `import geometry` hoisted); an in-file
+            // `module` declaration uses the flat mangled name (`Geometry_area`).
+            other => {
+                let (base, member) = other.split_once('.').unwrap_or((other, ""));
+                if self.imported_modules.contains(base) {
+                    let module = base.to_lowercase();
+                    self.needed_imports.insert(module.clone());
+                    PyExpr::Attribute {
+                        value: Box::new(PyExpr::Name(module)),
+                        attr: member.to_string(),
+                    }
+                } else {
+                    PyExpr::Name(other.replace('.', "_"))
+                }
+            }
         }
     }
 

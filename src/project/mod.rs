@@ -178,6 +178,98 @@ pub fn check(project: &Project) -> Vec<ModuleErrors> {
     all
 }
 
+/// A compiled project: each module's emitted Python source, keyed by file name
+/// (`geometry.py`, `main.py`), plus the shared runtime `_pyfun_rt.py` when any
+/// module needs the nominal `Option`/`Result` classes.
+#[derive(Debug)]
+pub struct CompiledProject {
+    /// `(file name, Python source)` pairs — the modules in topological order, with
+    /// `_pyfun_rt.py` (when present) last.
+    pub files: Vec<(String, String)>,
+}
+
+/// Lower and emit every module of `project` to Python (`DESIGN.md` §6.1).
+///
+/// Each module compiles to its own `<name>.py`; a cross-module `Geometry.area`
+/// emits `geometry.area` with `import geometry` hoisted, and the nominal
+/// `Option`/`Result` classes are hoisted into a shared `_pyfun_rt.py` that every
+/// module needing them imports (so such values are `isinstance`-compatible across
+/// files). Imported functions' arities are threaded through so a partial
+/// application across modules still curries.
+///
+/// This lowers only; the caller is expected to have run [`check`] first (the CLI
+/// gates compilation on a clean check, like the single-file path).
+pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
+    use crate::lowering::{self, ImportContext};
+    use crate::python_emitter;
+
+    // Each module's exported members and their arities, for cross-module partial
+    // application of imported curried functions.
+    let arities: HashMap<String, HashMap<String, usize>> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), export_arities(&m.ast)))
+        .collect();
+
+    let mut files = Vec::new();
+    let mut needs_runtime = false;
+    for module in &project.modules {
+        let mut ctx = ImportContext::default();
+        for import in &module.imports {
+            ctx.modules.insert(import.clone());
+            if let Some(members) = arities.get(import) {
+                for (member, arity) in members {
+                    ctx.member_arities
+                        .insert(format!("{import}.{member}"), *arity);
+                }
+            }
+        }
+        let lowered = lowering::lower_in_project(&module.ast, &ctx)?;
+        needs_runtime |= lowered.uses_runtime;
+        files.push((
+            module_py_name(&module.name),
+            python_emitter::emit(&lowered.py),
+        ));
+    }
+    if needs_runtime {
+        files.push((
+            "_pyfun_rt.py".to_string(),
+            python_emitter::emit(&lowering::runtime_module()),
+        ));
+    }
+    Ok(CompiledProject { files })
+}
+
+/// The arity of each top-level `let` *function* in `module`, keyed by bare name
+/// (parameterless values have no arity entry). Mirrors the arity table the
+/// single-file lowerer builds, used to seed an importing module so a partial
+/// application of an imported curried function lowers to `functools.partial`.
+fn export_arities(module: &Module) -> HashMap<String, usize> {
+    use crate::parser::ast::ExprKind;
+    module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Let(binding) => {
+                let arity = if !binding.params.is_empty() {
+                    Some(binding.params.len())
+                } else if let ExprKind::Fn { params, .. } = &binding.value.kind {
+                    Some(params.len())
+                } else {
+                    None
+                };
+                arity.map(|a| (binding.name.clone(), a))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The emitted Python file name for a module (`Geometry` → `geometry.py`).
+pub fn module_py_name(name: &str) -> String {
+    format!("{}.py", name.to_lowercase())
+}
+
 /// Whether a module visit is in progress (on the DFS path) or finished.
 enum Visit {
     Visiting,

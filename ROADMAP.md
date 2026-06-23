@@ -262,7 +262,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
    declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
    values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
-   types/ctors deferred). Seven ordered slices; **slices 0–3 have landed** — (0) implicit recursion (a
+   types/ctors deferred). Seven ordered slices; **slices 0–4 have landed** — (0) implicit recursion (a
    function binding is in scope in its own body like Python `def`, no `rec`, monomorphic, value bindings
    excluded); (1) `import` syntax (`import Geometry` → `Item::Import`; lexes/parses/pretty-prints/
    round-trips, a no-op until the driver resolves it); (2) the multi-file driver (`src/project`:
@@ -270,7 +270,11 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    `build_from_path` the `.pyfun` wrapper); (3) cross-module value checking (`types::check_module` seeds
    a module's env with its imports' exported value schemes under qualified keys and returns its own
    exports; `project::check` threads them through the topo order, reporting "not a member" for unexported
-   uses). Slice 4 (shared `_pyfun_rt.py` + cross-module lowering + parallel-file emit) is next.
+   uses); (4) multi-file lowering + emit (`lowering::lower_in_project`: `Geometry.area` → `geometry.area`
+   + hoisted `import geometry`, un-mangled names, cross-module partial application curries; nominal
+   `Option`/`Result` classes hoisted to a shared `_pyfun_rt.py` via `lowering::runtime_module` so values
+   stay `isinstance`-compatible across files; `project::compile` emits the `.py` tree). Slice 5 (CLI over
+   the graph: `compile -o <dir>`, temp-dir `run`, whole-graph `check`) is next.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
