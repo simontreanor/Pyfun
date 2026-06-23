@@ -346,13 +346,20 @@ uppercase-identifier rule for types/modules; the emitted file keeps the lowercas
 Resolution maps `import Geometry` → `geometry.pyfun` by lowercasing. (Multi-word/snake_case stems and
 nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
 
-**Resolution & ordering.** A new multi-file **driver** (a `src/project`-style module): from an entry file,
+**Resolution & ordering** (landed — slice 2, `src/project`). A multi-file **driver**: from an entry file,
 parse it, follow `import` edges (resolved relative to the entry's directory = the source root), and build
 a dependency **graph**. The graph must be **acyclic** — a cycle is an error (Python tolerates import
 cycles only fragilely; F# forbids them, and this is the cross-file face of declare-before-use). A
 topological sort gives the compile/emit order. So "a module may only use modules declared before it"
 falls out for free — no separate mechanism, and there is **no mutual recursion across modules** (merge
-the files, as in F#).
+the files, as in F#). *Implementation:* `project::build(entry, load)` walks the graph depth-first with an
+injected `load: Fn(&str) -> Option<String>` loader, so the graph/cycle/topo logic is **filesystem-free
+and unit-testable**; a back-edge to a module on the DFS path is a `ProjectError::Cycle` (reported as the
+path `A -> B -> A`), a `None` from the loader is a `ProjectError::Missing` (naming the importer), a
+lex/parse failure is a `ProjectError::Compile` (naming the module), and the DFS post-order is the
+returned topological order (dependencies first, entry last). `project::build_from_path(entry)` is the thin
+`.pyfun`-file wrapper (module name = stem with first letter uppercased; `import Geometry` → `geometry.pyfun`
+in the entry's directory). Cross-module *checking* and *emit* (the next slices) consume this `Project`.
 
 **Cross-module checking.** Each module is type-checked in topological order, its env seeded with every
 imported module's **exported value schemes** under their qualified keys (`env.insert("Geometry.area",
@@ -389,7 +396,9 @@ stays the core).
 cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
 de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
-driver: graph, cycle/missing-file errors, topo sort; (3) cross-module value checking; (4) shared
+driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
+DFS so the graph logic is filesystem-free and unit-testable; `build_from_path` is the `.pyfun`-file
+wrapper]; (3) cross-module value checking; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.
 

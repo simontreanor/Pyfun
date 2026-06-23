@@ -14,6 +14,7 @@ pub mod lexer;
 pub mod lowering;
 pub mod lsp;
 pub mod parser;
+pub mod project;
 pub mod python_emitter;
 pub mod types;
 
