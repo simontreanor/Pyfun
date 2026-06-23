@@ -254,7 +254,8 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
 1. **Prelude breadth (#9 cont.)** — lists/sets/maps/options/results/lazy-seq + built-in & in-file
    modules + ADT/record `__hash__` + **tuples** + the tuple-enabled stdlib (`List.zip`,
    `Map.ofList`/`toList`) landed. `Array` deferred as redundant with `List`.
-   **File-based modules (Phase 2) are now SCOPED** — see `DESIGN.md` §6.1. Decisions (all
+   **File-based modules (Phase 2) are now COMPLETE** — see `DESIGN.md` §6.1, with a runnable example in
+   `examples/modules/`. Decisions (all
    Python-natural): explicit `import Geometry` + qualified `Geometry.area` (reuses `qualified_name`, no
    parser change for access); **parallel `.py` output** (un-mangled names, `geometry.area`, real Python
    `import`); **all public** (no `pub`); a small **implicit-recursion** precursor (function bindings see
@@ -262,7 +263,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
    declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
    values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
-   types/ctors deferred). Seven ordered slices; **slices 0–6 have landed** — (0) implicit recursion (a
+   types/ctors deferred). Seven ordered slices; **all seven have landed** — (0) implicit recursion (a
    function binding is in scope in its own body like Python `def`, no `rec`, monomorphic, value bindings
    excluded); (1) `import` syntax (`import Geometry` → `Item::Import`; lexes/parses/pretty-prints/
    round-trips, a no-op until the driver resolves it); (2) the multi-file driver (`src/project`:
@@ -279,8 +280,9 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    and executes `python main.py`; a no-import file keeps the exact single-file behavior); (6) minimal
    import-awareness in the LSP (`analyze_in_dir` resolves an entry's imports from sibling files via
    `project::resolve_imports` and seeds `types::check_collecting_with_imports`, so a multi-module file
-   checks `Geometry.area` cleanly in the editor; the server maps the `file:` URI to a directory). Only
-   slice 7 (docs/example) remains.
+   checks `Geometry.area` cleanly in the editor; the server maps the `file:` URI to a directory); (7)
+   docs + the runnable `examples/modules/` project. **Phase 2 is complete.** Natural follow-ons (deferred):
+   cross-module types/ctors/records/measures/externs, visibility (`pub`), TCO, and rich cross-file LSP nav.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

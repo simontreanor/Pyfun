@@ -1,0 +1,7 @@
+# The Geometry module — one module per file (`DESIGN.md` §6.1). Its top-level
+# `let` values are its public interface; Main imports them as `Geometry.*`.
+# Compiles to a sibling `geometry.py` with un-mangled `def area`/`def square`.
+let area w h = w * h
+
+# A module member sees its siblings unqualified (`square` calls `area`).
+let square x = area x x

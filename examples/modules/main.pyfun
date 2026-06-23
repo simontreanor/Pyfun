@@ -1,0 +1,31 @@
+# A multi-file Pyfun project (`DESIGN.md` §6.1). From this directory:
+#   pyfun run     examples/modules/main.pyfun          # run the whole project
+#   pyfun check   examples/modules/main.pyfun          # type-check every module
+#   pyfun compile examples/modules/main.pyfun -o out   # emit the .py tree
+#
+# `import` brings a sibling source file into scope under its capitalized name
+# (`Geometry` ← geometry.pyfun); members are used qualified, `Geometry.area`.
+# The import graph must be acyclic. Each module compiles to its own readable
+# `.py`; a cross-module call lowers to plain Python attribute access
+# (`geometry.area(4, 5)`) with `import geometry` hoisted to the file header.
+import Geometry
+import Store
+
+# Cross-module full application → geometry.area(4, 5).
+let floor = Geometry.area 4 5
+let nine = Geometry.square 3
+
+# Cross-module *partial* application still curries (→ functools.partial).
+let widen = Geometry.area 10
+let strip = widen 2                  # 20
+
+# An Option built in Store and consumed here — one `Some` type via the shared
+# runtime, so `Option.withDefault` matches it correctly across the boundary.
+let hit = Option.withDefault 0 (Store.lookup 1)
+let miss = Option.withDefault 0 (Store.lookup 9)
+
+print floor                          # 20
+print nine                           # 9
+print strip                          # 20
+print hit                            # 100
+print miss                           # 0

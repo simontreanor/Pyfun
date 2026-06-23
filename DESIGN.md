@@ -306,9 +306,11 @@ shadow a built-in module or duplicate another. **MVP limits:** the body holds on
 (`type`/`measure`/`extern` inside a module are deferred), and there are no nested modules. The next
 layer is the full *file-based* module system, scoped in §6.1.
 
-### 6.1 File-based modules (Phase 2 — scoped, not yet built)
+### 6.1 File-based modules (Phase 2 — complete)
 
 One module per file, referenced with an explicit `import`, compiled to a tree of readable Python files.
+**All seven slices have landed** (each marked inline below); a runnable example lives in
+`examples/modules/`.
 The design optimizes for **Python familiarity** (the §7.1 theme): explicit imports, real Python modules,
 no enforced visibility. All four shaping decisions were taken deliberately:
 
@@ -436,7 +438,9 @@ schemes) + `project::check` over the topo order]; (4) shared
 `-o <dir>`) [**done** — import-detecting `check`/`compile`/`run` in `src/main.rs`, single-file
 back-compat preserved]; (6) minimal-import-awareness LSP [**done** — `analyze_in_dir` +
 `project::resolve_imports` + `types::check_collecting_with_imports`, URI→dir in the server]; (7)
-docs/example/memory.
+docs/example [**done** — this section, plus the runnable `examples/modules/` project]. **All seven
+slices have landed — Phase 2 file-based modules are complete** (the deferred items above —
+cross-module types/ctors, `pub`, rich cross-file LSP nav — remain the natural follow-ons).
 
 ## 7. Surface language (MVP)
 

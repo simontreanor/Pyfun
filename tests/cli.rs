@@ -192,6 +192,28 @@ fn run_executes_a_multi_file_project() {
 }
 
 #[test]
+fn the_committed_modules_example_runs() {
+    // Keep the shipped multi-file example (`examples/modules/`) working end-to-end.
+    if !have_python() {
+        eprintln!("skipping example run: no python interpreter");
+        return;
+    }
+    let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/modules/main.pyfun");
+    let out = Command::new(pyfun_bin())
+        .arg("run")
+        .arg(&entry)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    assert_eq!(stdout.trim(), "20\n9\n20\n100\n0");
+}
+
+#[test]
 fn single_file_without_imports_still_inlines_classes() {
     // Back-compat: a no-import file uses the single-file path — classes inlined,
     // emitted to stdout, no shared runtime.
