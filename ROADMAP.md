@@ -262,7 +262,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
    declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
    values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
-   types/ctors deferred). Seven ordered slices; **slices 0–4 have landed** — (0) implicit recursion (a
+   types/ctors deferred). Seven ordered slices; **slices 0–5 have landed** — (0) implicit recursion (a
    function binding is in scope in its own body like Python `def`, no `rec`, monomorphic, value bindings
    excluded); (1) `import` syntax (`import Geometry` → `Item::Import`; lexes/parses/pretty-prints/
    round-trips, a no-op until the driver resolves it); (2) the multi-file driver (`src/project`:
@@ -273,8 +273,11 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    uses); (4) multi-file lowering + emit (`lowering::lower_in_project`: `Geometry.area` → `geometry.area`
    + hoisted `import geometry`, un-mangled names, cross-module partial application curries; nominal
    `Option`/`Result` classes hoisted to a shared `_pyfun_rt.py` via `lowering::runtime_module` so values
-   stay `isinstance`-compatible across files; `project::compile` emits the `.py` tree). Slice 5 (CLI over
-   the graph: `compile -o <dir>`, temp-dir `run`, whole-graph `check`) is next.
+   stay `isinstance`-compatible across files; `project::compile` emits the `.py` tree); (5) the CLI over
+   the graph (`check`/`compile`/`run` in `src/main.rs` detect imports and drive the project — whole-graph
+   check with per-module diagnostics, `compile -o <dir>` writes the tree, `run` materializes to a temp dir
+   and executes `python main.py`; a no-import file keeps the exact single-file behavior). Slice 6 (minimal
+   import-awareness in the LSP) is next, then slice 7 (docs/example).
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

@@ -5,15 +5,24 @@
 //!
 //! Usage:
 //!   pyfun check   <file.pyfun>                  # type-check, report diagnostics
-//!   pyfun compile <file.pyfun> [-o <out.py>]    # type-check then lower to Python
+//!   pyfun compile <file.pyfun> [-o <out>]       # type-check then lower to Python
 //!   pyfun run     <file.pyfun>                  # compile then execute with Python
 //!   pyfun parse   <file.pyfun>                  # canonical pretty-print
 //!   pyfun <file.pyfun>                          # shorthand for `compile`
+//!
+//! `check`/`compile`/`run` operate over the **whole import graph** when the entry
+//! file has `import`s (`DESIGN.md` §6.1): every module is checked/emitted, the
+//! shared `_pyfun_rt.py` is produced, and `run` materializes the tree to a temp
+//! directory. A file with **no imports behaves exactly as before** (single-file
+//! path: `compile` to stdout/one file, `run` piped to the interpreter).
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
 use pyfun::diagnostics::{self, Level};
+use pyfun::project::{self, ProjectError};
+use pyfun::syntax::{Item, Module};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -49,7 +58,10 @@ fn help() {
     eprintln!();
     eprintln!("usage:");
     eprintln!("  pyfun check   <file.pyfun>                type-check, report diagnostics");
-    eprintln!("  pyfun compile <file.pyfun> [-o <out.py>]  type-check then lower to Python");
+    eprintln!("  pyfun compile <file.pyfun> [-o <out>]     type-check then lower to Python");
+    eprintln!(
+        "                                            (-o is a file for one module, a dir for a project)"
+    );
     eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
@@ -78,6 +90,10 @@ fn check(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A file with imports is the entry of a multi-module project.
+    if has_imports(&module) {
+        return check_project(path);
+    }
     match pyfun::types::check(&module) {
         Ok(()) => {
             eprintln!("ok: no type errors");
@@ -104,6 +120,11 @@ fn compile(path: &str, out: Option<&str>) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
+    if let Ok(module) = pyfun::parse(&source)
+        && has_imports(&module)
+    {
+        return compile_project(path, out);
+    }
     let python = match pyfun::compile(&source) {
         Ok(py) => py,
         Err(e) => {
@@ -137,6 +158,11 @@ fn run(path: &str) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
+    if let Ok(module) = pyfun::parse(&source)
+        && has_imports(&module)
+    {
+        return run_project(path);
+    }
     let python = match pyfun::compile(&source) {
         Ok(py) => py,
         Err(e) => {
@@ -161,6 +187,177 @@ fn run(path: &str) -> ExitCode {
     }
     match child.wait() {
         Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(_) => ExitCode::FAILURE,
+        Err(e) => fail(&format!("`{interp}` did not finish: {e}")),
+    }
+}
+
+/// Whether `module` opens a multi-module project (has at least one `import`).
+fn has_imports(module: &Module) -> bool {
+    module
+        .items
+        .iter()
+        .any(|i| matches!(i, Item::Import { .. }))
+}
+
+/// Resolve the import graph rooted at `entry`, rendering any graph error
+/// (missing file, cycle, or a lex/parse failure in some module) and returning
+/// the exit code to use on failure.
+fn resolve_project(entry: &str) -> Result<project::Project, ExitCode> {
+    project::build_from_path(Path::new(entry)).map_err(|e| render_project_error(entry, &e))
+}
+
+/// Render a graph-resolution error. A lex/parse failure is shown rustc-style
+/// against the offending module's source; the rest are one-line messages.
+fn render_project_error(entry: &str, error: &ProjectError) -> ExitCode {
+    match error {
+        ProjectError::Compile { name, error } => {
+            let root = Path::new(entry).parent().unwrap_or_else(|| Path::new("."));
+            let file = root.join(project::module_file_name(name));
+            match std::fs::read_to_string(&file) {
+                Ok(src) => eprintln!(
+                    "{}",
+                    diagnostics::render(&src, Level::Error, &error.message(), error.span())
+                ),
+                Err(_) => eprintln!("error: in module `{name}`: {}", error.message()),
+            }
+        }
+        other => eprintln!("error: {other}"),
+    }
+    ExitCode::FAILURE
+}
+
+/// Type-check every module of the project, rendering each module's errors against
+/// its own source. Returns `true` if the project type-checks.
+fn check_project_ok(project: &project::Project) -> bool {
+    let groups = project::check(project);
+    if groups.is_empty() {
+        return true;
+    }
+    let mut total = 0;
+    for group in &groups {
+        let source = project
+            .modules
+            .iter()
+            .find(|m| m.name == group.name)
+            .map(|m| m.source.as_str())
+            .unwrap_or("");
+        eprintln!(
+            "-- module `{}` ({}) --",
+            group.name,
+            project::module_file_name(&group.name)
+        );
+        for e in &group.errors {
+            eprintln!(
+                "{}",
+                diagnostics::render(source, Level::Error, &e.message, e.span)
+            );
+            total += 1;
+        }
+    }
+    eprintln!("\n{total} error{}", if total == 1 { "" } else { "s" });
+    false
+}
+
+fn check_project(entry: &str) -> ExitCode {
+    let project = match resolve_project(entry) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    if check_project_ok(&project) {
+        eprintln!("ok: no type errors ({} modules)", project.modules.len());
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Lower a checked project to its Python files, or render a lowering error.
+fn lower_project(project: &project::Project) -> Result<Vec<(String, String)>, ExitCode> {
+    match project::compile(project) {
+        Ok(compiled) => Ok(compiled.files),
+        Err(e) => {
+            eprintln!("error: lowering failed: {}", e.message);
+            Err(ExitCode::FAILURE)
+        }
+    }
+}
+
+fn compile_project(entry: &str, out: Option<&str>) -> ExitCode {
+    let project = match resolve_project(entry) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    // The compiler is the gatekeeper: a project must type-check before it lowers.
+    if !check_project_ok(&project) {
+        return ExitCode::FAILURE;
+    }
+    let files = match lower_project(&project) {
+        Ok(f) => f,
+        Err(code) => return code,
+    };
+    match out {
+        // For a project, `-o` names a directory holding the whole `.py` tree.
+        Some(dir) => {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                return fail(&format!("cannot create {dir}: {e}"));
+            }
+            for (name, source) in &files {
+                let path = Path::new(dir).join(name);
+                if let Err(e) = std::fs::write(&path, source) {
+                    return fail(&format!("cannot write {}: {e}", path.display()));
+                }
+            }
+            eprintln!("wrote {} files to {dir}", files.len());
+            ExitCode::SUCCESS
+        }
+        // No `-o`: print each file to stdout under a header banner.
+        None => {
+            for (name, source) in &files {
+                println!("# ==== {name} ====");
+                print!("{source}");
+                println!();
+            }
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+fn run_project(entry: &str) -> ExitCode {
+    let project = match resolve_project(entry) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    if !check_project_ok(&project) {
+        return ExitCode::FAILURE;
+    }
+    let files = match lower_project(&project) {
+        Ok(f) => f,
+        Err(code) => return code,
+    };
+    let Some(interp) = python_cmd() else {
+        return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
+    };
+    // Materialize the tree to a temp dir and run `python <entry>.py` there, so the
+    // emitted `import geometry` / `_pyfun_rt` lines resolve as sibling modules.
+    let dir = std::env::temp_dir().join(format!("pyfun_run_{}", std::process::id()));
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return fail(&format!("cannot create temp dir: {e}"));
+    }
+    for (name, source) in &files {
+        if let Err(e) = std::fs::write(dir.join(name), source) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return fail(&format!("cannot stage {name}: {e}"));
+        }
+    }
+    let entry_py = project::module_py_name(&project.entry().name);
+    let status = Command::new(&interp)
+        .arg(&entry_py)
+        .current_dir(&dir)
+        .status();
+    let _ = std::fs::remove_dir_all(&dir);
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => fail(&format!("`{interp}` did not finish: {e}")),
     }

@@ -399,10 +399,16 @@ application still lowers to `functools.partial`**. `project::compile` builds eac
 from its imports, emits `<name>.py` per module, and appends `_pyfun_rt.py` (via `runtime_module()`) iff
 any module used the nominal classes.
 
-**CLI.** `pyfun {check,compile,run} entry.pyfun` operate over the whole graph: `check` checks all modules;
-`compile -o <dir>` emits the `.py` tree (+ `_pyfun_rt.py`) into `<dir>`; `run` materializes the tree to a
-temp dir and executes `python entry.py` with the dir on the path. A file with **no imports behaves exactly
-as today** (full back-compat).
+**CLI** (landed — slice 5, `src/main.rs`). `pyfun {check,compile,run} entry.pyfun` operate over the whole
+graph: `check` checks all modules (errors rendered rustc-style against each module's own source, grouped
+under a `-- module `Name` (name.pyfun) --` header); `compile -o <dir>` emits the `.py` tree (+
+`_pyfun_rt.py`) into `<dir>` (no `-o` prints each file to stdout under a `# ==== name.py ====` banner);
+`run` materializes the tree to a temp dir and executes `python entry.py` with the dir on the path (then
+cleans up). Each command **detects imports** by parsing the entry: a file with **no imports takes the
+single-file path exactly as before** (full back-compat — `compile` to stdout / one file with the classes
+*inlined*, `run` piped to `python -`), and only a file that actually `import`s engages the graph driver.
+The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
+Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
 
 **LSP.** The MVP gains **minimal import awareness** — the analyzer resolves an imported file's export
 interface so a multi-module file type-checks cleanly (no spurious "unbound `Geometry.area`"). **Rich
@@ -420,7 +426,8 @@ wrapper]; (3) cross-module value checking [**done** — `types::check_module` (s
 schemes) + `project::check` over the topo order]; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit [**done** — `lowering::lower_in_project` +
 `lowering::runtime_module` + `project::compile`]; (5) CLI over the graph (temp-dir `run`,
-`-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.
+`-o <dir>`) [**done** — import-detecting `check`/`compile`/`run` in `src/main.rs`, single-file
+back-compat preserved]; (6) minimal-import-awareness LSP; (7) docs/example/memory.
 
 ## 7. Surface language (MVP)
 
