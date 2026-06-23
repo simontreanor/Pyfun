@@ -223,6 +223,53 @@ fn e2e_runs_a_cross_module_program() {
     }
 }
 
+// ---------- slice 6: import-aware editor analysis ----------
+
+#[test]
+fn editor_analysis_resolves_imports_from_disk() {
+    // With the directory known, a `Geometry.area` reference checks cleanly.
+    let dir = Scratch::new("analyze_ok");
+    dir.write("geometry.pyfun", "let area w h = w * h");
+    let main = "import Geometry\nlet floor = Geometry.area 4 5";
+
+    let analysis = pyfun::analyze_in_dir(main, Some(dir.0.as_path()));
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "imported member should resolve: {:?}",
+        analysis.diagnostics
+    );
+}
+
+#[test]
+fn editor_analysis_without_a_dir_cannot_resolve_imports() {
+    // The dir-less analysis (no filesystem) can't see Geometry, so the qualified
+    // reference is unresolved — the behavior before import-awareness.
+    let main = "import Geometry\nlet floor = Geometry.area 4 5";
+    let analysis = pyfun::analyze(main);
+    assert!(
+        analysis
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("not a member of `Geometry`")),
+        "expected an unresolved-member diagnostic: {:?}",
+        analysis.diagnostics
+    );
+}
+
+#[test]
+fn editor_analysis_still_flags_a_genuine_cross_module_error() {
+    // Import resolution must not mask a real type error against the imported API.
+    let dir = Scratch::new("analyze_err");
+    dir.write("geometry.pyfun", "let area w h = w * h");
+    let main = "import Geometry\nlet bad = Geometry.area 4 \"five\"";
+
+    let analysis = pyfun::analyze_in_dir(main, Some(dir.0.as_path()));
+    assert!(
+        !analysis.diagnostics.is_empty(),
+        "a cross-module type error should still be reported"
+    );
+}
+
 #[test]
 fn e2e_an_option_crosses_the_module_boundary() {
     // The decisive runtime test: an Option built in Store and inspected in Main

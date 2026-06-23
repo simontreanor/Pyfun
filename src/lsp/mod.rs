@@ -28,10 +28,55 @@ pub mod resolve;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::Analysis;
 use json::{Json, int, obj, str};
+
+/// Convert a `file:` document URI to a filesystem path, for resolving sibling
+/// modules during import-aware analysis (`DESIGN.md` §6.1). Returns `None` for a
+/// non-`file:` URI. Percent-escapes are decoded; on Windows a leading slash
+/// before a drive letter (`/C:/…`) is dropped.
+fn uri_to_path(uri: &str) -> Option<PathBuf> {
+    let rest = uri.strip_prefix("file://")?;
+    // `file:///path` (empty authority) → `/path`; tolerate a `localhost` authority.
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    let decoded = percent_decode(rest);
+    let decoded = if cfg!(windows) {
+        decoded
+            .strip_prefix('/')
+            .filter(|s| s.as_bytes().get(1) == Some(&b':'))
+            .map(str::to_string)
+            .unwrap_or(decoded)
+    } else {
+        decoded
+    };
+    Some(PathBuf::from(decoded))
+}
+
+/// Decode `%XX` percent-escapes in a URI path component (e.g. `%20` → space,
+/// `%3A` → `:`). Invalid escapes are left as-is.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let (Some(h), Some(l)) = (
+                bytes.get(i + 1).and_then(|b| (*b as char).to_digit(16)),
+                bytes.get(i + 2).and_then(|b| (*b as char).to_digit(16)),
+            )
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
 /// Run the server: read framed JSON-RPC messages from stdin, dispatch them, and
 /// write framed responses/notifications to stdout until an `exit` notification.
@@ -211,7 +256,12 @@ impl Server {
         {
             return Some(analysis.clone());
         }
-        let analysis = Rc::new(crate::analyze(&doc.text));
+        // Resolve `import`s relative to the document's own directory, so a
+        // multi-module file checks cleanly (`DESIGN.md` §6.1). A non-`file:` URI
+        // (or a path without a parent) just analyzes without imports.
+        let path = uri_to_path(uri);
+        let dir = path.as_deref().and_then(std::path::Path::parent);
+        let analysis = Rc::new(crate::analyze_in_dir(&doc.text, dir));
         self.cache
             .borrow_mut()
             .insert(uri.to_string(), (doc.version, analysis.clone()));
@@ -849,6 +899,62 @@ mod tests {
         let out = server.handle(&json::parse(&open_msg("file:///ok.pyfun", "let n = 1")).unwrap());
         let diags = out[0].get("params").unwrap().get("diagnostics").unwrap();
         assert_eq!(diags.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn uri_to_path_handles_file_uris() {
+        // Percent-escapes decode; a non-file URI yields None.
+        assert_eq!(uri_to_path("untitled:foo"), None);
+        let decoded = uri_to_path("file:///tmp/my%20mod.pyfun").unwrap();
+        assert!(decoded.to_string_lossy().contains("my mod.pyfun"));
+        #[cfg(windows)]
+        assert_eq!(
+            uri_to_path("file:///C:/a/b.pyfun").unwrap(),
+            std::path::PathBuf::from("C:/a/b.pyfun")
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            uri_to_path("file:///a/b.pyfun").unwrap(),
+            std::path::PathBuf::from("/a/b.pyfun")
+        );
+    }
+
+    #[test]
+    fn import_aware_analysis_resolves_a_sibling_module() {
+        // Open a multi-module file whose `import` resolves to a real sibling file:
+        // the qualified reference must not be flagged. A non-existent sibling (the
+        // control) would leave the "not a member" diagnostic in place.
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_imports_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main = dir.join("main.pyfun");
+        let p = main.to_string_lossy().replace('\\', "/");
+        // `file:///C:/…` on Windows, `file:///tmp/…` on Unix (a leading-slash path
+        // already supplies the third slash).
+        let uri = if p.starts_with('/') {
+            format!("file://{p}")
+        } else {
+            format!("file:///{p}")
+        };
+
+        let mut server = Server::default();
+        let out = server.handle(
+            &json::parse(&open_msg(
+                &uri,
+                "import Geometry\nlet floor = Geometry.area 4 5",
+            ))
+            .unwrap(),
+        );
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(diags.is_empty(), "expected clean analysis, got {diags:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

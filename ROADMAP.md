@@ -262,7 +262,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
    declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
    values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
-   types/ctors deferred). Seven ordered slices; **slices 0–5 have landed** — (0) implicit recursion (a
+   types/ctors deferred). Seven ordered slices; **slices 0–6 have landed** — (0) implicit recursion (a
    function binding is in scope in its own body like Python `def`, no `rec`, monomorphic, value bindings
    excluded); (1) `import` syntax (`import Geometry` → `Item::Import`; lexes/parses/pretty-prints/
    round-trips, a no-op until the driver resolves it); (2) the multi-file driver (`src/project`:
@@ -276,8 +276,11 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stay `isinstance`-compatible across files; `project::compile` emits the `.py` tree); (5) the CLI over
    the graph (`check`/`compile`/`run` in `src/main.rs` detect imports and drive the project — whole-graph
    check with per-module diagnostics, `compile -o <dir>` writes the tree, `run` materializes to a temp dir
-   and executes `python main.py`; a no-import file keeps the exact single-file behavior). Slice 6 (minimal
-   import-awareness in the LSP) is next, then slice 7 (docs/example).
+   and executes `python main.py`; a no-import file keeps the exact single-file behavior); (6) minimal
+   import-awareness in the LSP (`analyze_in_dir` resolves an entry's imports from sibling files via
+   `project::resolve_imports` and seeds `types::check_collecting_with_imports`, so a multi-module file
+   checks `Geometry.area` cleanly in the editor; the server maps the `file:` URI to a directory). Only
+   slice 7 (docs/example) remains.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

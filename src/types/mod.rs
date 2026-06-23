@@ -516,14 +516,32 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
+    let (errors, _types, schemes) = run(module, false, &seed_from_imports(imports));
+    (errors, ModuleExports { schemes })
+}
+
+/// Like [`check_collecting`] but with imported modules' exports seeded under
+/// qualified keys (`DESIGN.md` §6.1), so the editor analysis of a multi-module
+/// file resolves `Geometry.area` instead of flagging it. Used by the LSP.
+pub fn check_collecting_with_imports(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, Vec<TypeSpan>) {
+    let (errors, types, _exports) = run(module, true, &seed_from_imports(imports));
+    (errors, types)
+}
+
+/// Build the seed env for a module from its imports' exports: each member bound
+/// under its qualified key (`Geometry.area`), the form the `Field` access path
+/// resolves.
+fn seed_from_imports(imports: &HashMap<String, ModuleExports>) -> Env {
     let mut seed = Env::new();
     for (name, exports) in imports {
         for (member, scheme) in &exports.schemes {
             seed.insert(format!("{name}.{member}"), scheme.clone());
         }
     }
-    let (errors, _types, schemes) = run(module, false, &seed);
-    (errors, ModuleExports { schemes })
+    seed
 }
 
 /// Type-check `module` and, in the same pass, collect the inferred type of every

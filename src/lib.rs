@@ -76,9 +76,24 @@ pub struct Analysis {
 /// module are noise); once it is, the type errors take over. This is the one entry
 /// point the LSP server needs.
 pub fn analyze(source: &str) -> Analysis {
+    analyze_in_dir(source, None)
+}
+
+/// Like [`analyze`], but resolves `import`s relative to `dir` so a multi-module
+/// file checks cleanly in the editor (`DESIGN.md` §6.1). When `dir` is `None`
+/// (or no imports resolve) this is exactly [`analyze`]. The LSP passes the
+/// directory of the document's file; imported modules are read from sibling
+/// `<name>.pyfun` files (best-effort — missing/broken imports are skipped).
+pub fn analyze_in_dir(source: &str, dir: Option<&std::path::Path>) -> Analysis {
     let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
-    let (type_errors, types) = types::check_collecting(&module);
+    let (type_errors, types) = match dir {
+        Some(d) => {
+            let imports = project::resolve_imports(d, &module);
+            types::check_collecting_with_imports(&module, &imports)
+        }
+        None => types::check_collecting(&module),
+    };
     // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
     // by position so cascading errors read top-to-bottom.
     let mut syntax_errors: Vec<_> = lex_errors

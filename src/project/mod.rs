@@ -13,7 +13,7 @@
 //! This slice resolves and orders the graph only; cross-module type-checking
 //! (slice 3) and multi-file lowering/emit (slice 4) build on `Project`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::CompileError;
@@ -238,6 +238,61 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
         ));
     }
     Ok(CompiledProject { files })
+}
+
+/// Best-effort resolution of `module`'s imports' export interfaces, reading
+/// sibling `<name>.pyfun` files from `dir` (`DESIGN.md` §6.1). For the **LSP**:
+/// returns the `ModuleExports` of each *directly* imported module that could be
+/// loaded and checked (transitively resolving each import's own imports), so an
+/// in-editor multi-module file type-checks `Geometry.area` cleanly. Unlike the
+/// compile/check driver this is *forgiving* — a missing file, a parse error, or
+/// an import cycle simply omits that module rather than erroring, so a
+/// half-written project still gives useful diagnostics for the file in hand.
+pub fn resolve_imports(
+    dir: &Path,
+    module: &Module,
+) -> HashMap<String, crate::types::ModuleExports> {
+    let mut cache = HashMap::new();
+    let mut visiting = HashSet::new();
+    let mut out = HashMap::new();
+    for name in collect_imports(module) {
+        if let Some(exports) = resolve_exports(dir, &name, &mut cache, &mut visiting) {
+            out.insert(name, exports);
+        }
+    }
+    out
+}
+
+/// Load, recursively resolve the imports of, and check the module `name` from
+/// `dir`, returning its exports. Memoized in `cache`; `visiting` breaks cycles.
+/// Any failure (missing file, parse error, cycle) yields `None`.
+fn resolve_exports(
+    dir: &Path,
+    name: &str,
+    cache: &mut HashMap<String, crate::types::ModuleExports>,
+    visiting: &mut HashSet<String>,
+) -> Option<crate::types::ModuleExports> {
+    if let Some(exports) = cache.get(name) {
+        return Some(exports.clone());
+    }
+    if visiting.contains(name) {
+        return None; // a cycle — bail rather than recurse forever
+    }
+    let source = std::fs::read_to_string(dir.join(module_file_name(name))).ok()?;
+    let module = crate::parse(&source).ok()?;
+
+    visiting.insert(name.to_string());
+    let mut imports = HashMap::new();
+    for import in collect_imports(&module) {
+        if let Some(exports) = resolve_exports(dir, &import, cache, visiting) {
+            imports.insert(import, exports);
+        }
+    }
+    visiting.remove(name);
+
+    let (_errors, exports) = crate::types::check_module(&module, &imports);
+    cache.insert(name.to_string(), exports.clone());
+    Some(exports)
 }
 
 /// The arity of each top-level `let` *function* in `module`, keyed by bare name

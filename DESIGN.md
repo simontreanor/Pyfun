@@ -410,11 +410,18 @@ single-file path exactly as before** (full back-compat — `compile` to stdout /
 The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
 Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
 
-**LSP.** The MVP gains **minimal import awareness** — the analyzer resolves an imported file's export
-interface so a multi-module file type-checks cleanly (no spurious "unbound `Geometry.area`"). **Rich
-cross-file navigation is deferred**: workspace symbols, go-to-definition / find-references / rename across
-files, and a project-wide cache are a substantial follow-on (today's per-URI, version-cached analysis
-stays the core).
+**LSP** (landed — slice 6). The editor analysis gains **minimal import awareness**: `analyze_in_dir(source,
+dir)` resolves an imported file's export interface (via `project::resolve_imports`, a *forgiving* variant
+that reads sibling `<name>.pyfun` files, resolves transitively, and silently omits a missing/broken/cyclic
+import) and seeds the type-check (`types::check_collecting_with_imports`), so a multi-module file
+type-checks `Geometry.area` cleanly instead of flagging "not a member" — while a genuine cross-module type
+error is still reported. The server maps the document's `file:` URI to a directory (`uri_to_path`,
+percent-decoding + the Windows `/C:/` fixup) and passes it in; a non-`file:` URI or a no-imports file is
+analyzed exactly as before. **Limitations (acceptable for the MVP, documented):** imported modules are read
+from *disk*, not the editor's unsaved buffers, and the per-URI/version cache is not invalidated when an
+imported file changes (re-open/edit the dependent file to refresh). **Rich cross-file navigation is
+deferred**: workspace symbols, go-to-definition / find-references / rename across files, and a project-wide
+cache are a substantial follow-on (today's per-URI, version-cached analysis stays the core).
 
 **Deferred (explicit non-goals for the first cut):** `from X import y` / `open`; visibility (`pub`);
 cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
@@ -427,7 +434,9 @@ schemes) + `project::check` over the topo order]; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit [**done** — `lowering::lower_in_project` +
 `lowering::runtime_module` + `project::compile`]; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`) [**done** — import-detecting `check`/`compile`/`run` in `src/main.rs`, single-file
-back-compat preserved]; (6) minimal-import-awareness LSP; (7) docs/example/memory.
+back-compat preserved]; (6) minimal-import-awareness LSP [**done** — `analyze_in_dir` +
+`project::resolve_imports` + `types::check_collecting_with_imports`, URI→dir in the server]; (7)
+docs/example/memory.
 
 ## 7. Surface language (MVP)
 
