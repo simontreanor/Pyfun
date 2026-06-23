@@ -316,8 +316,11 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   qualified, `Geometry.area`. This is the core Python idiom (`import foo; foo.bar()`) and **reuses the
   existing access machinery unchanged** — `Geometry.area` is already the `Field { base: Var("Geometry"),
   name: "area" }` node that `types::qualified_name` resolves off an uppercase base. The *access* needs no
-  parser change; only the `import` *statement* is new (`Item::Import`, a new `import` keyword, parsed at
-  the top of the file before other items — matching Python and the existing declare-before-use rule).
+  parser change; only the `import` *statement* is new (`Item::Import { name, span }`, a new `import`
+  keyword, the name a single capitalized identifier). **The syntax has landed (slice 1):** it lexes,
+  parses (as an ordinary top-level item), pretty-prints, and round-trips; it is a no-op in single-file
+  checking and lowering until the multi-file driver (slice 2) resolves it. (Enforcing "imports before
+  other items" is left to that driver, matching the cross-file declare-before-use rule.)
   `from X import y` / `open` (unqualified import) are **deferred** (`open`-everything maps to Python's
   discouraged `import *`).
 - **Parallel `.py` output.** Each `foo.pyfun` compiles to a sibling `foo.py` with a real `import`; member
@@ -385,7 +388,7 @@ stays the core).
 **Deferred (explicit non-goals for the first cut):** `from X import y` / `open`; visibility (`pub`);
 cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
 de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ordered):** (0) implicit
-recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip; (2) multi-file
+recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort; (3) cross-module value checking; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.

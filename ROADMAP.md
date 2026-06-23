@@ -262,9 +262,11 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    stack-safe bulk work). Flat single-dir namespace + **acyclic** import graph (cross-file
    declare-before-use). A generated **`_pyfun_rt.py`** holds the `Option`/`Result` classes so those
    values stay `isinstance`-compatible across files; MVP exports **values only** (cross-module
-   types/ctors deferred). Seven ordered slices; **slice 0 (implicit recursion) has landed** — a
-   function binding is in scope in its own body (like Python `def`, no `rec`), monomorphic, value
-   bindings excluded. Slice 1 (`import` syntax) is next.
+   types/ctors deferred). Seven ordered slices; **slices 0–1 have landed** — (0) implicit recursion (a
+   function binding is in scope in its own body like Python `def`, no `rec`, monomorphic, value bindings
+   excluded); (1) `import` syntax (`import Geometry` → `Item::Import`; lexes/parses/pretty-prints/
+   round-trips, a no-op until the driver resolves it). Slice 2 (multi-file driver: graph + cycle/
+   missing-file errors + topo sort) is next.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

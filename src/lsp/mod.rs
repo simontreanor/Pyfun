@@ -550,6 +550,7 @@ const KIND_FUNCTION: i64 = 3;
 const KIND_CONSTRUCTOR: i64 = 4;
 const KIND_VALUE: i64 = 12;
 const KIND_CLASS: i64 = 7;
+const KIND_MODULE: i64 = 9;
 const KIND_UNIT: i64 = 11;
 const KIND_KEYWORD: i64 = 14;
 
@@ -590,10 +591,12 @@ fn completion_kind(kind: resolve::SymbolKind) -> i64 {
         Type | Record => KIND_CLASS,
         Extern => KIND_FUNCTION,
         Measure => KIND_UNIT,
+        Module => KIND_MODULE,
     }
 }
 
 /// `SymbolKind` codes (LSP spec) for the document-outline icons.
+const SYM_MODULE: i64 = 2;
 const SYM_ENUM: i64 = 10;
 const SYM_FUNCTION: i64 = 12;
 const SYM_NUMBER: i64 = 16;
@@ -609,6 +612,7 @@ fn symbol_kind(kind: resolve::SymbolKind) -> i64 {
         Type => SYM_ENUM,
         Record => SYM_STRUCT,
         Measure => SYM_NUMBER,
+        Module => SYM_MODULE,
     }
 }
 

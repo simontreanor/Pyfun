@@ -138,6 +138,11 @@ const PROGRAMS: &[&str] = &[
     "module Geometry =\n    let pi = 3\n    let area r = pi * r * r",
     "module M =\n    let add a b = a + b",
     "let big = Geometry.area 10",
+    // File-based module imports (`DESIGN.md` §6.1). The name is a single
+    // capitalized identifier; access is the ordinary `Name.member` field path.
+    "import Geometry",
+    "import Geometry\nlet big = Geometry.area 10",
+    "import Geometry\nimport Physics\nlet x = 1",
 ];
 
 #[test]
@@ -232,6 +237,24 @@ fn offside_rule_separates_statements_but_joins_continuations() {
         panic!("expected a let binding")
     };
     assert!(matches!(binding.value.kind, ExprKind::Match { .. }));
+}
+
+#[test]
+fn import_parses_to_a_named_import_item() {
+    let module = parse("import Geometry").unwrap();
+    assert_eq!(module.items.len(), 1);
+    let Item::Import { name, .. } = &module.items[0] else {
+        panic!("expected an import item")
+    };
+    assert_eq!(name, "Geometry");
+}
+
+#[test]
+fn import_requires_a_capitalized_module_name() {
+    // The module name is a single uppercase identifier (like the in-file `module`
+    // name); lowercase or missing names are errors.
+    assert!(parse("import geometry").is_err());
+    assert!(parse("import").is_err());
 }
 
 #[test]

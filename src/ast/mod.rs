@@ -42,6 +42,7 @@ pub fn print_item(item: &Item) -> String {
             s.push_str(&lines.join("\n"));
             s
         }
+        Item::Import { name, .. } => format!("import {name}"),
         Item::Expr(expr) => print_layout(expr, 0),
     }
 }

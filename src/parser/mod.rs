@@ -222,6 +222,7 @@ impl Parser {
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
+            Tok::Import => self.parse_import(),
             Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
             _ => Ok(Item::Expr(self.parse_expr()?)),
         }
@@ -257,6 +258,18 @@ impl Parser {
             name_span,
             items,
         })
+    }
+
+    /// `import Name` — bring another source file's module into scope under its
+    /// capitalized name (`DESIGN.md` §6.1). The name is a single capitalized
+    /// identifier (flat namespace; dotted/nested packages are deferred). The
+    /// multi-file driver that resolves the import lands in a later slice.
+    fn parse_import(&mut self) -> Result<Item, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Import, "`import`")?;
+        let name = self.parse_upper_ident("an imported module name")?;
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(Item::Import { name, span })
     }
 
     fn parse_measure(&mut self) -> Result<Item, ParseError> {
@@ -1240,6 +1253,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Measure => "measure",
         Tok::Extern => "extern",
         Tok::Module => "module",
+        Tok::Import => "import",
         Tok::Not => "not",
         Tok::And => "and",
         Tok::Or => "or",

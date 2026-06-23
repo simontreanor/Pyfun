@@ -26,6 +26,7 @@ pub enum SymbolKind {
     Record,
     Extern,
     Measure,
+    Module,
 }
 
 /// A module-level definition: its name, the span to jump to, and its kind.
@@ -105,6 +106,12 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                     });
                 }
             }
+            // An imported module appears in the outline under its name.
+            Item::Import { name, span } => out.push(Symbol {
+                name: name.clone(),
+                span: span.span(),
+                kind: SymbolKind::Module,
+            }),
             Item::Expr(_) => {}
         }
     }

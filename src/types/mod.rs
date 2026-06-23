@@ -525,6 +525,9 @@ fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
         match item {
             // Measures, types, and externs are all handled by the pre-pass.
             Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
+            // `import` has no single-file semantics yet — the multi-file driver
+            // that seeds imported modules' schemes lands in a later slice.
+            Item::Import { .. } => {}
             Item::Let(binding) => match inf.infer_binding(binding, &env) {
                 Ok((scheme, _eff)) => {
                     env.insert(binding.name.clone(), scheme);

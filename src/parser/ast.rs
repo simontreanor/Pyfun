@@ -63,6 +63,14 @@ pub enum Item {
         name_span: NodeSpan,
         items: Vec<LetBinding>,
     },
+    /// `import Name` — bring another source file's module into scope under its
+    /// capitalized name, accessed `Name.member` (`DESIGN.md` §6.1). Top-of-file
+    /// only. Slice 1 parses and pretty-prints it; the multi-file driver that
+    /// resolves it lands in a later slice (semantics stubbed for now).
+    Import {
+        name: String,
+        span: NodeSpan,
+    },
     Expr(Expr),
 }
 

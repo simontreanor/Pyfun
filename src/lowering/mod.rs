@@ -165,7 +165,9 @@ impl Lowerer {
                         }
                     }
                 }
-                Item::Measure { .. } | Item::Expr(_) => {}
+                // `import` lowers to nothing on its own (slice 1); the multi-file
+                // driver emits the Python `import` line and routes cross-module refs.
+                Item::Measure { .. } | Item::Import { .. } | Item::Expr(_) => {}
             }
         }
         // Built-in Result constructors (see the `result {}` computation expression).
@@ -242,8 +244,9 @@ impl Lowerer {
         for item in &module.items {
             match item {
                 // Measures, type declarations, and externs have no runtime code
-                // (an extern's effect is purely at its reference sites).
-                Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
+                // (an extern's effect is purely at its reference sites). `import`
+                // emits no code in single-file lowering (slice 1).
+                Item::Measure { .. } | Item::Type(_) | Item::Extern(_) | Item::Import { .. } => {}
                 Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
                 // A module's members lower to flat top-level defs/assignments with
                 // mangled names (`Geometry.area` → `Geometry_area`); bare sibling
