@@ -486,12 +486,44 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types) = run(module, false);
+    let (errors, _types, _exports) = run(module, false, &Env::new());
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
     }
+}
+
+/// A module's exported value interface (`DESIGN.md` §6.1): its public top-level
+/// `let` bindings' schemes, keyed by **bare** name. Opaque — the scheme
+/// representation is internal — produced by [`check_module`] and fed back in as a
+/// dependent module's imports. For the MVP a module exports **values only**
+/// (cross-module types / ctors / records / measures / externs are deferred).
+#[derive(Clone, Default)]
+pub struct ModuleExports {
+    schemes: Env,
+}
+
+/// Type-check `module` as one node of a multi-file project (`DESIGN.md` §6.1).
+///
+/// `imports` maps each imported module's **name** to its [`ModuleExports`]; those
+/// members are seeded into the env under qualified keys (`Geometry.area`), which
+/// is exactly how the `Field` access node resolves a `Module.member` reference —
+/// so using an unexported (or unimported) name yields the ordinary "`x` is not a
+/// member of `Geometry`" error. Returns the type errors plus this module's own
+/// exports (its top-level `let` values) for any dependent module to import.
+pub fn check_module(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, ModuleExports) {
+    let mut seed = Env::new();
+    for (name, exports) in imports {
+        for (member, scheme) in &exports.schemes {
+            seed.insert(format!("{name}.{member}"), scheme.clone());
+        }
+    }
+    let (errors, _types, schemes) = run(module, false, &seed);
+    (errors, ModuleExports { schemes })
 }
 
 /// Type-check `module` and, in the same pass, collect the inferred type of every
@@ -500,13 +532,18 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
 pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    run(module, true)
+    let (errors, types, _exports) = run(module, true, &Env::new());
+    (errors, types)
 }
 
-/// Shared core of [`check`] / [`check_collecting`]. When `record` is set, the
-/// inferencer accumulates a `(span, ty)` entry per expression node, which we
-/// resolve and render once inference is complete.
-fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
+/// Shared core of [`check`] / [`check_collecting`] / [`check_module`]. When
+/// `record` is set, the inferencer accumulates a `(span, ty)` entry per expression
+/// node, which we resolve and render once inference is complete. `seed` pre-binds
+/// extra schemes (imported modules' members under qualified keys, for the
+/// multi-file driver); it is empty for a single-file check. Returns the errors,
+/// the hover table, and the module's exported value schemes (top-level `let`
+/// bindings under their bare names).
+fn run(module: &Module, record: bool, seed: &Env) -> (Vec<TypeError>, Vec<TypeSpan>, Env) {
     let mut errors = Vec::new();
     let (decls, ctor_env) = build_decls(module, &mut errors);
 
@@ -520,24 +557,34 @@ fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
         ..Infer::default()
     };
     let mut env = ctor_env;
+    // Seed imported modules' exported members (under qualified keys like
+    // `Geometry.area`) so the `Field` access path resolves cross-module refs.
+    for (key, scheme) in seed {
+        env.insert(key.clone(), scheme.clone());
+    }
+    // Names of this module's top-level `let` values, for its export interface.
+    let mut exported: Vec<String> = Vec::new();
 
     for item in &module.items {
         match item {
             // Measures, types, and externs are all handled by the pre-pass.
             Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
-            // `import` has no single-file semantics yet — the multi-file driver
-            // that seeds imported modules' schemes lands in a later slice.
+            // `import` is resolved by the multi-file driver, which feeds the
+            // imported schemes in via `seed`; the item itself binds nothing here.
             Item::Import { .. } => {}
-            Item::Let(binding) => match inf.infer_binding(binding, &env) {
-                Ok((scheme, _eff)) => {
-                    env.insert(binding.name.clone(), scheme);
+            Item::Let(binding) => {
+                exported.push(binding.name.clone());
+                match inf.infer_binding(binding, &env) {
+                    Ok((scheme, _eff)) => {
+                        env.insert(binding.name.clone(), scheme);
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        let ty = inf.fresh();
+                        env.insert(binding.name.clone(), Scheme::mono(ty));
+                    }
                 }
-                Err(e) => {
-                    errors.push(e);
-                    let ty = inf.fresh();
-                    env.insert(binding.name.clone(), Scheme::mono(ty));
-                }
-            },
+            }
             Item::Expr(expr) => {
                 if let Err(e) = inf.infer_expr(expr, &env) {
                     errors.push(e);
@@ -580,7 +627,24 @@ fn run(module: &Module, record: bool) -> (Vec<TypeError>, Vec<TypeSpan>) {
         Vec::new()
     };
 
-    (errors, types)
+    // The module's export interface: each top-level `let` value's final scheme.
+    // A top-level binding generalizes against an env of closed schemes, so its
+    // scheme is itself closed (no free vars escape); applying the substitution to
+    // its type resolves any var a later statement pinned, leaving it safe to
+    // transplant into a dependent module's env (where `instantiate` refreshes the
+    // quantified vars).
+    let exports: Env = exported
+        .into_iter()
+        .filter_map(|name| {
+            env.get(&name).map(|scheme| {
+                let mut scheme = scheme.clone();
+                scheme.ty = inf.apply(&scheme.ty);
+                (name, scheme)
+            })
+        })
+        .collect();
+
+    (errors, types, exports)
 }
 
 /// Resolve a surface unit expression to a [`Unit`] over base measures, expanding

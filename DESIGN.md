@@ -361,14 +361,22 @@ returned topological order (dependencies first, entry last). `project::build_fro
 `.pyfun`-file wrapper (module name = stem with first letter uppercased; `import Geometry` → `geometry.pyfun`
 in the entry's directory). Cross-module *checking* and *emit* (the next slices) consume this `Project`.
 
-**Cross-module checking.** Each module is type-checked in topological order, its env seeded with every
-imported module's **exported value schemes** under their qualified keys (`env.insert("Geometry.area",
-scheme)`) — reusing the qualified-key env the checker already uses for built-in/in-file modules. A
-module's interface for the MVP is its top-level **`let` values only**; **cross-module types / ctors /
-records / measures / externs are deferred** (qualified type names `Geometry.Shape`, qualified ctor
-patterns `Geometry.Circle r`, and cross-module field resolution are their own follow-on — this mirrors
-the in-file-module `let`-only limit). Using a name a module does not export is a "module `Geometry` has no
-member `x`" error.
+**Cross-module checking** (landed — slice 3, `types::check_module` + `project::check`). Each module is
+type-checked in topological order, its env seeded with every imported module's **exported value schemes**
+under their qualified keys (`env.insert("Geometry.area", scheme)`) — reusing the qualified-key env the
+checker already uses for built-in/in-file modules, so the existing `Field`-node access path resolves a
+cross-module reference with no new lookup logic. A module's interface for the MVP is its top-level **`let`
+values only**; **cross-module types / ctors / records / measures / externs are deferred** (qualified type
+names `Geometry.Shape`, qualified ctor patterns `Geometry.Circle r`, and cross-module field resolution are
+their own follow-on — this mirrors the in-file-module `let`-only limit). Using a name a module does not
+export is the ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
+*Implementation:* the single-file `run` was generalized to take a `seed` env and return the module's
+exported schemes; `check_module(module, imports)` builds the qualified seed and returns
+`(errors, ModuleExports)`. Transplanting a scheme across modules is sound because a top-level binding
+generalizes against an env of closed schemes, so its own scheme is closed (no free vars escape) and
+`instantiate` refreshes the quantified vars in the dependent module's id space. `project::check` threads
+the `ModuleExports` map through the topological order, seeding each module from only the modules it
+actually imports (so an unimported module's members stay invisible), and returns errors grouped by module.
 
 **Output & the shared runtime.** Each module lowers independently to its own `.py`; a cross-module
 `Geometry.area` emits `geometry.area` (attribute access), with `import geometry` hoisted to the file
@@ -398,7 +406,8 @@ de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ord
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
 DFS so the graph logic is filesystem-free and unit-testable; `build_from_path` is the `.pyfun`-file
-wrapper]; (3) cross-module value checking; (4) shared
+wrapper]; (3) cross-module value checking [**done** — `types::check_module` (seeded env + exported
+schemes) + `project::check` over the topo order]; (4) shared
 `_pyfun_rt.py` + cross-module lowering + parallel-file emit; (5) CLI over the graph (temp-dir `run`,
 `-o <dir>`); (6) minimal-import-awareness LSP; (7) docs/example/memory.
 

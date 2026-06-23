@@ -139,6 +139,45 @@ pub fn build_from_path(entry: &Path) -> Result<Project, ProjectError> {
     })
 }
 
+/// Type errors found in one module of a project.
+#[derive(Debug)]
+pub struct ModuleErrors {
+    /// The module the errors were found in.
+    pub name: String,
+    pub errors: Vec<crate::types::TypeError>,
+}
+
+/// Type-check every module of `project` in topological order (`DESIGN.md` §6.1).
+///
+/// Each module is checked with its imports' exported value schemes seeded into
+/// scope (so `Geometry.area` resolves), and its own exports are recorded for the
+/// modules that depend on it — the topological order guarantees a module's
+/// imports are already checked when it is reached. Errors are returned grouped by
+/// module; an empty vec means the whole project type-checks. A module with errors
+/// still contributes its (best-effort) exports so dependents can be checked too.
+pub fn check(project: &Project) -> Vec<ModuleErrors> {
+    use crate::types::{self, ModuleExports};
+
+    let mut exports: HashMap<String, ModuleExports> = HashMap::new();
+    let mut all = Vec::new();
+    for module in &project.modules {
+        let imports: HashMap<String, ModuleExports> = module
+            .imports
+            .iter()
+            .filter_map(|name| exports.get(name).map(|e| (name.clone(), e.clone())))
+            .collect();
+        let (errors, module_exports) = types::check_module(&module.ast, &imports);
+        if !errors.is_empty() {
+            all.push(ModuleErrors {
+                name: module.name.clone(),
+                errors,
+            });
+        }
+        exports.insert(module.name.clone(), module_exports);
+    }
+    all
+}
+
 /// Whether a module visit is in progress (on the DFS path) or finished.
 enum Visit {
     Visiting,
@@ -347,6 +386,100 @@ mod tests {
             panic!("expected a compile error, got {err:?}");
         };
         assert_eq!(name, "Broken");
+    }
+
+    #[test]
+    fn a_well_typed_project_checks_clean() {
+        let project = build(
+            "Main",
+            loader(&[
+                ("Geometry", "let area w h = w * h"),
+                ("Main", "import Geometry\nlet floor = Geometry.area 4 5"),
+            ]),
+        )
+        .unwrap();
+        let errors = check(&project);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn using_an_unexported_member_is_an_error() {
+        // Geometry exports `area`, not `volume`; Main referencing `Geometry.volume`
+        // gets the ordinary "not a member" error, located in Main.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Geometry", "let area w h = w * h"),
+                ("Main", "import Geometry\nlet v = Geometry.volume 1 2"),
+            ]),
+        )
+        .unwrap();
+        let errors = check(&project);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].name, "Main");
+        assert!(
+            errors[0].errors[0]
+                .message
+                .contains("not a member of `Geometry`"),
+            "got: {}",
+            errors[0].errors[0].message
+        );
+    }
+
+    #[test]
+    fn a_cross_module_type_mismatch_is_caught() {
+        // Geometry.area : num 'a => 'a -> 'a -> 'a; applying it to a string is a
+        // type error in the importing module.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Geometry", "let area w h = w * h"),
+                (
+                    "Main",
+                    "import Geometry\nlet bad = Geometry.area 4 \"five\"",
+                ),
+            ]),
+        )
+        .unwrap();
+        let errors = check(&project);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].name, "Main");
+    }
+
+    #[test]
+    fn an_imported_polymorphic_value_instantiates_freshly() {
+        // `id : 'a -> 'a` imported and used at two different types must check.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Util", "let id x = x"),
+                (
+                    "Main",
+                    "import Util\nlet n = Util.id 1\nlet s = Util.id \"hi\"",
+                ),
+            ]),
+        )
+        .unwrap();
+        let errors = check(&project);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    #[test]
+    fn a_member_not_imported_is_unavailable() {
+        // Without `import Geometry`, Main never seeds Geometry's members, so
+        // `Geometry.area` is unresolved at check time (no import edge, no graph
+        // error — just an unknown qualified reference).
+        let project = build("Main", loader(&[("Main", "let x = Geometry.area 1 2")])).unwrap();
+        let errors = check(&project);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].name, "Main");
+        assert!(
+            errors[0].errors[0]
+                .message
+                .contains("not a member of `Geometry`"),
+            "got: {}",
+            errors[0].errors[0].message
+        );
     }
 
     #[test]
