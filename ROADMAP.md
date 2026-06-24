@@ -289,8 +289,9 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    go-to-definition across files (`resolve::qualified_at` + `locate_cross_file`), `workspace/symbol`, and
    **project-wide find-references + rename of top-level values and constructors** (`symbol_occurrences`;
    constructor occurrences incl. patterns via `Pattern::Ctor`/variant `name_span` + `resolve::walk_pattern`;
-   sound — kind-matched, strict scan refuses on parse failure). Still deferred: cross-module
-   records/measures/externs, type-name refs/rename (in-file only, needs a `TypeExpr::Con` span), a project-wide LSP cache.
+   sound — kind-matched, strict scan refuses on parse failure), and **in-file find-references / rename of
+   type names** (`TypeExpr::Con`/`TypeDecl` `name_span` + `resolve::walk_type` + `type_at`; types have no
+   cross-file dimension). Still deferred: cross-module records/measures/externs, a project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

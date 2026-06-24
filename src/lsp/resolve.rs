@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use crate::lexer::Span;
 use crate::syntax::{
-    BlockStmt, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDeclKind,
+    BlockStmt, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl,
+    TypeDeclKind, TypeExpr,
 };
 
 /// What kind of thing a module-level symbol is (drives the editor's icon and, for
@@ -77,7 +78,9 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                 };
                 out.push(Symbol {
                     name: decl.name.clone(),
-                    span: decl.span.span(),
+                    // The precise type-name span, so find-references / rename can
+                    // target it (not the whole `type` declaration).
+                    span: decl.name_span.span(),
                     kind,
                 });
                 if let TypeDeclKind::Sum(variants) = &decl.kind {
@@ -143,6 +146,42 @@ pub fn qualified_references(module: &Module) -> Vec<QualRef> {
     walk(module).quals
 }
 
+/// The type name (and occurrence span) under `offset`: a type-annotation use, or
+/// the type's own declaration name. For in-file type go-to-definition /
+/// find-references / rename. `None` when the cursor is not on a type name.
+pub fn type_at(module: &Module, offset: usize) -> Option<(String, Span)> {
+    // A use occurrence (narrowest covering the cursor).
+    if let Some(t) = walk(module)
+        .type_refs
+        .into_iter()
+        .filter(|t| t.span.start <= offset && offset < t.span.end)
+        .min_by_key(|t| t.span.end - t.span.start)
+    {
+        return Some((t.name, t.span));
+    }
+    // The declaration name itself.
+    for item in &module.items {
+        if let Item::Type(decl) = item {
+            let s = decl.name_span.span();
+            if s.start <= offset && offset < s.end {
+                return Some((decl.name.clone(), s));
+            }
+        }
+    }
+    None
+}
+
+/// Every type-annotation *use* of the type `name` (not the declaration — that is a
+/// [`Symbol`] in [`definitions`], so callers add it when wanted).
+pub fn type_use_references(module: &Module, name: &str) -> Vec<Span> {
+    walk(module)
+        .type_refs
+        .into_iter()
+        .filter(|t| t.name == name)
+        .map(|t| t.span)
+        .collect()
+}
+
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
@@ -150,6 +189,10 @@ fn walk(module: &Module) -> Resolver {
         match item {
             Item::Let(binding) => r.walk_binding(binding),
             Item::Expr(expr) => r.walk_expr(expr),
+            // Type / extern declarations carry type annotations whose type-name
+            // occurrences power in-file type find-references / rename.
+            Item::Type(decl) => r.walk_type_decl(decl),
+            Item::Extern(decl) => r.walk_type(&decl.ty),
             // Walk each module member's body (params in scope) so locals inside
             // resolve for hover/local navigation.
             Item::Module { items, .. } => {
@@ -231,6 +274,8 @@ struct Resolver {
     /// Qualified `Module.member` references in expression position (`Geometry.area`,
     /// `Geometry.Circle`) with the occurrence span, for cross-file navigation.
     quals: Vec<QualRef>,
+    /// Type-name occurrences in annotations, for in-file type find-references/rename.
+    type_refs: Vec<TypeRef>,
 }
 
 /// A qualified `Module.member` reference: the module name, the member name, and
@@ -239,6 +284,17 @@ struct Resolver {
 pub struct QualRef {
     pub module: String,
     pub member: String,
+    pub span: Span,
+}
+
+/// A type-name occurrence in an annotation (`Shape` in `{ s: Shape }` or
+/// `Shape -> int`): the name and the span of that occurrence. Powers in-file
+/// find-references / rename of a user type (type names have no cross-file
+/// dimension — there is no qualified-type syntax). Only an uppercase name is a
+/// type reference; a lowercase one is a type variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeRef {
+    pub name: String,
     pub span: Span,
 }
 
@@ -310,6 +366,53 @@ impl Resolver {
                 }
             }
             Pattern::Var { .. } | Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
+        }
+    }
+
+    /// Record type-name occurrences in a `type` declaration's field annotations
+    /// (sum variant fields, record field types). The declared name itself comes
+    /// from [`definitions`] (with its own span); only *uses* are recorded here.
+    fn walk_type_decl(&mut self, decl: &TypeDecl) {
+        match &decl.kind {
+            TypeDeclKind::Sum(variants) => {
+                for v in variants {
+                    for f in &v.fields {
+                        self.walk_type(f);
+                    }
+                }
+            }
+            TypeDeclKind::Record(fields) => {
+                for f in fields {
+                    self.walk_type(&f.ty);
+                }
+            }
+        }
+    }
+
+    /// Record type-name occurrences in a type expression (uppercase `Con` names),
+    /// recursing into arguments, function arrows, and tuples.
+    fn walk_type(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Con(name, span, args) => {
+                if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                    self.type_refs.push(TypeRef {
+                        name: name.clone(),
+                        span: span.span(),
+                    });
+                }
+                for a in args {
+                    self.walk_type(a);
+                }
+            }
+            TypeExpr::Fun(a, b) => {
+                self.walk_type(a);
+                self.walk_type(b);
+            }
+            TypeExpr::Tuple(elems) => {
+                for e in elems {
+                    self.walk_type(e);
+                }
+            }
         }
     }
 

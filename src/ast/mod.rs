@@ -139,8 +139,8 @@ fn print_variant(variant: &VariantDecl) -> String {
 fn print_type(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Fun(a, b) => format!("{} -> {}", print_type_atom(a), print_type(b)),
-        TypeExpr::Con(name, args) if args.is_empty() => name.clone(),
-        TypeExpr::Con(name, args) => {
+        TypeExpr::Con(name, _, args) if args.is_empty() => name.clone(),
+        TypeExpr::Con(name, _, args) => {
             let args: Vec<String> = args.iter().map(print_type_atom).collect();
             format!("{name} {}", args.join(" "))
         }
@@ -155,7 +155,7 @@ fn print_type(ty: &TypeExpr) -> String {
 /// sit as a single constructor field and reparse identically.
 fn print_type_atom(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Con(name, args) if args.is_empty() => name.clone(),
+        TypeExpr::Con(name, _, args) if args.is_empty() => name.clone(),
         // A tuple is already self-delimiting (its own parens).
         TypeExpr::Tuple(_) => print_type(ty),
         _ => format!("({})", print_type(ty)),

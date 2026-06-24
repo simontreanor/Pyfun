@@ -324,7 +324,9 @@ impl Parser {
     fn parse_type_decl(&mut self) -> Result<TypeDecl, ParseError> {
         let start = self.cur_start();
         self.expect(&Tok::Type, "`type`")?;
+        let name_start = self.cur_start();
         let name = self.parse_upper_ident("type name")?;
+        let name_span = crate::parser::ast::NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
         while let Tok::Ident(_) = self.peek() {
             params.push(self.parse_ident("type parameter")?);
@@ -345,6 +347,7 @@ impl Parser {
         let span = crate::parser::ast::NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(TypeDecl {
             name,
+            name_span,
             params,
             kind,
             span,
@@ -402,12 +405,14 @@ impl Parser {
         if let Tok::Ident(name) = self.peek().clone()
             && is_upper(&name)
         {
+            let start = self.cur_start();
             self.bump();
+            let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
             let mut args = Vec::new();
             while starts_type_atom(self.peek()) {
                 args.push(self.parse_type_atom()?);
             }
-            return Ok(TypeExpr::Con(name, args));
+            return Ok(TypeExpr::Con(name, name_span, args));
         }
         self.parse_type_atom()
     }
@@ -415,8 +420,10 @@ impl Parser {
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParseError> {
         match self.peek().clone() {
             Tok::Ident(name) => {
+                let start = self.cur_start();
                 self.bump();
-                Ok(TypeExpr::Con(name, Vec::new()))
+                let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                Ok(TypeExpr::Con(name, name_span, Vec::new()))
             }
             Tok::LParen => {
                 self.bump();

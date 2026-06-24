@@ -446,23 +446,25 @@ definition, its bare uses in the defining file, and every qualified use (`Geomet
 patterns: `Pattern::Ctor` and the `type` variant declaration each carry a name span, and the resolver
 records pattern constructors in the same reference channels as the expression forms, so the occurrence set
 is complete. Rename is sound: it fires only for a top-level value or constructor (a value renames to a
-value, a constructor to a constructor; a *type* is refused), and a *strict* scan **refuses** rather than do
-a partial rewrite if any project file fails to parse. **Still deferred:** find-references / rename of **type
-names** (no cross-file dimension — there is no qualified-type syntax, so a type name appears only in its
-defining file's annotations; in-file type refactoring would need type-annotation occurrence tracking
-— a span on `TypeExpr::Con` — a separate change) and a project-wide cache.
+value, a constructor to a constructor), and a *strict* scan **refuses** rather than do a partial rewrite if
+any project file fails to parse. **Type names** also navigate and rename, but **in-file only** — there is
+no qualified-type syntax, so a type name appears only in its own file's annotations (sum-variant and record
+field types, `extern` types). `TypeExpr::Con` and the `type` declaration each carry a name span, the
+resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name occurrences, and
+`resolve::type_at` / `type_use_references` drive go-to-definition, find-references, and rename (a type
+renames to an uppercase type name; builtins are refused). **Still deferred:** a project-wide LSP cache.
 
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
 (construct + qualified-pattern-match + cross-boundary exhaustiveness) and **cross-file LSP navigation**
-(go-to-definition across files, workspace symbols, and project-wide find-references + rename of top-level
-values and constructors). **Explicit non-goals (decided not to build):** visibility (`pub`) — Pyfun is
+(go-to-definition across files, workspace symbols, project-wide find-references + rename of top-level
+values and constructors, and in-file find-references / rename of type names). **Explicit non-goals
+(decided not to build):** visibility (`pub`) — Pyfun is
 all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
 X import y` / `open`; cross-module *records*/measures/externs (records hit the global field-uniqueness
-invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime; find-references
-/ rename of **type names** (in-file only — needs a `TypeExpr::Con` span; values + constructors already
-done) and a project-wide LSP cache.
+invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime; a project-wide
+LSP cache.
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected

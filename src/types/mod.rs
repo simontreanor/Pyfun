@@ -1036,7 +1036,7 @@ fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
                 collect_type_vars(e, map);
             }
         }
-        TypeExpr::Con(name, args) => {
+        TypeExpr::Con(name, _, args) => {
             if args.is_empty()
                 && !BUILTIN_TYPES.contains(&name.as_str())
                 && name.chars().next().is_some_and(char::is_lowercase)
@@ -1663,7 +1663,7 @@ fn resolve(
                 .collect();
             Ok(Ty::Tuple(resolved?))
         }
-        TypeExpr::Con(name, args) => {
+        TypeExpr::Con(name, _, args) => {
             let no_args = |t: Ty| -> Result<Ty, TypeError> {
                 if args.is_empty() {
                     Ok(t)

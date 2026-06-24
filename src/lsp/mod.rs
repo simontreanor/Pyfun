@@ -8,15 +8,16 @@
 //!   the narrowest expression under the cursor — the only way to *see* an inferred
 //!   type, since Pyfun never writes them.
 //! - **Go-to-definition** and **find-references**: navigate between a symbol and its
-//!   uses (module-level or local), via the name resolver in [`resolve`]. Both cross
-//!   files: go-to-definition on a qualified reference (`Geometry.area`) jumps to the
-//!   definition in that module's `.pyfun`, and find-references on a top-level value
-//!   or constructor spans the whole project (definition + bare uses + every
-//!   qualified use, including constructor *patterns*).
-//! - **Rename**: rewrite every occurrence of a local, a top-level `let` value, or a
-//!   constructor — project-wide for the latter two (a value renames to a value, a
-//!   constructor to a constructor; a strict scan refuses rather than half-rename if
-//!   any project file fails to parse). Renaming a *type* is not yet supported.
+//!   uses (module-level or local), via the name resolver in [`resolve`]. Values and
+//!   constructors cross files (go-to-definition on `Geometry.area` jumps to that
+//!   module's `.pyfun`; find-references spans the project — bare uses, every
+//!   qualified use, and constructor *patterns*); types navigate in-file (their
+//!   declaration and annotation uses).
+//! - **Rename**: rewrite every occurrence of a local, a top-level `let` value, a
+//!   constructor, or a type. Values and constructors rename project-wide (a value to
+//!   a value, a constructor to a constructor; a strict scan refuses rather than
+//!   half-rename if any project file fails to parse); a type renames in-file (type
+//!   names have no cross-file dimension — there is no qualified-type syntax).
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
 //! - **Document symbols** and **workspace symbols**: the module outline and a
 //!   project-wide symbol search across the directory's `.pyfun` files.
@@ -445,6 +446,13 @@ impl Server {
             return location;
         }
 
+        // A type-name occurrence jumps to its (in-file) declaration.
+        if let Some((name, _)) = resolve::type_at(module, offset)
+            && let Some(span) = user_type_decl_span(module, &name)
+        {
+            return obj(vec![("uri", str(uri)), ("range", span_range(text, span))]);
+        }
+
         // The narrowest reference span containing the cursor is the identifier.
         let target = resolve::references(module)
             .into_iter()
@@ -604,6 +612,19 @@ impl Server {
             .map(|v| v == &Json::Bool(true))
             .unwrap_or(true);
 
+        // A type name: its in-file annotation uses, plus its declaration when asked.
+        if let Some((name, _)) = resolve::type_at(module, offset) {
+            let mut spans = resolve::type_use_references(module, &name);
+            if include_declaration && let Some(decl) = user_type_decl_span(module, &name) {
+                spans.push(decl);
+            }
+            let locations = spans
+                .into_iter()
+                .map(|span| obj(vec![("uri", str(uri)), ("range", span_range(text, span))]))
+                .collect();
+            return Json::Array(locations);
+        }
+
         // A top-level value or constructor (bare or qualified) is searched across
         // all project files; anything else (a local binder) stays within this file.
         if let Some((tmod, member)) = value_target(module, uri, offset)
@@ -646,6 +667,14 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
+        // A user type: the editable range is the type-name occurrence.
+        if let Some((name, span)) = resolve::type_at(module, offset) {
+            return if user_type_decl_span(module, &name).is_some() {
+                span_range(text, span)
+            } else {
+                Json::Null // a builtin type is not renameable
+            };
+        }
         // A cross-file value or constructor: the editable range is the member
         // identifier (the part a qualified `Geometry.area` rewrites, or a bare
         // name's own span).
@@ -694,6 +723,29 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
+        // A user type renames in-file (type names have no cross-file dimension):
+        // its declaration plus its annotation uses. A type renames to a type
+        // (uppercase identifier).
+        if let Some((name, _)) = resolve::type_at(module, offset)
+            && let Some(decl_span) = user_type_decl_span(module, &name)
+        {
+            if !is_ctor_identifier(new_name) {
+                return Json::Null; // a type renames to an uppercase type name
+            }
+            let mut spans = resolve::type_use_references(module, &name);
+            spans.push(decl_span);
+            let edits: Vec<Json> = spans
+                .into_iter()
+                .map(|span| {
+                    obj(vec![
+                        ("range", span_range(text, span)),
+                        ("newText", str(new_name)),
+                    ])
+                })
+                .collect();
+            return obj(vec![("changes", obj(vec![(uri, Json::Array(edits))]))]);
+        }
+
         // A top-level value or constructor renames across the whole project (its
         // definition, its bare uses in the defining file, and every qualified use —
         // construction *and* pattern — elsewhere). The non-strict scan decides
@@ -960,6 +1012,20 @@ fn is_ctor_identifier(name: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !is_keyword(name)
+}
+
+/// The declaration span of a *user* type `name` (a `type`/record decl in this
+/// module), if any — so only user types, not builtins, are go-to-def / rename
+/// targets.
+fn user_type_decl_span(module: &crate::syntax::Module, name: &str) -> Option<crate::lexer::Span> {
+    resolve::definitions(module).into_iter().find_map(|s| {
+        (s.name == name
+            && matches!(
+                s.kind,
+                resolve::SymbolKind::Type | resolve::SymbolKind::Record
+            ))
+        .then_some(s.span)
+    })
 }
 
 /// Whether `new_name` is a valid rename for a symbol named `member`: a
@@ -1605,6 +1671,104 @@ mod tests {
         let out = server.handle(&json::parse(&req).unwrap());
         assert_eq!(out[0].get("result"), Some(&Json::Null));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn type_find_references_and_go_to_definition() {
+        let mut server = Server::default();
+        let uri = "file:///ty.pyfun";
+        let src = "type Shape = Mk int\ntype Box = { it: Shape }";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+
+        // find-references from the decl name `Shape` (line 0): decl + the field use.
+        let req = references_msg(uri, 0, 6, true);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let locs = out[0].get("result").unwrap().as_array().unwrap();
+        assert_eq!(locs.len(), 2, "decl + one use: {locs:?}");
+
+        // go-to-definition from the use `Shape` (line 1) jumps to the decl (line 0).
+        let req = pos_msg("textDocument/definition", uri, 1, 18);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let line = out[0]
+            .get("result")
+            .unwrap()
+            .get("range")
+            .unwrap()
+            .get("start")
+            .unwrap()
+            .get("line")
+            .unwrap()
+            .as_i64();
+        assert_eq!(line, Some(0));
+    }
+
+    #[test]
+    fn type_rename_rewrites_declaration_and_uses() {
+        let mut server = Server::default();
+        let uri = "file:///tyr.pyfun";
+        let src = "type Shape = Mk int\ntype Box = { it: Shape }";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(1)), ("character", int(18))]),
+                    ),
+                    ("newName", str("Figure")),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        let edits = out[0]
+            .get("result")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get(uri)
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(edits.len(), 2, "decl + one use rewritten");
+        assert!(
+            edits
+                .iter()
+                .all(|e| e.get("newText").and_then(Json::as_str) == Some("Figure"))
+        );
+    }
+
+    #[test]
+    fn type_rename_rejects_a_lowercase_name_and_builtins() {
+        let mut server = Server::default();
+        let uri = "file:///tyb.pyfun";
+        let src = "type Shape = Mk int\nlet xs = [1, 2, 3]";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        // A type renames only to an uppercase type name.
+        let lower = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(0)), ("character", int(6))]),
+                    ),
+                    ("newName", str("shape")),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&lower).unwrap());
+        assert_eq!(out[0].get("result"), Some(&Json::Null));
     }
 
     #[test]

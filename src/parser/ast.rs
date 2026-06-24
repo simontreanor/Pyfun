@@ -105,6 +105,9 @@ pub struct UnitExpr {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecl {
     pub name: String,
+    /// The span of the declared type name, so an editor can find-references /
+    /// rename it. `NodeSpan` compares equal — invisible to roundtrip.
+    pub name_span: NodeSpan,
     pub params: Vec<String>,
     pub kind: TypeDeclKind,
     pub span: NodeSpan,
@@ -140,8 +143,10 @@ pub struct FieldDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeExpr {
     /// A named type — variable, builtin, or type constructor — applied to zero or
-    /// more arguments. `a`, `int`, `List a`, `Option int` are all `Con`.
-    Con(String, Vec<TypeExpr>),
+    /// more arguments. `a`, `int`, `List a`, `Option int` are all `Con`. The
+    /// `NodeSpan` is the span of the type *name* (for editor find-references /
+    /// rename of a user type); it compares equal — invisible to roundtrip.
+    Con(String, NodeSpan, Vec<TypeExpr>),
     /// A function type `arg -> result`.
     Fun(Box<TypeExpr>, Box<TypeExpr>),
     /// A tuple type `(a, b)` — a structural product of two or more types.
