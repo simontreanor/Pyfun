@@ -21,8 +21,9 @@ let strip = widen 2                  # 20
 
 # An Option built in Store and consumed here — one `Some` type via the shared
 # runtime, so `Option.withDefault` matches it correctly across the boundary.
-let hit = Option.withDefault 0 (Store.lookup 1)
-let miss = Option.withDefault 0 (Store.lookup 9)
+# `|>` pipes the value into the (curried, partially-applied) transform.
+let hit = Store.lookup 1 |> Option.withDefault 0
+let miss = Store.lookup 9 |> Option.withDefault 0
 
 print floor                          # 20
 print nine                           # 9
