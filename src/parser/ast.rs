@@ -123,6 +123,9 @@ pub enum TypeDeclKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariantDecl {
     pub name: String,
+    /// The span of the constructor name, so an editor can find-references / rename
+    /// it. `NodeSpan` compares equal — invisible to roundtrip.
+    pub name_span: NodeSpan,
     pub fields: Vec<TypeExpr>,
 }
 
@@ -415,6 +418,10 @@ pub enum Pattern {
     Bool(bool),
     Ctor {
         name: String,
+        /// The span of the constructor name (qualified or bare), so an editor can
+        /// find-references / rename it. `NodeSpan` compares equal — invisible to
+        /// roundtrip.
+        name_span: NodeSpan,
         args: Vec<Pattern>,
     },
     /// `{ x = p, y }` — a record pattern. The owning record type is resolved from

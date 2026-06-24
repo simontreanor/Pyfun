@@ -372,12 +372,18 @@ impl Parser {
     }
 
     fn parse_variant(&mut self) -> Result<VariantDecl, ParseError> {
+        let start = self.cur_start();
         let name = self.parse_upper_ident("constructor name")?;
+        let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
         let mut fields = Vec::new();
         while starts_type_atom(self.peek()) {
             fields.push(self.parse_type_atom()?);
         }
-        Ok(VariantDecl { name, fields })
+        Ok(VariantDecl {
+            name,
+            name_span,
+            fields,
+        })
     }
 
     /// A type expression: an application optionally followed by `-> result`.
@@ -1059,13 +1065,19 @@ impl Parser {
         if let Tok::Ident(name) = self.peek().clone()
             && is_upper(&name)
         {
+            let start = self.cur_start();
             self.bump();
             let name = self.maybe_qualify_ctor(name)?;
+            let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
             let mut args = Vec::new();
             while starts_atom_pattern(self.peek()) {
                 args.push(self.parse_atom_pattern()?);
             }
-            return Ok(Pattern::Ctor { name, args });
+            return Ok(Pattern::Ctor {
+                name,
+                name_span,
+                args,
+            });
         }
         self.parse_atom_pattern()
     }
@@ -1096,6 +1108,7 @@ impl Parser {
                     let name = self.maybe_qualify_ctor(name)?;
                     Ok(Pattern::Ctor {
                         name,
+                        name_span: NodeSpan::new(Span::new(start, self.prev_end())),
                         args: Vec::new(),
                     })
                 } else {

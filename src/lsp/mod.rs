@@ -11,10 +11,12 @@
 //!   uses (module-level or local), via the name resolver in [`resolve`]. Both cross
 //!   files: go-to-definition on a qualified reference (`Geometry.area`) jumps to the
 //!   definition in that module's `.pyfun`, and find-references on a top-level value
-//!   spans the whole project (definition + bare uses + every qualified use).
-//! - **Rename**: rewrite every occurrence of a local or top-level `let` value —
-//!   project-wide for a top-level value (constructors/types refused; a strict scan
-//!   refuses rather than half-rename if any project file fails to parse).
+//!   or constructor spans the whole project (definition + bare uses + every
+//!   qualified use, including constructor *patterns*).
+//! - **Rename**: rewrite every occurrence of a local, a top-level `let` value, or a
+//!   constructor — project-wide for the latter two (a value renames to a value, a
+//!   constructor to a constructor; a strict scan refuses rather than half-rename if
+//!   any project file fails to parse). Renaming a *type* is not yet supported.
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
 //! - **Document symbols** and **workspace symbols**: the module outline and a
 //!   project-wide symbol search across the directory's `.pyfun` files.
@@ -485,16 +487,19 @@ impl Server {
         ]))
     }
 
-    /// Every occurrence of the top-level **value** `member` defined in module
-    /// `target_module`, across the project directory's `.pyfun` files: its
+    /// Every occurrence of the top-level **value or constructor** `member` defined
+    /// in module `target_module`, across the project directory's `.pyfun` files: its
     /// definition (when `include_decl`), its bare uses in the defining file, and its
     /// qualified uses (`Geometry.member`) elsewhere — as `(file uri, range)` pairs
-    /// (`DESIGN.md` §6.1). `None` if `member` is not a top-level *value* of
-    /// `target_module` (a constructor/type is not cross-file renameable), the
-    /// directory can't be read, or — when `strict` — some project file fails to
+    /// (`DESIGN.md` §6.1). A constructor's uses include both construction
+    /// expressions and patterns (the resolver records pattern constructors in the
+    /// same channels). The kind sought is chosen by the name's case
+    /// ([`symbol_kind_of`]). `None` if `member` is not such a definition of
+    /// `target_module` (a type, or a built-in, is not cross-file renameable here),
+    /// the directory can't be read, or — when `strict` — some project file fails to
     /// parse (so a rewrite could miss an occurrence). Reads each file from its open
     /// buffer if present, else disk.
-    fn value_occurrences(
+    fn symbol_occurrences(
         &self,
         uri: &str,
         target_module: &str,
@@ -502,6 +507,7 @@ impl Server {
         include_decl: bool,
         strict: bool,
     ) -> Option<Vec<(String, Json)>> {
+        let wanted_kind = symbol_kind_of(member);
         let dir = uri_to_path(uri)?.parent()?.to_path_buf();
         let mut files: Vec<String> = std::fs::read_dir(&dir)
             .ok()?
@@ -538,7 +544,7 @@ impl Server {
                 // The defining file: the definition (a *value*) plus its bare uses.
                 if let Some(sym) = resolve::definitions(&m)
                     .into_iter()
-                    .find(|s| s.name == member && s.kind == resolve::SymbolKind::Value)
+                    .find(|s| s.name == member && s.kind == wanted_kind)
                 {
                     defining_found = true;
                     if include_decl {
@@ -598,11 +604,11 @@ impl Server {
             .map(|v| v == &Json::Bool(true))
             .unwrap_or(true);
 
-        // A top-level value (bare or qualified) is searched across all project
-        // files; anything else (a local binder) stays within this file.
+        // A top-level value or constructor (bare or qualified) is searched across
+        // all project files; anything else (a local binder) stays within this file.
         if let Some((tmod, member)) = value_target(module, uri, offset)
             && let Some(occ) =
-                self.value_occurrences(uri, &tmod, &member, include_declaration, false)
+                self.symbol_occurrences(uri, &tmod, &member, include_declaration, false)
         {
             let locations = occ
                 .into_iter()
@@ -640,11 +646,12 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
-        // A cross-file value: the editable range is the member identifier (the part
-        // a qualified `Geometry.area` rewrites, or a bare name's own span).
+        // A cross-file value or constructor: the editable range is the member
+        // identifier (the part a qualified `Geometry.area` rewrites, or a bare
+        // name's own span).
         if let Some((tmod, member)) = value_target(module, uri, offset)
             && self
-                .value_occurrences(uri, &tmod, &member, true, true)
+                .symbol_occurrences(uri, &tmod, &member, true, true)
                 .is_some()
         {
             return if let Some(q) = resolve::qualified_at(module, offset) {
@@ -683,24 +690,26 @@ impl Server {
             .and_then(|d| d.get("uri"))
             .and_then(Json::as_str)
             .unwrap_or_default();
-        if !is_value_identifier(new_name) {
-            return Json::Null;
-        }
         // Only rename when the document fully parses (see `prepare_rename`).
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
-        // A top-level value renames across the whole project (its definition, its
-        // bare uses in the defining file, and every qualified use elsewhere). The
-        // non-strict scan decides whether the target *is* such a value; if so, a
-        // strict scan must succeed (every project file parses) or we refuse — never
-        // silently fall back to an incomplete in-file-only rewrite.
+        // A top-level value or constructor renames across the whole project (its
+        // definition, its bare uses in the defining file, and every qualified use —
+        // construction *and* pattern — elsewhere). The non-strict scan decides
+        // whether the target *is* such a symbol; if so, a strict scan must succeed
+        // (every project file parses) or we refuse — never silently fall back to an
+        // incomplete in-file-only rewrite.
         if let Some((tmod, member)) = value_target(module, uri, offset)
             && self
-                .value_occurrences(uri, &tmod, &member, true, false)
+                .symbol_occurrences(uri, &tmod, &member, true, false)
                 .is_some()
         {
-            let Some(occ) = self.value_occurrences(uri, &tmod, &member, true, true) else {
+            // A value renames to a value, a constructor to a constructor.
+            if !valid_rename(&member, new_name) {
+                return Json::Null;
+            }
+            let Some(occ) = self.symbol_occurrences(uri, &tmod, &member, true, true) else {
                 return Json::Null;
             };
             let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
@@ -720,7 +729,7 @@ impl Server {
         let Some((_, target)) = resolve::symbol_at(module, offset) else {
             return Json::Null;
         };
-        if !is_renameable(module, &target) {
+        if !is_renameable(module, &target) || !is_value_identifier(new_name) {
             return Json::Null;
         }
         let edits: Vec<Json> = resolve::find_references(module, &target, true)
@@ -942,6 +951,44 @@ fn is_value_identifier(name: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !is_keyword(name)
+}
+
+/// Whether `name` is a valid constructor identifier (uppercase-leading word
+/// characters, not a keyword) — a constructor renames only to another constructor.
+fn is_ctor_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !is_keyword(name)
+}
+
+/// Whether `new_name` is a valid rename for a symbol named `member`: a
+/// constructor (uppercase-leading) renames to a constructor, a value to a value —
+/// so a rename can't turn a value into a constructor or vice-versa.
+fn valid_rename(member: &str, new_name: &str) -> bool {
+    if member
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+    {
+        is_ctor_identifier(new_name)
+    } else {
+        is_value_identifier(new_name)
+    }
+}
+
+/// The definition kind a cross-file symbol search matches for `member`: a
+/// constructor when the name is uppercase-leading, otherwise a value.
+fn symbol_kind_of(member: &str) -> resolve::SymbolKind {
+    if member
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_uppercase())
+    {
+        resolve::SymbolKind::Constructor
+    } else {
+        resolve::SymbolKind::Value
+    }
 }
 
 /// Reserved words that a value identifier must not collide with.
@@ -1436,6 +1483,127 @@ mod tests {
             .unwrap()
             .as_i64();
         assert_eq!(line, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_references_for_a_constructor_spans_construction_and_patterns() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_ctorref_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("shape.pyfun"),
+            "type Shape = Circle float | Rect float float",
+        )
+        .unwrap();
+        let main_src = "import Shape\n\
+             let c = Shape.Circle 2.0\n\
+             let describe x =\n  match x with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let shape_uri = file_uri(&dir.join("shape.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        // From the construction `Shape.Circle` (line 1, on `Circle`).
+        let req = references_msg(&main_uri, 1, 16, true);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let locs = out[0].get("result").unwrap().as_array().unwrap();
+        let count = |u: &str| {
+            locs.iter()
+                .filter(|l| l.get("uri").and_then(Json::as_str) == Some(u))
+                .count()
+        };
+        // The declaration in shape.pyfun, plus construction + pattern in main.
+        assert_eq!(count(&shape_uri), 1, "decl: {locs:?}");
+        assert_eq!(count(&main_uri), 2, "construction + pattern: {locs:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_constructor_rewrites_across_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_ctorren_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("shape.pyfun"),
+            "type Shape = Circle float | Rect float float",
+        )
+        .unwrap();
+        let main_src = "import Shape\n\
+             let c = Shape.Circle 2.0\n\
+             let describe x =\n  match x with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let shape_uri = file_uri(&dir.join("shape.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(&main_uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(1)), ("character", int(16))]),
+                    ),
+                    ("newName", str("Disk")),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        assert_eq!(
+            changes.get(&shape_uri).unwrap().as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(changes.get(&main_uri).unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(
+            changes.get(&shape_uri).unwrap().as_array().unwrap()[0]
+                .get("newText")
+                .and_then(Json::as_str),
+            Some("Disk")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_constructor_rejects_a_lowercase_new_name() {
+        // A constructor renames only to a constructor (uppercase).
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_ctorbad_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("color.pyfun"), "type Color = Red | Green").unwrap();
+        let main_src = "import Color\nlet c = Color.Red";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(&main_uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(1)), ("character", int(14))]),
+                    ),
+                    ("newName", str("scarlet")),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        assert_eq!(out[0].get("result"), Some(&Json::Null));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

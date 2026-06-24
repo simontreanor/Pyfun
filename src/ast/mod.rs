@@ -367,8 +367,8 @@ pub fn print_pattern(pattern: &Pattern) -> String {
         Pattern::Var { name, .. } => name.clone(),
         Pattern::Int(n) => n.to_string(),
         Pattern::Bool(b) => b.to_string(),
-        Pattern::Ctor { name, args } if args.is_empty() => name.clone(),
-        Pattern::Ctor { name, args } => {
+        Pattern::Ctor { name, args, .. } if args.is_empty() => name.clone(),
+        Pattern::Ctor { name, args, .. } => {
             let args: Vec<String> = args.iter().map(print_pattern).collect();
             format!("({} {})", name, args.join(" "))
         }

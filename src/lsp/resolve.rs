@@ -84,7 +84,9 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                     for variant in variants {
                         out.push(Symbol {
                             name: variant.name.clone(),
-                            span: decl.span.span(),
+                            // The precise constructor-name span, so find-references
+                            // and rename can target it (not the whole `type` decl).
+                            span: variant.name_span.span(),
                             kind: SymbolKind::Constructor,
                         });
                     }
@@ -269,6 +271,48 @@ impl Resolver {
         self.scopes.pop();
     }
 
+    /// Record constructor occurrences inside a pattern so a constructor's
+    /// find-references / rename sees its *pattern* uses, like its construction
+    /// uses: a bare constructor as a module reference, a qualified one
+    /// (`Geometry.Circle`) as a qualified reference — the same channels as the
+    /// expression forms. Recurses into sub-patterns; binding of pattern *vars* is
+    /// handled separately by [`pattern_vars`].
+    fn walk_pattern(&mut self, pattern: &Pattern) {
+        match pattern {
+            Pattern::Ctor {
+                name,
+                name_span,
+                args,
+            } => {
+                match name.split_once('.') {
+                    Some((module, member)) => self.quals.push(QualRef {
+                        module: module.to_string(),
+                        member: member.to_string(),
+                        span: name_span.span(),
+                    }),
+                    None => self.refs.push(Reference {
+                        span: name_span.span(),
+                        target: Target::Module(name.clone()),
+                    }),
+                }
+                for arg in args {
+                    self.walk_pattern(arg);
+                }
+            }
+            Pattern::Record { fields } => {
+                for f in fields {
+                    self.walk_pattern(&f.pattern);
+                }
+            }
+            Pattern::Tuple { elems } => {
+                for e in elems {
+                    self.walk_pattern(e);
+                }
+            }
+            Pattern::Var { .. } | Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
+        }
+    }
+
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Int(_)
@@ -308,6 +352,7 @@ impl Resolver {
             ExprKind::Match { scrutinee, arms } => {
                 self.walk_expr(scrutinee);
                 for MatchArm { pattern, body } in arms {
+                    self.walk_pattern(pattern); // constructor occurrences
                     let mut bound = HashMap::new();
                     pattern_vars(pattern, &mut bound);
                     self.push_scope(bound);

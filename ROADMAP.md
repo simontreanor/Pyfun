@@ -287,9 +287,10 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    lowering). Dropped as **explicit non-goals**: visibility (`pub`, all-public is the Python-natural model)
    and TCO (`List`/`Seq` combinators are the stack-safe path). **Cross-file LSP navigation** also landed:
    go-to-definition across files (`resolve::qualified_at` + `locate_cross_file`), `workspace/symbol`, and
-   **project-wide find-references + rename of top-level values** (`value_occurrences`; sound — values only,
-   strict scan refuses on parse failure). Still deferred: cross-module records/measures/externs, cross-file
-   find-references/rename of *constructors/types* (need `Pattern::Ctor` + variant spans), a project-wide LSP cache.
+   **project-wide find-references + rename of top-level values and constructors** (`symbol_occurrences`;
+   constructor occurrences incl. patterns via `Pattern::Ctor`/variant `name_span` + `resolve::walk_pattern`;
+   sound — kind-matched, strict scan refuses on parse failure). Still deferred: cross-module
+   records/measures/externs, type-name refs/rename (in-file only, needs a `TypeExpr::Con` span), a project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

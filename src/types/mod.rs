@@ -2698,7 +2698,7 @@ impl Infer {
             }
             Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int(Unit::dimensionless()), span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
-            Pattern::Ctor { name, args } => {
+            Pattern::Ctor { name, args, .. } => {
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
                     return Err(TypeError {
                         message: format!("unknown constructor `{name}`"),
@@ -2950,7 +2950,9 @@ impl Infer {
             Pattern::Wildcard | Pattern::Var { .. } => Some(vec![Pattern::Wildcard; arity]),
             Pattern::Bool(b) => (*tag == Tag::Bool(*b)).then(Vec::new),
             Pattern::Int(n) => (*tag == Tag::Int(*n)).then(Vec::new),
-            Pattern::Ctor { name, args } => (*tag == Tag::Sum(name.clone())).then(|| args.clone()),
+            Pattern::Ctor { name, args, .. } => {
+                (*tag == Tag::Sum(name.clone())).then(|| args.clone())
+            }
             Pattern::Record { fields } => {
                 let Tag::Record(rname) = tag else { return None };
                 let order = &self.decls.records[rname].fields;

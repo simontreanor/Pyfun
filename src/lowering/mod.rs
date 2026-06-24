@@ -1077,7 +1077,7 @@ impl Lowerer {
             Pattern::Var { name, .. } => PyPattern::Capture(name.clone()),
             Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
-            Pattern::Ctor { name, args } => {
+            Pattern::Ctor { name, args, .. } => {
                 if name == "Ok" || name == "Error" {
                     self.needs_result = true;
                 }
