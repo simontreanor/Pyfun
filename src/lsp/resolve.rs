@@ -135,6 +135,12 @@ pub fn qualified_at(module: &Module, offset: usize) -> Option<QualRef> {
         .min_by_key(|q| q.span.end - q.span.start)
 }
 
+/// Every qualified `Module.member` reference (expression position) in the module,
+/// for cross-file find-references / rename (`DESIGN.md` §6.1).
+pub fn qualified_references(module: &Module) -> Vec<QualRef> {
+    walk(module).quals
+}
+
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();

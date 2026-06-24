@@ -286,9 +286,10 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    ->`, cross-boundary exhaustiveness; `merge_imported_types` + qualified ctor patterns + dotted-class
    lowering). Dropped as **explicit non-goals**: visibility (`pub`, all-public is the Python-natural model)
    and TCO (`List`/`Seq` combinators are the stack-safe path). **Cross-file LSP navigation** also landed:
-   go-to-definition jumps across files on a qualified ref (`resolve::qualified_at` + `locate_cross_file`)
-   and `workspace/symbol` searches the project dir. Still deferred: cross-module records/measures/externs,
-   cross-file find-references/rename (need constructor-pattern spans), a project-wide LSP cache.
+   go-to-definition across files (`resolve::qualified_at` + `locate_cross_file`), `workspace/symbol`, and
+   **project-wide find-references + rename of top-level values** (`value_occurrences`; sound — values only,
+   strict scan refuses on parse failure). Still deferred: cross-module records/measures/externs, cross-file
+   find-references/rename of *constructors/types* (need `Pattern::Ctor` + variant spans), a project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

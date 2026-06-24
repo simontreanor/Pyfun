@@ -433,25 +433,32 @@ analyzed exactly as before. **Limitations (acceptable for the MVP, documented):*
 from *disk*, not the editor's unsaved buffers, and the per-URI/version cache is not invalidated when an
 imported file changes (re-open/edit the dependent file to refresh). **Rich cross-file navigation is
 deferred** (today's per-URI, version-cached analysis stays the core). *Cross-file navigation follow-on
-(landed):* **go-to-definition crosses files** — a qualified reference to an imported file module
+(landed):* (1) **go-to-definition crosses files** — a qualified reference to an imported file module
 (`Geometry.area`, `Geometry.Circle`) jumps to the definition in that module's `.pyfun`
 (`resolve::qualified_at` records expression-position qualified refs with spans; the server resolves the
-sibling URI and locates the member via `resolve::definitions`, reading an open buffer over disk) — and
-**workspace symbols** (`workspace/symbol`) searches every definition across the project directory's
-`.pyfun` files. Still deferred: cross-file **find-references** and **rename** (find-references would need
-constructor-pattern spans to be complete — `Pattern::Ctor` carries none — and an incomplete reference set
-is worse than none; cross-file rename builds on it and adds capture concerns) and a project-wide cache.
+sibling URI and locates the member via `resolve::definitions`, reading an open buffer over disk); (2)
+**workspace symbols** (`workspace/symbol`) search every definition across the project directory's `.pyfun`
+files; and (3) **find-references and rename for top-level `let` values** span the whole project —
+`Server::value_occurrences` scans the directory's `.pyfun` files and collects the value's definition, its
+bare uses in the defining file, and every qualified use (`Geometry.area`) elsewhere (rewriting only the
+member identifier, via `member_subspan`, so the `Geometry.` qualifier is preserved). Rename is sound: it
+fires only for a top-level *value* (a constructor/type is refused, as in-file), and a *strict* scan
+**refuses** rather than do a partial rewrite if any project file fails to parse. **Still deferred:**
+cross-file find-references / rename for **constructors and types** (would need a span on `Pattern::Ctor`
+and on the `type` variant declaration — values suffice for the common refactor and don't appear in
+patterns, so this is a smaller, separable follow-on) and a project-wide cache.
 
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
 (construct + qualified-pattern-match + cross-boundary exhaustiveness) and **cross-file LSP navigation**
-(go-to-definition across files + workspace symbols). **Explicit non-goals (decided not
-to build):** visibility (`pub`) — Pyfun is
+(go-to-definition across files, workspace symbols, and project-wide find-references + rename of top-level
+values). **Explicit non-goals (decided not to build):** visibility (`pub`) — Pyfun is
 all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
 X import y` / `open`; cross-module *records*/measures/externs (records hit the global field-uniqueness
 invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime; cross-file
-find-references / rename (need constructor-pattern spans) and a project-wide LSP cache.
+find-references / rename for **constructors and types** (need `Pattern::Ctor` + `type`-variant spans;
+values already cross files) and a project-wide LSP cache.
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected

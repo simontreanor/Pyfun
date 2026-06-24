@@ -8,11 +8,13 @@
 //!   the narrowest expression under the cursor — the only way to *see* an inferred
 //!   type, since Pyfun never writes them.
 //! - **Go-to-definition** and **find-references**: navigate between a symbol and its
-//!   uses (module-level or local), via the name resolver in [`resolve`].
-//!   Go-to-definition also crosses files: a qualified reference to an imported file
-//!   module (`Geometry.area`) jumps to the definition in that module's `.pyfun`.
-//! - **Rename**: rewrite every occurrence of a local or top-level `let` value
-//!   (within one file; cross-file rename is deferred).
+//!   uses (module-level or local), via the name resolver in [`resolve`]. Both cross
+//!   files: go-to-definition on a qualified reference (`Geometry.area`) jumps to the
+//!   definition in that module's `.pyfun`, and find-references on a top-level value
+//!   spans the whole project (definition + bare uses + every qualified use).
+//! - **Rename**: rewrite every occurrence of a local or top-level `let` value —
+//!   project-wide for a top-level value (constructors/types refused; a strict scan
+//!   refuses rather than half-rename if any project file fails to parse).
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
 //! - **Document symbols** and **workspace symbols**: the module outline and a
 //!   project-wide symbol search across the directory's `.pyfun` files.
@@ -76,6 +78,52 @@ fn module_imports(module: &crate::syntax::Module, name: &str) -> bool {
         .items
         .iter()
         .any(|i| matches!(i, crate::syntax::Item::Import { name: n, .. } if n == name))
+}
+
+/// The module name a document URI belongs to (`…/geometry.pyfun` → `Geometry`).
+fn current_module(uri: &str) -> Option<String> {
+    crate::project::module_name_from_path(&uri_to_path(uri)?)
+}
+
+/// Within a qualified reference's source span (`Geometry.area`), the sub-span of
+/// just the **member** identifier (`area`) — the part a rename rewrites, keeping
+/// the `Geometry.` qualifier. Found as the text after the last `.` (skipping any
+/// whitespace), so it tolerates `Geometry . area`.
+fn member_subspan(
+    source: &str,
+    expr_span: crate::lexer::Span,
+    member_len: usize,
+) -> crate::lexer::Span {
+    use crate::lexer::Span;
+    let slice = &source[expr_span.start..expr_span.end];
+    match slice.rfind('.') {
+        Some(dot) => {
+            let after = slice[dot + 1..]
+                .bytes()
+                .take_while(|b| b.is_ascii_whitespace())
+                .count();
+            let start = expr_span.start + dot + 1 + after;
+            Span::new(start, (start + member_len).min(expr_span.end))
+        }
+        None => expr_span,
+    }
+}
+
+/// The cross-file *value* target at `offset`, as (defining module, member): a
+/// qualified reference (`Geometry.area`), or a bare module-level name resolved
+/// against the current file's own module. `None` for a local binder or no symbol.
+fn value_target(
+    module: &crate::syntax::Module,
+    uri: &str,
+    offset: usize,
+) -> Option<(String, String)> {
+    if let Some(q) = resolve::qualified_at(module, offset) {
+        return Some((q.module, q.member));
+    }
+    match resolve::symbol_at(module, offset) {
+        Some((_, resolve::Target::Module(name))) => Some((current_module(uri)?, name)),
+        _ => None,
+    }
 }
 
 /// Decode `%XX` percent-escapes in a URI path component (e.g. `%20` → space,
@@ -437,10 +485,90 @@ impl Server {
         ]))
     }
 
+    /// Every occurrence of the top-level **value** `member` defined in module
+    /// `target_module`, across the project directory's `.pyfun` files: its
+    /// definition (when `include_decl`), its bare uses in the defining file, and its
+    /// qualified uses (`Geometry.member`) elsewhere — as `(file uri, range)` pairs
+    /// (`DESIGN.md` §6.1). `None` if `member` is not a top-level *value* of
+    /// `target_module` (a constructor/type is not cross-file renameable), the
+    /// directory can't be read, or — when `strict` — some project file fails to
+    /// parse (so a rewrite could miss an occurrence). Reads each file from its open
+    /// buffer if present, else disk.
+    fn value_occurrences(
+        &self,
+        uri: &str,
+        target_module: &str,
+        member: &str,
+        include_decl: bool,
+        strict: bool,
+    ) -> Option<Vec<(String, Json)>> {
+        let dir = uri_to_path(uri)?.parent()?.to_path_buf();
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
+                    .then(|| p.file_name()?.to_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect();
+        files.sort(); // deterministic output
+
+        let mut out: Vec<(String, Json)> = Vec::new();
+        let mut defining_found = false;
+        for fname in files {
+            let file_uri = sibling_uri(uri, &fname);
+            let source = match self.documents.get(&file_uri) {
+                Some(doc) => doc.text.clone(),
+                None => match std::fs::read_to_string(dir.join(&fname)) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                },
+            };
+            let Ok(m) = crate::parse(&source) else {
+                if strict {
+                    return None; // an unparseable file might hide an occurrence
+                }
+                continue;
+            };
+            let is_defining = crate::project::module_name_from_path(Path::new(&fname)).as_deref()
+                == Some(target_module);
+            if is_defining {
+                // The defining file: the definition (a *value*) plus its bare uses.
+                if let Some(sym) = resolve::definitions(&m)
+                    .into_iter()
+                    .find(|s| s.name == member && s.kind == resolve::SymbolKind::Value)
+                {
+                    defining_found = true;
+                    if include_decl {
+                        out.push((file_uri.clone(), span_range(&source, sym.span)));
+                    }
+                }
+                for r in resolve::references(&m) {
+                    if r.target == resolve::Target::Module(member.to_string()) {
+                        out.push((file_uri.clone(), span_range(&source, r.span)));
+                    }
+                }
+            } else {
+                // An importer: qualified uses `target_module.member` (rewrite the
+                // member identifier only, keeping the `Module.` qualifier).
+                for q in resolve::qualified_references(&m) {
+                    if q.module == target_module && q.member == member {
+                        let span = member_subspan(&source, q.span, member.len());
+                        out.push((file_uri.clone(), span_range(&source, span)));
+                    }
+                }
+            }
+        }
+        defining_found.then_some(out)
+    }
+
     /// Find-references: every occurrence of the symbol under the cursor (a `Local`
     /// binder or a `Module` symbol), returned as an array of `Location`s. Honours
     /// the request's `context.includeDeclaration` (default `true`). The cursor may
-    /// sit on a use *or* the definition/binder itself.
+    /// sit on a use *or* the definition/binder itself. A top-level value is searched
+    /// across the whole project; a local stays within the file.
     fn references(&self, msg: &Json) -> Json {
         let params = msg.get("params");
         let uri = params
@@ -470,6 +598,19 @@ impl Server {
             .map(|v| v == &Json::Bool(true))
             .unwrap_or(true);
 
+        // A top-level value (bare or qualified) is searched across all project
+        // files; anything else (a local binder) stays within this file.
+        if let Some((tmod, member)) = value_target(module, uri, offset)
+            && let Some(occ) =
+                self.value_occurrences(uri, &tmod, &member, include_declaration, false)
+        {
+            let locations = occ
+                .into_iter()
+                .map(|(u, range)| obj(vec![("uri", str(u)), ("range", range)]))
+                .collect();
+            return Json::Array(locations);
+        }
+
         let Some((_, symbol)) = resolve::symbol_at(module, offset) else {
             return Json::Array(vec![]);
         };
@@ -485,6 +626,12 @@ impl Server {
     /// rename box). `Null` when the symbol cannot be renamed (a prelude/builtin, or
     /// a constructor/type/extern whose occurrences aren't all precisely tracked).
     fn prepare_rename(&self, msg: &Json) -> Json {
+        let uri = msg
+            .get("params")
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str)
+            .unwrap_or_default();
         let Some((text, offset, analysis)) = self.locate(msg) else {
             return Json::Null;
         };
@@ -493,6 +640,21 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
+        // A cross-file value: the editable range is the member identifier (the part
+        // a qualified `Geometry.area` rewrites, or a bare name's own span).
+        if let Some((tmod, member)) = value_target(module, uri, offset)
+            && self
+                .value_occurrences(uri, &tmod, &member, true, true)
+                .is_some()
+        {
+            return if let Some(q) = resolve::qualified_at(module, offset) {
+                span_range(text, member_subspan(text, q.span, q.member.len()))
+            } else if let Some((span, _)) = resolve::symbol_at(module, offset) {
+                span_range(text, span)
+            } else {
+                Json::Null
+            };
+        }
         match resolve::symbol_at(module, offset) {
             Some((span, target)) if is_renameable(module, &target) => span_range(text, span),
             _ => Json::Null,
@@ -528,6 +690,33 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
+        // A top-level value renames across the whole project (its definition, its
+        // bare uses in the defining file, and every qualified use elsewhere). The
+        // non-strict scan decides whether the target *is* such a value; if so, a
+        // strict scan must succeed (every project file parses) or we refuse — never
+        // silently fall back to an incomplete in-file-only rewrite.
+        if let Some((tmod, member)) = value_target(module, uri, offset)
+            && self
+                .value_occurrences(uri, &tmod, &member, true, false)
+                .is_some()
+        {
+            let Some(occ) = self.value_occurrences(uri, &tmod, &member, true, true) else {
+                return Json::Null;
+            };
+            let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
+            for (u, range) in occ {
+                let edit = obj(vec![("range", range), ("newText", str(new_name))]);
+                match by_uri.iter_mut().find(|(k, _)| *k == u) {
+                    Some((_, edits)) => edits.push(edit),
+                    None => by_uri.push((u, vec![edit])),
+                }
+            }
+            let changes = by_uri
+                .into_iter()
+                .map(|(u, edits)| (u, Json::Array(edits)))
+                .collect();
+            return Json::Object(vec![("changes".to_string(), Json::Object(changes))]);
+        }
         let Some((_, target)) = resolve::symbol_at(module, offset) else {
             return Json::Null;
         };
@@ -1161,6 +1350,92 @@ mod tests {
             area.get("location").unwrap().get("uri").unwrap().as_str(),
             Some(geom_uri.as_str())
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_references_spans_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_xrefs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main_src = "import Geometry\nlet floor = Geometry.area 4 5";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let geom_uri = file_uri(&dir.join("geometry.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        // References from the qualified use `Geometry.area` (line 1, on `area`).
+        let req = references_msg(&main_uri, 1, 22, true);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let locs = out[0].get("result").unwrap().as_array().unwrap();
+        let uris: std::collections::HashSet<&str> = locs
+            .iter()
+            .filter_map(|l| l.get("uri").and_then(Json::as_str))
+            .collect();
+        assert!(
+            uris.contains(geom_uri.as_str()),
+            "missing def file: {uris:?}"
+        );
+        assert!(
+            uris.contains(main_uri.as_str()),
+            "missing use file: {uris:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_value_rewrites_across_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_xrename_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main_src = "import Geometry\nlet floor = Geometry.area 4 5";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let geom_uri = file_uri(&dir.join("geometry.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/rename")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(&main_uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(1)), ("character", int(22))]),
+                    ),
+                    ("newName", str("surface")),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        // Both files are edited; the qualified use rewrites only the member.
+        let geom_edits = changes.get(&geom_uri).unwrap().as_array().unwrap();
+        let main_edits = changes.get(&main_uri).unwrap().as_array().unwrap();
+        assert_eq!(geom_edits.len(), 1);
+        assert_eq!(main_edits.len(), 1);
+        assert_eq!(
+            geom_edits[0].get("newText").and_then(Json::as_str),
+            Some("surface")
+        );
+        // The def edit is on line 0 of geometry.pyfun (`area`).
+        let line = geom_edits[0]
+            .get("range")
+            .unwrap()
+            .get("start")
+            .unwrap()
+            .get("line")
+            .unwrap()
+            .as_i64();
+        assert_eq!(line, Some(0));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
