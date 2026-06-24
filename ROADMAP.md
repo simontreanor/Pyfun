@@ -33,6 +33,9 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
   primitives (int/float/string) compare.
 - **Chained comparisons** (`a < b < c`, Python-style) (S) — currently left-associative.
+- **Operator sections / operators as functions** (`(*)`, `(+)`, `((*) 2)`) (S) — F#-style; operators are
+  binary syntax only today, so `(*)` doesn't parse. Would lower to a generated lambda (or `operator.mul`).
+  Workaround: a lambda, `fun x -> x * 2`.
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
 *Cross-module (file-modules follow-ons)*
