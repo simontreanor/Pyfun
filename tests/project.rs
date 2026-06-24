@@ -65,20 +65,25 @@ fn a_missing_imported_file_is_reported() {
 
 // ---------- slice 4: multi-file lowering & emit ----------
 
-/// Build a project from in-memory `(name, source)` files (entry first by
-/// convention) and compile it to its emitted Python files.
-fn compile(entry: &str, files: &[(&str, &str)]) -> Vec<(String, String)> {
+/// Resolve a project from in-memory `(name, source)` files via the graph driver.
+fn build_mem(entry: &str, files: &[(&str, &str)]) -> project::Project {
     let owned: Vec<(String, String)> = files
         .iter()
         .map(|(n, s)| (n.to_string(), s.to_string()))
         .collect();
-    let project = project::build(entry, |name| {
+    project::build(entry, move |name| {
         owned
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, s)| s.clone())
     })
-    .unwrap();
+    .unwrap()
+}
+
+/// Build a project from in-memory files (entry first by convention), assert it
+/// type-checks, and compile it to its emitted Python files.
+fn compile(entry: &str, files: &[(&str, &str)]) -> Vec<(String, String)> {
+    let project = build_mem(entry, files);
     assert!(
         project::check(&project).is_empty(),
         "project should type-check"
@@ -220,6 +225,116 @@ fn e2e_runs_a_cross_module_program() {
     let dir = Scratch::new("e2e_cross");
     if let Some(out) = run_project(&dir, &files, "main.py") {
         assert_eq!(out.trim(), "20");
+    }
+}
+
+// ---------- cross-module sum types (construction + matching) ----------
+
+#[test]
+fn a_cross_module_sum_type_constructs_and_matches() {
+    let files = compile(
+        "Main",
+        &[
+            ("Shape", "type Shape = Circle float | Rect float float"),
+            (
+                "Main",
+                "import Shape\n\
+                 let c = Shape.Circle 2.0\n\
+                 let area s =\n  match s with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w * h\n\
+                 let a = area c",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    // Construction routes to the imported module's class; the match uses a dotted
+    // class pattern against that same class.
+    assert!(main.contains("c = shape.Circle(2.0)"), "{main}");
+    assert!(main.contains("case shape.Circle(r):"), "{main}");
+    assert!(main.contains("import shape"), "{main}");
+}
+
+#[test]
+fn a_cross_module_nullary_enum_constructs_as_a_call() {
+    let files = compile(
+        "Main",
+        &[
+            ("Color", "type Color = Red | Green | Blue"),
+            (
+                "Main",
+                "import Color\n\
+                 let favourite = Color.Green\n\
+                 let name k =\n  match k with\n  | Color.Red -> \"r\"\n  | Color.Green -> \"g\"\n  | Color.Blue -> \"b\"\n\
+                 let n = name favourite",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    // A nullary constructor used as a value is an instance: `color.Green()`.
+    assert!(main.contains("favourite = color.Green()"), "{main}");
+    assert!(main.contains("case color.Green():"), "{main}");
+}
+
+#[test]
+fn a_cross_module_non_exhaustive_match_is_caught() {
+    let project = build_mem(
+        "Main",
+        &[
+            ("Shape", "type Shape = Circle float | Rect float float"),
+            (
+                "Main",
+                "import Shape\nlet f s =\n  match s with\n  | Shape.Circle r -> r",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].name, "Main");
+    assert!(
+        errors[0].errors[0].message.contains("Shape.Rect"),
+        "witness should name the missing qualified ctor: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn a_constructor_of_an_unimported_type_is_unavailable() {
+    // Without `import Shape`, `Shape.Circle` is not in scope.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Shape", "type Shape = Circle float | Rect float float"),
+            ("Main", "let c = Shape.Circle 2.0"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("not a member of `Shape`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn e2e_cross_module_adt_round_trips() {
+    let files = compile(
+        "Main",
+        &[
+            ("Shape", "type Shape = Circle int | Rect int int"),
+            (
+                "Main",
+                "import Shape\n\
+                 let area s =\n  match s with\n  | Shape.Circle r -> r * r\n  | Shape.Rect w h -> w * h\n\
+                 print (area (Shape.Circle 3))\n\
+                 print (area (Shape.Rect 4 5))",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_adt");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "9\n20");
     }
 }
 

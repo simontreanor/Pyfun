@@ -58,8 +58,12 @@ pub fn lower(module: &Module) -> Result<PyModule, LowerError> {
 pub struct ImportContext {
     /// Imported file-module names (`Geometry`).
     pub modules: HashSet<String>,
-    /// Qualified member name (`Geometry.area`) → its arity.
+    /// Qualified member name (`Geometry.area`) → its arity. Includes constructors
+    /// that take arguments (`Geometry.Circle`).
     pub member_arities: HashMap<String, usize>,
+    /// Qualified names of imported **nullary** constructors (`Palette.Red`), which
+    /// must lower to a call (`palette.Red()`) when referenced as a value.
+    pub nullary_ctors: HashSet<String>,
 }
 
 /// A module lowered as part of a multi-file project.
@@ -80,6 +84,7 @@ pub struct LoweredModule {
 pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.imported_modules = ctx.modules.clone();
+    lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
     lowerer.use_runtime = true;
     for (name, arity) in &ctx.member_arities {
         lowerer.arities.entry(name.clone()).or_insert(*arity);
@@ -134,6 +139,9 @@ struct Lowerer {
     /// A `Geometry.member` reference routes to Python `geometry.member` (vs the
     /// `Geometry_member` mangling used for in-file `module` declarations).
     imported_modules: HashSet<String>,
+    /// Qualified names of imported nullary constructors (`Palette.Red`), referenced
+    /// as values, which must lower to a call (`palette.Red()`) not the bare class.
+    imported_nullary_ctors: HashSet<String>,
     /// Whether to import the nominal `Option`/`Result` classes from the shared
     /// `_pyfun_rt.py` (multi-file projects) instead of inlining them (single file).
     use_runtime: bool,
@@ -261,6 +269,7 @@ impl Lowerer {
             needed_collection_helpers: BTreeSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
+            imported_nullary_ctors: HashSet::new(),
             use_runtime: false,
             fn_local_stack: Vec::new(),
             tmp_counter: 0,
@@ -1021,14 +1030,44 @@ impl Lowerer {
                 if self.imported_modules.contains(base) {
                     let module = base.to_lowercase();
                     self.needed_imports.insert(module.clone());
-                    PyExpr::Attribute {
+                    let attr = PyExpr::Attribute {
                         value: Box::new(PyExpr::Name(module)),
-                        attr: member.to_string(),
+                        // A member may be a constructor (`Geometry.Circle`), so
+                        // mangle it the same way its defining module did
+                        // (`None` → `None_`); value members are unaffected.
+                        attr: py_ctor_name(member),
+                    };
+                    // A nullary constructor used as a value is an instance, so call
+                    // it (`palette.Red()`), matching the single-module behavior.
+                    if self.imported_nullary_ctors.contains(other) {
+                        PyExpr::Call {
+                            func: Box::new(attr),
+                            args: vec![],
+                        }
+                    } else {
+                        attr
                     }
                 } else {
                     PyExpr::Name(other.replace('.', "_"))
                 }
             }
+        }
+    }
+
+    /// The Python class name a constructor pattern matches against. A qualified
+    /// constructor from an imported file module (`Geometry.Circle`) becomes dotted
+    /// attribute access on the imported module (`geometry.Circle`, with `import
+    /// geometry` hoisted) so it matches the *same* class the module defines; a bare
+    /// constructor is just mangled away from Python keywords.
+    fn ctor_class_name(&mut self, name: &str) -> String {
+        if let Some((base, member)) = name.split_once('.')
+            && self.imported_modules.contains(base)
+        {
+            let module = base.to_lowercase();
+            self.needed_imports.insert(module.clone());
+            format!("{module}.{}", py_ctor_name(member))
+        } else {
+            py_ctor_name(name)
         }
     }
 
@@ -1047,7 +1086,7 @@ impl Lowerer {
                     lowered.push(self.lower_pattern(arg));
                 }
                 PyPattern::Class {
-                    name: py_ctor_name(name),
+                    name: self.ctor_class_name(name),
                     args: lowered,
                 }
             }

@@ -143,6 +143,9 @@ const PROGRAMS: &[&str] = &[
     "import Geometry",
     "import Geometry\nlet big = Geometry.area 10",
     "import Geometry\nimport Physics\nlet x = 1",
+    // Qualified constructor patterns (an imported sum type, `DESIGN.md` §6.1).
+    "let f s =\n  match s with\n  | Geometry.Circle r -> r\n  | Geometry.Rect w h -> w",
+    "let g k =\n  match k with\n  | Color.Red -> 1\n  | Color.Other -> 2",
 ];
 
 #[test]

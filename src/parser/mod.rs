@@ -1053,11 +1053,14 @@ impl Parser {
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         // A capitalized identifier at this level is a constructor that may take
-        // argument patterns; everything else is a single atom pattern.
+        // argument patterns; everything else is a single atom pattern. A `.` after
+        // it makes it a qualified constructor from an imported module
+        // (`Geometry.Circle r`, `DESIGN.md` §6.1).
         if let Tok::Ident(name) = self.peek().clone()
             && is_upper(&name)
         {
             self.bump();
+            let name = self.maybe_qualify_ctor(name)?;
             let mut args = Vec::new();
             while starts_atom_pattern(self.peek()) {
                 args.push(self.parse_atom_pattern()?);
@@ -1065,6 +1068,18 @@ impl Parser {
             return Ok(Pattern::Ctor { name, args });
         }
         self.parse_atom_pattern()
+    }
+
+    /// After a capitalized identifier in pattern position, consume a `.Ctor`
+    /// suffix if present, yielding the qualified constructor name
+    /// (`Geometry.Circle`); otherwise return the bare name.
+    fn maybe_qualify_ctor(&mut self, base: String) -> Result<String, ParseError> {
+        if self.eat(&Tok::Dot) {
+            let ctor = self.parse_upper_ident("a constructor name after `.`")?;
+            Ok(format!("{base}.{ctor}"))
+        } else {
+            Ok(base)
+        }
     }
 
     fn parse_atom_pattern(&mut self) -> Result<Pattern, ParseError> {
@@ -1077,6 +1092,8 @@ impl Parser {
                 let start = self.cur_start();
                 self.bump();
                 if is_upper(&name) {
+                    // A nullary constructor, possibly qualified (`Geometry.Nothing`).
+                    let name = self.maybe_qualify_ctor(name)?;
                     Ok(Pattern::Ctor {
                         name,
                         args: Vec::new(),

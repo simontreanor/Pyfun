@@ -203,12 +203,17 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
 
-    // Each module's exported members and their arities, for cross-module partial
-    // application of imported curried functions.
+    // Each module's exported arities (functions + ctors with args) and nullary
+    // constructors, for cross-module partial application and nullary-ctor calls.
     let arities: HashMap<String, HashMap<String, usize>> = project
         .modules
         .iter()
         .map(|m| (m.name.clone(), export_arities(&m.ast)))
+        .collect();
+    let nullary: HashMap<String, HashSet<String>> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), export_nullary_ctors(&m.ast)))
         .collect();
 
     let mut files = Vec::new();
@@ -221,6 +226,11 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
                 for (member, arity) in members {
                     ctx.member_arities
                         .insert(format!("{import}.{member}"), *arity);
+                }
+            }
+            if let Some(ctors) = nullary.get(import) {
+                for ctor in ctors {
+                    ctx.nullary_ctors.insert(format!("{import}.{ctor}"));
                 }
             }
         }
@@ -295,16 +305,15 @@ fn resolve_exports(
     Some(exports)
 }
 
-/// The arity of each top-level `let` *function* in `module`, keyed by bare name
-/// (parameterless values have no arity entry). Mirrors the arity table the
-/// single-file lowerer builds, used to seed an importing module so a partial
-/// application of an imported curried function lowers to `functools.partial`.
+/// Lowering-relevant arities a module exports, keyed by bare name: top-level `let`
+/// *functions* and *constructors that take arguments* (so a cross-module partial
+/// application lowers to `functools.partial`). Parameterless values and nullary
+/// constructors have no arity entry (the latter are listed by [`export_nullary_ctors`]).
 fn export_arities(module: &Module) -> HashMap<String, usize> {
-    use crate::parser::ast::ExprKind;
-    module
-        .items
-        .iter()
-        .filter_map(|item| match item {
+    use crate::parser::ast::{ExprKind, TypeDeclKind};
+    let mut out = HashMap::new();
+    for item in &module.items {
+        match item {
             Item::Let(binding) => {
                 let arity = if !binding.params.is_empty() {
                     Some(binding.params.len())
@@ -313,11 +322,42 @@ fn export_arities(module: &Module) -> HashMap<String, usize> {
                 } else {
                     None
                 };
-                arity.map(|a| (binding.name.clone(), a))
+                if let Some(a) = arity {
+                    out.insert(binding.name.clone(), a);
+                }
             }
-            _ => None,
-        })
-        .collect()
+            Item::Type(decl) => {
+                if let TypeDeclKind::Sum(variants) = &decl.kind {
+                    for v in variants {
+                        if !v.fields.is_empty() {
+                            out.insert(v.name.clone(), v.fields.len());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The bare names of a module's **nullary** sum-type constructors, so an importing
+/// module lowers `Palette.Red` (used as a value) to a call `palette.Red()`.
+fn export_nullary_ctors(module: &Module) -> HashSet<String> {
+    use crate::parser::ast::TypeDeclKind;
+    let mut out = HashSet::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && let TypeDeclKind::Sum(variants) = &decl.kind
+        {
+            for v in variants {
+                if v.fields.is_empty() {
+                    out.insert(v.name.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The emitted Python file name for a module (`Geometry` → `geometry.py`).

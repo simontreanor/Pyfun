@@ -486,7 +486,7 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _exports) = run(module, false, &Env::new());
+    let (errors, _types, _schemes, _exports) = run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -494,54 +494,54 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
     }
 }
 
-/// A module's exported value interface (`DESIGN.md` §6.1): its public top-level
-/// `let` bindings' schemes, keyed by **bare** name. Opaque — the scheme
-/// representation is internal — produced by [`check_module`] and fed back in as a
-/// dependent module's imports. For the MVP a module exports **values only**
-/// (cross-module types / ctors / records / measures / externs are deferred).
+/// One sum type a module exports (`DESIGN.md` §6.1): its name, type-parameter
+/// arity, and constructors (bare name + signature/arity). Carried in
+/// [`ModuleExports`] so an importing module can construct and pattern-match the
+/// type's values. Records / measures / externs are not yet cross-module exported.
+#[derive(Clone)]
+struct ExportedType {
+    name: String,
+    arity: usize,
+    ctors: Vec<(String, CtorInfo)>,
+}
+
+/// A module's exported interface (`DESIGN.md` §6.1): its public top-level `let`
+/// values' schemes (keyed by **bare** name) and its public sum types. Opaque —
+/// the scheme/ctor representation is internal — produced by [`check_module`] and
+/// fed back in as a dependent module's imports.
 #[derive(Clone, Default)]
 pub struct ModuleExports {
     schemes: Env,
+    types: Vec<ExportedType>,
 }
 
 /// Type-check `module` as one node of a multi-file project (`DESIGN.md` §6.1).
 ///
-/// `imports` maps each imported module's **name** to its [`ModuleExports`]; those
-/// members are seeded into the env under qualified keys (`Geometry.area`), which
-/// is exactly how the `Field` access node resolves a `Module.member` reference —
-/// so using an unexported (or unimported) name yields the ordinary "`x` is not a
-/// member of `Geometry`" error. Returns the type errors plus this module's own
-/// exports (its top-level `let` values) for any dependent module to import.
+/// `imports` maps each imported module's **name** to its [`ModuleExports`]; its
+/// values are seeded into the env under qualified keys (`Geometry.area`) and its
+/// sum types into the decls/env under qualified constructor keys
+/// (`Geometry.Circle`), which is exactly how the `Field` access node (and the new
+/// qualified constructor pattern) resolve a `Module.member` reference — so using
+/// an unexported / unimported name yields the ordinary "`x` is not a member of
+/// `Geometry`" error. Returns the type errors plus this module's own exports for
+/// any dependent module to import.
 pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes) = run(module, false, &seed_from_imports(imports));
-    (errors, ModuleExports { schemes })
+    let (errors, _types, schemes, types) = run(module, false, imports);
+    (errors, ModuleExports { schemes, types })
 }
 
-/// Like [`check_collecting`] but with imported modules' exports seeded under
-/// qualified keys (`DESIGN.md` §6.1), so the editor analysis of a multi-module
-/// file resolves `Geometry.area` instead of flagging it. Used by the LSP.
+/// Like [`check_collecting`] but with imported modules' exports seeded
+/// (`DESIGN.md` §6.1), so the editor analysis of a multi-module file resolves
+/// `Geometry.area` / `Geometry.Circle` instead of flagging them. Used by the LSP.
 pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _exports) = run(module, true, &seed_from_imports(imports));
+    let (errors, types, _schemes, _exports) = run(module, true, imports);
     (errors, types)
-}
-
-/// Build the seed env for a module from its imports' exports: each member bound
-/// under its qualified key (`Geometry.area`), the form the `Field` access path
-/// resolves.
-fn seed_from_imports(imports: &HashMap<String, ModuleExports>) -> Env {
-    let mut seed = Env::new();
-    for (name, exports) in imports {
-        for (member, scheme) in &exports.schemes {
-            seed.insert(format!("{name}.{member}"), scheme.clone());
-        }
-    }
-    seed
 }
 
 /// Type-check `module` and, in the same pass, collect the inferred type of every
@@ -550,20 +550,31 @@ fn seed_from_imports(imports: &HashMap<String, ModuleExports>) -> Env {
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
 pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _exports) = run(module, true, &Env::new());
+    let (errors, types, _schemes, _exports) = run(module, true, &HashMap::new());
     (errors, types)
 }
 
 /// Shared core of [`check`] / [`check_collecting`] / [`check_module`]. When
 /// `record` is set, the inferencer accumulates a `(span, ty)` entry per expression
-/// node, which we resolve and render once inference is complete. `seed` pre-binds
-/// extra schemes (imported modules' members under qualified keys, for the
-/// multi-file driver); it is empty for a single-file check. Returns the errors,
-/// the hover table, and the module's exported value schemes (top-level `let`
-/// bindings under their bare names).
-fn run(module: &Module, record: bool, seed: &Env) -> (Vec<TypeError>, Vec<TypeSpan>, Env) {
+/// node, which we resolve and render once inference is complete. `imports` pre-binds
+/// imported modules' interfaces (members under qualified keys, sum types under
+/// qualified constructor keys, for the multi-file driver); it is empty for a
+/// single-file check. Returns the errors, the hover table, the module's exported
+/// value schemes (top-level `let` bindings under their bare names), and its
+/// exported sum types.
+fn run(
+    module: &Module,
+    record: bool,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, Vec<TypeSpan>, Env, Vec<ExportedType>) {
     let mut errors = Vec::new();
-    let (decls, ctor_env) = build_decls(module, &mut errors);
+    let (mut decls, ctor_env) = build_decls(module, &mut errors);
+    // This module's own public sum types, captured before imports are merged in.
+    let exported_types = collect_exported_types(module, &decls);
+    // Merge imported modules' sum types into the decls (qualified constructor keys),
+    // so `Geometry.Circle` construction, qualified ctor patterns, and exhaustiveness
+    // all resolve against the imported type.
+    merge_imported_types(&mut decls, imports, &mut errors);
 
     // Start fresh ids past the ids reserved for the seeded built-in schemes, so
     // a freshly allocated (and later bound) variable can't alias a builtin's
@@ -575,10 +586,18 @@ fn run(module: &Module, record: bool, seed: &Env) -> (Vec<TypeError>, Vec<TypeSp
         ..Infer::default()
     };
     let mut env = ctor_env;
-    // Seed imported modules' exported members (under qualified keys like
-    // `Geometry.area`) so the `Field` access path resolves cross-module refs.
-    for (key, scheme) in seed {
-        env.insert(key.clone(), scheme.clone());
+    // Seed imported modules' exported values (under qualified keys like
+    // `Geometry.area`) and constructors (`Geometry.Circle`) so the `Field` access
+    // path resolves cross-module references.
+    for (module_name, exports) in imports {
+        for (member, scheme) in &exports.schemes {
+            env.insert(format!("{module_name}.{member}"), scheme.clone());
+        }
+        for ty in &exports.types {
+            for (ctor, info) in &ty.ctors {
+                env.insert(format!("{module_name}.{ctor}"), info.scheme.clone());
+            }
+        }
     }
     // Names of this module's top-level `let` values, for its export interface.
     let mut exported: Vec<String> = Vec::new();
@@ -662,7 +681,72 @@ fn run(module: &Module, record: bool, seed: &Env) -> (Vec<TypeError>, Vec<TypeSp
         })
         .collect();
 
-    (errors, types, exports)
+    (errors, types, exports, exported_types)
+}
+
+/// Capture a module's own public **sum** types from the freshly-built decls, for
+/// its export interface (`DESIGN.md` §6.1). Records / measures / externs are not
+/// yet cross-module exported.
+fn collect_exported_types(module: &Module, decls: &Decls) -> Vec<ExportedType> {
+    let mut out = Vec::new();
+    for item in &module.items {
+        let Item::Type(decl) = item else { continue };
+        if !matches!(decl.kind, TypeDeclKind::Sum(_)) {
+            continue;
+        }
+        let Some(&arity) = decls.type_arity.get(&decl.name) else {
+            continue;
+        };
+        let ctors = decls
+            .type_ctors
+            .get(&decl.name)
+            .into_iter()
+            .flatten()
+            .filter_map(|c| decls.ctors.get(c).map(|info| (c.clone(), info.clone())))
+            .collect();
+        out.push(ExportedType {
+            name: decl.name.clone(),
+            arity,
+            ctors,
+        });
+    }
+    out
+}
+
+/// Merge imported modules' sum types into `decls` under qualified constructor keys
+/// (`Geometry.Circle`): the type's arity and constructor set (for exhaustiveness),
+/// plus each constructor's [`CtorInfo`] (for construction and pattern binding). A
+/// type name clashing with one already present is reported.
+fn merge_imported_types(
+    decls: &mut Decls,
+    imports: &HashMap<String, ModuleExports>,
+    errors: &mut Vec<TypeError>,
+) {
+    // Deterministic order so a clash is reported the same way every run.
+    let mut module_names: Vec<&String> = imports.keys().collect();
+    module_names.sort();
+    for module_name in module_names {
+        for ty in &imports[module_name].types {
+            if decls.type_arity.contains_key(&ty.name) {
+                errors.push(TypeError {
+                    message: format!(
+                        "imported type `{}` (from `{module_name}`) clashes with an existing type",
+                        ty.name
+                    ),
+                    span: Span::new(0, 0),
+                });
+                continue;
+            }
+            decls.type_arity.insert(ty.name.clone(), ty.arity);
+            let mut ctor_names = Vec::with_capacity(ty.ctors.len());
+            for (ctor, info) in &ty.ctors {
+                let qualified = format!("{module_name}.{ctor}");
+                decls.ctors.insert(qualified.clone(), info.clone());
+                ctor_names.push(qualified);
+            }
+            decls.type_ctors.insert(ty.name.clone(), ctor_names);
+        }
+    }
 }
 
 /// Resolve a surface unit expression to a [`Unit`] over base measures, expanding

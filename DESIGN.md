@@ -367,18 +367,28 @@ in the entry's directory). Cross-module *checking* and *emit* (the next slices) 
 type-checked in topological order, its env seeded with every imported module's **exported value schemes**
 under their qualified keys (`env.insert("Geometry.area", scheme)`) — reusing the qualified-key env the
 checker already uses for built-in/in-file modules, so the existing `Field`-node access path resolves a
-cross-module reference with no new lookup logic. A module's interface for the MVP is its top-level **`let`
-values only**; **cross-module types / ctors / records / measures / externs are deferred** (qualified type
-names `Geometry.Shape`, qualified ctor patterns `Geometry.Circle r`, and cross-module field resolution are
-their own follow-on — this mirrors the in-file-module `let`-only limit). Using a name a module does not
-export is the ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
-*Implementation:* the single-file `run` was generalized to take a `seed` env and return the module's
-exported schemes; `check_module(module, imports)` builds the qualified seed and returns
-`(errors, ModuleExports)`. Transplanting a scheme across modules is sound because a top-level binding
-generalizes against an env of closed schemes, so its own scheme is closed (no free vars escape) and
-`instantiate` refreshes the quantified vars in the dependent module's id space. `project::check` threads
-the `ModuleExports` map through the topological order, seeding each module from only the modules it
-actually imports (so an unimported module's members stay invisible), and returns errors grouped by module.
+cross-module reference with no new lookup logic. A module's interface is its top-level **`let`
+values** plus its **sum types** (since the cross-module-ADT follow-on; `ModuleExports` carries each public
+sum type's name, arity, and constructors). A consumer can construct (`Geometry.Circle 2.0`) and
+pattern-match (`| Geometry.Circle r ->`, a qualified constructor pattern) the imported type's values, with
+**exhaustiveness checked across the boundary** (a missing arm reports the qualified witness `Geometry.Rect
+_ _`). **Cross-module records / measures / externs are still deferred** (cross-module record field access
+runs into the global field-uniqueness invariant; these are their own follow-on). Using a name a module does
+not export is the ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
+*Implementation:* the single-file `run` was generalized to take the imports map and return the module's
+exported value schemes **and** its exported sum types; `check_module(module, imports)` seeds imported
+values under qualified keys and imported sum types into the decls under **qualified constructor keys**
+(`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] = ["Geometry.Circle", …]`),
+so construction (the `Field` arm), qualified ctor patterns (`bind_pattern`), and exhaustiveness
+(`ctor_signature`) all resolve with no special cases. Transplanting a scheme across modules is sound
+because a top-level binding (and a constructor) generalizes against an env of closed schemes, so its own
+scheme is closed and `instantiate` refreshes the quantified vars in the dependent module's id space.
+`project::check` threads the `ModuleExports` map through the topological order, seeding each module from
+only the modules it actually imports (so an unimported module's members/constructors stay invisible), and
+returns errors grouped by module. *Lowering* routes a qualified constructor — in expression or pattern
+position — to the imported module's class (`geometry.Circle`, dotted class pattern `case geometry.Circle(r):`,
+with `import geometry` hoisted); a nullary imported constructor used as a value is called
+(`palette.Red()`), and imported constructor arities are threaded so a partial application still curries.
 
 **Output & the shared runtime** (landed — slice 4, `lowering::lower_in_project` + `project::compile`).
 Each module lowers independently to its own `.py`; a cross-module `Geometry.area` emits `geometry.area`
@@ -425,9 +435,15 @@ imported file changes (re-open/edit the dependent file to refresh). **Rich cross
 deferred**: workspace symbols, go-to-definition / find-references / rename across files, and a project-wide
 cache are a substantial follow-on (today's per-URI, version-cached analysis stays the core).
 
-**Deferred (explicit non-goals for the first cut):** `from X import y` / `open`; visibility (`pub`);
-cross-module types/ctors/records/measures/externs; nested/dotted packages & multi-word stem naming; TCO;
-de-duplicated `_pf_*` runtime; full multi-file LSP. **Implementation slices (ordered):** (0) implicit
+**Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
+(construct + qualified-pattern-match + cross-boundary exhaustiveness). **Explicit non-goals (decided not
+to build):** visibility (`pub`) — Pyfun is
+all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
+CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
+hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
+X import y` / `open`; cross-module *records*/measures/externs (records hit the global field-uniqueness
+invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
+**Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
 DFS so the graph logic is filesystem-free and unit-testable; `build_from_path` is the `.pyfun`-file
@@ -439,8 +455,8 @@ schemes) + `project::check` over the topo order]; (4) shared
 back-compat preserved]; (6) minimal-import-awareness LSP [**done** — `analyze_in_dir` +
 `project::resolve_imports` + `types::check_collecting_with_imports`, URI→dir in the server]; (7)
 docs/example [**done** — this section, plus the runnable `examples/modules/` project]. **All seven
-slices have landed — Phase 2 file-based modules are complete** (the deferred items above —
-cross-module types/ctors, `pub`, rich cross-file LSP nav — remain the natural follow-ons).
+slices have landed — Phase 2 file-based modules are complete**, plus the cross-module-ADT follow-on
+(above).
 
 ## 7. Surface language (MVP)
 

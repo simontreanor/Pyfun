@@ -281,8 +281,12 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    import-awareness in the LSP (`analyze_in_dir` resolves an entry's imports from sibling files via
    `project::resolve_imports` and seeds `types::check_collecting_with_imports`, so a multi-module file
    checks `Geometry.area` cleanly in the editor; the server maps the `file:` URI to a directory); (7)
-   docs + the runnable `examples/modules/` project. **Phase 2 is complete.** Natural follow-ons (deferred):
-   cross-module types/ctors/records/measures/externs, visibility (`pub`), TCO, and rich cross-file LSP nav.
+   docs + the runnable `examples/modules/` project. **Phase 2 is complete.** Follow-on landed:
+   **cross-module sum-type ADTs** (construct `Geometry.Circle 2.0`, qualified pattern `| Geometry.Circle r
+   ->`, cross-boundary exhaustiveness; `merge_imported_types` + qualified ctor patterns + dotted-class
+   lowering). Dropped as **explicit non-goals**: visibility (`pub`, all-public is the Python-natural model)
+   and TCO (`List`/`Seq` combinators are the stack-safe path). Still deferred: cross-module
+   records/measures/externs, rich cross-file LSP nav.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
