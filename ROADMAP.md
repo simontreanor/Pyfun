@@ -5,6 +5,53 @@ exhaustive matching, computation expressions, units of measure) is complete. Eac
 what it is, what it unlocks, and rough effort/risk. See [`DESIGN.md`](./DESIGN.md) for the full
 design and [`GUIDE.md`](./GUIDE.md) for current status.
 
+## Backlog — the full remaining picture
+
+The single forward-looking list of **everything not yet built**, so nothing is drip-fed. Three
+buckets: **non-goals** (decided against), **deferred** (real features, no current demand — build on
+request), and **warts** (small polish). The narrative sections below record what *has* shipped.
+Nothing here blocks normal use; the language is feature-complete for its MVP showcase + Phase 2
+file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
+
+### Non-goals (won't build unless a concrete need appears, with the reason)
+- **Visibility (`pub`)** — Pyfun is all-public, the Python-natural model; enforced privacy fights the ethos.
+- **Tail-call optimization** — CPython has none; the stack-safe path is the `List`/`Seq` combinators
+  (deep self-recursion matching hand-written Python's `RecursionError` is acceptable).
+- **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
+- **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
+  Python dispatches operators at runtime.
+- **Row polymorphism** — out of scope; the global-unique-field-name rule stands unless that rule is lifted.
+- **Macros** and a **package manager** — out of scope for the compiler (a future Python runtime package
+  could default to `uv`).
+
+### Deferred (real, no current demand — say the word and I'll scope it)
+*Language*
+- **List patterns + `cons`/`head`/`tail`** (M–L) — deferred until a big-O-honest representation is chosen
+  (the eager `List` is a Python array; these want a linked list, so it's a *new type*, not just syntax).
+- **Lift the unique-field-name restriction** (L) — needs type annotations or type-directed field
+  resolution (or row polymorphism, a non-goal).
+- **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
+  primitives (int/float/string) compare.
+- **Chained comparisons** (`a < b < c`, Python-style) (S) — currently left-associative.
+- **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
+  today there is one `io` label and declared function arrows are treated as pure.
+*Cross-module (file-modules follow-ons)*
+- **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
+  are blocked by the global field-uniqueness invariant (the hard part).
+*Tooling*
+- **REPL** (M) — natural follow-on to `pyfun run`.
+- **Project-wide LSP cache + truly incremental reparse** (M–L) — performance, not capability; the
+  per-document version cache already avoids redundant re-analysis.
+- **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
+
+### Warts (small, low priority)
+- **No guiding error for `+` on strings** (S) — the type error is generic rather than a hint to use a
+  concat/format path.
+- **A bare literal unified to `float` prints `7` not `7.0`** (S) — arithmetic coerces, so computed
+  values are unaffected; only a bare displayed literal looks like an int.
+
+---
+
 ## Language features (the remaining vision)
 
 ### 1. Effect inference (`DESIGN.md` §4) — ✅ done (inference-first, with `let pure`)
