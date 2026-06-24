@@ -123,6 +123,18 @@ pub fn references(module: &Module) -> Vec<Reference> {
     walk(module).refs
 }
 
+/// The narrowest qualified `Module.member` reference (expression position) whose
+/// occurrence covers `offset`, for cross-file go-to-definition (`DESIGN.md` §6.1).
+/// Pattern-position qualified constructors are not included (patterns carry no
+/// constructor span).
+pub fn qualified_at(module: &Module, offset: usize) -> Option<QualRef> {
+    walk(module)
+        .quals
+        .into_iter()
+        .filter(|q| q.span.start <= offset && offset < q.span.end)
+        .min_by_key(|q| q.span.end - q.span.start)
+}
+
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
@@ -208,6 +220,18 @@ struct Resolver {
     /// Every local binder's span (params, block `let`s, pattern vars, CE `let`s),
     /// so find-references can recognize the cursor sitting on a binder itself.
     binders: Vec<Span>,
+    /// Qualified `Module.member` references in expression position (`Geometry.area`,
+    /// `Geometry.Circle`) with the occurrence span, for cross-file navigation.
+    quals: Vec<QualRef>,
+}
+
+/// A qualified `Module.member` reference: the module name, the member name, and
+/// the occurrence span. Used for cross-file go-to-definition (`DESIGN.md` §6.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QualRef {
+    pub module: String,
+    pub member: String,
+    pub span: Span,
 }
 
 impl Resolver {
@@ -340,10 +364,18 @@ impl Resolver {
                     self.walk_expr(&f.value);
                 }
             }
-            ExprKind::Field { base, .. } => {
-                // `Module.member` (built-in modules) is a qualified name, not a
-                // reference to a local/definition — don't resolve the module base.
-                if crate::types::qualified_name(expr).is_none() {
+            ExprKind::Field { base, name } => {
+                // `Module.member` is a qualified name (built-in, in-file, or imported
+                // file module), not a reference to a local/definition — record it for
+                // cross-file navigation rather than resolving the module base.
+                if let Some(q) = crate::types::qualified_name(expr) {
+                    let module = q.split('.').next().unwrap_or("").to_string();
+                    self.quals.push(QualRef {
+                        module,
+                        member: name.clone(),
+                        span: expr.span(),
+                    });
+                } else {
                     self.walk_expr(base);
                 }
             }

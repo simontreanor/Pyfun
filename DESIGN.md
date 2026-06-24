@@ -432,17 +432,26 @@ percent-decoding + the Windows `/C:/` fixup) and passes it in; a non-`file:` URI
 analyzed exactly as before. **Limitations (acceptable for the MVP, documented):** imported modules are read
 from *disk*, not the editor's unsaved buffers, and the per-URI/version cache is not invalidated when an
 imported file changes (re-open/edit the dependent file to refresh). **Rich cross-file navigation is
-deferred**: workspace symbols, go-to-definition / find-references / rename across files, and a project-wide
-cache are a substantial follow-on (today's per-URI, version-cached analysis stays the core).
+deferred** (today's per-URI, version-cached analysis stays the core). *Cross-file navigation follow-on
+(landed):* **go-to-definition crosses files** — a qualified reference to an imported file module
+(`Geometry.area`, `Geometry.Circle`) jumps to the definition in that module's `.pyfun`
+(`resolve::qualified_at` records expression-position qualified refs with spans; the server resolves the
+sibling URI and locates the member via `resolve::definitions`, reading an open buffer over disk) — and
+**workspace symbols** (`workspace/symbol`) searches every definition across the project directory's
+`.pyfun` files. Still deferred: cross-file **find-references** and **rename** (find-references would need
+constructor-pattern spans to be complete — `Pattern::Ctor` carries none — and an incomplete reference set
+is worse than none; cross-file rename builds on it and adds capture concerns) and a project-wide cache.
 
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
-(construct + qualified-pattern-match + cross-boundary exhaustiveness). **Explicit non-goals (decided not
+(construct + qualified-pattern-match + cross-boundary exhaustiveness) and **cross-file LSP navigation**
+(go-to-definition across files + workspace symbols). **Explicit non-goals (decided not
 to build):** visibility (`pub`) — Pyfun is
 all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
 X import y` / `open`; cross-module *records*/measures/externs (records hit the global field-uniqueness
-invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
+invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime; cross-file
+find-references / rename (need constructor-pattern spans) and a project-wide LSP cache.
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
@@ -455,8 +464,8 @@ schemes) + `project::check` over the topo order]; (4) shared
 back-compat preserved]; (6) minimal-import-awareness LSP [**done** — `analyze_in_dir` +
 `project::resolve_imports` + `types::check_collecting_with_imports`, URI→dir in the server]; (7)
 docs/example [**done** — this section, plus the runnable `examples/modules/` project]. **All seven
-slices have landed — Phase 2 file-based modules are complete**, plus the cross-module-ADT follow-on
-(above).
+slices have landed — Phase 2 file-based modules are complete**, plus the cross-module-ADT and
+cross-file-LSP-navigation follow-ons (above).
 
 ## 7. Surface language (MVP)
 

@@ -285,8 +285,10 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    **cross-module sum-type ADTs** (construct `Geometry.Circle 2.0`, qualified pattern `| Geometry.Circle r
    ->`, cross-boundary exhaustiveness; `merge_imported_types` + qualified ctor patterns + dotted-class
    lowering). Dropped as **explicit non-goals**: visibility (`pub`, all-public is the Python-natural model)
-   and TCO (`List`/`Seq` combinators are the stack-safe path). Still deferred: cross-module
-   records/measures/externs, rich cross-file LSP nav.
+   and TCO (`List`/`Seq` combinators are the stack-safe path). **Cross-file LSP navigation** also landed:
+   go-to-definition jumps across files on a qualified ref (`resolve::qualified_at` + `locate_cross_file`)
+   and `workspace/symbol` searches the project dir. Still deferred: cross-module records/measures/externs,
+   cross-file find-references/rename (need constructor-pattern spans), a project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

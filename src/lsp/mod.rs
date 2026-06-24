@@ -9,9 +9,13 @@
 //!   type, since Pyfun never writes them.
 //! - **Go-to-definition** and **find-references**: navigate between a symbol and its
 //!   uses (module-level or local), via the name resolver in [`resolve`].
-//! - **Rename**: rewrite every occurrence of a local or top-level `let` value.
+//!   Go-to-definition also crosses files: a qualified reference to an imported file
+//!   module (`Geometry.area`) jumps to the definition in that module's `.pyfun`.
+//! - **Rename**: rewrite every occurrence of a local or top-level `let` value
+//!   (within one file; cross-file rename is deferred).
 //! - **Completion**: in-scope module symbols plus prelude, builtins, and keywords.
-//! - **Document symbols**: the module outline, from [`resolve::definitions`].
+//! - **Document symbols** and **workspace symbols**: the module outline and a
+//!   project-wide symbol search across the directory's `.pyfun` files.
 //!
 //! All of them run over a **resilient, version-cached analysis** ([`crate::analyze`]):
 //! the lexer and parser recover from errors, so a half-typed file still produces
@@ -28,7 +32,7 @@ pub mod resolve;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use crate::Analysis;
@@ -53,6 +57,25 @@ fn uri_to_path(uri: &str) -> Option<PathBuf> {
         decoded
     };
     Some(PathBuf::from(decoded))
+}
+
+/// Replace the final path segment of a `file:` URI with `filename`, yielding a
+/// sibling module's URI without re-encoding the path (preserves the client's
+/// exact encoding).
+fn sibling_uri(uri: &str, filename: &str) -> String {
+    match uri.rfind('/') {
+        Some(i) => format!("{}/{filename}", &uri[..i]),
+        None => filename.to_string(),
+    }
+}
+
+/// Whether `module` has an `import <name>` (so `name` is an imported *file*
+/// module, eligible for cross-file navigation).
+fn module_imports(module: &crate::syntax::Module, name: &str) -> bool {
+    module
+        .items
+        .iter()
+        .any(|i| matches!(i, crate::syntax::Item::Import { name: n, .. } if n == name))
 }
 
 /// Decode `%XX` percent-escapes in a URI path component (e.g. `%20` → space,
@@ -168,6 +191,10 @@ impl Server {
             }
             Some("textDocument/documentSymbol") => {
                 let result = self.document_symbols(msg);
+                vec![response(id, result)]
+            }
+            Some("workspace/symbol") => {
+                let result = self.workspace_symbols(msg);
                 vec![response(id, result)]
             }
             // Unknown *request* (has an id) → a proper error so the client isn't
@@ -357,6 +384,17 @@ impl Server {
             .unwrap_or(0) as u32;
         let offset = position_to_byte(text, line, character);
 
+        // A qualified reference to an *imported file module* (`Geometry.area`,
+        // `Geometry.Circle`) jumps across files to the definition in that module's
+        // `.pyfun` (`DESIGN.md` §6.1). Built-in / in-file module members fall
+        // through to the in-file resolver below.
+        if let Some(q) = resolve::qualified_at(module, offset)
+            && module_imports(module, &q.module)
+            && let Some(location) = self.locate_cross_file(uri, &q.module, &q.member)
+        {
+            return location;
+        }
+
         // The narrowest reference span containing the cursor is the identifier.
         let target = resolve::references(module)
             .into_iter()
@@ -377,6 +415,26 @@ impl Server {
             Some(span) => obj(vec![("uri", str(uri)), ("range", span_range(text, span))]),
             None => Json::Null, // a prelude/builtin — no source location
         }
+    }
+
+    /// Resolve a qualified reference to an imported file module (`Geometry.area`)
+    /// to a `Location` in that module's `.pyfun` file: find its sibling URI, read
+    /// it (preferring an open buffer over disk), and locate the member's
+    /// definition span. `None` if the file or member can't be found.
+    fn locate_cross_file(&self, uri: &str, module_name: &str, member: &str) -> Option<Json> {
+        let target_uri = sibling_uri(uri, &crate::project::module_file_name(module_name));
+        let source = match self.documents.get(&target_uri) {
+            Some(doc) => doc.text.clone(),
+            None => std::fs::read_to_string(uri_to_path(&target_uri)?).ok()?,
+        };
+        let module = crate::parse(&source).ok()?;
+        let sym = resolve::definitions(&module)
+            .into_iter()
+            .find(|s| s.name == member)?;
+        Some(obj(vec![
+            ("uri", str(&target_uri)),
+            ("range", span_range(&source, sym.span)),
+        ]))
     }
 
     /// Find-references: every occurrence of the symbol under the cursor (a `Local`
@@ -593,6 +651,76 @@ impl Server {
             .collect();
         Json::Array(symbols)
     }
+
+    /// Workspace symbols: every module-level definition across the project's
+    /// `.pyfun` files (the flat single-directory namespace), filtered by the query
+    /// substring (case-insensitive), as `SymbolInformation[]` with cross-file
+    /// `Location`s. Scans the directories of all open documents — reading each
+    /// sibling file from its open buffer if present, else from disk (`DESIGN.md`
+    /// §6.1). Cross-file LSP navigation; rich x-file find-references / rename
+    /// remain deferred (the latter needs constructor-pattern spans).
+    fn workspace_symbols(&self, msg: &Json) -> Json {
+        let query = msg
+            .get("params")
+            .and_then(|p| p.get("query"))
+            .and_then(Json::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for doc_uri in self.documents.keys() {
+            let Some(dir) = uri_to_path(doc_uri).and_then(|p| p.parent().map(Path::to_path_buf))
+            else {
+                continue;
+            };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut files: Vec<String> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let p = e.path();
+                    (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
+                        .then(|| p.file_name()?.to_str().map(str::to_string))
+                        .flatten()
+                })
+                .collect();
+            files.sort(); // deterministic output
+            for fname in files {
+                let file_uri = sibling_uri(doc_uri, &fname);
+                if !seen.insert(file_uri.clone()) {
+                    continue;
+                }
+                let source = match self.documents.get(&file_uri) {
+                    Some(doc) => doc.text.clone(),
+                    None => match std::fs::read_to_string(dir.join(&fname)) {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    },
+                };
+                let Ok(module) = crate::parse(&source) else {
+                    continue;
+                };
+                for sym in resolve::definitions(&module) {
+                    if !query.is_empty() && !sym.name.to_lowercase().contains(&query) {
+                        continue;
+                    }
+                    out.push(obj(vec![
+                        ("name", str(&sym.name)),
+                        ("kind", int(symbol_kind(sym.kind))),
+                        (
+                            "location",
+                            obj(vec![
+                                ("uri", str(&file_uri)),
+                                ("range", span_range(&source, sym.span)),
+                            ]),
+                        ),
+                    ]));
+                }
+            }
+        }
+        Json::Array(out)
+    }
 }
 
 /// `CompletionItemKind` codes (LSP spec) for the kinds we emit.
@@ -700,6 +828,7 @@ fn initialize_result() -> Json {
                 // An (empty) CompletionOptions object enables completion.
                 ("completionProvider", obj(vec![])),
                 ("documentSymbolProvider", Json::Bool(true)),
+                ("workspaceSymbolProvider", Json::Bool(true)),
             ]),
         ),
         (
@@ -954,6 +1083,84 @@ mod tests {
             .as_array()
             .unwrap();
         assert!(diags.is_empty(), "expected clean analysis, got {diags:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Build a `file:` URI for `path` (Windows `file:///C:/…`, Unix `file:///…`).
+    fn file_uri(path: &std::path::Path) -> String {
+        let p = path.to_string_lossy().replace('\\', "/");
+        if p.starts_with('/') {
+            format!("file://{p}")
+        } else {
+            format!("file:///{p}")
+        }
+    }
+
+    #[test]
+    fn goto_definition_jumps_across_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_gotodef_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let geom_uri = file_uri(&dir.join("geometry.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(
+            &json::parse(&open_msg(
+                &main_uri,
+                "import Geometry\nlet floor = Geometry.area 4 5",
+            ))
+            .unwrap(),
+        );
+        // Cursor on `Geometry.area` (line 1, inside the qualified reference).
+        let req = pos_msg("textDocument/definition", &main_uri, 1, 16);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let result = out[0].get("result").unwrap();
+        assert_eq!(result.get("uri").unwrap().as_str(), Some(geom_uri.as_str()));
+        // `area` is defined on line 0 of geometry.pyfun.
+        let line = result
+            .get("range")
+            .unwrap()
+            .get("start")
+            .unwrap()
+            .get("line")
+            .unwrap()
+            .as_i64();
+        assert_eq!(line, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_symbols_span_the_project_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_wsym_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let geom_uri = file_uri(&dir.join("geometry.pyfun"));
+
+        let mut server = Server::default();
+        server
+            .handle(&json::parse(&open_msg(&main_uri, "import Geometry\nlet floor = 1")).unwrap());
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("workspace/symbol")),
+            ("params", obj(vec![("query", str("area"))])),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        let syms = out[0].get("result").unwrap().as_array().unwrap();
+        // `area` lives in geometry.pyfun, found from the open `main` document's dir.
+        let area = syms
+            .iter()
+            .find(|s| s.get("name").and_then(Json::as_str) == Some("area"))
+            .expect("workspace symbols should include `area`");
+        assert_eq!(
+            area.get("location").unwrap().get("uri").unwrap().as_str(),
+            Some(geom_uri.as_str())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
