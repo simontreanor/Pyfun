@@ -260,6 +260,14 @@ pub enum ExprKind {
         else_: Box<Expr>,
     },
 
+    /// `try body` — run `body`, converting a thrown Python exception into an
+    /// `Error`. Evaluates to `Result <body-type> Exception` (`DESIGN.md` §6). The
+    /// only way to catch an exception (e.g. from an `extern` call); Pyfun code
+    /// itself signals failure with `Error`, so there is no `raise`.
+    Try {
+        body: Box<Expr>,
+    },
+
     /// `match scrutinee with | pat -> body ...`
     Match {
         scrutinee: Box<Expr>,
@@ -440,6 +448,9 @@ pub enum Pattern {
         span: NodeSpan,
     },
     Int(i64),
+    /// A string literal pattern `case "foo":`. Like `Int`, a refutable leaf over an
+    /// infinite type, so a `match` on strings still needs a wildcard to be exhaustive.
+    Str(String),
     Bool(bool),
     Ctor {
         name: String,

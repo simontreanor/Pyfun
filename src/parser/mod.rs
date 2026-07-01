@@ -728,6 +728,15 @@ impl Parser {
                 },
             ));
         }
+        // `try body` binds looser than `+`/comparison but tighter than `|>`/`and`/
+        // `or`, so `try parse s` is `try (parse s)` and `try parse s |> f` pipes the
+        // resulting `Result` out (`(try parse s) |> f`). Parens capture a wider body.
+        if matches!(self.peek(), Tok::Try) {
+            let start = self.cur_start();
+            self.bump();
+            let body = Box::new(self.parse_not()?);
+            return Ok(self.mk(start, ExprKind::Try { body }));
+        }
         self.parse_comparison()
     }
 
@@ -1257,6 +1266,10 @@ impl Parser {
             Tok::Int(n) => {
                 self.bump();
                 Ok(Pattern::Int(n))
+            }
+            Tok::Str(s) => {
+                self.bump();
+                Ok(Pattern::Str(s))
             }
             Tok::True => {
                 self.bump();

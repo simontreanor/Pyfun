@@ -1146,6 +1146,7 @@ fn set_innermost_io(ty: &mut Ty) {
 enum Tag {
     Bool(bool),
     Int(i64),
+    Str(String),
     Sum(String),
     Record(String),
     /// A tuple's single implicit constructor, carrying its arity.
@@ -1787,6 +1788,29 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
             arity: 0,
         },
     );
+
+    // `Exception` — the reserved record carrying a caught Python exception's
+    // `errorKind` (the class name, `type(e).__name__`) and `errorMessage` (`str(e)`).
+    // Produced only by `try e : Result a Exception` (`ExprKind::Try`). Reserved (a
+    // user `type Exception` is rejected via the `type_arity` clash), and it reuses
+    // the ordinary record machinery, so its fields join the global field registry.
+    decls.type_arity.insert("Exception".to_string(), 0);
+    decls.records.insert(
+        "Exception".to_string(),
+        RecordInfo {
+            params_count: 0,
+            fields: vec![
+                ("errorKind".to_string(), Ty::Str),
+                ("errorMessage".to_string(), Ty::Str),
+            ],
+        },
+    );
+    decls
+        .field_owner
+        .insert("errorKind".to_string(), "Exception".to_string());
+    decls
+        .field_owner
+        .insert("errorMessage".to_string(), "Exception".to_string());
 }
 
 /// Resolve a surface type expression into a [`Ty`].
@@ -2351,6 +2375,17 @@ impl Infer {
                 Ok(self.apply(&tt))
             }
 
+            // `try body : Result <body> Exception`. The body's own effect still
+            // propagates (the call is performed — `try` catches a *thrown*
+            // exception, it does not suppress the `io`), so nothing is discharged.
+            ExprKind::Try { body } => {
+                let inner = self.infer_expr(body, env)?;
+                Ok(Ty::Con(
+                    "Result".to_string(),
+                    vec![self.apply(&inner), Ty::Con("Exception".to_string(), vec![])],
+                ))
+            }
+
             ExprKind::Fn { params, body } => {
                 let mut body_env = env.clone();
                 let mut param_tys = Vec::with_capacity(params.len());
@@ -2880,6 +2915,7 @@ impl Infer {
                 Ok(())
             }
             Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int(Unit::dimensionless()), span),
+            Pattern::Str(_) => self.unify(scrut_ty, &Ty::Str, span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
             Pattern::Ctor { name, args, .. } => {
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
@@ -3109,6 +3145,7 @@ impl Infer {
             Pattern::Wildcard | Pattern::Var { .. } => None,
             Pattern::Bool(b) => Some(Tag::Bool(*b)),
             Pattern::Int(n) => Some(Tag::Int(*n)),
+            Pattern::Str(s) => Some(Tag::Str(s.clone())),
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
             Pattern::Record { ty, .. } => Some(Tag::Record(ty.clone())),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
@@ -3144,7 +3181,7 @@ impl Infer {
     /// The number of sub-patterns a constructor binds (its arity).
     fn tag_arity(&self, tag: &Tag) -> usize {
         match tag {
-            Tag::Bool(_) | Tag::Int(_) => 0,
+            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) => 0,
             Tag::Sum(name) => self.decls.ctors[name].arity,
             Tag::Record(name) => self.decls.records[name].fields.len(),
             Tag::Tuple(n) => *n,
@@ -3155,7 +3192,7 @@ impl Infer {
     /// parameters pinned by unifying the constructor's result with the column).
     fn tag_field_types(&mut self, ty: &Ty, tag: &Tag) -> Vec<Ty> {
         match tag {
-            Tag::Bool(_) | Tag::Int(_) => Vec::new(),
+            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) => Vec::new(),
             Tag::Sum(name) => {
                 let info = self.decls.ctors[name].clone();
                 let cty = self.instantiate(&info.scheme);
@@ -3199,6 +3236,7 @@ impl Infer {
             Pattern::Wildcard | Pattern::Var { .. } => Some(vec![Pattern::Wildcard; arity]),
             Pattern::Bool(b) => (*tag == Tag::Bool(*b)).then(Vec::new),
             Pattern::Int(n) => (*tag == Tag::Int(*n)).then(Vec::new),
+            Pattern::Str(s) => (*tag == Tag::Str(s.clone())).then(Vec::new),
             Pattern::Ctor { name, args, .. } => {
                 (*tag == Tag::Sum(name.clone())).then(|| args.clone())
             }
@@ -3226,6 +3264,7 @@ impl Infer {
             Wit::Wild => "_".to_string(),
             Wit::Con(Tag::Bool(b), _) => b.to_string(),
             Wit::Con(Tag::Int(n), _) => n.to_string(),
+            Wit::Con(Tag::Str(s), _) => format!("{s:?}"),
             Wit::Con(Tag::Sum(name), args) => {
                 if args.is_empty() {
                     name.clone()

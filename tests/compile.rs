@@ -194,6 +194,55 @@ fn e2e_zip_into_a_map_and_back() {
 }
 
 #[test]
+fn try_lowers_to_a_try_except_yielding_ok_or_error() {
+    let py = pyfun::compile(
+        "extern parseInt : string -> int = int\n\
+         let safe s = try (parseInt s)",
+    )
+    .unwrap();
+    // The Exception record is emitted as `_Exception` (not shadowing the builtin).
+    assert!(py.contains("class _Exception:"), "{py}");
+    assert!(py.contains("try:"), "{py}");
+    assert!(py.contains("= Ok(int(s))"), "{py}");
+    assert!(py.contains("except Exception as"), "{py}");
+    // The handler builds Error(_Exception(type(e).__name__, str(e))).
+    assert!(py.contains("_Exception(type("), "{py}");
+    assert!(py.contains(").__name__, str("), "{py}");
+}
+
+#[test]
+fn e2e_try_catches_and_recovers() {
+    run_and_check(
+        "
+        extern parseInt : string -> int = int
+        let orZero s = Result.withDefault 0 (try (parseInt s))
+        let good = orZero \"42\"
+        let bad = orZero \"oops\"
+        ",
+        &[("good", "42"), ("bad", "0")],
+    );
+}
+
+#[test]
+fn e2e_try_exposes_exception_kind_and_message() {
+    run_and_check(
+        "
+        extern parseInt : string -> int = int
+        let kindOf s =
+          match try (parseInt s):
+            case Ok n: \"ok\"
+            case Error e: e.errorKind
+        let k = kindOf \"nope\"
+        let matched =
+          match try (parseInt \"x\"):
+            case Error (Exception { errorKind = \"ValueError\" }): \"caught-value-error\"
+            case _: \"other\"
+        ",
+        &[("k", "ValueError"), ("matched", "caught-value-error")],
+    );
+}
+
+#[test]
 fn interpolated_string_lowers_to_a_python_fstring() {
     let py = pyfun::compile(
         "let name = \"Ada\"\n\

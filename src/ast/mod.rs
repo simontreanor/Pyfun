@@ -300,6 +300,9 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::App { func, arg } => {
             format!("({} {})", print_expr(func), print_expr(arg))
         }
+        // Parenthesized so it reparses correctly wherever it sits (e.g. as an
+        // application argument); the body is itself self-parenthesizing.
+        ExprKind::Try { body } => format!("(try {})", print_expr(body)),
         ExprKind::If { cond, then, else_ } => {
             // A right-nested `if` in the else branch flattens into an `elif` chain
             // (reparses to the same nested `If`).
@@ -402,6 +405,7 @@ pub fn print_pattern(pattern: &Pattern) -> String {
         Pattern::Wildcard => "_".to_string(),
         Pattern::Var { name, .. } => name.clone(),
         Pattern::Int(n) => n.to_string(),
+        Pattern::Str(s) => print_string(s),
         Pattern::Bool(b) => b.to_string(),
         Pattern::Ctor { name, args, .. } if args.is_empty() => name.clone(),
         Pattern::Ctor { name, args, .. } => {

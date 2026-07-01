@@ -304,6 +304,27 @@ contain a string literal reusing the outer quote (`f"{String.contains "}" s}"`).
 (`:.2f`, `!r`), multi-line `f"""..."""`, and `{x=}` self-documenting holes are deferred. Covered by
 lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
 
+**`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns
+`Error`); the only reason to catch is the **Python FFI boundary** — an `extern` call can throw. So rather
+than importing Python's imperative `try/except/finally/raise` (and an exception class hierarchy Pyfun has
+no types for), the feature is a single **expression**: `try e : Result <e> Exception` (`ExprKind::Try`). It
+runs `e`, and a thrown Python exception becomes `Error`; success is `Ok`. `try` is a prefix keyword binding
+looser than `+`/comparison but tighter than `|>`, so `try parse s` is `try (parse s)` while `try parse s
+|> Result.withDefault 0` pipes the `Result` out; parens capture a wider body. It does **not** change
+effects — the body's `io` still happens (`try` catches a *thrown* exception, it doesn't suppress the
+call). The `Error` payload is a **reserved built-in record `Exception`** with `errorKind : string` (the
+class name, `type(e).__name__`) and `errorMessage : string` (`str(e)`) — read by field access (`e.errorKind`)
+or matched (`case Error (Exception { errorKind = "ValueError" }): …`). It reuses the ordinary record
+machinery (so its two fields join the global field registry, and a user `type Exception` is rejected as
+reserved), lowered to a class emitted as **`_Exception`** so it does not shadow Python's builtin
+`Exception` that the handler catches. Lowering reuses the `PyStmt::Try` node (extended with an `as <name>`
+binding): `try:  t = Ok(<body>)  except Exception as e:  t = Error(_Exception(type(e).__name__, str(e)))`.
+There is deliberately **no `raise`, no `finally`, no exception hierarchy** (Pyfun signals failure with
+`Error`; the `result {}` CE + `Result` module compose the rest). Enabled by **string-literal patterns**
+(`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `string` type, so a string `match`
+still needs a wildcard), which landed alongside. Covered by roundtrip/typecheck/compile/run tests +
+`examples/hello.pyfun`.
+
 **Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
 `take`/`range` are **lazy** (they route to Python's own lazy `map`/`filter`/`itertools.islice`/`range`,

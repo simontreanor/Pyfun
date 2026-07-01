@@ -379,7 +379,11 @@ impl Resolver {
                     self.walk_pattern(alt);
                 }
             }
-            Pattern::Var { .. } | Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
+            Pattern::Var { .. }
+            | Pattern::Wildcard
+            | Pattern::Int(_)
+            | Pattern::Str(_)
+            | Pattern::Bool(_) => {}
         }
     }
 
@@ -466,6 +470,7 @@ impl Resolver {
                 self.walk_expr(then);
                 self.walk_expr(else_);
             }
+            ExprKind::Try { body } => self.walk_expr(body),
             ExprKind::Match { scrutinee, arms } => {
                 self.walk_expr(scrutinee);
                 for MatchArm {
@@ -637,7 +642,7 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
                 pattern_vars(first, out);
             }
         }
-        Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
+        Pattern::Wildcard | Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => {}
     }
 }
 

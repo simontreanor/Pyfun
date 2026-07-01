@@ -144,6 +144,15 @@ const PROGRAMS: &[&str] = &[
     "let g = f\"upper {String.upper name}\"",
     "let g = f\"a literal brace {{ and {x}\"",
     "let g = f\"no holes at all\"",
+    // `try e` — catch an exception into a `Result` (`DESIGN.md` §6). Binds looser
+    // than `+` but tighter than `|>`, so the result pipes out.
+    "let r = try (parseInt s)",
+    "let r = try parseInt s",
+    "let n = Result.withDefault 0 (try (parseInt s))",
+    // String literal patterns, and a record pattern over the reserved `Exception`.
+    "let f s =\n  match s:\n    case \"yes\": 1\n    case \"no\": 0\n    case _: 2",
+    "let g r =\n  match r:\n    case Ok n: n\n    case Error e: e.errorKind\n    case _: \"?\"",
+    "let h r =\n  match r:\n    case Error (Exception { errorKind = \"ValueError\" }): 1\n    case _: 0",
     // Built-in `String` module: qualified access is the ordinary field path.
     "let g = String.concat \"a\" \"b\"",
     "let parts = String.split \",\" line",

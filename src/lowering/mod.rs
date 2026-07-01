@@ -90,16 +90,17 @@ pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredM
         lowerer.arities.entry(name.clone()).or_insert(*arity);
     }
     let py = lowerer.lower_module(module)?;
-    let uses_runtime = lowerer.needs_result || lowerer.needs_option;
+    let uses_runtime = lowerer.needs_result || lowerer.needs_option || lowerer.needs_exception;
     Ok(LoweredModule { py, uses_runtime })
 }
 
 /// The shared runtime module (`_pyfun_rt.py`): the nominal `Ok`/`Error`/`Some`/
-/// `None_` classes every project module imports, so those values are
+/// `None_`/`_Exception` classes every project module imports, so those values are
 /// `isinstance`-compatible across files (`DESIGN.md` §6.1).
 pub fn runtime_module() -> PyModule {
     let mut body = result_prelude();
     body.extend(option_prelude());
+    body.extend(exception_prelude());
     PyModule { body }
 }
 
@@ -160,6 +161,9 @@ struct Lowerer {
     /// prelude), set when `Some`/`None` or an `Option.*` / `Map.tryFind` member that
     /// constructs them is lowered.
     needs_option: bool,
+    /// Whether the built-in `Exception` record class (`_Exception`) must be emitted,
+    /// set when a `try` expression (which builds one on a caught exception) is lowered.
+    needs_exception: bool,
 }
 
 type Lowered = Result<(Vec<PyStmt>, PyExpr), LowerError>;
@@ -173,6 +177,16 @@ impl Lowerer {
         let mut ctor_arity = std::collections::HashMap::new();
         let mut record_fields = std::collections::HashMap::new();
         let mut field_to_record = std::collections::HashMap::new();
+        // The reserved `Exception` record (fields errorKind/errorMessage) — the
+        // payload of a `try`'s `Error`. Seeded like a user record so its literals and
+        // patterns lower through the same machinery (class name mangled by
+        // `py_record_class` to dodge Python's builtin `Exception`).
+        record_fields.insert(
+            "Exception".to_string(),
+            vec!["errorKind".to_string(), "errorMessage".to_string()],
+        );
+        field_to_record.insert("errorKind".to_string(), "Exception".to_string());
+        field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
         for item in &module.items {
@@ -277,6 +291,7 @@ impl Lowerer {
             needs_functools: false,
             needs_result: false,
             needs_option: false,
+            needs_exception: false,
         }
     }
 
@@ -374,6 +389,16 @@ impl Lowerer {
                 });
             } else {
                 body.extend(option_prelude());
+            }
+        }
+        if self.needs_exception {
+            if self.use_runtime {
+                body.push(PyStmt::ImportFrom {
+                    module: "_pyfun_rt".to_string(),
+                    names: vec!["_Exception".to_string()],
+                });
+            } else {
+                body.extend(exception_prelude());
             }
         }
         // List-prelude helpers referenced by the program (deterministic order).
@@ -699,6 +724,49 @@ impl Lowerer {
                 Ok((stmts, PyExpr::FStr(py_parts)))
             }
 
+            // `try body` → run the body in a `try`, assigning `Ok(value)`; a caught
+            // exception becomes `Error(_Exception(type(e).__name__, str(e)))`. The
+            // result lands in a temp that becomes the expression's value.
+            ExprKind::Try { body } => {
+                self.needs_result = true;
+                self.needs_exception = true;
+                let (body_stmts, body_val) = self.lower_value(body, locals)?;
+                let result_tmp = self.fresh_tmp();
+                let exc = self.fresh_tmp(); // the `except ... as <exc>` binding
+                let mut try_body = body_stmts;
+                try_body.push(PyStmt::Assign {
+                    target: result_tmp.clone(),
+                    value: call1("Ok", body_val),
+                });
+                // _Exception(type(e).__name__, str(e))
+                let kind = PyExpr::Attribute {
+                    value: Box::new(PyExpr::Call {
+                        func: Box::new(PyExpr::Name("type".to_string())),
+                        args: vec![PyExpr::Name(exc.clone())],
+                    }),
+                    attr: "__name__".to_string(),
+                };
+                let message = PyExpr::Call {
+                    func: Box::new(PyExpr::Name("str".to_string())),
+                    args: vec![PyExpr::Name(exc.clone())],
+                };
+                let payload = PyExpr::Call {
+                    func: Box::new(PyExpr::Name(py_record_class("Exception"))),
+                    args: vec![kind, message],
+                };
+                let handler = vec![PyStmt::Assign {
+                    target: result_tmp.clone(),
+                    value: call1("Error", payload),
+                }];
+                let try_stmt = PyStmt::Try {
+                    body: try_body,
+                    exc_type: Some("Exception".to_string()),
+                    binding: Some(exc),
+                    handler,
+                };
+                Ok((vec![try_stmt], PyExpr::Name(result_tmp)))
+            }
+
             ExprKind::Record { fields, .. } => self.lower_record(fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
                 self.lower_record_update(base, fields, locals)
@@ -778,7 +846,7 @@ impl Lowerer {
         Ok((
             stmts,
             PyExpr::Call {
-                func: Box::new(PyExpr::Name(record)),
+                func: Box::new(PyExpr::Name(py_record_class(&record))),
                 args,
             },
         ))
@@ -816,7 +884,7 @@ impl Lowerer {
         Ok((
             stmts,
             PyExpr::Call {
-                func: Box::new(PyExpr::Name(record)),
+                func: Box::new(PyExpr::Name(py_record_class(&record))),
                 args,
             },
         ))
@@ -1123,6 +1191,7 @@ impl Lowerer {
             Pattern::Wildcard => PyPattern::Wildcard,
             Pattern::Var { name, .. } => PyPattern::Capture(name.clone()),
             Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
+            Pattern::Str(s) => PyPattern::Literal(PyExpr::Str(s.clone())),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
             Pattern::Ctor { name, args, .. } => {
                 if name == "Ok" || name == "Error" {
@@ -1145,7 +1214,7 @@ impl Lowerer {
                     .map(|f| (f.name.clone(), self.lower_pattern(&f.pattern)))
                     .collect();
                 PyPattern::ClassKw {
-                    name: ty.clone(),
+                    name: py_record_class(ty),
                     fields: lowered,
                 }
             }
@@ -1528,6 +1597,17 @@ fn py_ctor_name(name: &str) -> String {
     }
 }
 
+/// The Python class name for a record type. Almost always the type name verbatim,
+/// but the reserved built-in `Exception` is emitted as `_Exception` so it does not
+/// shadow Python's builtin `Exception` (which `try` catches with `except Exception`).
+fn py_record_class(name: &str) -> String {
+    if name == "Exception" {
+        "_Exception".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 /// `name()` — a zero-argument call (used to invoke generated CE helper functions).
 fn call0(name: &str) -> PyExpr {
     PyExpr::Call {
@@ -1556,6 +1636,17 @@ fn result_prelude() -> Vec<PyStmt> {
             fields: vec!["_0".to_string()],
         },
     ]
+}
+
+/// The `_Exception` record class — the `Error` payload of a `try` (`DESIGN.md` §6).
+/// Emitted as `_Exception` (not `Exception`) so it does not shadow Python's builtin
+/// `Exception`, which `try` lowering catches with `except Exception`. Its structural
+/// `__eq__`/`__repr__`/`__match_args__` come from `emit_class`, like any record.
+fn exception_prelude() -> Vec<PyStmt> {
+    vec![PyStmt::ClassDef {
+        name: "_Exception".to_string(),
+        fields: vec!["errorKind".to_string(), "errorMessage".to_string()],
+    }]
 }
 
 /// The `Some`/`None_` classes backing the built-in `Option` type (`None` is mangled
@@ -1979,6 +2070,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 vec![PyStmt::Try {
                     body: vec![PyStmt::Return(call1("Some", call("int", vec![name("s")])))],
                     exc_type: Some("ValueError".to_string()),
+                    binding: None,
                     handler: vec![PyStmt::Return(call0("None_"))],
                 }],
             ),
@@ -2026,7 +2118,7 @@ fn is_irrefutable(pattern: &Pattern) -> bool {
         Pattern::Record { fields, .. } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
         Pattern::Or(alts) => alts.iter().any(is_irrefutable),
-        Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
+        Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
     }
 }
 
@@ -2083,6 +2175,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             scan_scope(rhs, assigned, bound);
         }
         ExprKind::Unary { expr, .. } => scan_scope(expr, assigned, bound),
+        ExprKind::Try { body } => scan_scope(body, assigned, bound),
         ExprKind::Annot { value, .. } => scan_scope(value, assigned, bound),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {

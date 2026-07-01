@@ -49,12 +49,13 @@ pub enum PyStmt {
     Match { subject: PyExpr, cases: Vec<PyCase> },
     /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
     RaiseRuntimeError(String),
-    /// `try: body except [ExcType]: handler` — a single except clause (bare when
-    /// `exc_type` is `None`). Used by `String.toInt`'s total parse (`int(s)` guarded
-    /// against `ValueError`); a general building block for future `try`/`except`.
+    /// `try: body except [ExcType [as name]]: handler` — a single except clause
+    /// (bare when `exc_type` is `None`; binds the caught exception to `binding` when
+    /// present). Used by `String.toInt`'s total parse and by `try e` (`DESIGN.md` §6).
     Try {
         body: Vec<PyStmt>,
         exc_type: Option<String>,
+        binding: Option<String>,
         handler: Vec<PyStmt>,
     },
     /// A data-constructor class with positional fields and `__match_args__`.
@@ -290,14 +291,17 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::Try {
             body,
             exc_type,
+            binding,
             handler,
         } => {
             line(out, depth, "try:");
             emit_block(body, depth + 1, out);
-            match exc_type {
-                Some(ty) => line(out, depth, &format!("except {ty}:")),
-                None => line(out, depth, "except:"),
-            }
+            let clause = match (exc_type, binding) {
+                (Some(ty), Some(name)) => format!("except {ty} as {name}:"),
+                (Some(ty), None) => format!("except {ty}:"),
+                (None, _) => "except:".to_string(),
+            };
+            line(out, depth, &clause);
             emit_block(handler, depth + 1, out);
         }
         PyStmt::ClassDef { name, fields } => emit_class(name, fields, depth, out),

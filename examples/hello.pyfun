@@ -199,6 +199,18 @@ extern pure sqrt: float -> float = math.sqrt
 let label = show 42                  # "42"  (str(42))
 let root = sqrt 16.0                 # 4.0   (math.sqrt(16.0))
 
+# `try e` catches a Python exception (e.g. from an `extern`) into a `Result a
+# Exception`, so the imperative FFI boundary becomes the FP error type. The
+# reserved `Exception` record exposes `errorKind` (the class name) and
+# `errorMessage`. `try` binds looser than `+` but tighter than `|>`.
+extern parseInt: string -> int = int
+let parsed42 = Result.withDefault 0 (try (parseInt "42"))    # 42
+let parsedBad = Result.withDefault 0 (try (parseInt "oops")) # 0  (ValueError caught)
+let errorKindOf s =
+  match try (parseInt s):
+    case Ok n: "ok"
+    case Error e: e.errorKind                                # string literal patterns
+
 # Lists: the eager `List a` collection (lowers to a Python list). Literals are
 # comma-separated `[a, b, c]`. Collection functions are module-qualified
 # (`List.map`, `Set.add`, `Map.tryFind`) — the module disambiguates a shared name
@@ -294,6 +306,11 @@ print (describe here)                 # elsewhere
 # Externs in action (call out to Python's str / math.sqrt).
 print label                           # 42
 print root                            # 4.0
+
+# `try` in action: recover a default, and read the caught exception's kind.
+print parsed42                        # 42
+print parsedBad                       # 0    (try caught the ValueError)
+print (errorKindOf "nope")            # ValueError
 
 # Lists in action.
 print squares                         # [1, 4, 9, 16, 25]

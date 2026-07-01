@@ -23,6 +23,10 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **Row polymorphism** — out of scope; the global-unique-field-name rule stands unless that rule is lifted.
 - **Macros** and a **package manager** — out of scope for the compiler (a future Python runtime package
   could default to `uv`).
+- **Imperative `raise`/`finally`/exception hierarchy** — Pyfun signals failure with `Error`, not by
+  raising; the `try e : Result a Exception` expression (done) catches at the FFI boundary, and
+  `result {}` + the `Result` module compose the rest. A `raise`/`finally` statement form would duplicate
+  `Result` and import a class hierarchy Pyfun has no types for.
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
@@ -38,9 +42,6 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   Workaround: a lambda, `fun x -> x * 2`.
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
-- **General `try`/`except` exception handling** (M–L) — `Result`/`Option` are the error primitives today;
-  there is no way to *catch* a Python exception from an `extern` call. The `PyStmt::Try` IR node now exists
-  (used by `String.toInt`), so the emitter groundwork is in place; a surface syntax + typing remain.
 - **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+);
   still deferred are **format specifiers** (`{x:.2f}`, `{v!r}` — a mini-language), **multi-line** `f"""..."""`
   (Pyfun has no triple-quoted strings), and **`{x=}`** self-documenting holes.

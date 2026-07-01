@@ -1092,6 +1092,57 @@ fn accepts_map_functions() {
 }
 
 #[test]
+fn try_yields_a_result_over_exception() {
+    // `try e : Result <e> Exception`; the Ok payload is the body's type, the Error
+    // payload is the reserved `Exception` record (accessed by field).
+    let src = "extern parseInt : string -> int = int\n\
+               let describe s =\n\
+               \x20 match try (parseInt s):\n\
+               \x20 \x20 case Ok n: n\n\
+               \x20 \x20 case Error e: String.len e.errorKind";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn try_body_type_flows_into_ok() {
+    // The Ok arm binds the body's type — here `string`, so String ops apply.
+    let src = "extern readFile : string -> string = open\n\
+               let firstChar path =\n\
+               \x20 match try (readFile path):\n\
+               \x20 \x20 case Ok contents: String.upper contents\n\
+               \x20 \x20 case Error e: e.errorMessage";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn exception_type_is_reserved() {
+    // A user `type Exception` collides with the reserved built-in.
+    assert!(pyfun::check("type Exception = Boom").is_err());
+}
+
+#[test]
+fn string_literal_patterns_typecheck_over_strings() {
+    let src = "let classify s =\n\
+               \x20 match s:\n\
+               \x20 \x20 case \"yes\": 1\n\
+               \x20 \x20 case \"no\": 0\n\
+               \x20 \x20 case _: 2";
+    assert!(pyfun::check(src).is_ok());
+    // Matching a string literal against a non-string scrutinee is a type error.
+    assert!(
+        pyfun::check("let f n =\n  match n:\n    case \"x\": 1\n    case _: 0\nlet r = f 5").is_err()
+    );
+}
+
+#[test]
+fn string_match_needs_a_wildcard_to_be_exhaustive() {
+    // `string` is infinite, so enumerating literals is never exhaustive.
+    assert!(
+        pyfun::check("let f s =\n  match s:\n    case \"a\": 1\n    case \"b\": 2").is_err()
+    );
+}
+
+#[test]
 fn interpolated_string_has_type_string() {
     // The whole f-string is a `string`; holes may be any type (int, tuple, ADT).
     let src = "let name = \"Ada\"\n\
