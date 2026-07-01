@@ -194,6 +194,80 @@ fn e2e_zip_into_a_map_and_back() {
 }
 
 #[test]
+fn string_functions_lower_to_builtins_and_helpers() {
+    let py = pyfun::compile(
+        "let n = String.len \"hi\"\n\
+         let up = String.upper \"hi\"\n\
+         let parts = String.split \",\" \"a,b\"\n\
+         let joined = String.join \"-\" parts\n\
+         let has = String.contains \"a\" \"abc\"\n\
+         let s = String.fromInt 7\n\
+         let chars = String.toList \"hi\"",
+    )
+    .unwrap();
+    // Bare-builtin routes (no helper).
+    assert!(py.contains("len(\"hi\")"), "{py}");
+    assert!(py.contains("str(7)"), "{py}");
+    assert!(py.contains("list(\"hi\")"), "{py}");
+    // Emitted helpers.
+    assert!(py.contains("def _pf_str_upper(s):"), "{py}");
+    assert!(py.contains("return s.upper()"), "{py}");
+    assert!(py.contains("def _pf_str_split(sep, s):"), "{py}");
+    assert!(py.contains("return s.split(sep)"), "{py}");
+    assert!(py.contains("def _pf_str_join(sep, xs):"), "{py}");
+    assert!(py.contains("return sep.join(xs)"), "{py}");
+    assert!(py.contains("def _pf_str_contains(sub, s):"), "{py}");
+    assert!(py.contains("return sub in s"), "{py}");
+}
+
+#[test]
+fn string_to_int_lowers_to_a_try_except_and_pulls_in_the_option_prelude() {
+    let py = pyfun::compile("let r = String.toInt \"42\"").unwrap();
+    assert!(py.contains("class Some:"), "{py}");
+    assert!(py.contains("class None_:"), "{py}");
+    assert!(py.contains("def _pf_str_to_int(s):"), "{py}");
+    assert!(py.contains("try:"), "{py}");
+    assert!(py.contains("return Some(int(s))"), "{py}");
+    assert!(py.contains("except ValueError:"), "{py}");
+    assert!(py.contains("return None_()"), "{py}");
+}
+
+#[test]
+fn e2e_string_operations() {
+    run_and_check(
+        "
+        let g = String.concat \"Hello, \" \"World\"
+        let up = String.upper g
+        let n = String.len g
+        let parts = String.split \", \" g
+        let joined = String.join \"/\" parts
+        let has = String.contains \"World\" g
+        let r = String.replace \"o\" \"0\" g
+        ",
+        &[
+            ("up", "HELLO, WORLD"),
+            ("n", "12"),
+            ("parts", "['Hello', 'World']"),
+            ("joined", "Hello/World"),
+            ("has", "True"),
+            ("r", "Hell0, W0rld"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_string_to_int_parses_or_yields_none() {
+    run_and_check(
+        "
+        let ok = Option.withDefault 0 (String.toInt \"41\")
+        let bad = Option.withDefault 0 (String.toInt \"nope\")
+        let neg = Option.withDefault 0 (String.toInt \"-5\")
+        ",
+        &[("ok", "41"), ("bad", "0"), ("neg", "-5")],
+    );
+}
+
+#[test]
 fn unused_collection_helpers_are_not_emitted() {
     let py = pyfun::compile("let s = Set.empty").unwrap();
     assert!(!py.contains("_pf_"), "{py}");

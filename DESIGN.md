@@ -267,6 +267,26 @@ demand. Each has a module of combinators: `Option.map`/`withDefault`/`isSome`/`i
 **effect-polymorphic** (like `List.map`). `Map.tryFind` returns an `Option`; `Result.toOption` bridges
 the two (`Ok v → Some v`, `Error _ → None`). A user `type Option`/`Result` is rejected (reserved).
 
+**Strings — the `String` module (implemented).** Text operations over the built-in `string` type (which
+lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
+`upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
+`toList` (single source of truth `types::STRING_PRELUDE` + `seed_string_prelude`). **Naming follows the
+`List` precedent** — use Python's word where it has a natural one (`len`/`upper`/`lower`/`strip`/`split`/
+`join`/`replace`, matching Python's `str` methods, and consistent with `List.len`), and Pyfun's own
+convention otherwise (the `contains`/`ofList`-style `toInt`/`toList`/`fromInt` family, and camelCase for
+multi-word `startsWith`/`endsWith` like `tryFind`/`withDefault`). Unlike the collection preludes these
+schemes are **monomorphic** (concrete over `string`/`int`/`float`/`bool`, no type variables) and all
+**pure**. There is **no `char` type** — a character is a length-1 string, so `String.toList : string ->
+List string` yields single-character strings and `String.join`/`concat` compose them back. Separator-first
+argument order (`String.join ", " xs`, `String.split "," s`) keeps partial application natural. Lowering
+mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Python builtins
+(`len`/`str`/`list`); the rest lower to emitted `_pf_str_*` helpers (`_pf_str_upper` = `s.upper()`,
+`_pf_str_split` = `s.split(sep)`, …) so each curried function is one callable. The one total parse,
+`String.toInt : string -> Option int`, lowers to a `try`/`except ValueError` helper returning
+`Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
+prelude. String interpolation / f-strings (a front-end feature) and overloading `+` for strings are
+deferred — `String.concat` is the concatenation path.
+
 **Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
 `take`/`range` are **lazy** (they route to Python's own lazy `map`/`filter`/`itertools.islice`/`range`,
@@ -280,14 +300,20 @@ generator the `seq {}` CE already produces.
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The
-built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`; members paired in
+built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`/`String`; members paired in
 `MODULE_PRELUDES`) and **user-declared in-file modules** (below) share one access syntax. The access
 mechanism needed **no parser change**: `Module.member` is parsed as the ordinary field-access node
 `Field { base: Var("List"), name: "map" }`; `types::qualified_name` recognizes an **uppercase** base
 (value identifiers are lowercase, so `Upper.x` is only ever module access — a record-field base is a
 lowercase value), and the checker + lowering resolve the dotted member against the module instead of as
 record-field access. A genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in
-`PRELUDE`), matching F# (`List.map` qualified, `abs` global).
+`PRELUDE`), matching F# (`List.map` qualified, `abs` global). An unknown member gets a **"did you
+mean"** hint — `` `startswith` is not a member of `String` (did you mean `String.startsWith`?) `` —
+computed by `closest_member` (a case-insensitive match first, then edit distance ≤ ~⅓ the name, then a
+prefix relation for abbreviation slips like `length`→`len`). It scans the env's qualified keys, so it
+serves built-in *and* user modules, and rides the shared inference path so it surfaces in `pyfun check`
+*and* LSP editor diagnostics. Names stay **single-spelling** (no camelCase/lowercase aliases) — casing is
+load-bearing (`Upper.x` vs `lower.x`), so the hint is the forgiving path, not a second accepted name.
 
 **In-file modules (implemented).** `module Name = <indented let bindings>` declares a namespace within
 a file (`Item::Module`):

@@ -1028,6 +1028,27 @@ impl Lowerer {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_take")
             }
+            // String — text ops over the built-in `string` (Python `str`). Bare
+            // routes reuse Python builtins (`len`/`str`/`list`); the rest lower to
+            // emitted `_pf_str_*` helpers so each curried function is one callable.
+            "String.len" => bare("len"),
+            "String.fromInt" | "String.fromFloat" => bare("str"),
+            "String.toList" => bare("list"),
+            "String.concat" => coll(self, "_pf_str_concat"),
+            "String.join" => coll(self, "_pf_str_join"),
+            "String.split" => coll(self, "_pf_str_split"),
+            "String.upper" => coll(self, "_pf_str_upper"),
+            "String.lower" => coll(self, "_pf_str_lower"),
+            "String.strip" => coll(self, "_pf_str_strip"),
+            "String.contains" => coll(self, "_pf_str_contains"),
+            "String.startsWith" => coll(self, "_pf_str_starts_with"),
+            "String.endsWith" => coll(self, "_pf_str_ends_with"),
+            "String.replace" => coll(self, "_pf_str_replace"),
+            // `String.toInt` is total (guarded `int(s)`), so it constructs Some/None.
+            "String.toInt" => {
+                self.needs_option = true;
+                coll(self, "_pf_str_to_int")
+            }
             // A user module member (`Geometry.area`). An imported *file* module
             // lowers to Python attribute access on the imported module
             // (`geometry.area`, with `import geometry` hoisted); an in-file
@@ -1887,6 +1908,60 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     }),
                     args: vec![name("xs"), name("n")],
                 },
+            ),
+            // String.concat(a, b) -> a + b
+            "_pf_str_concat" => def1(helper, &["a", "b"], binop(PyBinOp::Add, name("a"), name("b"))),
+            // String.join(sep, xs) -> sep.join(xs)
+            "_pf_str_join" => def1(
+                helper,
+                &["sep", "xs"],
+                method(name("sep"), "join", vec![name("xs")]),
+            ),
+            // String.split(sep, s) -> s.split(sep)
+            "_pf_str_split" => def1(
+                helper,
+                &["sep", "s"],
+                method(name("s"), "split", vec![name("sep")]),
+            ),
+            // String.toUpper(s) -> s.upper()
+            "_pf_str_upper" => def1(helper, &["s"], method(name("s"), "upper", vec![])),
+            // String.toLower(s) -> s.lower()
+            "_pf_str_lower" => def1(helper, &["s"], method(name("s"), "lower", vec![])),
+            // String.strip(s) -> s.strip()
+            "_pf_str_strip" => def1(helper, &["s"], method(name("s"), "strip", vec![])),
+            // String.contains(sub, s) -> sub in s
+            "_pf_str_contains" => def1(
+                helper,
+                &["sub", "s"],
+                binop(PyBinOp::In, name("sub"), name("s")),
+            ),
+            // String.startsWith(pre, s) -> s.startswith(pre)
+            "_pf_str_starts_with" => def1(
+                helper,
+                &["pre", "s"],
+                method(name("s"), "startswith", vec![name("pre")]),
+            ),
+            // String.endsWith(suf, s) -> s.endswith(suf)
+            "_pf_str_ends_with" => def1(
+                helper,
+                &["suf", "s"],
+                method(name("s"), "endswith", vec![name("suf")]),
+            ),
+            // String.replace(old, new, s) -> s.replace(old, new)
+            "_pf_str_replace" => def1(
+                helper,
+                &["old", "new", "s"],
+                method(name("s"), "replace", vec![name("old"), name("new")]),
+            ),
+            // String.toInt(s) -> total parse: Some(int(s)) or None_ on ValueError
+            "_pf_str_to_int" => def(
+                helper,
+                &["s"],
+                vec![PyStmt::Try {
+                    body: vec![PyStmt::Return(call1("Some", call("int", vec![name("s")])))],
+                    exc_type: Some("ValueError".to_string()),
+                    handler: vec![PyStmt::Return(call0("None_"))],
+                }],
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

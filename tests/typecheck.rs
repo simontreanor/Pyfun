@@ -1092,6 +1092,78 @@ fn accepts_map_functions() {
 }
 
 #[test]
+fn accepts_string_functions() {
+    let src = "let g = String.concat \"Hello, \" \"World\"\n\
+               let n = String.len g\n\
+               let up = String.upper g\n\
+               let lo = String.lower g\n\
+               let t = String.strip \"  x  \"\n\
+               let parts = String.split \",\" g\n\
+               let joined = String.join \" | \" parts\n\
+               let has = String.contains \"World\" g\n\
+               let sw = String.startsWith \"He\" g\n\
+               let ew = String.endsWith \"ld\" g\n\
+               let r = String.replace \"l\" \"L\" g\n\
+               let s1 = String.fromInt 7\n\
+               let s2 = String.fromFloat 3.5\n\
+               let chars = String.toList g";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn string_to_int_returns_an_option() {
+    // `String.toInt : string -> Option int` — the result must match/destructure as an
+    // Option, and its payload is an int (usable in arithmetic).
+    let src = "let bump o =\n\
+               \x20 match o:\n\
+               \x20 \x20 case Some n: n + 1\n\
+               \x20 \x20 case None: 0\n\
+               let r = bump (String.toInt \"41\")";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn string_len_rejects_a_non_string() {
+    // `String.len : string -> int`; applying it to an int is a type error.
+    assert!(pyfun::check("let n = String.len 5").is_err());
+}
+
+#[test]
+fn unknown_member_suggests_the_closest_name() {
+    // Casing slip (camelCase), pure-casing shout, and abbreviation confusion all get
+    // a "did you mean" pointing at the one canonical spelling.
+    assert_error_contains(
+        "let r = String.startswith \"a\" \"b\"",
+        "did you mean `String.startsWith`?",
+    );
+    assert_error_contains("let r = String.UPPER \"x\"", "did you mean `String.upper`?");
+    assert_error_contains("let n = String.length \"x\"", "did you mean `String.len`?");
+}
+
+#[test]
+fn unknown_member_with_no_close_name_gives_no_suggestion() {
+    // A genuinely absent function isn't force-fit to a bad suggestion.
+    let msgs = errors("let r = String.frobnicate \"x\"");
+    assert!(
+        msgs.iter().any(|m| m.contains("is not a member of `String`")),
+        "{msgs:?}"
+    );
+    assert!(
+        !msgs.iter().any(|m| m.contains("did you mean")),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn did_you_mean_works_for_user_modules_too() {
+    // The suggestion scans qualified env keys, so user modules benefit as well.
+    assert_error_contains(
+        "module Geom =\n  let area w h = w * h\nlet x = Geom.aera 2 3",
+        "did you mean `Geom.area`?",
+    );
+}
+
+#[test]
 fn list_zip_pairs_elements_into_tuples() {
     // `List.zip : List a -> List b -> List (a, b)`. Destructuring a zipped pair
     // recovers both element types.

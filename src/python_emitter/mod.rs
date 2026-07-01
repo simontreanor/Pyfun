@@ -49,6 +49,14 @@ pub enum PyStmt {
     Match { subject: PyExpr, cases: Vec<PyCase> },
     /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
     RaiseRuntimeError(String),
+    /// `try: body except [ExcType]: handler` — a single except clause (bare when
+    /// `exc_type` is `None`). Used by `String.toInt`'s total parse (`int(s)` guarded
+    /// against `ValueError`); a general building block for future `try`/`except`.
+    Try {
+        body: Vec<PyStmt>,
+        exc_type: Option<String>,
+        handler: Vec<PyStmt>,
+    },
     /// A data-constructor class with positional fields and `__match_args__`.
     ClassDef { name: String, fields: Vec<String> },
 }
@@ -268,6 +276,19 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
                 depth,
                 &format!("raise RuntimeError({})", string_literal(message)),
             );
+        }
+        PyStmt::Try {
+            body,
+            exc_type,
+            handler,
+        } => {
+            line(out, depth, "try:");
+            emit_block(body, depth + 1, out);
+            match exc_type {
+                Some(ty) => line(out, depth, &format!("except {ty}:")),
+                None => line(out, depth, "except:"),
+            }
+            emit_block(handler, depth + 1, out);
         }
         PyStmt::ClassDef { name, fields } => emit_class(name, fields, depth, out),
     }

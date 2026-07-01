@@ -343,13 +343,39 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("toList", 1),
 ];
 
+/// The `String` module (`DESIGN.md` §6): text operations over the built-in `string`
+/// type (which lowers to a Python `str`). Like the collection preludes, the
+/// `(member, arity)` pairs are the single source of truth shared with
+/// [`seed_string_prelude`] (schemes) and lowering (arities + emitted helpers). All
+/// pure and **monomorphic** (over `string`/`int`/`float`/`bool`) — no type vars.
+/// Pyfun has no `char` type, so a "character" is a length-1 string: `String.toList`
+/// yields single-char strings. `String.toInt : string -> Option int` is **total**
+/// (a `ValueError`-guarded parse), so it lowers to a `try`/`except` helper.
+pub const STRING_PRELUDE: &[(&str, usize)] = &[
+    ("len", 1),
+    ("concat", 2),
+    ("join", 2),
+    ("split", 2),
+    ("upper", 1),
+    ("lower", 1),
+    ("strip", 1),
+    ("contains", 2),
+    ("startsWith", 2),
+    ("endsWith", 2),
+    ("replace", 3),
+    ("fromInt", 1),
+    ("fromFloat", 1),
+    ("toInt", 1),
+    ("toList", 1),
+];
+
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
 /// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
 /// no parser change was needed); the checker and lowering recognize a base that is
 /// one of these names and resolve the dotted member against the prelude instead of
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
-pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result", "Seq"];
+pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result", "Seq", "String"];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
 /// truth for seeding qualified schemes, registering arities, and editor completion.
@@ -360,6 +386,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Option", OPTION_PRELUDE),
     ("Result", RESULT_PRELUDE),
     ("Seq", SEQ_PRELUDE),
+    ("String", STRING_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -411,6 +438,54 @@ pub fn qualified_name(expr: &Expr) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Classic Levenshtein edit distance (insert/delete/substitute), over `char`s so a
+/// case slip counts as one substitution. Powers the "did you mean" member hint.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    // A single rolling row of the DP matrix: `row[j]` is the distance from the
+    // processed prefix of `a` to the first `j` chars of `b`.
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0]; // diagonal (row[i][j-1] before overwrite)
+        row[0] = i + 1;
+        for j in 0..b.len() {
+            let cost = usize::from(ca != b[j]);
+            let ins_del = row[j + 1].min(row[j]) + 1;
+            let sub = prev + cost;
+            prev = row[j + 1];
+            row[j + 1] = ins_del.min(sub);
+        }
+    }
+    row[b.len()]
+}
+
+/// The member of `module` closest to `name` by edit distance, when one is near
+/// enough to be a plausible typo or casing slip (`String.startswith` → `startsWith`).
+/// Scans the env's qualified keys, so it works for built-in *and* user modules alike.
+fn closest_member(module: &str, name: &str, env: &Env) -> Option<String> {
+    let prefix = format!("{module}.");
+    let members = || env.keys().filter_map(|k| k.strip_prefix(&prefix));
+    // Direct members only (qualified keys are single-dot).
+    let direct = || members().filter(|m| !m.contains('.'));
+    // A pure casing difference (`UPPER` → `upper`) is an unambiguous fix — suggest it
+    // outright, before falling back to fuzzy distance.
+    if let Some(m) = direct().find(|m| m.eq_ignore_ascii_case(name)) {
+        return Some(m.to_string());
+    }
+    let (dist, best) = direct()
+        .map(|m| (levenshtein(name, m), m))
+        .min_by_key(|&(d, _)| d)?;
+    let (nlen, mlen) = (name.chars().count(), best.chars().count());
+    // Threshold ~1/3 the longer name (rustc-style), but always at least 2 so a
+    // short name's casing slip (`Len` → `len`) is still caught.
+    let within_threshold = dist <= (nlen.max(mlen) / 3).max(2);
+    // Abbreviation confusion (`length` → `len`, `string` → `str`): one name is a
+    // prefix of the other. Guarded on length ≥ 3 so tiny fragments don't over-match.
+    let prefix_related =
+        nlen.min(mlen) >= 3 && (name.starts_with(best) || best.starts_with(name));
+    (within_threshold || prefix_related).then(|| best.to_string())
 }
 
 /// The unit variable id used by the unit-polymorphic prelude numerics
@@ -778,6 +853,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_list_prelude(&mut env);
     seed_set_prelude(&mut env);
     seed_map_prelude(&mut env);
+    seed_string_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
     seed_seq_prelude(&mut env);
@@ -1320,6 +1396,50 @@ fn seed_set_prelude(env: &mut Env) {
     put("difference", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
     put("ofList", pure_fn(list(a()), set(a())));
     put("toList", pure_fn(set(a()), list(a())));
+}
+
+/// Seed the `String` module ([`STRING_PRELUDE`]) — pure, **monomorphic** text
+/// operations over the built-in `string`, under qualified keys (`String.split`).
+/// No type variables (all concrete over `string`/`int`/`float`), so the schemes are
+/// closed. `String.toInt` returns `Option int` (a total parse).
+fn seed_string_prelude(env: &mut Env) {
+    let str_ = || Ty::Str;
+    let int = || Ty::Int(Unit::dimensionless());
+    let float = || Ty::Float(Unit::dimensionless());
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    // Closed schemes — no quantified type/unit/effect variables.
+    let scheme = |ty: Ty| Scheme {
+        vars: vec![],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, ty: Ty| {
+        env.insert(format!("String.{member}"), scheme(ty));
+    };
+    put("len", pure_fn(str_(), int()));
+    put("concat", pure_fn(str_(), pure_fn(str_(), str_())));
+    // String.join sep xs — separator first (curry-friendly, F#-style).
+    put("join", pure_fn(str_(), pure_fn(list(str_()), str_())));
+    put("split", pure_fn(str_(), pure_fn(str_(), list(str_()))));
+    put("upper", pure_fn(str_(), str_()));
+    put("lower", pure_fn(str_(), str_()));
+    put("strip", pure_fn(str_(), str_()));
+    put("contains", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
+    put("startsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
+    put("endsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
+    // String.replace old new s
+    put("replace", pure_fn(str_(), pure_fn(str_(), pure_fn(str_(), str_()))));
+    put("fromInt", pure_fn(int(), str_()));
+    put("fromFloat", pure_fn(float(), str_()));
+    put("toInt", pure_fn(str_(), opt(int())));
+    // Each element of the result is a single-character string (no `char` type).
+    put("toList", pure_fn(str_(), list(str_())));
 }
 
 /// Seed the `Map` module ([`MAP_PRELUDE`]) — pure functions over `Map k v`
@@ -2301,8 +2421,12 @@ impl Infer {
                         Some(scheme) => Ok(self.instantiate(scheme)),
                         None => {
                             let module = q.split('.').next().unwrap_or("");
+                            let hint = match closest_member(module, name, env) {
+                                Some(m) => format!(" (did you mean `{module}.{m}`?)"),
+                                None => String::new(),
+                            };
                             Err(TypeError {
-                                message: format!("`{name}` is not a member of `{module}`"),
+                                message: format!("`{name}` is not a member of `{module}`{hint}"),
                                 span,
                             })
                         }

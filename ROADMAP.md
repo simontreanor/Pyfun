@@ -38,6 +38,11 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   Workaround: a lambda, `fun x -> x * 2`.
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
+- **String interpolation / f-strings** (M) — a front-end feature (lexer + parser); the `String` module
+  landed (len/concat/split/join/upper/lower/strip/contains/replace/toInt), but formatted interpolation is separate.
+- **General `try`/`except` exception handling** (M–L) — `Result`/`Option` are the error primitives today;
+  there is no way to *catch* a Python exception from an `extern` call. The `PyStmt::Try` IR node now exists
+  (used by `String.toInt`), so the emitter groundwork is in place; a surface syntax + typing remain.
 *Cross-module (file-modules follow-ons)*
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).
@@ -48,8 +53,8 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
 
 ### Warts (small, low priority)
-- **No guiding error for `+` on strings** (S) — the type error is generic rather than a hint to use a
-  concat/format path.
+- **No guiding error for `+` on strings** (S) — the type error is generic rather than a hint to point at
+  `String.concat` (the concatenation path). `+` stays numeric; overloading it for strings is deferred.
 - **A bare literal unified to `float` prints `7` not `7.0`** (S) — arithmetic coerces, so computed
   values are unaffected; only a bare displayed literal looks like an int.
 
@@ -245,7 +250,8 @@ no constructors. Keys/elements must be hashable at runtime — primitives and AD
   resolver + dependency graph, visibility, multi-file LSP) — a separate, larger initiative. (Generated
   `__hash__` on ADT/record classes and **in-file modules** are **done**.)
 - **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + results + lazy
-  seq + built-in & in-file modules + ADT `__hash__` done; file-based modules open.
+  seq + **the `String` module** (text ops; `String.toInt` via the new `PyStmt::Try` node) + built-in &
+  in-file modules + ADT `__hash__` done; file-based modules done.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).

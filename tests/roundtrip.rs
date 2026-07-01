@@ -137,6 +137,10 @@ const PROGRAMS: &[&str] = &[
     "extern show: a -> string = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
+    // Built-in `String` module: qualified access is the ordinary field path.
+    "let g = String.concat \"a\" \"b\"",
+    "let parts = String.split \",\" line",
+    "let n = String.toInt s",
     // In-file modules: members and qualified access.
     "module Geometry =\n    let pi = 3\n    let area r = pi * r * r",
     "module M =\n    let add a b = a + b",
