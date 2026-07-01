@@ -45,7 +45,7 @@
           "match": "\\b(let)\\b\\s+(mut)\\b\\s*([a-z_][A-Za-z0-9_']*)?",
           "captures": {
             "1": { "name": "keyword.declaration.pyfun" },
-            "2": { "name": "invalid.deprecated.pyfun" },
+            "2": { "name": "invalid.pyfun" },
             "3": { "name": "entity.name.function.pyfun" }
           }
         },
@@ -62,7 +62,7 @@
         {
           "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; flagged like a discouraged/escape-hatch feature.",
           "match": "\\b(extern)\\b",
-          "name": "invalid.deprecated.pyfun"
+          "name": "invalid.pyfun"
         },
         {
           "comment": "Other binding/declaration keywords (benign).",
@@ -117,7 +117,7 @@
         },
         {
           "comment": "`<-` reassignment — the act of mutation; flagged to match `mut`.",
-          "name": "invalid.deprecated.pyfun",
+          "name": "invalid.pyfun",
           "match": "<-"
         },
         {
