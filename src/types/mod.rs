@@ -1097,6 +1097,35 @@ fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
         .collect()
 }
 
+/// The top-level alternatives a pattern denotes: an or-pattern flattens to its
+/// (recursively flattened) alternatives, anything else is itself (`DESIGN.md`
+/// §7.2). Used to expand or-patterns for exhaustiveness.
+fn expand_or(pat: &Pattern) -> Vec<Pattern> {
+    match pat {
+        Pattern::Or(alts) => alts.iter().flat_map(expand_or).collect(),
+        p => vec![p.clone()],
+    }
+}
+
+/// Replace each row `[head, ..rest]` with one row per top-level alternative of
+/// `head`, so no row's first column is an or-pattern. Empty rows pass through.
+fn expand_first_column(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
+    let mut out = Vec::new();
+    for row in matrix {
+        match row.split_first() {
+            Some((head, rest)) => {
+                for alt in expand_or(head) {
+                    let mut r = vec![alt];
+                    r.extend_from_slice(rest);
+                    out.push(r);
+                }
+            }
+            None => out.push(row.clone()),
+        }
+    }
+    out
+}
+
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
 /// type vars 0 and 1, and the prelude numerics use unit var [`PRELUDE_UVAR`] (2)
 /// and `num` var [`PRELUDE_NUMVAR`] (3). Inference must start allocating fresh ids
@@ -2225,6 +2254,12 @@ impl Infer {
                 for arm in arms {
                     let mut arm_env = env.clone();
                     self.bind_pattern(&arm.pattern, &scrut_ty, scrutinee.span(), &mut arm_env)?;
+                    // A guard is checked in the arm's pattern-bound scope and must be
+                    // `bool` (`DESIGN.md` §7.2).
+                    if let Some(guard) = &arm.guard {
+                        let g_ty = self.infer_expr(guard, &arm_env)?;
+                        self.unify(&Ty::Bool, &g_ty, guard.span())?;
+                    }
                     let body_ty = self.infer_expr(&arm.body, &arm_env)?;
                     self.unify(&result, &body_ty, arm.body.span())?;
                 }
@@ -2250,7 +2285,11 @@ impl Infer {
                 Ok(Ty::Tuple(tys?))
             }
 
-            ExprKind::Record { fields } => self.infer_record(fields, span, env),
+            ExprKind::Record {
+                ty,
+                ty_span,
+                fields,
+            } => self.infer_record(ty, ty_span.span(), fields, span, env),
             ExprKind::RecordUpdate { base, fields } => {
                 self.infer_record_update(base, fields, span, env)
             }
@@ -2387,15 +2426,24 @@ impl Infer {
         (record_ty, fields)
     }
 
-    /// `{ x = e, … }` — a record literal. The type is resolved from the field
-    /// names; the literal must mention exactly the record's fields, once each.
+    /// `Point { x = e, … }` — a constructor-tagged record literal (`DESIGN.md`
+    /// §8.3). The type is the tag; the literal must mention exactly the record's
+    /// fields, once each.
     fn infer_record(
         &mut self,
+        ty: &str,
+        ty_span: Span,
         fields: &[crate::parser::ast::FieldInit],
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        let owner = self.record_of_field(&fields[0].name, span)?;
+        if !self.decls.records.contains_key(ty) {
+            return Err(TypeError {
+                message: format!("`{ty}` is not a record type"),
+                span: ty_span,
+            });
+        }
+        let owner = ty.to_string();
         let (record_ty, field_tys) = self.instantiate_record(&owner);
 
         let mut seen: HashSet<String> = HashSet::new();
@@ -2723,8 +2771,18 @@ impl Infer {
                 }
                 Ok(())
             }
-            Pattern::Record { fields } => {
-                let owner = self.record_of_field(&fields[0].name, span)?;
+            Pattern::Record {
+                ty,
+                ty_span,
+                fields,
+            } => {
+                if !self.decls.records.contains_key(ty) {
+                    return Err(TypeError {
+                        message: format!("`{ty}` is not a record type"),
+                        span: ty_span.span(),
+                    });
+                }
+                let owner = ty.to_string();
                 let (record_ty, field_tys) = self.instantiate_record(&owner);
                 self.unify(&record_ty, scrut_ty, span)?;
                 let mut seen: HashSet<String> = HashSet::new();
@@ -2757,6 +2815,52 @@ impl Infer {
                 }
                 Ok(())
             }
+            // Every alternative matches the same scrutinee type and must bind the
+            // same variables at the same types (`DESIGN.md` §7.2). Bind the first
+            // into a temp scope, then unify each other alternative's bindings
+            // against it before committing the (agreed) bindings to `env`.
+            Pattern::Or(alts) => {
+                let base = env.clone();
+                let mut first_env = base.clone();
+                self.bind_pattern(&alts[0], scrut_ty, span, &mut first_env)?;
+                let new_names: Vec<String> = first_env
+                    .keys()
+                    .filter(|k| !base.contains_key(*k))
+                    .cloned()
+                    .collect();
+                for alt in &alts[1..] {
+                    let mut alt_env = base.clone();
+                    self.bind_pattern(alt, scrut_ty, span, &mut alt_env)?;
+                    let bound_here = |n: &str| alt_env.contains_key(n) && !base.contains_key(n);
+                    for n in &new_names {
+                        if !bound_here(n) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "variable `{n}` is bound in only some alternatives of the or-pattern"
+                                ),
+                                span,
+                            });
+                        }
+                        let t1 = first_env.get(n).unwrap().ty.clone();
+                        let t2 = alt_env.get(n).unwrap().ty.clone();
+                        self.unify(&t1, &t2, span)?;
+                    }
+                    for n in alt_env.keys() {
+                        if !base.contains_key(n) && !new_names.contains(n) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "variable `{n}` is bound in only some alternatives of the or-pattern"
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                }
+                for n in &new_names {
+                    env.insert(n.clone(), first_env.get(n).unwrap().clone());
+                }
+                Ok(())
+            }
         }
     }
 
@@ -2773,7 +2877,13 @@ impl Infer {
         arms: &[MatchArm],
         span: Span,
     ) -> Result<(), TypeError> {
-        let matrix: Vec<Vec<Pattern>> = arms.iter().map(|a| vec![a.pattern.clone()]).collect();
+        // A guarded arm may fail at runtime, so it never contributes to coverage
+        // (`DESIGN.md` §7.2): only unguarded arms form the exhaustiveness matrix.
+        let matrix: Vec<Vec<Pattern>> = arms
+            .iter()
+            .filter(|a| a.guard.is_none())
+            .map(|a| vec![a.pattern.clone()])
+            .collect();
         let types = vec![self.apply(scrut_ty)];
         let Some(witness) = self.useful(&matrix, &types) else {
             return Ok(());
@@ -2796,6 +2906,12 @@ impl Infer {
             // Width 0: a wildcard row is useful only when no arm row remains.
             return matrix.is_empty().then(Vec::new);
         }
+        // Flatten any or-pattern in the first column into separate rows, so the
+        // constructor machinery below never sees a `Pattern::Or` head (`DESIGN.md`
+        // §7.2). Deeper or-patterns surface as first-column heads in the recursive
+        // calls and are expanded there.
+        let matrix = expand_first_column(matrix);
+        let matrix = &matrix[..];
         let col_ty = self.apply(&types[0]);
         let rest = &types[1..];
         let present = self.present_tags(matrix);
@@ -2859,12 +2975,10 @@ impl Infer {
             Pattern::Bool(b) => Some(Tag::Bool(*b)),
             Pattern::Int(n) => Some(Tag::Int(*n)),
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
-            Pattern::Record { fields } => self
-                .decls
-                .field_owner
-                .get(&fields[0].name)
-                .map(|owner| Tag::Record(owner.clone())),
+            Pattern::Record { ty, .. } => Some(Tag::Record(ty.clone())),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
+            // Or-patterns are expanded away in `useful` before this is reached.
+            Pattern::Or(_) => None,
         }
     }
 
@@ -2953,7 +3067,7 @@ impl Infer {
             Pattern::Ctor { name, args, .. } => {
                 (*tag == Tag::Sum(name.clone())).then(|| args.clone())
             }
-            Pattern::Record { fields } => {
+            Pattern::Record { fields, .. } => {
                 let Tag::Record(rname) = tag else { return None };
                 let order = &self.decls.records[rname].fields;
                 let mut slots = vec![Pattern::Wildcard; order.len()];
@@ -2965,6 +3079,8 @@ impl Infer {
                 Some(slots)
             }
             Pattern::Tuple { elems } => (*tag == Tag::Tuple(elems.len())).then(|| elems.clone()),
+            // Or-patterns are expanded away in `useful` before specialization.
+            Pattern::Or(_) => None,
         }
     }
 
@@ -2996,7 +3112,7 @@ impl Infer {
                     .map(|((f, _), a)| format!("{f} = {}", self.render_witness(a, false)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{{ {parts} }}")
+                format!("{name} {{ {parts} }}")
             }
             Wit::Con(Tag::Tuple(_), args) => {
                 let parts = args

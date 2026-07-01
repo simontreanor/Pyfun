@@ -270,7 +270,7 @@ fn if_in_value_position_is_a_conditional_expression() {
 #[test]
 fn exhaustive_match_without_wildcard_keeps_a_runtime_guard() {
     // Even a statically exhaustive ADT match emits a defensive `case _: raise`.
-    let py = pyfun::compile("type Color = Red | Green | Blue\nlet f c = match c with | Red -> 1 | Green -> 2 | Blue -> 3").unwrap();
+    let py = pyfun::compile("type Color = Red | Green | Blue\nlet f c = match c: case Red: 1 case Green: 2 case Blue: 3").unwrap();
     assert!(py.contains("case _:"), "{py}");
     assert!(
         py.contains("raise RuntimeError(\"non-exhaustive match\")"),
@@ -321,7 +321,8 @@ fn adt_classes_get_structural_hash() {
 
 #[test]
 fn record_lowers_to_class_with_named_fields() {
-    let py = pyfun::compile("type Point = { x: int, y: int }\nlet p = { y = 4, x = 3 }").unwrap();
+    let py =
+        pyfun::compile("type Point = { x: int, y: int }\nlet p = Point { y = 4, x = 3 }").unwrap();
     assert!(py.contains("class Point:"), "{py}");
     assert!(py.contains("__match_args__ = ('x', 'y')"), "{py}");
     assert!(py.contains("def __init__(self, x, y):"), "{py}");
@@ -332,7 +333,7 @@ fn record_lowers_to_class_with_named_fields() {
 #[test]
 fn record_update_copies_through_a_temp() {
     let py = pyfun::compile(
-        "type Point = { x: int, y: int }\nlet p = { x = 1, y = 2 }\nlet q = { p with x = 9 }",
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = 2 }\nlet q = { p with x = 9 }",
     )
     .unwrap();
     // `p` is bound to a temp so it is evaluated once; the unchanged field is read
@@ -342,7 +343,8 @@ fn record_update_copies_through_a_temp() {
 
 #[test]
 fn record_field_access_lowers_to_attribute() {
-    let py = pyfun::compile("type Point = { x: int }\nlet p = { x = 1 }\nlet s = p.x").unwrap();
+    let py =
+        pyfun::compile("type Point = { x: int }\nlet p = Point { x = 1 }\nlet s = p.x").unwrap();
     assert!(py.contains("s = p.x"), "{py}");
 }
 
@@ -350,7 +352,7 @@ fn record_field_access_lowers_to_attribute() {
 fn record_pattern_lowers_to_keyword_class_pattern() {
     let py = pyfun::compile(
         "type Point = { x: int, y: int }\n\
-         let f p = match p with | { x = 0, y } -> y | { x } -> x",
+         let f p = match p: case Point { x = 0, y }: y case Point { x }: x",
     )
     .unwrap();
     // Keyword class patterns name a subset of fields, in source order.
@@ -367,7 +369,7 @@ fn tuple_literal_lowers_to_python_tuple() {
 
 #[test]
 fn tuple_pattern_lowers_to_sequence_pattern() {
-    let py = pyfun::compile("let swap p = match p with | (a, b) -> (b, a)").unwrap();
+    let py = pyfun::compile("let swap p = match p: case (a, b): (b, a)").unwrap();
     assert!(py.contains("case (a, b):"), "{py}");
     assert!(py.contains("return (b, a)"), "{py}");
 }
@@ -377,11 +379,11 @@ fn e2e_tuple_construct_and_destructure() {
     run_and_check(
         "
         let swap p =
-          match p with
-          | (a, b) -> (b, a)
+          match p:
+            case (a, b): (b, a)
         let fst t =
-          match t with
-          | (a, _) -> a
+          match t:
+            case (a, _): a
         let pair = (10, 20)
         let s = swap pair
         let first = fst pair
@@ -395,8 +397,8 @@ fn e2e_nested_tuple_pattern() {
     run_and_check(
         "
         let f t =
-          match t with
-          | ((a, b), c) -> a + b + c
+          match t:
+            case ((a, b), c): a + b + c
         let r = f ((1, 2), 3)
         ",
         &[("r", "6")],
@@ -409,13 +411,13 @@ fn e2e_record_pattern_match() {
         "
         type Point = { x: int, y: int }
         let classify p =
-          match p with
-          | { x = 0, y = 0 } -> 1
-          | { x = 0 } -> 2
-          | { x, y } -> x + y
-        let a = classify { x = 0, y = 0 }
-        let b = classify { x = 0, y = 9 }
-        let c = classify { x = 3, y = 4 }
+          match p:
+            case Point { x = 0, y = 0 }: 1
+            case Point { x = 0 }: 2
+            case Point { x, y }: x + y
+        let a = classify (Point { x = 0, y = 0 })
+        let b = classify (Point { x = 0, y = 9 })
+        let c = classify (Point { x = 3, y = 4 })
         ",
         &[("a", "1"), ("b", "2"), ("c", "7")],
     );
@@ -428,13 +430,13 @@ fn e2e_nested_record_and_constructor_pattern() {
         "
         type Box = { item: Option int, tag: bool }
         let f b =
-          match b with
-          | { item = Some n, tag = true } -> n
-          | { item = Some n } -> n + 100
-          | _ -> 0
-        let a = f { item = Some 5, tag = true }
-        let b = f { item = Some 5, tag = false }
-        let c = f { item = None, tag = true }
+          match b:
+            case Box { item = Some n, tag = true }: n
+            case Box { item = Some n }: n + 100
+            case _: 0
+        let a = f (Box { item = Some 5, tag = true })
+        let b = f (Box { item = Some 5, tag = false })
+        let c = f (Box { item = None, tag = true })
         ",
         &[("a", "5"), ("b", "105"), ("c", "0")],
     );
@@ -446,10 +448,10 @@ fn e2e_deep_exhaustive_match_without_wildcard() {
     run_and_check(
         "
         let f o =
-          match o with
-          | Some true -> 1
-          | Some false -> 2
-          | None -> 3
+          match o:
+            case Some true: 1
+            case Some false: 2
+            case None: 3
         let a = f (Some true)
         let b = f (Some false)
         let c = f None
@@ -619,7 +621,7 @@ fn prelude_partial_application_uses_partial() {
 
 #[test]
 fn unknown_constructor_is_rejected() {
-    let err = pyfun::compile("let f o = match o with | Nope v -> v").unwrap_err();
+    let err = pyfun::compile("let f o = match o: case Nope v: v").unwrap_err();
     assert!(err.to_string().contains("unknown constructor"), "{err}");
 }
 
@@ -684,10 +686,10 @@ fn e2e_if_and_match() {
     run_and_check(
         "
         let classify n =
-          match n with
-          | 0 -> \"zero\"
-          | 1 -> \"one\"
-          | _ -> \"many\"
+          match n:
+            case 0: \"zero\"
+            case 1: \"one\"
+            case _: \"many\"
         let r1 = classify 0
         let r2 = classify 7
         let r3 = if true then 10 else 20
@@ -703,11 +705,11 @@ fn e2e_blocks_in_match_arms_and_if_branches() {
     run_and_check(
         "
         let classify n =
-          match n with
-          | 0 ->
+          match n:
+            case 0:
               let base = 100
               base
-          | _ ->
+            case _:
               let mut acc = n
               acc <- acc * 2
               acc
@@ -764,7 +766,7 @@ fn division_operators_lower_to_matching_python_operators() {
 fn e2e_match_in_value_position_is_hoisted() {
     // The match must be evaluated into a temp, then added to 5.
     run_and_check(
-        "let r = (match 1 with | 1 -> 10 | _ -> 20) + 5",
+        "let r = (match 1: case 1: 10 case _: 20) + 5",
         &[("r", "15")],
     );
 }
@@ -774,10 +776,10 @@ fn e2e_adt_construction_and_match() {
     run_and_check(
         "
         type Color = Red | Green | Blue
-        let unwrap o = match o with | Some v -> v | None -> 0
+        let unwrap o = match o: case Some v: v case None: 0
         let r1 = unwrap (Some 5)
         let r2 = unwrap None
-        let rank c = match c with | Red -> 1 | Green -> 2 | Blue -> 3
+        let rank c = match c: case Red: 1 case Green: 2 case Blue: 3
         let r3 = rank Green
         ",
         &[("r1", "5"), ("r2", "0"), ("r3", "2")],
@@ -789,7 +791,7 @@ fn e2e_records_construct_access_and_update() {
     run_and_check(
         "
         type Point = { x: int, y: int }
-        let p = { x = 3, y = 4 }
+        let p = Point { x = 3, y = 4 }
         let moved = { p with x = 10 }
         let sx = p.x
         let sy = moved.y
@@ -806,7 +808,7 @@ fn e2e_polymorphic_record_field() {
     run_and_check(
         "
         type Box a = { item: a }
-        let mk v = { item = v }
+        let mk v = Box { item = v }
         let i = (mk 42).item
         let s = (mk \"hi\").item
         ",
@@ -858,7 +860,7 @@ fn e2e_recursive_adt() {
         // distinct name (`Lst`).
         "
         type Lst a = Nil | Cons a (Lst a)
-        let head d xs = match xs with | Nil -> d | Cons h t -> h
+        let head d xs = match xs: case Nil: d case Cons h t: h
         let r = head 0 (Cons 7 (Cons 8 Nil))
         ",
         &[("r", "7")],
@@ -912,7 +914,7 @@ fn e2e_result_ce_binds_and_short_circuits() {
     run_and_check(
         "
         let safe ok v = result { let! x = if ok then Ok v else Error 9  return (x + 1) }
-        let unwrap r = match r with | Ok n -> n | Error e -> e
+        let unwrap r = match r: case Ok n: n case Error e: e
         let r1 = unwrap (safe true 10)
         let r2 = unwrap (safe false 10)
         ",
@@ -945,7 +947,7 @@ fn e2e_user_monad_ce_binds_and_short_circuits() {
     run_and_check(
         "
         module Maybe =
-          let bind m f = match m with | Some x -> f x | None -> None
+          let bind m f = match m: case Some x: f x case None: None
           let return_ x = Some x
         let safe a b =
           Maybe {
@@ -953,7 +955,7 @@ fn e2e_user_monad_ce_binds_and_short_circuits() {
             let! y = b
             return x + y
           }
-        let unwrap m = match m with | Some n -> n | None -> 0
+        let unwrap m = match m: case Some n: n case None: 0
         let r1 = unwrap (safe (Some 3) (Some 4))
         let r2 = unwrap (safe (Some 3) None)
         ",
@@ -1157,7 +1159,7 @@ fn e2e_adts_and_records_as_keys_and_elements() {
          let hasGreen = Set.contains Green cs\n\
          let m = Map.add (Some 1) \"one\" Map.empty\n\
          let v = Option.withDefault \"?\" (Map.tryFind (Some 1) m)\n\
-         let pts = Set.ofList [{ x = 1, y = 2 }, { x = 1, y = 2 }, { x = 3, y = 4 }]\n\
+         let pts = Set.ofList [Point { x = 1, y = 2 }, Point { x = 1, y = 2 }, Point { x = 3, y = 4 }]\n\
          let npts = Set.len pts",
         &[
             ("ncolors", "3"),

@@ -355,7 +355,16 @@ impl Resolver {
                     self.walk_pattern(arg);
                 }
             }
-            Pattern::Record { fields } => {
+            Pattern::Record {
+                ty,
+                ty_span,
+                fields,
+            } => {
+                // The tag is a type-name occurrence (navigable/renamable in-file).
+                self.type_refs.push(TypeRef {
+                    name: ty.clone(),
+                    span: ty_span.span(),
+                });
                 for f in fields {
                     self.walk_pattern(&f.pattern);
                 }
@@ -363,6 +372,11 @@ impl Resolver {
             Pattern::Tuple { elems } => {
                 for e in elems {
                     self.walk_pattern(e);
+                }
+            }
+            Pattern::Or(alts) => {
+                for alt in alts {
+                    self.walk_pattern(alt);
                 }
             }
             Pattern::Var { .. } | Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
@@ -454,11 +468,20 @@ impl Resolver {
             }
             ExprKind::Match { scrutinee, arms } => {
                 self.walk_expr(scrutinee);
-                for MatchArm { pattern, body } in arms {
-                    self.walk_pattern(pattern); // constructor occurrences
+                for MatchArm {
+                    pattern,
+                    guard,
+                    body,
+                } in arms
+                {
+                    self.walk_pattern(pattern); // constructor / record-tag occurrences
                     let mut bound = HashMap::new();
                     pattern_vars(pattern, &mut bound);
                     self.push_scope(bound);
+                    // The guard and body both see the pattern's bindings.
+                    if let Some(guard) = guard {
+                        self.walk_expr(guard);
+                    }
                     self.walk_expr(body);
                     self.scopes.pop();
                 }
@@ -507,7 +530,16 @@ impl Resolver {
                     self.walk_expr(e);
                 }
             }
-            ExprKind::Record { fields } => {
+            ExprKind::Record {
+                ty,
+                ty_span,
+                fields,
+            } => {
+                // The constructor tag is a type-name occurrence (in-file nav/rename).
+                self.type_refs.push(TypeRef {
+                    name: ty.clone(),
+                    span: ty_span.span(),
+                });
                 for f in fields {
                     self.walk_expr(&f.value);
                 }
@@ -579,7 +611,7 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
                 pattern_vars(arg, out);
             }
         }
-        Pattern::Record { fields } => {
+        Pattern::Record { fields, .. } => {
             for f in fields {
                 pattern_vars(&f.pattern, out);
             }
@@ -587,6 +619,13 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
         Pattern::Tuple { elems } => {
             for e in elems {
                 pattern_vars(e, out);
+            }
+        }
+        // Every alternative binds the same variables (enforced by the checker), so
+        // the first is representative.
+        Pattern::Or(alts) => {
+            if let Some(first) = alts.first() {
+                pattern_vars(first, out);
             }
         }
         Pattern::Wildcard | Pattern::Int(_) | Pattern::Bool(_) => {}
@@ -649,7 +688,7 @@ mod tests {
 
     #[test]
     fn pattern_binding_is_a_local_target() {
-        let m = module("let f o = match o with | Some y -> y | None -> 0");
+        let m = module("let f o = match o: case Some y: y case None: 0");
         let refs = references(&m);
         // `y` resolves to its pattern binder.
         assert!(refs.iter().any(|r| matches!(r.target, Target::Local(_))));

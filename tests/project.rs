@@ -240,7 +240,7 @@ fn a_cross_module_sum_type_constructs_and_matches() {
                 "Main",
                 "import Shape\n\
                  let c = Shape.Circle 2.0\n\
-                 let area s =\n  match s with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w * h\n\
+                 let area s =\n  match s:\n    case Shape.Circle r: r\n    case Shape.Rect w h: w * h\n\
                  let a = area c",
             ),
         ],
@@ -263,7 +263,7 @@ fn a_cross_module_nullary_enum_constructs_as_a_call() {
                 "Main",
                 "import Color\n\
                  let favourite = Color.Green\n\
-                 let name k =\n  match k with\n  | Color.Red -> \"r\"\n  | Color.Green -> \"g\"\n  | Color.Blue -> \"b\"\n\
+                 let name k =\n  match k:\n    case Color.Red: \"r\"\n    case Color.Green: \"g\"\n    case Color.Blue: \"b\"\n\
                  let n = name favourite",
             ),
         ],
@@ -282,7 +282,7 @@ fn a_cross_module_non_exhaustive_match_is_caught() {
             ("Shape", "type Shape = Circle float | Rect float float"),
             (
                 "Main",
-                "import Shape\nlet f s =\n  match s with\n  | Shape.Circle r -> r",
+                "import Shape\nlet f s =\n  match s:\n    case Shape.Circle r: r",
             ),
         ],
     );
@@ -326,7 +326,7 @@ fn e2e_cross_module_adt_round_trips() {
             (
                 "Main",
                 "import Shape\n\
-                 let area s =\n  match s with\n  | Shape.Circle r -> r * r\n  | Shape.Rect w h -> w * h\n\
+                 let area s =\n  match s:\n    case Shape.Circle r: r * r\n    case Shape.Rect w h: w * h\n\
                  print (area (Shape.Circle 3))\n\
                  print (area (Shape.Rect 4 5))",
             ),

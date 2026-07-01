@@ -297,9 +297,12 @@ pub enum ExprKind {
         elems: Vec<Expr>,
     },
 
-    /// A record literal: `{ x = 1, y = 2 }`. The (nominal) record type is
-    /// resolved from the set of field names.
+    /// A record literal: `Point { x = 1, y = 2 }` — constructor-tagged
+    /// (`DESIGN.md` §8.3). `ty` names the record type; `ty_span` is the tag's
+    /// span (for editor nav; `NodeSpan` compares equal — roundtrip-invisible).
     Record {
+        ty: String,
+        ty_span: NodeSpan,
         fields: Vec<FieldInit>,
     },
 
@@ -401,10 +404,13 @@ pub enum CeItem {
     YieldBang(Expr),
 }
 
-/// One arm of a `match` expression.
+/// One arm of a `match` expression: `case pattern [if guard]: body`
+/// (`DESIGN.md` §7.2). A guarded arm does not count toward exhaustiveness (its
+/// `guard` may be false), so the checker excludes it from coverage.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Expr,
 }
 
@@ -429,11 +435,13 @@ pub enum Pattern {
         name_span: NodeSpan,
         args: Vec<Pattern>,
     },
-    /// `{ x = p, y }` — a record pattern. The owning record type is resolved from
-    /// the (globally unique) field names. May mention a subset of fields; an
-    /// omitted field is left unmatched. `{ x }` shorthand binds field `x` to the
-    /// variable `x` (a `Var` sub-pattern).
+    /// `Point { x = p, y }` — a constructor-tagged record pattern (`DESIGN.md`
+    /// §8.3). `ty` names the record type (`ty_span` is the tag's span). May mention
+    /// a subset of fields; an omitted field is left unmatched. `{ x }` shorthand
+    /// binds field `x` to the variable `x` (a `Var` sub-pattern).
     Record {
+        ty: String,
+        ty_span: NodeSpan,
         fields: Vec<FieldPattern>,
     },
     /// `(a, b)` — a tuple pattern (two or more sub-patterns). Irrefutable iff every
@@ -441,6 +449,10 @@ pub enum Pattern {
     Tuple {
         elems: Vec<Pattern>,
     },
+    /// `a | b | c` — an or-pattern (`DESIGN.md` §7.2): matches if any alternative
+    /// does. All alternatives must bind the same variables at the same types; lowers
+    /// to a Python or-pattern `case a | b | c:`. Two or more alternatives.
+    Or(Vec<Pattern>),
 }
 
 /// One `name [= pattern]` entry in a record pattern. Shorthand `{ x }` carries a

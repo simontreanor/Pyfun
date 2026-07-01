@@ -593,22 +593,59 @@ impl Parser {
         Ok(self.mk(start, ExprKind::If { cond, then, else_ }))
     }
 
+    /// Parse `match e: case pat [if guard]: body …` (`DESIGN.md` §7.2). At bracket
+    /// depth 0 the `:` after the scrutinee opens an offside block of `case` arms;
+    /// inside brackets there is no `Indent` and the arms simply follow.
     fn parse_match(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         self.expect(&Tok::Match, "`match`")?;
         let scrutinee = Box::new(self.parse_expr()?);
-        self.expect(&Tok::With, "`with`")?;
+        if matches!(self.peek(), Tok::With) {
+            return Err(self.error(
+                "match now uses `match e:` with `case pattern: body` arms, \
+                 not `with | pattern -> body` (DESIGN.md §7.2)",
+            ));
+        }
+        self.expect(&Tok::Colon, "`:` after the match scrutinee")?;
+        let indented = self.eat(&Tok::Indent);
         let mut arms = Vec::new();
-        while self.eat(&Tok::Bar) {
-            let pattern = self.parse_pattern()?;
-            self.expect(&Tok::Arrow, "`->`")?;
-            let body = self.parse_block_or_expr()?;
-            arms.push(MatchArm { pattern, body });
+        while matches!(self.peek(), Tok::Case) {
+            arms.push(self.parse_case_arm()?);
+            if indented {
+                if !self.eat(&Tok::Sep) {
+                    break;
+                }
+                if matches!(self.peek(), Tok::Dedent) {
+                    break;
+                }
+            }
+        }
+        if indented {
+            self.expect(&Tok::Dedent, "end of the match arms")?;
         }
         if arms.is_empty() {
-            return Err(self.error("expected at least one `| pattern -> expr` arm"));
+            return Err(self.error("a match needs at least one `case pattern: body` arm"));
         }
         Ok(self.mk(start, ExprKind::Match { scrutinee, arms }))
+    }
+
+    /// Parse one `case pattern [if guard]: body` arm. The pattern may be an
+    /// or-pattern (`case a | b:`); the optional `if guard` makes the arm refutable.
+    fn parse_case_arm(&mut self) -> Result<MatchArm, ParseError> {
+        self.expect(&Tok::Case, "`case`")?;
+        let pattern = self.parse_pattern()?;
+        let guard = if self.eat(&Tok::If) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        self.expect(&Tok::Colon, "`:` after the case pattern")?;
+        let body = self.parse_block_or_expr()?;
+        Ok(MatchArm {
+            pattern,
+            guard,
+            body,
+        })
     }
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
@@ -833,6 +870,14 @@ impl Parser {
                     self.bump(); // builder name
                     return self.parse_ce(CeBuilder::User(name), start);
                 }
+                // `Point { x = 1, y = 2 }` — a constructor-tagged record literal
+                // (`DESIGN.md` §8.3): an uppercase name before a `{` whose body is
+                // not a CE item (that case was handled just above).
+                if is_upper(&name) && *self.peek2() == Tok::LBrace {
+                    self.bump(); // type tag
+                    let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                    return self.parse_record_literal(name, ty_span, start);
+                }
                 self.bump();
                 ExprKind::Var(name)
             }
@@ -880,28 +925,44 @@ impl Parser {
         Ok(self.mk(start, ExprKind::List { elems }))
     }
 
-    /// Parse a record literal `{ x = 1, y = 2 }` or update `{ base with x = 3 }`.
-    ///
-    /// The two are distinguished by lookahead: a leading `ident =` is a literal's
-    /// first field; anything else is the `base` expression of an update (followed
-    /// by `with`).
+    /// Parse the `{ … }` body of a constructor-tagged record literal `ty { … }`
+    /// (`DESIGN.md` §8.3); the tag `ty` has already been consumed.
+    fn parse_record_literal(
+        &mut self,
+        ty: String,
+        ty_span: NodeSpan,
+        start: usize,
+    ) -> Result<Expr, ParseError> {
+        self.expect(&Tok::LBrace, "`{`")?;
+        let fields = self.parse_field_inits()?;
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(self.mk(
+            start,
+            ExprKind::Record {
+                ty,
+                ty_span,
+                fields,
+            },
+        ))
+    }
+
+    /// Parse a functional record update `{ base with x = 3 }`. Record *literals*
+    /// are constructor-tagged (`Point { … }`, parsed in `parse_atom`), so a bare
+    /// `{` in expression position is always an update (`DESIGN.md` §8.3).
     fn parse_record(&mut self, start: usize) -> Result<Expr, ParseError> {
         self.expect(&Tok::LBrace, "`{`")?;
-        let is_literal = matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Eq);
-        let kind = if is_literal {
-            ExprKind::Record {
-                fields: self.parse_field_inits()?,
-            }
-        } else {
-            let base = Box::new(self.parse_expr()?);
-            self.expect(&Tok::With, "`with`")?;
-            ExprKind::RecordUpdate {
-                base,
-                fields: self.parse_field_inits()?,
-            }
-        };
+        // A targeted migration error for the old bare record literal `{ x = 1 }`.
+        if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Eq) {
+            return Err(self.error(
+                "record literals are now constructor-tagged: write `T { x = … }` \
+                 naming the record type (DESIGN.md §8.3)",
+            ));
+        }
+        let base = Box::new(self.parse_expr()?);
+        self.expect(&Tok::With, "`with`")?;
+        let fields = self.parse_field_inits()?;
         self.expect(&Tok::RBrace, "`}`")?;
-        Ok(self.mk(start, kind))
+        Ok(self.mk(start, ExprKind::RecordUpdate { base, fields }))
     }
 
     /// Parse `ident = expr (, ident = expr)*` field initializers up to `}`.
@@ -1064,16 +1125,37 @@ impl Parser {
         }
     }
 
+    /// Parse a full pattern, including a top-level or-pattern `a | b | c`
+    /// (`DESIGN.md` §7.2). Alternatives are joined at the constructor-application
+    /// level, so `Some a | None` is `(Some a) | None`, not `Some (a | None)`.
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
-        // A capitalized identifier at this level is a constructor that may take
-        // argument patterns; everything else is a single atom pattern. A `.` after
-        // it makes it a qualified constructor from an imported module
-        // (`Geometry.Circle r`, `DESIGN.md` §6.1).
+        let first = self.parse_pattern_app()?;
+        if !matches!(self.peek(), Tok::Bar) {
+            return Ok(first);
+        }
+        let mut alts = vec![first];
+        while self.eat(&Tok::Bar) {
+            alts.push(self.parse_pattern_app()?);
+        }
+        Ok(Pattern::Or(alts))
+    }
+
+    /// Parse a constructor-application pattern (no top-level `|`). A capitalized
+    /// identifier is a constructor that may take argument patterns, a
+    /// constructor-tagged record pattern (`Point { … }`), or — after a `.` — a
+    /// qualified constructor from an imported module (`Geometry.Circle r`,
+    /// `DESIGN.md` §6.1). Everything else is a single atom pattern.
+    fn parse_pattern_app(&mut self) -> Result<Pattern, ParseError> {
         if let Tok::Ident(name) = self.peek().clone()
             && is_upper(&name)
         {
             let start = self.cur_start();
             self.bump();
+            // `Point { … }` — a constructor-tagged record pattern (`DESIGN.md` §8.3).
+            if matches!(self.peek(), Tok::LBrace) {
+                let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                return self.parse_record_pattern_body(name, ty_span);
+            }
             let name = self.maybe_qualify_ctor(name)?;
             let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
             let mut args = Vec::new();
@@ -1111,7 +1193,13 @@ impl Parser {
                 let start = self.cur_start();
                 self.bump();
                 if is_upper(&name) {
-                    // A nullary constructor, possibly qualified (`Geometry.Nothing`).
+                    // `Point { … }` — a constructor-tagged record pattern as an atom
+                    // (e.g. a constructor argument), else a nullary constructor,
+                    // possibly qualified (`Geometry.Nothing`).
+                    if matches!(self.peek(), Tok::LBrace) {
+                        let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                        return self.parse_record_pattern_body(name, ty_span);
+                    }
                     let name = self.maybe_qualify_ctor(name)?;
                     Ok(Pattern::Ctor {
                         name,
@@ -1154,15 +1242,19 @@ impl Parser {
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(first)
             }
-            Tok::LBrace => self.parse_record_pattern(),
             _ => Err(self.error("expected a pattern")),
         }
     }
 
-    /// Parse `{ name [= pattern] (, name [= pattern])* }` — a record pattern.
-    /// A bare `name` is shorthand for `name = name` (binds the field to a
-    /// same-named variable).
-    fn parse_record_pattern(&mut self) -> Result<Pattern, ParseError> {
+    /// Parse the `{ name [= pattern] (, name [= pattern])* }` body of a
+    /// constructor-tagged record pattern `ty { … }` (`DESIGN.md` §8.3); the tag
+    /// `ty` has already been consumed. A bare `name` is shorthand for `name = name`
+    /// (binds the field to a same-named variable).
+    fn parse_record_pattern_body(
+        &mut self,
+        ty: String,
+        ty_span: NodeSpan,
+    ) -> Result<Pattern, ParseError> {
         self.expect(&Tok::LBrace, "`{`")?;
         let mut fields = Vec::new();
         while !matches!(self.peek(), Tok::RBrace) {
@@ -1190,7 +1282,11 @@ impl Parser {
         if fields.is_empty() {
             return Err(self.error("a record pattern needs at least one field"));
         }
-        Ok(Pattern::Record { fields })
+        Ok(Pattern::Record {
+            ty,
+            ty_span,
+            fields,
+        })
     }
 
     fn parse_ident(&mut self, what: &str) -> Result<String, ParseError> {
@@ -1230,15 +1326,12 @@ fn starts_atom(tok: &Tok) -> bool {
 }
 
 fn starts_atom_pattern(tok: &Tok) -> bool {
+    // A `{` no longer starts a pattern on its own: record patterns are
+    // constructor-tagged (`Point { … }`), so they begin with an `Ident`
+    // (`DESIGN.md` §8.3).
     matches!(
         tok,
-        Tok::Underscore
-            | Tok::Ident(_)
-            | Tok::Int(_)
-            | Tok::True
-            | Tok::False
-            | Tok::LParen
-            | Tok::LBrace
+        Tok::Underscore | Tok::Ident(_) | Tok::Int(_) | Tok::True | Tok::False | Tok::LParen
     )
 }
 

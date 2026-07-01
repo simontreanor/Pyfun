@@ -107,13 +107,18 @@ fn accepts_partial_application_and_pipe() {
 
 #[test]
 fn accepts_match_over_int_literals() {
-    assert!(pyfun::check("let f n = match n with | 0 -> \"zero\" | _ -> \"many\"").is_ok());
+    assert!(
+        pyfun::check("let f n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"").is_ok()
+    );
 }
 
 #[test]
 fn accepts_user_defined_adt() {
     // `Option`/`Some`/`None` are built-in (no user declaration needed).
-    let src = "let unwrap o = match o with | Some v -> v | None -> 0\n\
+    let src = "let unwrap o =\n\
+               \x20 match o:\n\
+               \x20 \x20 case Some v: v\n\
+               \x20 \x20 case None: 0\n\
                let r = unwrap (Some 5)";
     assert!(pyfun::check(src).is_ok());
 }
@@ -172,7 +177,7 @@ fn rejects_infinite_type() {
 #[test]
 fn rejects_match_arm_result_mismatch() {
     assert_error_contains(
-        "let f n = match n with | 0 -> 1 | _ -> \"two\"",
+        "let f n =\n  match n:\n    case 0: 1\n    case _: \"two\"",
         "expected int, found string",
     );
 }
@@ -180,7 +185,7 @@ fn rejects_match_arm_result_mismatch() {
 #[test]
 fn rejects_unknown_constructor() {
     assert_error_contains(
-        "let f o = match o with | Nope v -> v",
+        "let f o =\n  match o:\n    case Nope v: v",
         "unknown constructor `Nope`",
     );
 }
@@ -188,13 +193,13 @@ fn rejects_unknown_constructor() {
 #[test]
 fn rejects_non_exhaustive_adt_match() {
     // `Option` is built-in; matching only `Some` misses `None`.
-    let src = "let f o = match o with | Some v -> v";
+    let src = "let f o =\n  match o:\n    case Some v: v";
     assert_error_contains(src, "non-exhaustive match: `None` is not matched");
 }
 
 #[test]
 fn rejects_non_exhaustive_int_match() {
-    assert_error_contains("let f n = match n with | 0 -> 1", "add a wildcard");
+    assert_error_contains("let f n =\n  match n:\n    case 0: 1", "add a wildcard");
 }
 
 // ---------- deep (nested) exhaustiveness ----------
@@ -203,10 +208,10 @@ fn rejects_non_exhaustive_int_match() {
 fn accepts_deep_exhaustive_nested_adt() {
     // Covering every nested combination is exhaustive without a wildcard.
     let src = "let f o =\n\
-               \x20 match o with\n\
-               \x20 | Some true -> 1\n\
-               \x20 | Some false -> 2\n\
-               \x20 | None -> 3";
+               \x20 match o:\n\
+               \x20 \x20 case Some true: 1\n\
+               \x20 \x20 case Some false: 2\n\
+               \x20 \x20 case None: 3";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -215,9 +220,9 @@ fn accepts_deep_exhaustive_record_with_nested_ctors() {
     // The motivating case: `{ item = Some n } | { item = None }` is complete.
     let src = "type Box = { item: Option int }\n\
                let f b =\n\
-               \x20 match b with\n\
-               \x20 | { item = Some n } -> n\n\
-               \x20 | { item = None } -> 0";
+               \x20 match b:\n\
+               \x20 \x20 case Box { item = Some n }: n\n\
+               \x20 \x20 case Box { item = None }: 0";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -226,9 +231,9 @@ fn reports_nested_witness_for_missing_inner_constructor() {
     // Missing `Some false` — the witness names the precise nested hole.
     assert_error_contains(
         "let f o =\n\
-         \x20 match o with\n\
-         \x20 | Some true -> 1\n\
-         \x20 | None -> 2",
+         \x20 match o:\n\
+         \x20 \x20 case Some true: 1\n\
+         \x20 \x20 case None: 2",
         "`Some false` is not matched",
     );
 }
@@ -238,11 +243,11 @@ fn reports_record_witness_for_missing_field_combination() {
     assert_error_contains(
         "type P = { x: bool, y: bool }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { x = true, y = true } -> 1\n\
-         \x20 | { x = true, y = false } -> 2\n\
-         \x20 | { x = false, y = true } -> 3",
-        "`{ x = false, y = false }` is not matched",
+         \x20 match p:\n\
+         \x20 \x20 case P { x = true, y = true }: 1\n\
+         \x20 \x20 case P { x = true, y = false }: 2\n\
+         \x20 \x20 case P { x = false, y = true }: 3",
+        "`P { x = false, y = false }` is not matched",
     );
 }
 
@@ -251,9 +256,9 @@ fn deep_check_still_requires_wildcard_for_open_inner_type() {
     // The inner `int` is infinite, so listing some literals isn't exhaustive.
     assert_error_contains(
         "let f o =\n\
-         \x20 match o with\n\
-         \x20 | Some 0 -> 1\n\
-         \x20 | None -> 2",
+         \x20 match o:\n\
+         \x20 \x20 case Some 0: 1\n\
+         \x20 \x20 case None: 2",
         "non-exhaustive",
     );
 }
@@ -322,7 +327,10 @@ fn rejects_seq_with_return() {
 // ---------- user-defined CE builders ----------
 
 const MAYBE_BUILDER: &str = "module Maybe =\n\
-    \x20 let bind m f = match m with | Some x -> f x | None -> None\n\
+    \x20 let bind m f =\n\
+    \x20 \x20 match m:\n\
+    \x20 \x20 \x20 case Some x: f x\n\
+    \x20 \x20 \x20 case None: None\n\
     \x20 let return_ x = Some x\n\
     \x20 let returnFrom m = m\n";
 
@@ -500,7 +508,7 @@ fn arithmetic_is_numeric_polymorphic() {
 fn rejects_mixing_concrete_int_and_float() {
     // Literals adapt, but two *concrete* numeric bases don't implicitly coerce:
     // `f` is forced to `int` by its int-literal pattern, so `1.0 + f 0` clashes.
-    let src = "let f n = match n with | 0 -> n | _ -> n\nlet r = 1.0 + f 0";
+    let src = "let f n =\n  match n:\n    case 0: n\n    case _: n\nlet r = 1.0 + f 0";
     assert_error_contains(src, "found int");
 }
 
@@ -626,7 +634,7 @@ fn not_binds_looser_than_comparison() {
 #[test]
 fn accepts_record_decl_literal_update_and_access() {
     let src = "type Point = { x: int, y: int }\n\
-               let p = { x = 3, y = 4 }\n\
+               let p = Point { x = 3, y = 4 }\n\
                let q = { p with y = 9 }\n\
                let s = p.x + q.y";
     assert!(pyfun::check(src).is_ok());
@@ -637,7 +645,7 @@ fn record_field_access_drives_function_type() {
     // `r.x + r.y` forces `r : Point` even without an annotation.
     let src = "type Point = { x: int, y: int }\n\
                let sumxy r = r.x + r.y\n\
-               let t = sumxy { x = 1, y = 2 }";
+               let t = sumxy (Point { x = 1, y = 2 })";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -645,7 +653,7 @@ fn record_field_access_drives_function_type() {
 fn parameterized_record_is_polymorphic() {
     // A `Box a` literal/access used at two element types in one program.
     let src = "type Box a = { item: a }\n\
-               let mk v = { item = v }\n\
+               let mk v = Box { item = v }\n\
                let bi = (mk 5).item\n\
                let bs = (mk \"hi\").item";
     assert!(pyfun::check(src).is_ok());
@@ -654,7 +662,7 @@ fn parameterized_record_is_polymorphic() {
 #[test]
 fn rejects_missing_record_field() {
     assert_error_contains(
-        "type Point = { x: int, y: int }\nlet p = { x = 1 }",
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1 }",
         "missing field",
     );
 }
@@ -662,7 +670,7 @@ fn rejects_missing_record_field() {
 #[test]
 fn rejects_unknown_field_in_literal() {
     assert_error_contains(
-        "type Point = { x: int, y: int }\nlet p = { x = 1, y = 2, z = 3 }",
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = 2, z = 3 }",
         "has no field `z`",
     );
 }
@@ -670,7 +678,7 @@ fn rejects_unknown_field_in_literal() {
 #[test]
 fn rejects_unknown_field_access() {
     assert_error_contains(
-        "type Point = { x: int }\nlet p = { x = 1 }\nlet z = p.nope",
+        "type Point = { x: int }\nlet p = Point { x = 1 }\nlet z = p.nope",
         "unknown record field `nope`",
     );
 }
@@ -678,7 +686,7 @@ fn rejects_unknown_field_access() {
 #[test]
 fn rejects_wrong_record_field_type() {
     assert_error_contains(
-        "type Point = { x: int, y: int }\nlet p = { x = 1, y = true }",
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = true }",
         "expected int, found bool",
     );
 }
@@ -703,8 +711,8 @@ fn accepts_record_pattern_match() {
     // `{ x, y }` shorthand binds both fields; field types flow into the body.
     let src = "type Point = { x: int, y: int }\n\
                let sumxy p =\n\
-               \x20 match p with\n\
-               \x20 | { x, y } -> x + y";
+               \x20 match p:\n\
+               \x20 \x20 case Point { x, y }: x + y";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -713,8 +721,8 @@ fn record_pattern_binds_fields_at_their_types() {
     // The bound `n` is an `int`, so `n + 1` checks; the catch-all is exhaustive.
     let src = "type Box = { item: int }\n\
                let f b =\n\
-               \x20 match b with\n\
-               \x20 | { item = n } -> n + 1";
+               \x20 match b:\n\
+               \x20 \x20 case Box { item = n }: n + 1";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -722,8 +730,8 @@ fn record_pattern_binds_fields_at_their_types() {
 fn record_pattern_may_mention_a_subset_of_fields() {
     let src = "type Point = { x: int, y: int }\n\
                let onlyx p =\n\
-               \x20 match p with\n\
-               \x20 | { x } -> x";
+               \x20 match p:\n\
+               \x20 \x20 case Point { x }: x";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -732,8 +740,8 @@ fn irrefutable_record_pattern_is_exhaustive() {
     // A record pattern whose fields are all irrefutable is itself a catch-all.
     let src = "type Point = { x: int, y: int }\n\
                let f p =\n\
-               \x20 match p with\n\
-               \x20 | { x = a, y = b } -> a + b";
+               \x20 match p:\n\
+               \x20 \x20 case Point { x = a, y = b }: a + b";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -743,9 +751,9 @@ fn rejects_refutable_record_pattern_without_wildcard() {
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { x = 0 } -> 1\n\
-         \x20 | { x = 1 } -> 2",
+         \x20 match p:\n\
+         \x20 \x20 case Point { x = 0 }: 1\n\
+         \x20 \x20 case Point { x = 1 }: 2",
         "non-exhaustive",
     );
 }
@@ -756,9 +764,9 @@ fn rejects_unknown_field_in_pattern() {
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { x = 0, z = 1 } -> 1\n\
-         \x20 | _ -> 0",
+         \x20 match p:\n\
+         \x20 \x20 case Point { x = 0, z = 1 }: 1\n\
+         \x20 \x20 case _: 0",
         "has no field `z`",
     );
 }
@@ -769,10 +777,10 @@ fn rejects_record_pattern_with_no_known_field() {
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { z = 0 } -> 1\n\
-         \x20 | _ -> 0",
-        "unknown record field `z`",
+         \x20 match p:\n\
+         \x20 \x20 case Point { z = 0 }: 1\n\
+         \x20 \x20 case _: 0",
+        "has no field `z`",
     );
 }
 
@@ -781,9 +789,9 @@ fn rejects_field_matched_twice_in_pattern() {
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { x = 0, x = 1 } -> 1\n\
-         \x20 | _ -> 0",
+         \x20 match p:\n\
+         \x20 \x20 case Point { x = 0, x = 1 }: 1\n\
+         \x20 \x20 case _: 0",
         "matched twice",
     );
 }
@@ -794,9 +802,9 @@ fn rejects_record_pattern_field_type_mismatch() {
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
-         \x20 match p with\n\
-         \x20 | { x = true } -> 1\n\
-         \x20 | _ -> 0",
+         \x20 match p:\n\
+         \x20 \x20 case Point { x = true }: 1\n\
+         \x20 \x20 case _: 0",
         "int",
     );
 }
@@ -807,7 +815,7 @@ fn rejects_update_of_unrelated_field() {
     assert_error_contains(
         "type Point = { x: int }\n\
          type Other = { y: int }\n\
-         let p = { x = 1 }\n\
+         let p = Point { x = 1 }\n\
          let bad = { p with y = 2 }",
         "type mismatch",
     );
@@ -956,7 +964,9 @@ fn rejects_heterogeneous_list() {
 #[test]
 fn accepts_tuple_construct_and_destructure() {
     let src = "let pair = (1, true)\n\
-               let swap p = match p with | (a, b) -> (b, a)\n\
+               let swap p =\n\
+               \x20 match p:\n\
+               \x20 \x20 case (a, b): (b, a)\n\
                let s = swap pair";
     assert!(pyfun::check(src).is_ok());
 }
@@ -966,7 +976,11 @@ fn tuple_elements_keep_their_own_types() {
     // The first element is int, the second string; using the second as a number
     // is an error.
     assert_error_contains(
-        "let t = (1, \"x\")\nlet bad = (match t with | (a, b) -> b) + 1",
+        "let t = (1, \"x\")\n\
+         let second =\n\
+         \x20 match t:\n\
+         \x20 \x20 case (a, b): b\n\
+         let bad = second + 1",
         "string",
     );
 }
@@ -975,7 +989,10 @@ fn tuple_elements_keep_their_own_types() {
 fn rejects_tuple_arity_mismatch() {
     // A 2-tuple cannot unify with a 3-tuple.
     assert_error_contains(
-        "let f p = match p with | (a, b) -> a\nlet bad = f (1, 2, 3)",
+        "let f p =\n\
+         \x20 match p:\n\
+         \x20 \x20 case (a, b): a\n\
+         let bad = f (1, 2, 3)",
         "found",
     );
 }
@@ -989,14 +1006,14 @@ fn tuple_type_displays_with_parentheses() {
 #[test]
 fn tuple_match_is_exhaustive_without_wildcard() {
     // A single tuple pattern of variables covers all values (one constructor).
-    assert!(pyfun::check("let fst p = match p with | (a, b) -> a").is_ok());
+    assert!(pyfun::check("let fst p =\n  match p:\n    case (a, b): a").is_ok());
 }
 
 #[test]
 fn rejects_non_exhaustive_tuple_match_with_witness() {
     // Deep exhaustiveness recurses into element columns and reports a witness.
     assert_error_contains(
-        "let f p = match p with | (true, b) -> b",
+        "let f p =\n  match p:\n    case (true, b): b",
         "`(false, _)` is not matched",
     );
 }
@@ -1005,7 +1022,7 @@ fn rejects_non_exhaustive_tuple_match_with_witness() {
 fn accepts_tuple_in_record_field_and_extern() {
     let src = "type Pair = { both: (int, string) }\n\
                extern pure mk : a -> b -> (a, b) = builtins.tuple\n\
-               let p = { both = (1, \"x\") }";
+               let p = Pair { both = (1, \"x\") }";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -1078,8 +1095,11 @@ fn accepts_map_functions() {
 fn list_zip_pairs_elements_into_tuples() {
     // `List.zip : List a -> List b -> List (a, b)`. Destructuring a zipped pair
     // recovers both element types.
-    let src = "let ps = List.zip [1, 2] [\"a\", \"b\"]\n\
-               let firsts = List.map (fun p -> match p with | (n, s) -> n) ps\n\
+    let src = "let firstOf p =\n\
+               \x20 match p:\n\
+               \x20 \x20 case (n, s): n\n\
+               let ps = List.zip [1, 2] [\"a\", \"b\"]\n\
+               let firsts = List.map firstOf ps\n\
                let total = List.sum firsts";
     assert!(pyfun::check(src).is_ok());
 }

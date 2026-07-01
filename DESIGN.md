@@ -613,6 +613,96 @@ deferred to a later named function (no guiding error yet); plus ✅ comparison/e
 (`< > <= >= == !=`) with the `comparison` constraint and structural ADT equality; plus ✅ logical
 `and` / `or` / `not`.
 
+### 7.2 Pattern matching — Python-framed (implemented)
+
+Pyfun's original `match e with | pat -> body` framing is F#. Python 3.10+ users now know a *native*
+`match`/`case`, so the F# framing is the second false friend (§ discussion): the audience has muscle
+memory for `match x:` / `case …:` and Pyfun spells it differently for no functional gain. This section
+adopts Python's **framing** while keeping Pyfun's **pattern language** untouched — the distinction is the
+whole point.
+
+**Surface form.**
+```
+match <scrutinee>:
+  case <pattern>: <block>
+  case <pattern> if <guard>: <block>     # optional guard (see below)
+  case <a> | <b>: <block>                # or-pattern (see below)
+  ...
+```
+- `match e:` — the `:` opens an offside block of `case` arms (the scrutinee is any expression; the `:`
+  at bracket depth 0 ends it).
+- `case pat:` — the `:` opens the arm's **block** body (a sequence of statements whose final expression is
+  the arm's value, per §7's block rule — so a `match` remains an **expression** yielding the taken arm's
+  value). Inline (`case None: 0`) and indented multi-statement bodies both work, exactly as `then`/`else`
+  bodies do today.
+- Arms are `case`-delimited (new statements in the match block), **not** `|`-delimited. `with` and the
+  leading `|` leave `match` entirely.
+
+**What is deliberately *not* Python.** The **pattern language is unchanged**, because it is the part you
+value and the part that carries Pyfun's FP surface:
+- Constructor patterns stay **juxtaposition**: `case Some v:`, not Python's call-form `case Some(v):`.
+  Juxtaposition is how application and construction are spelled everywhere else (§7); patterns mirror
+  construction, and `Some(v)` would drag `( )`-application into patterns and fight currying.
+- Tuple patterns `case (a, b):`, literal patterns, `_`, and **tagged record patterns** `case Point { x =
+  0, y }:` (§8.3) are as before. Record patterns keep `{ … }` rather than becoming Python class/mapping
+  patterns — consistent with tagged construction, and Pyfun has no `{ }` mapping-pattern to collide with.
+
+**Two slots this framing frees (Python-identical), both implemented:**
+- **Or-patterns.** With arms delimited by `case`, `|` inside a pattern means alternation, as in Python:
+  `case 1 | 2 | 3:`. Parsed at the constructor-application level (`Some a | None` is `(Some a) | None`),
+  modelled as `Pattern::Or(Vec<Pattern>)`. Every alternative must bind the **same variables at the same
+  types** (checked in `bind_pattern` by binding each alternative into a temp scope and unifying); the
+  exhaustiveness checker expands an or-pattern into its alternatives (`expand_first_column` in `useful`),
+  and it lowers to a Python or-pattern `case a | b | c:`.
+- **Guards.** `case pat if cond:` is a refutable arm condition, the Python spelling. The guard is checked
+  in the arm's pattern-bound scope and must be `bool`; a **guarded arm never counts toward exhaustiveness**
+  (`check_exhaustive` filters `guard.is_none()`, and lowering's `has_catch_all` treats a guarded arm as
+  refutable). It lowers to `case pat if cond:`; because Python allows no statements in a guard, a guard
+  that would need hoisted statements is a lowering error (realistic guards are pure expressions).
+
+**Implementation scope.** The *framing* change is lexer + parser + pretty-printer only (mirroring the
+"blocks in tail position" change); **guards and or-patterns** additionally reach the checker, lowering,
+and Python IR (both are genuine new pattern power, not just spelling):
+- **Lexer.** `case` becomes a keyword. `:` at bracket **depth 0** primes a pending block (a new
+  tail-position opener alongside `=`/`->`/`then`/`else`). This is unambiguous: Pyfun puts `:` nowhere else
+  at depth 0 — record field types (`x: int`) live inside `{ }` (offside off), and there are no `let`/param
+  type annotations — so a depth-0 `:` is always a `match`/`case` block opener. (This quietly forbids ever
+  adding a depth-0 `:` elsewhere, e.g. optional `let x : int` annotations; §8.3 decision 2 leans on their
+  absence, so the dependency is already implied.)
+- **Parser.** `match e:` then an indented (or, inside brackets, un-indented) `Sep`-separated sequence of
+  `case` arms; each arm parses a pattern (with a top-level `|` folded into `Pattern::Or`), an optional `if`
+  guard, then a block body via the existing `parse_block_or_expr`. `case` starts a new arm (default `Sep`,
+  not a continuation token), so no continuation-token table change is needed.
+- **Pretty-printer.** Renders `match e:` / `case p:` with offside indentation (an or-pattern parenthesized,
+  a guard as ` if <cond>`), replacing the `with | … ->` rendering. A `match` embedded mid-expression still
+  has an inline parenthesized form `(match e: case p: b …)`. Round-trip guarantee preserved.
+- **Checker.** `MatchArm` gained `guard: Option<Expr>` (typed `bool` in the arm scope; excluded from
+  coverage) and `Pattern::Or` (same-variables-same-types check; expanded for exhaustiveness).
+- **Lowering / IR.** `PyCase` gained an optional guard; `PyPattern::Or` emits `a | b`. Arms still lower to
+  a Python `match`/`case` statement — now an even closer 1:1 — with the defensive `case _: raise` guard.
+  Witnesses still print in Pyfun pattern syntax (`` `Some false` ``, `` `Point { x = _ } ` ``).
+
+**Migration.** This **replaces** `match … with | … ->`; the two spellings are not both supported (avoid
+two ways to write one thing in an MVP). `->` is retained for lambdas (`fun x -> …`) and function types
+(`int -> int`), where it does not compete with a Python form. Examples and `examples/hello.pyfun` move to
+the new spelling in the same change.
+
+**Example (with §8.3 tagged records — construction and pattern now mirror):**
+```
+let describe p =
+  match p:
+    case Point { x = 0, y = 0 }: "origin"
+    case Point { x = 0 }:        "y-axis"
+    case Point { x, y }:         "elsewhere"
+
+let classify n =
+  match n:
+    case 0: "zero"
+    case _:
+      let positive = n > 0
+      if positive then "positive" else "negative"
+```
+
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
 These two F# flagships are deliberately in the MVP — they are the clearest demonstrations of "what
@@ -716,46 +806,77 @@ Design intent:
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).
 
-### 8.3 Records (implemented)
+### 8.3 Records (implemented — constructor-tagged literals)
 
 Named-field **product** types, complementing ADTs' sum types: `type Point = { x: int, y: int }`,
-construction `{ x = 1, y = 2 }`, access `p.x`, functional update `{ p with x = 3 }`. Parameterized
-records (`type Box a = { item: a }`) are polymorphic.
+**construction `Point { x = 1, y = 2 }`**, access `p.x`, functional update `{ p with x = 3 }`.
+Parameterized records (`type Box a = { item: a }`) are polymorphic.
 
-Decisions (all ✅ implemented):
+**Motivation for the revision.** The original literal spelling `{ x = 1, y = 2 }` is a *false friend*
+to Python readers: it reads as a `dict`, but a Python dict is `{ "x": 1 }` (colons, string keys) and a
+Pyfun record is nominal with `=` and bare field names. Pyfun has no dict/map literal (maps are built
+with `Map.ofList` / `Map.add`), so the collision is only against a reader's Python knowledge — but that
+is exactly the "basic stuff should feel familiar" surface we care about (§7.1). Tagging the literal with
+its type constructor kills the false friend, is **honest about nominality** (§ decision 1), matches
+Haskell's record syntax (functional pedigree) *and* Python's dataclass call `Point(x=1, y=2)` (familiar),
+and makes construction **mirror** its pattern (below).
 
-1. **Nominal, not structural / row-polymorphic.** A record literal/access resolves to a *declared*
-   record type. Records reuse the existing `Ty::Con` machinery (a record is just a type constructor
+Decisions:
+
+1. **Nominal, not structural / row-polymorphic.** (Unchanged.) A record literal/access resolves to a
+   *declared* record type. Records reuse the existing `Ty::Con` machinery (a record is a type constructor
    with a field registry), so no new `Ty` variant, and they unify and generalize exactly like ADTs.
-2. **Field names are globally unique.** Resolution is by field name: `e.x` and `{ x = … }` find their
-   record type from the field(s) alone. Pyfun has **no type annotations** on `let`/params, so there is
-   no other signal to resolve a bare `.x` against — and row polymorphism (inferring "some record with
-   field `x`") is explicitly out of scope (§11, keep the MVP bounded). Reusing a field name across two
-   records is therefore a compile error. This is the one real ergonomic limitation; lifting it needs
-   either annotations or row polymorphism.
-3. **Lowering reuses the ADT class machinery** (§5 representation contract): a record type becomes a
-   Python class with its real field names, `__match_args__`, structural `__eq__`/`__hash__`, and
-   `__repr__`.
-   Literals and updates emit **positional** constructor calls in declared field order; an update binds
-   its base to a temp first so it is evaluated once (`{ p with x = 3 }` → `_t = p; Point(3, _t.y)`).
-4. **Syntax disambiguation.** `{` collides with computation-expression blocks, so: a `{` immediately
-   after `=` in a `type` declaration is a record body; a CE block is always preceded by a builder name
-   (`async`/`seq`/`result`); a bare `{` in expression position is a record literal (`{ ident = …`
-   lookahead) or update (`{ expr with … }`). `.field` is a postfix that binds tighter than application
-   (`f p.x` is `f (p.x)`).
+2. **Field names are globally unique — retained.** Resolution of a bare `p.x` access is *still* by field
+   name: an access carries no tag and no type annotation (Pyfun has none on `let`/params), so `x` must
+   identify its record. Tagging construction and patterns does **not** by itself lift this — access
+   remains the blocker. Reusing a field name across two records stays a compile error. Lifting it needs
+   annotations or row polymorphism (§11) and remains deferred; this revision is orthogonal to it.
+3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
+   always names its type: `Point { x = 1, y = 2 }`. There is **no bare `{ f = v }` literal** — that form
+   is removed, which is what eliminates the dict false friend outright. The type-declaration body keeps
+   bare braces (`type Point = { x: int, y: int }` — a *type* body, not an expression), and access `p.x`
+   is unchanged.
+4. **Update stays bare: `{ e with f = v }`.** The base expression `e` already fixes the record type, and
+   the `with` keyword makes the form unambiguously an update (Python has no `{ … with … }`), so it is not
+   a false friend and needs no tag. (Lowering unchanged: bind base to a temp, then a positional
+   constructor call — `{ p with x = 3 }` → `_t = p; Point(3, _t.y)`.)
+5. **Lowering reuses the ADT class machinery** (§5). A record type becomes a Python class with its real
+   field names, `__match_args__`, structural `__eq__`/`__hash__`, `__repr__`. `Point { x = 1, y = 2 }`
+   lowers to the positional call `Point(1, 2)` in declared field order — i.e. the *tag erases into the
+   class name it already denotes*, so codegen is unchanged from today.
+6. **Syntax disambiguation.** `{` participates in three constructs; the rule is now cleaner because bare
+   expression-position literals are gone:
+   - A `{` immediately after `=` in a `type` declaration is a **record-type body**.
+   - `Name { … }` in expression position: peek the brace body. A computation-expression item
+     (`let!`/`return`/`yield`/`do!` — the existing `starts_ce_item` lookahead) ⇒ a **CE block** and
+     `Name` is a builder (§8.1). Otherwise `field = expr, …` ⇒ a **record construction** node
+     `Record { ty: Name, fields }`; the checker verifies `Name` is a declared record type (error
+     otherwise). This resolves the `Maybe { let! … }` vs `Point { x = 1 }` ambiguity by brace content, as
+     today — only the record arm changes from "apply `Name` to a bare literal" to "construct `Name`".
+   - A bare `{` in expression position must be a **functional update** (`{ e with … }`); anything else is
+     a parse error (the old bare-literal path is removed). A data constructor applied to a record is now
+     written with the tag explicit, `Some (Point { x = 1 })`, not `Some { x = 1 }`.
+   - `.field` is a postfix binding tighter than application (`f p.x` is `f (p.x)`). (Unchanged.)
 
-**Record patterns** in `match` are supported: `match p with | { x = 0, y } -> …`. The form is `{ name =
-pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. The owning record type is
-resolved from the (globally unique) field names, so a pattern may name a **subset** of fields (omitted
-fields go unmatched). They lower to Python keyword class patterns (`case Point(x=0, y=y):`). A record
-pattern whose fields are all irrefutable acts as a catch-all for exhaustiveness.
+**Record patterns** in `match` are correspondingly **tagged**: `case Point { x = 0, y }:` (see §7.2). The
+form is `T { name = pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. Tagging
+makes the pattern **mirror construction** and matches the scrutinee's record type explicitly. A pattern
+may name a **subset** of fields (omitted fields go unmatched). It lowers to a Python keyword class pattern
+(`case Point(x=0, y=y):`). A record pattern whose named sub-patterns are all irrefutable acts as a
+catch-all for exhaustiveness.
 
-**Exhaustiveness is deep.** The checker uses Maranget's usefulness algorithm (matrix specialization),
-not a top-level constructor scan, so it recurses into nested patterns: `Some true | Some false | None`
-and `{ item = Some n } | { item = None }` are recognized as complete without a `_`. When a `match` is
-non-exhaustive it reports a concrete witness — `` `None` ``, `` `Some false` ``, `` `{ x = _, y = true
-} ` `` — naming an uncovered value. Infinite types (`int`, `string`) and types without matchable
-constructors are exhaustive only via a wildcard arm.
+**Exhaustiveness is deep** and is **entirely unaffected** by this revision — the check operates on the
+`Pattern` AST (Maranget usefulness, matrix specialization), which is unchanged; only the surface spelling
+of construction and record patterns moves. `Point { item = Some n } | Point { item = None }` is still
+recognized as complete without a `_`, and witnesses print in the tagged form (`` `Point { x = _, y = true
+} ` ``). Infinite types (`int`, `string`) and types without matchable constructors are exhaustive only via
+a wildcard arm.
+
+**Alternative considered — distinctive delimiters `{| … |}`** (OCaml/F#-anonymous flavour, e.g.
+`{| x = 1, y = 2 |}`). It also removes the false friend with a simpler grammar (no type-name
+classification), but is noisier per use, *looks* structural/anonymous (dishonest about Pyfun records being
+nominal), and gains no symmetry with construction-vs-pattern. Rejected in favour of the tag, which buys
+familiarity (dataclass/Haskell) and honesty. Neither option lifts field-uniqueness (decision 2).
 
 Deferred: derived ordering on records, and lifting the unique-field-name restriction.
 

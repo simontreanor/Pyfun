@@ -33,7 +33,7 @@ let id x = x
 let pick b = if b then 1 else 0
 
 # Blocks: an indented body is a sequence of statements ending in the value. They
-# open after `=` (a `let` body), `->` (a `match` arm or lambda), and `then`/`else`.
+# open after `=` (a `let` body), `->` (a lambda), `case P:` (a `match` arm), `then`/`else`.
 # `let mut` + `<-` give local mutation; reassigning a plain `let` is a compile
 # error (immutable by default). Lowers to a flat Python statement sequence.
 let scaled a b =
@@ -53,27 +53,27 @@ let accumulate =
   let first = tally 10
   tally 5                             # 15  (10 then +5)
 
-# A block in a `match` arm (opened after `->`).
+# A block in a `match` arm (opened after `case P:`).
 let describeSign n =
-  match n with
-  | 0 -> "zero"
-  | _ ->
-      let positive = n > 0
-      if positive then "positive" else "negative"
+  match n:
+    case 0: "zero"
+    case _:
+        let positive = n > 0
+        if positive then "positive" else "negative"
 
 # Exhaustive pattern matching over an ADT (checked at compile time).
 let unwrap o =
-  match o with
-  | Some v -> v
-  | None -> 0
+  match o:
+    case Some v: v
+    case None: 0
 
 let answer = unwrap (Some 42)
 
 let rank c =
-  match c with
-  | Red -> 1
-  | Green -> 2
-  | Blue -> 3
+  match c:
+    case Red: 1
+    case Green: 2
+    case Blue: 3
 
 # Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
 let compose = fun f g x -> f (g x)
@@ -117,9 +117,9 @@ let computed =
 # desugars to `Maybe.bind`/`Maybe.return_` calls — ordinary inference does the rest.
 module Maybe =
   let bind m f =
-    match m with
-    | Some x -> f x
-    | None -> None
+    match m:
+      case Some x: f x
+      case None: None
   let return_ x = Some x
 let addOpt a b =
   Maybe {
@@ -134,12 +134,12 @@ let addOpt a b =
 let pairUp a b = (a, b)
 let origin = (0, 0)
 let swap p =
-  match p with
-  | (a, b) -> (b, a)
+  match p:
+    case (a, b): (b, a)
 let labelled = (1, "one", true)              # (int, string, bool)
 let firstOf t =
-  match t with
-  | (a, _, _) -> a
+  match t:
+    case (a, _, _): a
 
 # Units of measure: dimensional analysis at compile time, erased at runtime.
 measure m
@@ -231,7 +231,7 @@ print (not (seven == 8) or false)    # True
 
 # Records: construct with `{ f = v }`, access with `.f`, copy-and-update with
 # `{ r with f = v }`. The record type is resolved from the field names.
-let here = { x = 3, y = 4 }
+let here = Point { x = 3, y = 4 }
 let shifted = { here with x = 10 }
 let dot r = r.x + r.y                 # field access fixes `r : Point`
 print here.x                          # 3
@@ -244,11 +244,11 @@ print accumulate                      # 15   (closure capturing a mutable)
 # Record patterns: destructure in `match`. `{ x }` shorthand binds the field; a
 # pattern may name a subset of fields, and `{ x, y }` is an exhaustive catch-all.
 let describe p =
-  match p with
-  | { x = 0, y = 0 } -> "origin"
-  | { x = 0 } -> "y-axis"
-  | { x, y } -> "elsewhere"
-print (describe { x = 0, y = 0 })     # origin
+  match p:
+    case Point { x = 0, y = 0 }: "origin"
+    case Point { x = 0 }: "y-axis"
+    case Point { x, y }: "elsewhere"
+print (describe (Point { x = 0, y = 0 }))   # origin
 print (describe here)                 # elsewhere
 
 # Externs in action (call out to Python's str / math.sqrt).

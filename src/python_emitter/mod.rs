@@ -56,6 +56,8 @@ pub enum PyStmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PyCase {
     pub pattern: PyPattern,
+    /// `case pat if guard:` — an optional guard expression (`DESIGN.md` §7.2).
+    pub guard: Option<PyExpr>,
     pub body: Vec<PyStmt>,
 }
 
@@ -77,6 +79,8 @@ pub enum PyPattern {
     },
     /// `case (a, b)` — a sequence pattern, used for tuple patterns.
     Sequence(Vec<PyPattern>),
+    /// `case a | b | c` — an or-pattern.
+    Or(Vec<PyPattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -246,7 +250,15 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::Match { subject, cases } => {
             line(out, depth, &format!("match {}:", expr(subject)));
             for case in cases {
-                line(out, depth + 1, &format!("case {}:", pattern(&case.pattern)));
+                let guard = match &case.guard {
+                    Some(g) => format!(" if {}", expr(g)),
+                    None => String::new(),
+                };
+                line(
+                    out,
+                    depth + 1,
+                    &format!("case {}{guard}:", pattern(&case.pattern)),
+                );
                 emit_block(&case.body, depth + 2, out);
             }
         }
@@ -350,6 +362,10 @@ fn pattern(pat: &PyPattern) -> String {
         PyPattern::Sequence(elems) => {
             let elems: Vec<String> = elems.iter().map(pattern).collect();
             format!("({})", elems.join(", "))
+        }
+        PyPattern::Or(alts) => {
+            let alts: Vec<String> = alts.iter().map(pattern).collect();
+            alts.join(" | ")
         }
     }
 }

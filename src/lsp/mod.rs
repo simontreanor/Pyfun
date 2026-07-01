@@ -1564,7 +1564,7 @@ mod tests {
         .unwrap();
         let main_src = "import Shape\n\
              let c = Shape.Circle 2.0\n\
-             let describe x =\n  match x with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w";
+             let describe x =\n  match x:\n    case Shape.Circle r: r\n    case Shape.Rect w h: w";
         std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
         let main_uri = file_uri(&dir.join("main.pyfun"));
         let shape_uri = file_uri(&dir.join("shape.pyfun"));
@@ -1598,7 +1598,7 @@ mod tests {
         .unwrap();
         let main_src = "import Shape\n\
              let c = Shape.Circle 2.0\n\
-             let describe x =\n  match x with\n  | Shape.Circle r -> r\n  | Shape.Rect w h -> w";
+             let describe x =\n  match x:\n    case Shape.Circle r: r\n    case Shape.Rect w h: w";
         std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
         let main_uri = file_uri(&dir.join("main.pyfun"));
         let shape_uri = file_uri(&dir.join("shape.pyfun"));

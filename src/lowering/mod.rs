@@ -493,8 +493,13 @@ impl Lowerer {
                 for arm in arms {
                     let pattern = self.lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                    let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                     let body = self.lower_return(&arm.body, &arm_locals)?;
-                    cases.push(PyCase { pattern, body });
+                    cases.push(PyCase {
+                        pattern,
+                        guard,
+                        body,
+                    });
                 }
                 if !has_catch_all(arms) {
                     cases.push(non_exhaustive_guard());
@@ -597,9 +602,11 @@ impl Lowerer {
                 for arm in arms {
                     let pattern = self.lower_pattern(&arm.pattern);
                     let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                    let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                     let (arm_stmts, arm_val) = self.lower_value(&arm.body, &arm_locals)?;
                     cases.push(PyCase {
                         pattern,
+                        guard,
                         body: with_assign(arm_stmts, &tmp, arm_val),
                     });
                 }
@@ -673,7 +680,7 @@ impl Lowerer {
                 Ok((stmts, PyExpr::Tuple(vals)))
             }
 
-            ExprKind::Record { fields } => self.lower_record(fields, locals),
+            ExprKind::Record { fields, .. } => self.lower_record(fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
                 self.lower_record_update(base, fields, locals)
             }
@@ -1090,22 +1097,47 @@ impl Lowerer {
                     args: lowered,
                 }
             }
-            Pattern::Record { fields } => {
-                // Records lower to a class named after the record type; the field
-                // names match its attributes, so emit a keyword class pattern.
-                let record = self.field_to_record[&fields[0].name].clone();
+            Pattern::Record { ty, fields, .. } => {
+                // Records lower to a class named after the record type (the tag); the
+                // field names match its attributes, so emit a keyword class pattern.
                 let lowered = fields
                     .iter()
                     .map(|f| (f.name.clone(), self.lower_pattern(&f.pattern)))
                     .collect();
                 PyPattern::ClassKw {
-                    name: record,
+                    name: ty.clone(),
                     fields: lowered,
                 }
             }
             Pattern::Tuple { elems } => {
                 let lowered = elems.iter().map(|e| self.lower_pattern(e)).collect();
                 PyPattern::Sequence(lowered)
+            }
+            Pattern::Or(alts) => {
+                let lowered = alts.iter().map(|p| self.lower_pattern(p)).collect();
+                PyPattern::Or(lowered)
+            }
+        }
+    }
+
+    /// Lower an optional `case` guard to a Python guard expression. A guard runs
+    /// inside the arm (after the pattern binds), so it must be a pure expression —
+    /// Python allows no statements in a `case … if …:` guard (`DESIGN.md` §7.2).
+    fn lower_guard(
+        &mut self,
+        guard: &Option<Expr>,
+        locals: &HashSet<String>,
+    ) -> Result<Option<PyExpr>, LowerError> {
+        match guard {
+            None => Ok(None),
+            Some(g) => {
+                let (stmts, val) = self.lower_value(g, locals)?;
+                if !stmts.is_empty() {
+                    return Err(LowerError {
+                        message: "a `case` guard must be a simple expression".to_string(),
+                    });
+                }
+                Ok(Some(val))
             }
         }
     }
@@ -1265,6 +1297,7 @@ impl Lowerer {
                         name: "Ok".to_string(),
                         args: vec![ok_pat],
                     },
+                    guard: None,
                     body: rest,
                 },
                 PyCase {
@@ -1272,6 +1305,7 @@ impl Lowerer {
                         name: "Error".to_string(),
                         args: vec![PyPattern::Capture(e_tmp.clone())],
                     },
+                    guard: None,
                     body: vec![PyStmt::Return(call1("Error", PyExpr::Name(e_tmp)))],
                 },
             ],
@@ -1871,26 +1905,33 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
     match pattern {
         Pattern::Var { name, .. } => vec![name.clone()],
         Pattern::Ctor { args, .. } => args.iter().flat_map(pattern_bindings).collect(),
-        Pattern::Record { fields } => fields
+        Pattern::Record { fields, .. } => fields
             .iter()
             .flat_map(|f| pattern_bindings(&f.pattern))
             .collect(),
         Pattern::Tuple { elems } => elems.iter().flat_map(pattern_bindings).collect(),
+        // Every alternative binds the same variables (enforced by the checker), so
+        // the first alternative's bindings are representative.
+        Pattern::Or(alts) => alts.first().map(pattern_bindings).unwrap_or_default(),
         _ => vec![],
     }
 }
 
-/// A `match` is exhaustive at lowering time only if some arm is irrefutable (a
-/// wildcard, a variable, or a record pattern with all-irrefutable fields).
+/// A `match` is exhaustive at lowering time only if some *unguarded* arm is
+/// irrefutable (a wildcard, a variable, a record pattern with all-irrefutable
+/// fields, or an or-pattern with an irrefutable alternative). A guarded arm can
+/// fail at runtime, so it never makes the match exhaustive (`DESIGN.md` §7.2).
 fn has_catch_all(arms: &[crate::parser::ast::MatchArm]) -> bool {
-    arms.iter().any(|arm| is_irrefutable(&arm.pattern))
+    arms.iter()
+        .any(|arm| arm.guard.is_none() && is_irrefutable(&arm.pattern))
 }
 
 fn is_irrefutable(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => true,
-        Pattern::Record { fields } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
+        Pattern::Record { fields, .. } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
+        Pattern::Or(alts) => alts.iter().any(is_irrefutable),
         Pattern::Int(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
     }
 }
@@ -1929,6 +1970,9 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         ExprKind::Match { scrutinee, arms } => {
             scan_scope(scrutinee, assigned, bound);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    scan_scope(guard, assigned, bound);
+                }
                 scan_scope(&arm.body, assigned, bound);
             }
         }
@@ -1951,7 +1995,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
                 scan_scope(e, assigned, bound);
             }
         }
-        ExprKind::Record { fields } => {
+        ExprKind::Record { fields, .. } => {
             for f in fields {
                 scan_scope(&f.value, assigned, bound);
             }
@@ -1978,6 +2022,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
 fn non_exhaustive_guard() -> PyCase {
     PyCase {
         pattern: PyPattern::Wildcard,
+        guard: None,
         body: vec![PyStmt::RaiseRuntimeError(
             "non-exhaustive match".to_string(),
         )],

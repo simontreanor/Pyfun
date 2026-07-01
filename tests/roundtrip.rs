@@ -39,27 +39,27 @@ const PROGRAMS: &[&str] = &[
     "let piped = x |> f |> g a",
     "let choose = if cond then a else b",
     "let compose = fun f g x -> f (g x)",
-    "let describe n = match n with | 0 -> \"zero\" | _ -> \"many\"",
-    "let unwrap o = match o with | Some v -> v | None -> 0",
-    "let nested = match p with | Pair (Some a) b -> a | _ -> b",
+    "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
+    "let unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
+    "let nested =\n  match p:\n    case Pair (Some a) b: a\n    case _: b",
     // Record patterns: shorthand, explicit, subset, and nested sub-patterns. The
     // `{ x }` shorthand must print back as shorthand (not `{ x = x }`).
-    "let f p = match p with | { x, y } -> x",
-    "let f p = match p with | { x = a, y = b } -> a",
-    "let f p = match p with | { x = 0, y } -> y | { x } -> x",
-    "let f b = match b with | { item = Some n } -> n | _ -> 0",
+    "let f p =\n  match p:\n    case Point { x, y }: x",
+    "let f p =\n  match p:\n    case Point { x = a, y = b }: a",
+    "let f p =\n  match p:\n    case Point { x = 0, y }: y\n    case Point { x }: x",
+    "let f b =\n  match b:\n    case Box { item = Some n }: n\n    case _: 0",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.
-    "let classify n =\n  match n with\n  | 0 -> \"zero\"\n  | _ -> \"many\"",
+    "let classify n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     // Blocks in match arms / if branches / lambda bodies (opened after `->`,
     // `then`/`else`). A single-statement block is unwrapped, so only multi-stmt
     // bodies stay blocks; the printer renders them with offside layout.
-    "let f n =\n  match n with\n  | 0 ->\n      let x = 1\n      x\n  | _ -> 0",
+    "let f n =\n  match n:\n    case 0:\n        let x = 1\n        x\n    case _: 0",
     "let f c =\n  if c then\n      let x = 1\n      x\n  else 0",
     "let f c =\n  if c then 1\n  else\n      let y = 2\n      y",
     "let g = fun x ->\n  let y = x\n  y",
-    "let f n =\n  match n with\n  | 0 ->\n      let a = 1\n      a\n  | _ ->\n      let b = 2\n      b",
+    "let f n =\n  match n:\n    case 0:\n        let a = 1\n        a\n    case _:\n        let b = 2\n        b",
     // Offside rule: consecutive bare statements are separate items.
     "print a\nprint b",
     // Blocks: indented `let` bodies with local bindings, sequencing, and `<-`.
@@ -74,7 +74,7 @@ const PROGRAMS: &[&str] = &[
     // Records: declaration, literal, functional update, field access.
     "type Point = { x: int, y: int }",
     "type Box a = { item: a, tag: string }",
-    "let p = { x = 3, y = 4 }",
+    "let p = Point { x = 3, y = 4 }",
     "let q = { p with y = 9 }",
     "let s = p.x",
     "let d = obj.inner.value",
@@ -84,7 +84,7 @@ const PROGRAMS: &[&str] = &[
     "type Option a = None | Some a",
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
-    "type Option a = None | Some a\nlet unwrap o = match o with | Some v -> v | None -> 0",
+    "type Option a = None | Some a\nlet unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
     // List literals: empty, simple, nested, and compound elements.
     "let xs = [1, 2, 3]",
     "let e = []",
@@ -99,9 +99,9 @@ const PROGRAMS: &[&str] = &[
     "let mixed = (f a, x + 1, [1, 2])",
     "let grouped = (x + 1)",
     // Tuple patterns in match arms, including nested ones.
-    "let swap p = match p with | (a, b) -> (b, a)",
-    "let fst t = match t with | (a, _) -> a",
-    "let deep p = match p with | ((a, b), c) -> a",
+    "let swap p =\n  match p:\n    case (a, b): (b, a)",
+    "let fst t =\n  match t:\n    case (a, _): a",
+    "let deep p =\n  match p:\n    case ((a, b), c): a",
     // Tuple types in declarations and externs.
     "type Pair = { both: (int, string) }",
     "extern pure mk: a -> b -> (a, b) = builtins.tuple",
@@ -114,7 +114,7 @@ const PROGRAMS: &[&str] = &[
     "let a = Maybe { let! x = m return x }",
     "let a = Build { yield 1 yield 2 }",
     "let a = M { let x = 1 do! e return! r }",
-    "let a = Some { x = 1 }",
+    "let a = Some (Cell { x = 1 })",
     // Units of measure.
     "measure m",
     // Derived-measure aliases (`measure N = <unit body>`, no `<>` brackets).
@@ -144,8 +144,8 @@ const PROGRAMS: &[&str] = &[
     "import Geometry\nlet big = Geometry.area 10",
     "import Geometry\nimport Physics\nlet x = 1",
     // Qualified constructor patterns (an imported sum type, `DESIGN.md` §6.1).
-    "let f s =\n  match s with\n  | Geometry.Circle r -> r\n  | Geometry.Rect w h -> w",
-    "let g k =\n  match k with\n  | Color.Red -> 1\n  | Color.Other -> 2",
+    "let f s =\n  match s:\n    case Geometry.Circle r: r\n    case Geometry.Rect w h: w",
+    "let g k =\n  match k:\n    case Color.Red: 1\n    case Color.Other: 2",
 ];
 
 #[test]
@@ -230,7 +230,7 @@ fn offside_rule_separates_statements_but_joins_continuations() {
     assert_eq!(module.items.len(), 2, "statements should not merge");
 
     // An indented continuation stays part of the same item.
-    let module = parse("let f n =\n  match n with\n  | 0 -> 1\n  | _ -> 2").unwrap();
+    let module = parse("let f n =\n  match n:\n    case 0: 1\n    case _: 2").unwrap();
     assert_eq!(
         module.items.len(),
         1,
@@ -264,6 +264,6 @@ fn import_requires_a_capitalized_module_name() {
 fn reports_errors_for_malformed_input() {
     assert!(parse("let = 1").is_err());
     assert!(parse("if x then y").is_err()); // missing else
-    assert!(parse("match x with").is_err()); // no arms
+    assert!(parse("match x:").is_err()); // no arms
     assert!(parse("(1 + 2").is_err()); // unbalanced paren
 }

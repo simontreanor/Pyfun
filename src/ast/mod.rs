@@ -190,7 +190,10 @@ fn needs_block(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Block { .. } => true,
         ExprKind::If { then, else_, .. } => needs_block(then) || needs_block(else_),
-        ExprKind::Match { arms, .. } => arms.iter().any(|a| needs_block(&a.body)),
+        // A `match` always renders offside (`match e:` / `case p:`), the canonical
+        // Python-framed form (`DESIGN.md` §7.2). An inline parenthesized form still
+        // exists in `print_expr` for a `match` embedded mid-expression.
+        ExprKind::Match { .. } => true,
         ExprKind::Fn { body, .. } => needs_block(body),
         _ => false,
     }
@@ -225,12 +228,13 @@ fn print_layout(expr: &Expr, indent: usize) -> String {
             print_body(else_, indent),
         ),
         ExprKind::Match { scrutinee, arms } => {
-            let mut s = format!("{pad}match {} with", print_expr(scrutinee));
+            let mut s = format!("{pad}match {}:", print_expr(scrutinee));
             for arm in arms {
                 s.push_str(&format!(
-                    "\n{pad}| {} ->{}",
+                    "\n{pad}    case {}{}:{}",
                     print_pattern(&arm.pattern),
-                    print_body(&arm.body, indent),
+                    print_guard(&arm.guard),
+                    print_body(&arm.body, indent + 1),
                 ));
             }
             s
@@ -291,7 +295,7 @@ pub fn print_expr(expr: &Expr) -> String {
         }
         ExprKind::Match { scrutinee, arms } => {
             let arms: Vec<String> = arms.iter().map(print_arm).collect();
-            format!("(match {} with {})", print_expr(scrutinee), arms.join(" "))
+            format!("(match {}: {})", print_expr(scrutinee), arms.join(" "))
         }
         ExprKind::Binary { op, lhs, rhs } => {
             format!("({} {} {})", print_expr(lhs), op.symbol(), print_expr(rhs))
@@ -317,9 +321,9 @@ pub fn print_expr(expr: &Expr) -> String {
             let elems: Vec<String> = elems.iter().map(print_expr).collect();
             format!("({})", elems.join(", "))
         }
-        ExprKind::Record { fields } => {
+        ExprKind::Record { ty, fields, .. } => {
             let fields: Vec<String> = fields.iter().map(print_field_init).collect();
-            format!("{{ {} }}", fields.join(", "))
+            format!("{ty} {{ {} }}", fields.join(", "))
         }
         ExprKind::RecordUpdate { base, fields } => {
             let fields: Vec<String> = fields.iter().map(print_field_init).collect();
@@ -351,10 +355,19 @@ fn print_ce_item(item: &CeItem) -> String {
     }
 }
 
+/// Render the ` if guard` suffix of a guarded arm (empty when unguarded).
+fn print_guard(guard: &Option<Expr>) -> String {
+    match guard {
+        Some(g) => format!(" if {}", print_expr(g)),
+        None => String::new(),
+    }
+}
+
 fn print_arm(arm: &MatchArm) -> String {
     format!(
-        "| {} -> {}",
+        "case {}{}: {}",
         print_pattern(&arm.pattern),
+        print_guard(&arm.guard),
         print_expr(&arm.body)
     )
 }
@@ -372,7 +385,7 @@ pub fn print_pattern(pattern: &Pattern) -> String {
             let args: Vec<String> = args.iter().map(print_pattern).collect();
             format!("({} {})", name, args.join(" "))
         }
-        Pattern::Record { fields } => {
+        Pattern::Record { ty, fields, .. } => {
             let parts: Vec<String> = fields
                 .iter()
                 .map(|f| match &f.pattern {
@@ -381,11 +394,18 @@ pub fn print_pattern(pattern: &Pattern) -> String {
                     p => format!("{} = {}", f.name, print_pattern(p)),
                 })
                 .collect();
-            format!("{{ {} }}", parts.join(", "))
+            format!("{ty} {{ {} }}", parts.join(", "))
         }
         Pattern::Tuple { elems } => {
             let elems: Vec<String> = elems.iter().map(print_pattern).collect();
             format!("({})", elems.join(", "))
+        }
+        // Always parenthesized so a nested or-pattern (a constructor argument, a
+        // tuple element) reparses to the same alternation rather than binding to
+        // the enclosing constructor.
+        Pattern::Or(alts) => {
+            let alts: Vec<String> = alts.iter().map(print_pattern).collect();
+            format!("({})", alts.join(" | "))
         }
     }
 }

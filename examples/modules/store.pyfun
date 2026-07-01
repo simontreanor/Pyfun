@@ -3,7 +3,7 @@
 # `_pyfun_rt.py` that every module imports, the `Some` built here is the *same*
 # type Main inspects with the `Option` module — so it works across files.
 let lookup key =
-  match key with
-  | 1 -> Some 100
-  | 2 -> Some 200
-  | _ -> None
+  match key:
+    case 1: Some 100
+    case 2: Some 200
+    case _: None
