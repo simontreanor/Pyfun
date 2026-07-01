@@ -75,6 +75,29 @@ let rank c =
     case Green: 2
     case Blue: 3
 
+# Or-patterns: `case a | b:` matches any alternative (Python-identical). All
+# alternatives must bind the same variables (here, none).
+let size n =
+  match n:
+    case 1 | 2 | 3: "small"
+    case _: "big"
+
+# Guards: a `case` arm may carry an `if` condition. A guarded arm is refutable —
+# it never counts toward exhaustiveness, so a catch-all `case _` is still needed.
+let sign n =
+  match n:
+    case 0: "zero"
+    case m if m > 0: "positive"
+    case _: "negative"
+
+# `elif` — sugar for `else if`; `if`/`then`/`else` stay (an inline expression, not
+# `:`-framed). The printer canonicalizes any else-if chain to `elif`.
+let grade n =
+  if n >= 90 then "A"
+  elif n >= 80 then "B"
+  elif n >= 70 then "C"
+  else "F"
+
 # Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
 let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
@@ -276,6 +299,15 @@ print diag                            # 25
 print (describeSign 0)                # zero
 print (describeSign 7)                # positive
 print (describeSign (0 - 3))          # negative
+
+# Or-patterns, guards, and `elif`.
+print (size 2)                        # small  (or-pattern 1 | 2 | 3)
+print (size 9)                        # big
+print (sign 5)                        # positive  (guard: m if m > 0)
+print (sign (0 - 4))                  # negative
+print (grade 95)                      # A  (elif chain)
+print (grade 83)                      # B
+print (grade 68)                      # F
 
 # A user-defined computation expression (the Maybe monad).
 print (addOpt (Some 3) (Some 4))      # Some(7)
