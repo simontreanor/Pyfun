@@ -878,6 +878,28 @@ workspace symbols (project-wide, vs. today's per-document outline); and richer h
 (docs, separate effect line). The `editors/vscode/` client is intentionally thin —
 all language smarts live in the Rust server.
 
+**Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
+smarts, `editors/vscode/pyfun.tmLanguage.json` gives static, parse-free
+highlighting (keywords, declarations, types/constructors, numbers + adjacent unit
+annotations, operators, strings/comments). One deliberate design choice: the
+**escape-hatch tokens are flagged in a caution colour** to signal the opt-outs
+from Pyfun's immutable-by-default / effect-checked defaults — `mut` (the
+mutability opt-out), `<-` (the act of mutation), and `extern` (the untyped,
+effectful-by-default Python FFI boundary). `pure` deliberately stays a neutral
+`storage.modifier` (it's an *encouraged* assertion, the opposite of an escape
+hatch), and `->` is scoped apart from `<-` so only the reassignment arrow is
+flagged. The colour is applied via **honest TextMate scopes plus a pinned
+foreground**, not by borrowing a "warning" scope: `mut` →
+`storage.modifier.mutable.pyfun`, `<-` → `keyword.operator.mutation.pyfun`,
+`extern` → `keyword.other.extern.pyfun` (each names what the token *is*), and the
+extension pins all three to an amber `#CC5E00` (no italic) via
+`contributes.configurationDefaults.editor.tokenColorCustomizations`. Pinning the
+colour rather than relying on a theme's rendering of, say, `invalid` keeps the hue
+consistent across themes and light/dark auto-switching, and avoids the semantic
+lie that these valid keywords are errors (an earlier `invalid.deprecated` scoping
+also picked up theme-specific italics). Users can still override the colour in
+their own `editor.tokenColorCustomizations`.
+
 ## 10. Scope & phases
 
 MVP = "immutable, expression-oriented, effect-tracked, FP-first syntax — with computation
