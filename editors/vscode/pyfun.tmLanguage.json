@@ -41,11 +41,11 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "`let mut name` — `mut` is the mutability escape hatch (opt-out of immutable-by-default), flagged like a deprecated/discouraged feature.",
+          "comment": "`let mut name` — `mut` is the mutability escape hatch (opt-out of immutable-by-default). Honest scope (it *is* a storage modifier) + a `.mutable` tail the extension pins to an amber 'caution' colour via configurationDefaults.",
           "match": "\\b(let)\\b\\s+(mut)\\b\\s*([a-z_][A-Za-z0-9_']*)?",
           "captures": {
             "1": { "name": "keyword.declaration.pyfun" },
-            "2": { "name": "invalid.pyfun" },
+            "2": { "name": "storage.modifier.mutable.pyfun" },
             "3": { "name": "entity.name.function.pyfun" }
           }
         },
@@ -60,9 +60,9 @@
           }
         },
         {
-          "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; flagged like a discouraged/escape-hatch feature.",
+          "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; an escape hatch. Honest keyword scope + a `.extern` tail the extension pins to the same amber 'caution' colour.",
           "match": "\\b(extern)\\b",
-          "name": "invalid.pyfun"
+          "name": "keyword.other.extern.pyfun"
         },
         {
           "comment": "Other binding/declaration keywords (benign).",
@@ -116,8 +116,8 @@
           "match": "\\|>"
         },
         {
-          "comment": "`<-` reassignment — the act of mutation; flagged to match `mut`.",
-          "name": "invalid.pyfun",
+          "comment": "`<-` reassignment — the act of mutation. Honest operator scope + a `.mutation` tail pinned to the same amber 'caution' colour as `mut`.",
+          "name": "keyword.operator.mutation.pyfun",
           "match": "<-"
         },
         {
