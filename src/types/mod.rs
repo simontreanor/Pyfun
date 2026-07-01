@@ -32,8 +32,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::lexer::Span;
 use crate::parser::ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module,
-    Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, MatchArm,
+    Module, Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
 };
 
 /// A factor in a unit term: a base measure or a unit variable.
@@ -2257,6 +2257,17 @@ impl Infer {
             ExprKind::Int(_) => Ok(self.fresh_num()),
             ExprKind::Float(_) => Ok(Ty::Float(Unit::dimensionless())),
             ExprKind::Str(_) => Ok(Ty::Str),
+            // An interpolated string is a `string`; each hole may be any type (the
+            // emitted Python f-string stringifies it). We still infer every hole so
+            // its effect propagates (`f"{impure x}"` is `io`).
+            ExprKind::Interp { parts } => {
+                for part in parts {
+                    if let InterpPart::Expr(e) = part {
+                        self.infer_expr(e, env)?;
+                    }
+                }
+                Ok(Ty::Str)
+            }
             ExprKind::Bool(_) => Ok(Ty::Bool),
             ExprKind::Unit => Ok(Ty::Unit),
 

@@ -23,6 +23,11 @@ pub enum Tok {
     Int(i64),
     Float(f64),
     Str(String),
+    /// An interpolated string `f"...{expr}..."`, pre-split by the lexer into literal
+    /// chunks and holes. Each hole carries the already-lexed tokens of its embedded
+    /// expression (spans absolute into the original source, terminated by `Eof`), so
+    /// the parser re-parses them in place with the ordinary expression grammar.
+    FStr(Vec<FStrPart>),
 
     // Identifiers & keywords
     Ident(String),
@@ -132,4 +137,13 @@ impl Tok {
 pub struct Token {
     pub tok: Tok,
     pub span: Span,
+}
+
+/// One segment of an interpolated `f"..."` string ([`Tok::FStr`]): a literal chunk
+/// (with escapes and `{{`/`}}` already resolved), or a hole holding the pre-lexed
+/// tokens of its embedded expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FStrPart {
+    Lit(String),
+    Hole(Vec<Token>),
 }

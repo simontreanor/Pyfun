@@ -38,11 +38,12 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   Workaround: a lambda, `fun x -> x * 2`.
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
-- **String interpolation / f-strings** (M) — a front-end feature (lexer + parser); the `String` module
-  landed (len/concat/split/join/upper/lower/strip/contains/replace/toInt), but formatted interpolation is separate.
 - **General `try`/`except` exception handling** (M–L) — `Result`/`Option` are the error primitives today;
   there is no way to *catch* a Python exception from an `extern` call. The `PyStmt::Try` IR node now exists
   (used by `String.toInt`), so the emitter groundwork is in place; a surface syntax + typing remain.
+- **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+);
+  still deferred are **format specifiers** (`{x:.2f}`, `{v!r}` — a mini-language), **multi-line** `f"""..."""`
+  (Pyfun has no triple-quoted strings), and **`{x=}`** self-documenting holes.
 *Cross-module (file-modules follow-ons)*
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).

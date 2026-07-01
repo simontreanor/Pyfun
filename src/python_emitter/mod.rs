@@ -96,6 +96,8 @@ pub enum PyExpr {
     Int(i64),
     Float(f64),
     Str(String),
+    /// An interpolated f-string `f"...{expr}..."`, from a Pyfun `f"..."`.
+    FStr(Vec<PyFStrPart>),
     Bool(bool),
     Name(String),
     /// `left <op> right` — arithmetic only in Phase 2.
@@ -135,6 +137,14 @@ pub enum PyExpr {
     Tuple(Vec<PyExpr>),
     /// The `None` literal — the unit value (e.g. the result of an assignment).
     NoneLit,
+}
+
+/// One segment of an emitted f-string ([`PyExpr::FStr`]): a literal chunk (its
+/// specials and braces re-escaped on emit) or an embedded expression hole.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyFStrPart {
+    Lit(String),
+    Expr(PyExpr),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -423,6 +433,24 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         PyExpr::Int(n) => n.to_string(),
         PyExpr::Float(f) => format!("{f:?}"),
         PyExpr::Str(s) => string_literal(s),
+        PyExpr::FStr(parts) => {
+            let mut out = String::from("f\"");
+            for part in parts {
+                match part {
+                    PyFStrPart::Lit(s) => out.push_str(&fstring_literal(s)),
+                    // A hole is delimited by braces, so it needs no outer parens
+                    // (emit at the lowest precedence). Nested same-quote strings and
+                    // backslashes are valid inside f-string holes on Python 3.12+.
+                    PyFStrPart::Expr(e) => {
+                        out.push('{');
+                        out.push_str(&emit_expr(e, 0));
+                        out.push('}');
+                    }
+                }
+            }
+            out.push('"');
+            out
+        }
         PyExpr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
         PyExpr::Name(name) => name.clone(),
         PyExpr::BinOp { op, left, right } => {
@@ -485,5 +513,23 @@ fn string_literal(s: &str) -> String {
         }
     }
     out.push('"');
+    out
+}
+
+/// Escape a literal chunk of an f-string: the same specials as [`string_literal`]
+/// plus doubling `{`/`}` so they are not read as interpolation delimiters.
+fn fstring_literal(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '{' => out.push_str("{{"),
+            '}' => out.push_str("}}"),
+            _ => out.push(c),
+        }
+    }
     out
 }

@@ -25,10 +25,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::parser::ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, Item, LetBinding, Module,
-    Param, Pattern, TypeDeclKind, TypeExpr,
+    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, InterpPart, Item, LetBinding,
+    Module, Param, Pattern, TypeDeclKind, TypeExpr,
 };
-use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyModule, PyPattern, PyStmt};
+use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPattern, PyStmt};
 
 /// An error raised while lowering (e.g. a construct not yet supported).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -678,6 +678,25 @@ impl Lowerer {
                     vals.push(v);
                 }
                 Ok((stmts, PyExpr::Tuple(vals)))
+            }
+
+            // An interpolated string lowers ~1:1 to a Python f-string: literal chunks
+            // pass through, holes become `{expr}` (Python stringifies each). Any
+            // statements a hole hoists run first.
+            ExprKind::Interp { parts } => {
+                let mut stmts = Vec::new();
+                let mut py_parts = Vec::with_capacity(parts.len());
+                for part in parts {
+                    match part {
+                        InterpPart::Lit(s) => py_parts.push(PyFStrPart::Lit(s.clone())),
+                        InterpPart::Expr(e) => {
+                            let (s, v) = self.lower_value(e, locals)?;
+                            stmts.extend(s);
+                            py_parts.push(PyFStrPart::Expr(v));
+                        }
+                    }
+                }
+                Ok((stmts, PyExpr::FStr(py_parts)))
             }
 
             ExprKind::Record { fields, .. } => self.lower_record(fields, locals),
@@ -2068,6 +2087,13 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {
                 scan_scope(e, assigned, bound);
+            }
+        }
+        ExprKind::Interp { parts } => {
+            for part in parts {
+                if let InterpPart::Expr(e) = part {
+                    scan_scope(e, assigned, bound);
+                }
             }
         }
         ExprKind::Record { fields, .. } => {

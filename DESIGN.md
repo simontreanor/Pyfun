@@ -284,8 +284,25 @@ mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Py
 `_pf_str_split` = `s.split(sep)`, …) so each curried function is one callable. The one total parse,
 `String.toInt : string -> Option int`, lowers to a `try`/`except ValueError` helper returning
 `Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
-prelude. String interpolation / f-strings (a front-end feature) and overloading `+` for strings are
-deferred — `String.concat` is the concatenation path.
+prelude. Overloading `+` for strings is deferred — `String.concat` is the concatenation path.
+
+**String interpolation — `f"..."` (implemented).** Python-style interpolated strings: an `f` prefix
+(adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
+holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a
+`string`; a hole may be **any type** — the emitted Python f-string stringifies it (so `f"{p}"` for a
+record uses the generated `__repr__`, `Point { x = 1 }` → `Point(1)`), which is the one place Pyfun
+relaxes to Python's implicit `str()` rather than requiring an explicit conversion. Holes' **effects
+propagate** (`f"{impure x}"` is `io`). *Lexing* is the crux: the lexer (`lex_fstring`) splits an
+`f"..."` into a `Tok::FStr(Vec<FStrPart>)` of literal chunks and holes, finding each hole's matching
+`}` by balancing nested `{}` and skipping string literals, then **pre-lexes each hole's tokens with
+absolute spans** (`lex_subrange`, bracket depth pre-set so no layout tokens leak in). The parser's
+`parse_interp` re-parses those hole tokens with the ordinary expression grammar into
+`ExprKind::Interp { parts: Vec<InterpPart> }`, so diagnostics and LSP navigation reach inside holes.
+*Lowering* is 1:1: `PyExpr::FStr` emits a real Python f-string, holes verbatim, literal chunks with
+their specials and braces re-escaped. This **targets Python 3.12+** (PEP 701), so a hole may freely
+contain a string literal reusing the outer quote (`f"{String.contains "}" s}"`). Format specifiers
+(`:.2f`, `!r`), multi-line `f"""..."""`, and `{x=}` self-documenting holes are deferred. Covered by
+lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
 
 **Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/

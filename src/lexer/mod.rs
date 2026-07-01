@@ -19,7 +19,7 @@
 
 mod token;
 
-pub use token::{Span, Tok, Token};
+pub use token::{FStrPart, Span, Tok, Token};
 
 /// An error produced during lexing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,12 +271,145 @@ impl<'a> Lexer<'a> {
         match c {
             b'0'..=b'9' => self.lex_number(start),
             b'"' => self.lex_string(start),
+            // An adjacent `f"` (no space) opens an interpolated string. `f "x"` with a
+            // space stays ordinary application, matching Python; only the pathological
+            // adjacent `f"x"` changes meaning (it was `f` applied to `"x"`).
+            b'f' if self.peek2() == Some(b'"') => self.lex_fstring(start),
             c if is_ident_start(c) => {
                 self.lex_ident(start);
                 Ok(())
             }
             _ => self.lex_symbol(start),
         }
+    }
+
+    /// Lex an interpolated string `f"...{expr}..."` into a single [`Tok::FStr`],
+    /// splitting it into literal chunks and holes. `{{`/`}}` escape to literal
+    /// braces; a lone `{` opens a hole scanned by [`Self::lex_hole`].
+    fn lex_fstring(&mut self, start: usize) -> Result<(), LexError> {
+        self.pos += 2; // skip `f"`
+        let mut parts: Vec<FStrPart> = Vec::new();
+        let mut lit = String::new();
+        let flush = |lit: &mut String, parts: &mut Vec<FStrPart>| {
+            if !lit.is_empty() {
+                parts.push(FStrPart::Lit(std::mem::take(lit)));
+            }
+        };
+        loop {
+            match self.peek() {
+                None => return Err(self.err(start, "unterminated f-string")),
+                Some(b'"') => {
+                    self.pos += 1;
+                    flush(&mut lit, &mut parts);
+                    self.push(Tok::FStr(parts), start);
+                    return Ok(());
+                }
+                Some(b'\\') => {
+                    self.pos += 1;
+                    match self.peek() {
+                        Some(b'"') => lit.push('"'),
+                        Some(b'\\') => lit.push('\\'),
+                        Some(b'n') => lit.push('\n'),
+                        Some(b't') => lit.push('\t'),
+                        _ => return Err(self.err(self.pos, "invalid escape sequence")),
+                    }
+                    self.pos += 1;
+                }
+                Some(b'{') if self.peek2() == Some(b'{') => {
+                    lit.push('{');
+                    self.pos += 2;
+                }
+                Some(b'}') if self.peek2() == Some(b'}') => {
+                    lit.push('}');
+                    self.pos += 2;
+                }
+                Some(b'{') => {
+                    self.pos += 1; // consume `{`
+                    flush(&mut lit, &mut parts);
+                    let hole = self.lex_hole(start)?;
+                    parts.push(FStrPart::Hole(hole));
+                }
+                Some(b'}') => {
+                    return Err(self.err(
+                        self.pos,
+                        "single `}` in f-string; write `}}` for a literal brace",
+                    ));
+                }
+                Some(b) => {
+                    lit.push(b as char);
+                    self.pos += 1;
+                }
+            }
+        }
+    }
+
+    /// Scan a hole body (the cursor is just past the opening `{`) up to its matching
+    /// `}`, balancing nested `{}` and skipping string literals so a brace or quote
+    /// inside them doesn't close the hole early, then lex the captured slice into the
+    /// hole's tokens (with absolute spans).
+    fn lex_hole(&mut self, fstr_start: usize) -> Result<Vec<Token>, LexError> {
+        let hole_start = self.pos;
+        let mut brace_depth = 0usize;
+        loop {
+            match self.peek() {
+                None => return Err(self.err(fstr_start, "unterminated f-string (missing `}`)")),
+                Some(b'"') => self.skip_string_in_hole()?,
+                Some(b'{') => {
+                    brace_depth += 1;
+                    self.pos += 1;
+                }
+                Some(b'}') if brace_depth > 0 => {
+                    brace_depth -= 1;
+                    self.pos += 1;
+                }
+                Some(b'}') => {
+                    let hole_end = self.pos;
+                    self.pos += 1; // consume `}`
+                    if hole_start == hole_end {
+                        return Err(self.err(hole_start, "empty f-string hole `{}`"));
+                    }
+                    return Ok(self.lex_subrange(hole_start, hole_end));
+                }
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    /// Skip a string literal inside a hole (cursor at the opening `"`), honoring
+    /// backslash escapes, so its contents can't prematurely close the hole.
+    fn skip_string_in_hole(&mut self) -> Result<(), LexError> {
+        let start = self.pos;
+        self.pos += 1; // opening quote
+        loop {
+            match self.peek() {
+                None => return Err(self.err(start, "unterminated string literal in f-string")),
+                Some(b'"') => {
+                    self.pos += 1;
+                    return Ok(());
+                }
+                Some(b'\\') => self.pos += 2, // skip the escaped character
+                Some(_) => self.pos += 1,
+            }
+        }
+    }
+
+    /// Lex the source range `[start, end)` (a hole's expression) into its own token
+    /// stream, offsetting every span back to absolute source positions and forwarding
+    /// any errors. Bracket depth is pre-set so the offside rule emits no layout tokens
+    /// inside the hole.
+    fn lex_subrange(&mut self, start: usize, end: usize) -> Vec<Token> {
+        let sub = std::str::from_utf8(&self.src[start..end]).expect("hole slice is valid utf-8");
+        let mut lexer = Lexer::new(sub);
+        lexer.depth = 1; // suppress Indent/Dedent/Sep inside the hole
+        let (mut tokens, errors) = lexer.run();
+        for t in &mut tokens {
+            t.span = Span::new(t.span.start + start, t.span.end + start);
+        }
+        for mut e in errors {
+            e.span = Span::new(e.span.start + start, e.span.end + start);
+            self.errors.push(e);
+        }
+        tokens
     }
 
     fn lex_number(&mut self, start: usize) -> Result<(), LexError> {
@@ -477,6 +610,59 @@ mod tests {
         assert_eq!(
             kinds("1 # ignored\n2"),
             vec![Tok::Int(1), Tok::Sep, Tok::Int(2), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn fstring_splits_into_literals_and_holes() {
+        let toks = kinds("f\"a {x} b\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr, got {:?}", toks[0]);
+        };
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], FStrPart::Lit("a ".to_string()));
+        let FStrPart::Hole(hole) = &parts[1] else {
+            panic!("expected a hole");
+        };
+        // The hole is lexed to its own tokens, terminated by `Eof`.
+        assert_eq!(
+            hole.iter().map(|t| t.tok.clone()).collect::<Vec<_>>(),
+            vec![Tok::Ident("x".to_string()), Tok::Eof]
+        );
+        assert_eq!(parts[2], FStrPart::Lit(" b".to_string()));
+    }
+
+    #[test]
+    fn fstring_hole_spans_are_absolute() {
+        // `f"v={x}"` — the hole's `x` sits at byte offset 5 in the source.
+        let toks = lex("f\"v={x}\"").unwrap();
+        let Tok::FStr(parts) = &toks[0].tok else {
+            panic!("expected FStr");
+        };
+        let FStrPart::Hole(hole) = &parts[1] else {
+            panic!("expected a hole");
+        };
+        assert_eq!(hole[0].span, Span::new(5, 6));
+    }
+
+    #[test]
+    fn fstring_escapes_and_nested_braces() {
+        // `{{`/`}}` are literal braces; a nested string keeps its own `}`.
+        let toks = kinds("f\"{{x}} {g \"}\"}\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr");
+        };
+        assert_eq!(parts[0], FStrPart::Lit("{x} ".to_string()));
+        assert!(matches!(parts[1], FStrPart::Hole(_)));
+    }
+
+    #[test]
+    fn f_with_space_is_not_an_fstring() {
+        // `f "x"` (with a space) stays ordinary application; only adjacent `f"` opens
+        // an interpolated string.
+        assert_eq!(
+            kinds("f \"x\""),
+            vec![Tok::Ident("f".to_string()), Tok::Str("x".to_string()), Tok::Eof]
         );
     }
 

@@ -137,6 +137,13 @@ const PROGRAMS: &[&str] = &[
     "extern show: a -> string = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
+    // Interpolated strings `f"..."`: literal chunks, holes with full expressions,
+    // `{{`/`}}` escapes. Printing re-escapes and reparses to the same AST.
+    "let g = f\"hello {name}\"",
+    "let g = f\"{a} + {b} = {a + b}\"",
+    "let g = f\"upper {String.upper name}\"",
+    "let g = f\"a literal brace {{ and {x}\"",
+    "let g = f\"no holes at all\"",
     // Built-in `String` module: qualified access is the ordinary field path.
     "let g = String.concat \"a\" \"b\"",
     "let parts = String.split \",\" line",

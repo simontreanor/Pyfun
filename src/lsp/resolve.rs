@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use crate::lexer::Span;
 use crate::syntax::{
-    BlockStmt, CeItem, Expr, ExprKind, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl,
-    TypeDeclKind, TypeExpr,
+    BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, MatchArm, Module, Pattern,
+    TypeDecl, TypeDeclKind, TypeExpr,
 };
 
 /// What kind of thing a module-level symbol is (drives the editor's icon and, for
@@ -528,6 +528,15 @@ impl Resolver {
             ExprKind::List { elems } | ExprKind::Tuple { elems } => {
                 for e in elems {
                     self.walk_expr(e);
+                }
+            }
+            // Walk each interpolation hole so navigation/rename reach inside `f"..."`
+            // (hole spans are absolute).
+            ExprKind::Interp { parts } => {
+                for part in parts {
+                    if let InterpPart::Expr(e) = part {
+                        self.walk_expr(e);
+                    }
                 }
             }
             ExprKind::Record {

@@ -35,11 +35,11 @@
 
 pub mod ast;
 
-use crate::lexer::{Span, Tok, Token};
+use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
-    FieldPattern, Item, LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, TypeDecl,
-    TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    FieldPattern, InterpPart, Item, LetBinding, MatchArm, Module, NodeSpan, Param, Pattern,
+    TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -857,6 +857,12 @@ impl Parser {
                 self.bump();
                 ExprKind::Str(s)
             }
+            Tok::FStr(parts) => {
+                self.bump();
+                ExprKind::Interp {
+                    parts: Self::parse_interp(parts)?,
+                }
+            }
             Tok::True => {
                 self.bump();
                 ExprKind::Bool(true)
@@ -921,6 +927,28 @@ impl Parser {
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
+    }
+
+    /// Parse the segments of an interpolated string into `InterpPart`s. Literal
+    /// chunks pass through; each hole's pre-lexed tokens (absolute spans, `Eof`-
+    /// terminated) are parsed as a full expression by a fresh sub-parser, and any
+    /// leftover tokens after that expression are an error.
+    fn parse_interp(parts: Vec<FStrPart>) -> Result<Vec<InterpPart>, ParseError> {
+        let mut out = Vec::with_capacity(parts.len());
+        for part in parts {
+            match part {
+                FStrPart::Lit(s) => out.push(InterpPart::Lit(s)),
+                FStrPart::Hole(tokens) => {
+                    let mut sub = Parser { tokens, pos: 0 };
+                    let expr = sub.parse_expr()?;
+                    if !sub.at_eof() {
+                        return Err(sub.error("unexpected token after f-string hole expression"));
+                    }
+                    out.push(InterpPart::Expr(Box::new(expr)));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Parse a list literal `[a, b, c]` — comma-separated, possibly empty, with an

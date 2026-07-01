@@ -7,8 +7,8 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, Item, LetBinding,
-    MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
+    BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, InterpPart, Item,
+    LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -288,6 +288,7 @@ pub fn print_expr(expr: &Expr) -> String {
         // reparse as integers.
         ExprKind::Float(f) => format!("{f:?}"),
         ExprKind::Str(s) => print_string(s),
+        ExprKind::Interp { parts } => print_interp(parts),
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Unit => "()".to_string(),
         ExprKind::Var(name) => name.clone(),
@@ -441,6 +442,37 @@ fn print_string(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\t' => out.push_str("\\t"),
             _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Print an interpolated string `f"..."`: literal chunks re-escape their specials
+/// (and re-double `{`/`}`), holes print their expression inside `{…}`. Reparsing the
+/// result yields the same `ExprKind::Interp`.
+fn print_interp(parts: &[InterpPart]) -> String {
+    let mut out = String::from("f\"");
+    for part in parts {
+        match part {
+            InterpPart::Lit(s) => {
+                for c in s.chars() {
+                    match c {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\t' => out.push_str("\\t"),
+                        '{' => out.push_str("{{"),
+                        '}' => out.push_str("}}"),
+                        _ => out.push(c),
+                    }
+                }
+            }
+            InterpPart::Expr(e) => {
+                out.push('{');
+                out.push_str(&print_expr(e));
+                out.push('}');
+            }
         }
     }
     out.push('"');

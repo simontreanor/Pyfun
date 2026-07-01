@@ -235,6 +235,13 @@ let csv = String.join "," words               # "Hello,World"
 let parsed = Option.withDefault 0 (String.toInt "41")   # 41
 let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
 
+# String interpolation: `f"...{expr}..."` (Python-style). Holes take any full
+# expression and are stringified; `{{`/`}}` are literal braces. Lowers 1:1 to a
+# Python f-string (targets Python 3.12+).
+let who = "Ada"
+let scoreLine = f"{who} scored {parsed} ({String.upper who})"   # "Ada scored 41 (ADA)"
+let sumLine = f"{parsed} doubled is {parsed + parsed}"          # "41 doubled is 82"
+
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
 #   pyfun run examples/hello.pyfun
 # Consecutive `print` statements are separated by Pyfun's offside rule (a line
@@ -308,6 +315,8 @@ print csv                             # Hello,World
 print (String.len title)             # 12
 print parsed                          # 41   (total parse of "41")
 print unparsed                        # 0    (String.toInt "x" -> None)
+print scoreLine                       # Ada scored 41 (ADA)   (f-string)
+print sumLine                         # 41 doubled is 82
 
 # In-file module members.
 print floorArea                       # 20

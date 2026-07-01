@@ -1092,6 +1092,35 @@ fn accepts_map_functions() {
 }
 
 #[test]
+fn interpolated_string_has_type_string() {
+    // The whole f-string is a `string`; holes may be any type (int, tuple, ADT).
+    let src = "let name = \"Ada\"\n\
+               let n = 3\n\
+               let p = (1, 2)\n\
+               let msg = f\"hi {name}, n={n}, sum={n + 1}, p={p}\"\n\
+               let len = String.len msg";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn interpolation_hole_must_be_well_typed() {
+    // A hole is an ordinary expression, so an unbound name in it is an error.
+    assert!(pyfun::check("let m = f\"value {missing}\"").is_err());
+    // A type error inside a hole is caught too (adding a string to an int).
+    assert!(pyfun::check("let m = f\"{1 + \"x\"}\"").is_err());
+}
+
+#[test]
+fn interpolation_propagates_hole_effects() {
+    // A pure function may be asserted `pure` even when it builds an f-string from
+    // pure holes...
+    assert!(pyfun::check("let pure label n = f\"n = {n}\"").is_ok());
+    // ...but a hole performing `io` (here `print`, via its unit result) makes the
+    // whole expression impure, so `pure` is rejected.
+    assert!(pyfun::check("let pure shout x = f\"{print x}\"").is_err());
+}
+
+#[test]
 fn accepts_string_functions() {
     let src = "let g = String.concat \"Hello, \" \"World\"\n\
                let n = String.len g\n\

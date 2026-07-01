@@ -215,12 +215,26 @@ impl Expr {
 }
 
 /// Expression shapes. Application is single-argument so currying is structural:
+/// One segment of an interpolated string ([`ExprKind::Interp`]): a literal chunk
+/// (escapes and `{{`/`}}` already resolved) or an embedded expression (a "hole").
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpPart {
+    Lit(String),
+    Expr(Box<Expr>),
+}
+
 /// `f a b` parses to `App(App(f, a), b)` (see `DESIGN.md` §7).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Int(i64),
     Float(f64),
     Str(String),
+    /// An interpolated string `f"...{expr}..."`: a sequence of literal chunks and
+    /// embedded expressions. Evaluates to a `string`; each hole may be any type
+    /// (stringified by the emitted Python f-string).
+    Interp {
+        parts: Vec<InterpPart>,
+    },
     Bool(bool),
     /// The unit value `()` — the sole inhabitant of the `unit` type (lowers to
     /// Python `None`).

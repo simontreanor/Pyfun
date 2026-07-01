@@ -194,6 +194,61 @@ fn e2e_zip_into_a_map_and_back() {
 }
 
 #[test]
+fn interpolated_string_lowers_to_a_python_fstring() {
+    let py = pyfun::compile(
+        "let name = \"Ada\"\n\
+         let a = 3\n\
+         let b = 4\n\
+         let g = f\"hi {name}: {a + b}\"\n\
+         let u = f\"upper {String.upper name}\"\n\
+         let e = f\"brace {{ {a}\"",
+    )
+    .unwrap();
+    assert!(py.contains("g = f\"hi {name}: {a + b}\""), "{py}");
+    // A module member in a hole lowers to its helper call, inside the f-string.
+    assert!(py.contains("u = f\"upper {_pf_str_upper(name)}\""), "{py}");
+    // `{{` stays a literal brace in the emitted f-string.
+    assert!(py.contains("e = f\"brace {{ {a}\""), "{py}");
+}
+
+#[test]
+fn e2e_interpolated_strings() {
+    run_and_check(
+        "
+        let name = \"Ada\"
+        let a = 3
+        let b = 4
+        let p = (1, 2)
+        let greet = f\"Hello, {name}!\"
+        let math = f\"{a} + {b} = {a + b}\"
+        let up = f\"upper: {String.upper name}\"
+        let brace = f\"{{literal}} {a}\"
+        let point = f\"point {p}\"
+        ",
+        &[
+            ("greet", "Hello, Ada!"),
+            ("math", "3 + 4 = 7"),
+            ("up", "upper: ADA"),
+            ("brace", "{literal} 3"),
+            ("point", "point (1, 2)"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_interpolation_hole_with_nested_string() {
+    // A hole may contain a string literal (with its own quotes/braces); on the
+    // Python 3.12+ target these reuse the outer quote cleanly.
+    run_and_check(
+        "
+        let s = \"a}b\"
+        let r = f\"contains: {String.contains \"}\" s}\"
+        ",
+        &[("r", "contains: True")],
+    );
+}
+
+#[test]
 fn string_functions_lower_to_builtins_and_helpers() {
     let py = pyfun::compile(
         "let n = String.len \"hi\"\n\
