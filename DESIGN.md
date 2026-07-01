@@ -712,6 +712,12 @@ let classify n =
     case _:
       let positive = n > 0
       if positive then "positive" else "negative"
+
+let grade n =
+  if n >= 90 then "A"
+  elif n >= 80 then "B"
+  elif n >= 70 then "C"
+  else "F"
 ```
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
