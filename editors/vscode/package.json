@@ -2,7 +2,7 @@
   "name": "pyfun",
   "displayName": "Pyfun",
   "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "publisher": "pyfun",
   "repository": {
     "type": "git",

@@ -74,8 +74,9 @@
     "keywords": {
       "patterns": [
         {
+          "comment": "Control-flow keywords. `case` is a match arm (DESIGN.md §7.2); `match e:` / `case pat [if guard]: body`. `with` now only introduces a record update `{ p with x = 3 }`.",
           "name": "keyword.control.pyfun",
-          "match": "\\b(if|then|else|match|with|return|yield|do|in)\\b(!)?"
+          "match": "\\b(if|then|else|match|case|with|return|yield|do|in)\\b(!)?"
         },
         {
           "name": "keyword.operator.logical.pyfun",
