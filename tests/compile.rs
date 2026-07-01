@@ -682,6 +682,26 @@ fn e2e_pipe_and_composition() {
 }
 
 #[test]
+fn e2e_elif_chain_selects_the_right_branch() {
+    // `elif` is sugar for `else if`; the chain compiles to nested conditionals and
+    // picks the first matching branch (here via nested ternaries, all-expression).
+    run_and_check(
+        "
+        let grade n =
+          if n >= 90 then \"A\"
+          elif n >= 80 then \"B\"
+          elif n >= 70 then \"C\"
+          else \"F\"
+        let a = grade 95
+        let b = grade 85
+        let c = grade 72
+        let f = grade 50
+        ",
+        &[("a", "A"), ("b", "B"), ("c", "C"), ("f", "F")],
+    );
+}
+
+#[test]
 fn e2e_if_and_match() {
     run_and_check(
         "

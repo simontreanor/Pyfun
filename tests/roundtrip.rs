@@ -38,6 +38,9 @@ const PROGRAMS: &[&str] = &[
     "let curried = f a b c",
     "let piped = x |> f |> g a",
     "let choose = if cond then a else b",
+    // `elif` is sugar for `else if` (a nested `If`); the printer canonicalizes an
+    // else-if chain to `elif` and it reparses to the same AST.
+    "let grade n =\n  if n >= 90 then \"A\"\n  elif n >= 80 then \"B\"\n  else \"F\"",
     "let compose = fun f g x -> f (g x)",
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     "let unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",

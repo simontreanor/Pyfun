@@ -585,11 +585,24 @@ impl Parser {
     fn parse_if(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         self.expect(&Tok::If, "`if`")?;
+        self.parse_if_rest(start)
+    }
+
+    /// Parse the `cond then branch (elif … | else …)` tail of an `if`/`elif`. `elif`
+    /// is pure sugar for `else if` (`DESIGN.md` §7.2): it produces a nested `If` in
+    /// the else branch, so there is no distinct AST node.
+    fn parse_if_rest(&mut self, start: usize) -> Result<Expr, ParseError> {
         let cond = Box::new(self.parse_expr()?);
         self.expect(&Tok::Then, "`then`")?;
         let then = Box::new(self.parse_block_or_expr()?);
-        self.expect(&Tok::Else, "`else`")?;
-        let else_ = Box::new(self.parse_block_or_expr()?);
+        let else_ = if matches!(self.peek(), Tok::Elif) {
+            let elif_start = self.cur_start();
+            self.bump();
+            Box::new(self.parse_if_rest(elif_start)?)
+        } else {
+            self.expect(&Tok::Else, "`else` or `elif`")?;
+            Box::new(self.parse_block_or_expr()?)
+        };
         Ok(self.mk(start, ExprKind::If { cond, then, else_ }))
     }
 

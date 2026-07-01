@@ -184,8 +184,8 @@ impl<'a> Lexer<'a> {
 
     /// Whether the upcoming token can begin a new statement (so a same-column line
     /// is a separate statement) rather than continue the current one. Continuation
-    /// leads are infix operators, `|`, `.`, and the keywords `then`/`else`/`with`/
-    /// `and`/`or`/`in` — none of which can start an expression.
+    /// leads are infix operators, `|`, `.`, and the keywords `then`/`else`/`elif`/
+    /// `with`/`and`/`or`/`in` — none of which can start an expression.
     fn upcoming_starts_stmt(&self) -> bool {
         let Some(c) = self.peek() else { return false };
         if c.is_ascii_digit() || c == b'"' || c == b'(' || c == b'{' || c == b'[' {
@@ -198,7 +198,7 @@ impl<'a> Lexer<'a> {
             let ident = self.peek_ident();
             return !matches!(
                 ident.as_str(),
-                "then" | "else" | "with" | "and" | "or" | "in"
+                "then" | "else" | "elif" | "with" | "and" | "or" | "in"
             );
         }
         // Operators, `|`, `.`, `,`, closing brackets, etc. all continue a statement.

@@ -687,6 +687,17 @@ two ways to write one thing in an MVP). `->` is retained for lambdas (`fun x -> 
 (`int -> int`), where it does not compete with a Python form. Examples and `examples/hello.pyfun` move to
 the new spelling in the same change.
 
+**`if` is deliberately *not* `:`-framed** (unlike `match`). `if cond then a else b` stays — it is an
+**expression** (Python's `if:`/`elif:`/`else:` is a statement, and Python's value-form is the backwards
+`a if cond else b` ternary; neither is a good fit), it is frequently a one-liner where offside blocks
+would be heavy, and `then` is not a false-friend (Python has no `then`, so nobody is *misled*). Block
+branches already work via the offside opener after `then`/`else` (§3), so nothing is lost. The `:`-framing
+suits multi-clause block constructs (`match`); `if/then/else` suits inline conditionals — a principled
+split, not an inconsistency. The one additive familiarity win taken here is **`elif`**: pure sugar for
+`else if`, parsed by `parse_if_rest` into a nested `If` in the else branch (no new AST node). The
+pretty-printer canonicalizes any else-if chain (however written) to an `elif` chain, so it round-trips;
+`elif` is a keyword and a statement-continuation lead (like `else`), so a chain spans lines cleanly.
+
 **Example (with §8.3 tagged records — construction and pattern now mirror):**
 ```
 let describe p =

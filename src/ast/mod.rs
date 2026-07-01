@@ -221,12 +221,26 @@ fn print_layout(expr: &Expr, indent: usize) -> String {
     }
     match &expr.kind {
         ExprKind::Block { stmts } => print_block(stmts, indent),
-        ExprKind::If { cond, then, else_ } => format!(
-            "{pad}if {} then{}\n{pad}else{}",
-            print_expr(cond),
-            print_body(then, indent),
-            print_body(else_, indent),
-        ),
+        ExprKind::If { cond, then, else_ } => {
+            // A right-nested `if` in the else branch prints as an `elif` chain (the
+            // canonical form for `else if` too; `DESIGN.md` §7.2).
+            let mut s = format!(
+                "{pad}if {} then{}",
+                print_expr(cond),
+                print_body(then, indent)
+            );
+            let mut cur: &Expr = else_;
+            while let ExprKind::If { cond, then, else_ } = &cur.kind {
+                s.push_str(&format!(
+                    "\n{pad}elif {} then{}",
+                    print_expr(cond),
+                    print_body(then, indent)
+                ));
+                cur = else_;
+            }
+            s.push_str(&format!("\n{pad}else{}", print_body(cur, indent)));
+            s
+        }
         ExprKind::Match { scrutinee, arms } => {
             let mut s = format!("{pad}match {}:", print_expr(scrutinee));
             for arm in arms {
@@ -286,12 +300,20 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("({} {})", print_expr(func), print_expr(arg))
         }
         ExprKind::If { cond, then, else_ } => {
-            format!(
-                "(if {} then {} else {})",
-                print_expr(cond),
-                print_expr(then),
-                print_expr(else_)
-            )
+            // A right-nested `if` in the else branch flattens into an `elif` chain
+            // (reparses to the same nested `If`).
+            let mut s = format!("(if {} then {}", print_expr(cond), print_expr(then));
+            let mut cur: &Expr = else_;
+            while let ExprKind::If { cond, then, else_ } = &cur.kind {
+                s.push_str(&format!(
+                    " elif {} then {}",
+                    print_expr(cond),
+                    print_expr(then)
+                ));
+                cur = else_;
+            }
+            s.push_str(&format!(" else {})", print_expr(cur)));
+            s
         }
         ExprKind::Match { scrutinee, arms } => {
             let arms: Vec<String> = arms.iter().map(print_arm).collect();
