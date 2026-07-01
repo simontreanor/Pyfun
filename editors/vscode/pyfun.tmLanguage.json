@@ -41,8 +41,17 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "`let [pure|mut] name` — colour the bound name as a function/binding.",
-          "match": "\\b(let)\\b(?:\\s+(pure|mut)\\b)?\\s*(!)?\\s*([a-z_][A-Za-z0-9_']*)?",
+          "comment": "`let mut name` — `mut` is the mutability escape hatch (opt-out of immutable-by-default), flagged like a deprecated/discouraged feature.",
+          "match": "\\b(let)\\b\\s+(mut)\\b\\s*([a-z_][A-Za-z0-9_']*)?",
+          "captures": {
+            "1": { "name": "keyword.declaration.pyfun" },
+            "2": { "name": "invalid.deprecated.pyfun" },
+            "3": { "name": "entity.name.function.pyfun" }
+          }
+        },
+        {
+          "comment": "`let [pure] name` / `let! name` — colour the bound name as a function/binding. `pure` is an encouraged effect assertion, so it stays a neutral storage modifier.",
+          "match": "\\b(let)\\b(?:\\s+(pure)\\b)?\\s*(!)?\\s*([a-z_][A-Za-z0-9_']*)?",
           "captures": {
             "1": { "name": "keyword.declaration.pyfun" },
             "2": { "name": "storage.modifier.pyfun" },
@@ -51,8 +60,13 @@
           }
         },
         {
-          "comment": "Other binding/declaration keywords.",
-          "match": "\\b(fun|type|measure|extern|module)\\b",
+          "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; flagged like a discouraged/escape-hatch feature.",
+          "match": "\\b(extern)\\b",
+          "name": "invalid.deprecated.pyfun"
+        },
+        {
+          "comment": "Other binding/declaration keywords (benign).",
+          "match": "\\b(fun|type|measure|module)\\b",
           "name": "keyword.declaration.pyfun"
         }
       ]
@@ -102,8 +116,13 @@
           "match": "\\|>"
         },
         {
+          "comment": "`<-` reassignment — the act of mutation; flagged to match `mut`.",
+          "name": "invalid.deprecated.pyfun",
+          "match": "<-"
+        },
+        {
           "name": "keyword.operator.arrow.pyfun",
-          "match": "->|<-"
+          "match": "->"
         },
         {
           "name": "keyword.operator.comparison.pyfun",
