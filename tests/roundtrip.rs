@@ -87,6 +87,9 @@ const PROGRAMS: &[&str] = &[
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     // A negative integer literal pattern.
     "let sign n =\n  match n:\n    case -1: \"neg\"\n    case 0: \"zero\"\n    case _: \"pos\"",
+    // as-patterns: bind the whole matched value alongside destructuring.
+    "let f s =\n  match s:\n    case Some v as w: w\n    case None: None",
+    "let g p =\n  match p:\n    case (a, b) as both: both",
     "let unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
     "let nested =\n  match p:\n    case Pair (Some a) b: a\n    case _: b",
     // Record patterns: shorthand, explicit, subset, and nested sub-patterns. The

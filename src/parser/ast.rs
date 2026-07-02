@@ -496,6 +496,14 @@ pub enum Pattern {
     /// does. All alternatives must bind the same variables at the same types; lowers
     /// to a Python or-pattern `case a | b | c:`. Two or more alternatives.
     Or(Vec<Pattern>),
+    /// `p as x` — an as-pattern: match `p` and also bind the whole matched value to
+    /// `x`. Transparent for exhaustiveness (covers exactly what `p` does); lowers 1:1
+    /// to Python `case p as x`.
+    As {
+        pattern: Box<Pattern>,
+        name: String,
+        name_span: NodeSpan,
+    },
 }
 
 /// One `name [= pattern]` entry in a record pattern. Shorthand `{ x }` carries a

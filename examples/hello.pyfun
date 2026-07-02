@@ -69,6 +69,14 @@ let unwrap o =
 
 let answer = unwrap (Some 42)
 
+# An as-pattern (`p as x`) binds the whole matched value alongside destructuring —
+# and it's transparent to the exhaustiveness check (`Some v as w` covers Some).
+let doubleIfSome o =
+  match o:
+    case Some v as w: w
+    case None: None
+let stillFortyTwo = doubleIfSome (Some 42)   # Some 42
+
 let rank c =
   match c:
     case Red: 1
@@ -324,6 +332,7 @@ let debugLine = f"{parsed=}"                                    # "parsed=41"
 # break back to the left margin), not braces or semicolons. Units erase, so the
 # printed numbers are plain Python numbers.
 print answer                         # 42
+print stillFortyTwo                   # Some(42)  (as-pattern binds the whole value)
 print (fact 5)                       # 120  (recursive)
 print seven                          # 7
 print (rank Green)                   # 2

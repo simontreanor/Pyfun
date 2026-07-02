@@ -442,6 +442,11 @@ pub fn print_pattern(pattern: &Pattern) -> String {
             let alts: Vec<String> = alts.iter().map(print_pattern).collect();
             format!("({})", alts.join(" | "))
         }
+        // Parenthesized so it reparses as its own unit (e.g. a constructor arg or
+        // tuple element `(p as x)`).
+        Pattern::As { pattern, name, .. } => {
+            format!("({} as {name})", print_pattern(pattern))
+        }
     }
 }
 

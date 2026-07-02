@@ -120,6 +120,38 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_as_patterns() {
+    // Both the inner var and the `as` name are bound.
+    assert!(
+        pyfun::check("let f o =\n  match o:\n    case Some v as w: v\n    case None: 0").is_ok()
+    );
+    // The `as` name is usable in the body.
+    assert!(
+        pyfun::check("let f o =\n  match o:\n    case Some v as w: w\n    case None: None").is_ok()
+    );
+    // `_ as x` is a catch-all.
+    assert!(pyfun::check("let f n =\n  match n:\n    case 0: 0\n    case _ as x: x").is_ok());
+}
+
+#[test]
+fn as_patterns_are_transparent_for_exhaustiveness() {
+    // `Circle r as w` covers only Circle, so Rect is still unmatched.
+    assert_error_contains(
+        "type Shape = Circle float | Rect float float\n\
+         let f s =\n  match s:\n    case Circle r as w: r",
+        "not matched",
+    );
+    // With both constructors (each `as`-bound) it's exhaustive — no wildcard.
+    assert!(
+        pyfun::check(
+            "type Shape = Circle float | Rect float float\n\
+             let f s =\n  match s:\n    case Circle r as w: r\n    case Rect a b as w: a"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn accepts_discard_binding() {
     // `let _ = e` discards any-typed e (top-level and mid-block, where it lets a
     // non-unit result be dropped despite the "non-final statement is unit" rule).

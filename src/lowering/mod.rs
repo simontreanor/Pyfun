@@ -1313,6 +1313,10 @@ impl Lowerer {
                 let lowered = alts.iter().map(|p| self.lower_pattern(p)).collect();
                 PyPattern::Or(lowered)
             }
+            Pattern::As { pattern, name, .. } => PyPattern::As {
+                pattern: Box::new(self.lower_pattern(pattern)),
+                name: name.clone(),
+            },
         }
     }
 
@@ -2338,6 +2342,12 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
         // Every alternative binds the same variables (enforced by the checker), so
         // the first alternative's bindings are representative.
         Pattern::Or(alts) => alts.first().map(pattern_bindings).unwrap_or_default(),
+        // `p as x` binds `x` plus whatever `p` binds.
+        Pattern::As { pattern, name, .. } => {
+            let mut v = pattern_bindings(pattern);
+            v.push(name.clone());
+            v
+        }
         _ => vec![],
     }
 }
@@ -2357,6 +2367,8 @@ fn is_irrefutable(pattern: &Pattern) -> bool {
         Pattern::Record { fields, .. } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
         Pattern::Or(alts) => alts.iter().any(is_irrefutable),
+        // The `x` binding is irrefutable; refutability is the inner pattern's.
+        Pattern::As { pattern, .. } => is_irrefutable(pattern),
         Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) | Pattern::Ctor { .. } => false,
     }
 }

@@ -379,6 +379,7 @@ impl Resolver {
                     self.walk_pattern(alt);
                 }
             }
+            Pattern::As { pattern, .. } => self.walk_pattern(pattern),
             Pattern::Var { .. }
             | Pattern::Wildcard
             | Pattern::Int(_)
@@ -649,6 +650,15 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
             if let Some(first) = alts.first() {
                 pattern_vars(first, out);
             }
+        }
+        // `p as x` binds `x` (span) plus whatever `p` binds.
+        Pattern::As {
+            pattern,
+            name,
+            name_span,
+        } => {
+            out.insert(name.clone(), name_span.span());
+            pattern_vars(pattern, out);
         }
         Pattern::Wildcard | Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => {}
     }

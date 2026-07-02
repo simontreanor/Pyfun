@@ -51,6 +51,7 @@ pub enum Tok {
     Module,
     Import,
     Try,
+    As, // `as` — the binder in an as-pattern (`case P as x:`)
     Not,
     And,
     Or,
@@ -126,6 +127,7 @@ impl Tok {
             "module" => Tok::Module,
             "import" => Tok::Import,
             "try" => Tok::Try,
+            "as" => Tok::As,
             "not" => Tok::Not,
             "and" => Tok::And,
             "or" => Tok::Or,

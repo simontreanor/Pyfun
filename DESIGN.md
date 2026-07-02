@@ -789,6 +789,11 @@ value and the part that carries Pyfun's FP surface:
   types** (checked in `bind_pattern` by binding each alternative into a temp scope and unifying); the
   exhaustiveness checker expands an or-pattern into its alternatives (`expand_first_column` in `useful`),
   and it lowers to a Python or-pattern `case a | b | c:`.
+- **As-patterns.** `case p as x:` matches `p` and also binds the whole matched value to `x` (Python's
+  spelling). `as` is a keyword binding looser than `|`, so `a | b as x` is `(a | b) as x`; modelled as
+  `Pattern::As`. It binds `x` plus the inner pattern's variables, and is **transparent for
+  exhaustiveness** — the usefulness algorithm peels it (delegating in `pattern_tag`/`row_head`/`expand_or`),
+  so `Circle r as w` covers exactly `Circle` and `_ as x` is a catch-all. Lowers 1:1 to Python `case p as x`.
 - **Guards.** `case pat if cond:` is a refutable arm condition, the Python spelling. The guard is checked
   in the arm's pattern-bound scope and must be `bool`; a **guarded arm never counts toward exhaustiveness**
   (`check_exhaustive` filters `guard.is_none()`, and lowering's `has_catch_all` treats a guarded arm as

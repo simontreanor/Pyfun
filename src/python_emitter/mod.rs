@@ -90,6 +90,8 @@ pub enum PyPattern {
     Sequence(Vec<PyPattern>),
     /// `case a | b | c` — an or-pattern.
     Or(Vec<PyPattern>),
+    /// `case p as name` — an as-pattern (bind the whole matched value).
+    As { pattern: Box<PyPattern>, name: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -429,6 +431,7 @@ fn pattern(pat: &PyPattern) -> String {
             let alts: Vec<String> = alts.iter().map(pattern).collect();
             alts.join(" | ")
         }
+        PyPattern::As { pattern: p, name } => format!("{} as {name}", pattern(p)),
     }
 }
 

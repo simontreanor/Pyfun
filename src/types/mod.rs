@@ -1205,6 +1205,8 @@ fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
 fn expand_or(pat: &Pattern) -> Vec<Pattern> {
     match pat {
         Pattern::Or(alts) => alts.iter().flat_map(expand_or).collect(),
+        // `p as x` covers exactly what `p` does; the binding is transparent here.
+        Pattern::As { pattern, .. } => expand_or(pattern),
         p => vec![p.clone()],
     }
 }
@@ -3102,6 +3104,19 @@ impl Infer {
                 env.insert(name.clone(), Scheme::mono(scrut_ty.clone()));
                 Ok(())
             }
+            // `p as x`: bind `x` to the whole matched value (like a `Var`), then
+            // bind the inner pattern against the same scrutinee type.
+            Pattern::As {
+                pattern,
+                name,
+                name_span,
+            } => {
+                if self.record_types {
+                    self.recorded.push((name_span.span(), scrut_ty.clone()));
+                }
+                env.insert(name.clone(), Scheme::mono(scrut_ty.clone()));
+                self.bind_pattern(pattern, scrut_ty, span, env)
+            }
             Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int(Unit::dimensionless()), span),
             Pattern::Str(_) => self.unify(scrut_ty, &Ty::Str, span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
@@ -3337,6 +3352,8 @@ impl Infer {
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
             Pattern::Record { ty, .. } => Some(Tag::Record(ty.clone())),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
+            // An as-pattern is transparent — its tag is the inner pattern's.
+            Pattern::As { pattern, .. } => self.pattern_tag(pattern),
             // Or-patterns are expanded away in `useful` before this is reached.
             Pattern::Or(_) => None,
         }
@@ -3440,6 +3457,8 @@ impl Infer {
                 Some(slots)
             }
             Pattern::Tuple { elems } => (*tag == Tag::Tuple(elems.len())).then(|| elems.clone()),
+            // An as-pattern specializes exactly like its inner pattern.
+            Pattern::As { pattern, .. } => self.row_head(pattern, tag, arity),
             // Or-patterns are expanded away in `useful` before specialization.
             Pattern::Or(_) => None,
         }

@@ -1263,14 +1263,28 @@ impl Parser {
     /// level, so `Some a | None` is `(Some a) | None`, not `Some (a | None)`.
     fn parse_pattern(&mut self) -> Result<Pattern, ParseError> {
         let first = self.parse_pattern_app()?;
-        if !matches!(self.peek(), Tok::Bar) {
-            return Ok(first);
+        let pat = if matches!(self.peek(), Tok::Bar) {
+            let mut alts = vec![first];
+            while self.eat(&Tok::Bar) {
+                alts.push(self.parse_pattern_app()?);
+            }
+            Pattern::Or(alts)
+        } else {
+            first
+        };
+        // `p as x` binds the whole matched value to `x`. `as` binds looser than `|`,
+        // so `a | b as x` is `(a | b) as x`.
+        if self.eat(&Tok::As) {
+            let name_start = self.cur_start();
+            let name = self.parse_ident("a name after `as`")?;
+            let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
+            return Ok(Pattern::As {
+                pattern: Box::new(pat),
+                name,
+                name_span,
+            });
         }
-        let mut alts = vec![first];
-        while self.eat(&Tok::Bar) {
-            alts.push(self.parse_pattern_app()?);
-        }
-        Ok(Pattern::Or(alts))
+        Ok(pat)
     }
 
     /// Parse a constructor-application pattern (no top-level `|`). A capitalized

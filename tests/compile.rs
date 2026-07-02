@@ -306,6 +306,33 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn as_pattern_lowers_to_python_as() {
+    let py = pyfun::compile(
+        "let f o =\n  match o:\n    case Some v as w: w\n    case None: None",
+    )
+    .unwrap();
+    assert!(py.contains("case Some(v) as w:"), "{py}");
+}
+
+#[test]
+fn e2e_as_pattern() {
+    run_and_check(
+        "
+        let describe = fun n ->
+            match n:
+                case 0: 0
+                case x as v: v
+        let both = fun p ->
+            match p:
+                case (a, b) as w: w
+        let a = describe 7
+        let b = both (3, 4)
+        ",
+        &[("a", "7"), ("b", "(3, 4)")],
+    );
+}
+
+#[test]
 fn discard_binding_lowers_and_runs_effects() {
     // `let _ = e` lowers to `_ = e` (Python's idiomatic discard); the effect runs.
     let py = pyfun::compile("let _ = 1 + 2").unwrap();

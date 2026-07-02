@@ -56,8 +56,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    Option int` (via `str.find`, `None` when absent — total, no `IndexError`, like `List.get`).
 9. **Mutual recursion** (M) — `let isEven … and isOdd …`; today "no cross-binding mutual recursion" (was a
    drip-fed aside). Needs an `and` grouping or SCC binding groups in `infer_binding`; monomorphic-in-group.
-10. **`as`-patterns** (S–M) — `case Some v as w:`; a `Pattern::As` binding, recurse for exhaustiveness,
-    lowers 1:1 to Python `case p as x`.
+10. ~~**`as`-patterns**~~ — ✅ **done 2026-07-02**. `case p as x:` binds the whole matched value to `x`
+    alongside destructuring (`Pattern::As`, `as` a keyword binding looser than `|`). **Transparent for
+    exhaustiveness** (peeled in the usefulness algorithm — `Circle r as w` covers exactly Circle, `_ as x`
+    is a catch-all); binds the name + the inner pattern's vars; lowers 1:1 to Python `case p as x`.
 11. ~~**`let _ = e` discard**~~ — ✅ **done 2026-07-02**. `let _ = e` discards any-typed `e` (lets a
     non-unit result be dropped mid-block despite the "non-final statement is `unit`" rule), lowering to
     Python's idiomatic `_ = e`. A discard takes no parameters and can't be `mut`. Parser-only change.
