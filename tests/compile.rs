@@ -417,6 +417,26 @@ fn e2e_numeric_conversions() {
 }
 
 #[test]
+fn e2e_digit_separators_and_bases() {
+    run_and_check(
+        "
+        let a = 1_000_000
+        let b = 0xFF
+        let c = 0o17
+        let d = 0b1010
+        let e = 0xDEAD_BEEF
+        ",
+        &[
+            ("a", "1000000"),
+            ("b", "255"),
+            ("c", "15"),
+            ("d", "10"),
+            ("e", "3735928559"),
+        ],
+    );
+}
+
+#[test]
 fn scientific_notation_lowers_to_float() {
     let py = pyfun::compile("let a = 1e6\nlet b = 2.5e-3\nlet g = 6.674e-11").unwrap();
     assert!(py.contains("a = 1000000.0"), "{py}");

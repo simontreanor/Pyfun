@@ -444,17 +444,33 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_number(&mut self, start: usize) -> Result<(), LexError> {
-        while matches!(self.peek(), Some(b'0'..=b'9')) {
-            self.pos += 1;
+        // Alternate integer bases: `0x`/`0o`/`0b` (case-insensitive), with optional
+        // `_` separators. These commit to an integer, so no float/exponent handling.
+        if self.peek() == Some(b'0') {
+            let radix = match self.peek2() {
+                Some(b'x' | b'X') => Some(16),
+                Some(b'o' | b'O') => Some(8),
+                Some(b'b' | b'B') => Some(2),
+                _ => None,
+            };
+            if let Some(radix) = radix {
+                self.pos += 2; // consume the `0x`/`0o`/`0b` prefix
+                let digits_start = self.pos;
+                self.consume_digit_run(radix);
+                let raw = self.slice(digits_start, self.pos).replace('_', "");
+                let value = i64::from_str_radix(&raw, radix)
+                    .map_err(|_| self.err(start, "invalid integer literal"))?;
+                self.push(Tok::Int(value), start);
+                return Ok(());
+            }
         }
+        self.consume_digit_run(10);
         // A '.' followed by a digit makes this a float; a trailing '.' is not
         // consumed (it isn't valid in the Phase 1 subset).
         let mut is_float = self.peek() == Some(b'.') && matches!(self.peek2(), Some(b'0'..=b'9'));
         if is_float {
             self.pos += 1; // consume '.'
-            while matches!(self.peek(), Some(b'0'..=b'9')) {
-                self.pos += 1;
-            }
+            self.consume_digit_run(10);
         }
         // Optional exponent: `e`/`E`, an optional sign, then digits (`1e6`,
         // `2.5e-3`, `6.674e-11`). A number with an exponent is a float even without
@@ -473,12 +489,11 @@ impl<'a> Lexer<'a> {
                 if matches!(self.peek(), Some(b'+' | b'-')) {
                     self.pos += 1; // exponent sign
                 }
-                while matches!(self.peek(), Some(b'0'..=b'9')) {
-                    self.pos += 1;
-                }
+                self.consume_digit_run(10);
             }
         }
-        let text = self.slice(start, self.pos);
+        // Strip `_` digit separators before parsing (Rust's parse rejects them).
+        let text = self.slice(start, self.pos).replace('_', "");
         if is_float {
             let value: f64 = text
                 .parse()
@@ -491,6 +506,20 @@ impl<'a> Lexer<'a> {
             self.push(Tok::Int(value), start);
         }
         Ok(())
+    }
+
+    /// Consume a run of base-`radix` digits with optional `_` separators. An
+    /// underscore is consumed only *between* digits (`1_000`), never leading,
+    /// trailing, or doubled — so `1_` leaves the `_` for the next token.
+    fn consume_digit_run(&mut self, radix: u32) {
+        while matches!(self.peek(), Some(c) if is_radix_digit(c, radix)) {
+            self.pos += 1;
+            if self.peek() == Some(b'_')
+                && matches!(self.peek2(), Some(d) if is_radix_digit(d, radix))
+            {
+                self.pos += 1; // the separator
+            }
+        }
     }
 
     fn lex_string(&mut self, start: usize) -> Result<(), LexError> {
@@ -648,6 +677,11 @@ fn is_ident_continue(c: u8) -> bool {
 /// The byte length of the UTF-8 sequence beginning with lead byte `b`. On a
 /// continuation or invalid byte, returns 1 to guarantee forward progress (the
 /// caller replaces the malformed slice with U+FFFD).
+/// Is byte `b` a digit in `radix` (2/8/10/16)? Handles hex `a`–`f`/`A`–`F`.
+fn is_radix_digit(b: u8, radix: u32) -> bool {
+    (b as char).is_digit(radix)
+}
+
 fn utf8_len(b: u8) -> usize {
     match b {
         _ if b < 0x80 => 1,
@@ -931,6 +965,22 @@ mod tests {
         assert_eq!(
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn digit_separators_and_alternate_bases() {
+        // `_` separators are stripped; 0x/0o/0b parse in their base.
+        assert_eq!(kinds("1_000_000"), vec![Tok::Int(1_000_000), Tok::Eof]);
+        assert_eq!(kinds("0xFF"), vec![Tok::Int(255), Tok::Eof]);
+        assert_eq!(kinds("0o17"), vec![Tok::Int(15), Tok::Eof]);
+        assert_eq!(kinds("0b1010"), vec![Tok::Int(10), Tok::Eof]);
+        assert_eq!(kinds("0xDEAD_BEEF"), vec![Tok::Int(0xDEAD_BEEF), Tok::Eof]);
+        assert_eq!(kinds("1_234.567_5"), vec![Tok::Float(1_234.567_5), Tok::Eof]);
+        // A trailing `_` (not between digits) is left for the next token.
+        assert_eq!(
+            kinds("1_ "),
+            vec![Tok::Int(1), Tok::Underscore, Tok::Eof]
         );
     }
 

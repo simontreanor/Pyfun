@@ -215,6 +215,10 @@ let cube = 3.0 ** 3.0                # 27.0
 let tower = 2.0 ** 3.0 ** 2.0        # 512.0  (right-assoc: 2 ^ (3 ^ 2))
 let negPow = -2.0 ** 2.0            # -4.0   (`**` tighter than unary minus)
 
+# Numeric-literal ergonomics: `_` digit separators and 0x/0o/0b bases.
+let million = 1_000_000             # 1000000
+let mask = 0xFF                     # 255  (hex; also 0o17 octal, 0b1010 binary)
+
 # Externs: typed imports of arbitrary Python callables (`DESIGN.md` §6). The
 # Pyfun name equals the Python name unless a `= target` clause gives a dotted
 # path (which is imported automatically). Type variables are bare lowercase, as
@@ -333,6 +337,8 @@ print parsedF                        # 2.71828  (String.toFloat)
 print cube                            # 27.0  (exponentiation)
 print tower                           # 512.0  (right-associative `**`)
 print negPow                          # -4.0  (`**` binds tighter than unary minus)
+print million                         # 1000000  (digit separators)
+print mask                            # 255      (0xFF)
 print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
 print depth                          # -20                   (negative literal)

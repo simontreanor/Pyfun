@@ -60,8 +60,10 @@ rather than checked — almost none of this is in the type system). Each was ver
     lowers 1:1 to Python `case p as x`.
 11. **`let _ = e` discard** (S) — discard a non-unit result without inventing a dummy name (pairs with the
     "non-final block statements must be `unit`" rule).
-12. **String escapes + numeric-literal ergonomics** (S each) — `\r`/`\u{…}`/raw strings; `1_000` digit
-    separators; `0xFF`/`0o17`/`0b101` (all currently lex as int-then-identifier).
+12. **Numeric-literal ergonomics** — ✅ **done 2026-07-02** (`1_000_000` digit separators and
+    `0xFF`/`0o17`/`0b101` alternate bases, incl. hex with separators `0xDEAD_BEEF`; `_` consumed only
+    between digits, values normalize to decimal in the AST). **String escapes** (`\r`/`\u{…}`/raw strings)
+    remain (S) — still only `\"`/`\\`/`\n`/`\t`.
 
 ### Non-goals (won't build unless a concrete need appears, with the reason)
 - **Visibility (`pub`)** — Pyfun is all-public, the Python-natural model; enforced privacy fights the ethos.
