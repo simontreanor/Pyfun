@@ -120,6 +120,17 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_discard_binding() {
+    // `let _ = e` discards any-typed e (top-level and mid-block, where it lets a
+    // non-unit result be dropped despite the "non-final statement is unit" rule).
+    assert!(pyfun::check("let _ = 1 + 2").is_ok());
+    assert!(pyfun::check("let f x =\n  let _ = x + 1\n  x").is_ok());
+    // A discard takes no parameters and can't be `mut`.
+    assert!(pyfun::check("let _ a = a").is_err());
+    assert!(pyfun::check("let mut _ = 1").is_err());
+}
+
+#[test]
 fn accepts_string_slice_and_index_of() {
     assert!(pyfun::check("let r = String.slice 0 3 \"hello\"").is_ok());
     assert!(pyfun::check("let r = String.tryIndexOf \"l\" \"hello\"").is_ok()); // : Option int

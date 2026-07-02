@@ -77,6 +77,9 @@ const PROGRAMS: &[&str] = &[
     "let curried = f a b c",
     "let piped = x |> f |> g a",
     "let choose = if cond then a else b",
+    // `let _ = e` discards a result (top-level and in a block).
+    "let _ = f 1",
+    "let g x =\n    let _ = h x\n    x",
     // `elif` is sugar for `else if` (a nested `If`); the printer canonicalizes an
     // else-if chain to `elif` and it reparses to the same AST.
     "let grade n =\n  if n >= 90 then \"A\"\n  elif n >= 80 then \"B\"\n  else \"F\"",

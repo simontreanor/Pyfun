@@ -461,11 +461,26 @@ impl Parser {
             }
         }
         let name_start = self.cur_start();
-        let name = self.parse_ident("binding name")?;
+        // `let _ = e` discards the result (useful for a non-`unit` expression whose
+        // value isn't needed but whose effect is). A discard takes no parameters and
+        // can't be `mut` — it binds nothing.
+        let is_discard = matches!(self.peek(), Tok::Underscore);
+        let name = if is_discard {
+            self.bump();
+            "_".to_string()
+        } else {
+            self.parse_ident("binding name")?
+        };
         let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
         while let Tok::Ident(_) = self.peek() {
             params.push(self.parse_param()?);
+        }
+        if is_discard && !params.is_empty() {
+            return Err(self.error("a discard binding `_` cannot take parameters"));
+        }
+        if is_discard && mutable {
+            return Err(self.error("a discard binding `_` cannot be `mut`"));
         }
         self.expect(&Tok::Eq, "`=`")?;
         let value = self.parse_block_or_expr()?;

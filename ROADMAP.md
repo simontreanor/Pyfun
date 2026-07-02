@@ -58,8 +58,9 @@ rather than checked — almost none of this is in the type system). Each was ver
    drip-fed aside). Needs an `and` grouping or SCC binding groups in `infer_binding`; monomorphic-in-group.
 10. **`as`-patterns** (S–M) — `case Some v as w:`; a `Pattern::As` binding, recurse for exhaustiveness,
     lowers 1:1 to Python `case p as x`.
-11. **`let _ = e` discard** (S) — discard a non-unit result without inventing a dummy name (pairs with the
-    "non-final block statements must be `unit`" rule).
+11. ~~**`let _ = e` discard**~~ — ✅ **done 2026-07-02**. `let _ = e` discards any-typed `e` (lets a
+    non-unit result be dropped mid-block despite the "non-final statement is `unit`" rule), lowering to
+    Python's idiomatic `_ = e`. A discard takes no parameters and can't be `mut`. Parser-only change.
 12. **Literal ergonomics** — ✅ **done 2026-07-02**. Numeric: `1_000_000` digit separators and
     `0xFF`/`0o17`/`0b101` alternate bases (incl. hex with separators `0xDEAD_BEEF`; `_` only between
     digits, values normalize to decimal). String escapes: added `\r` and Rust-style **`\u{HEX}`** (1–6

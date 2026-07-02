@@ -306,6 +306,26 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn discard_binding_lowers_and_runs_effects() {
+    // `let _ = e` lowers to `_ = e` (Python's idiomatic discard); the effect runs.
+    let py = pyfun::compile("let _ = 1 + 2").unwrap();
+    assert!(py.contains("_ = 1 + 2"), "{py}");
+}
+
+#[test]
+fn e2e_discard_runs_the_effect() {
+    // A discarded `print` still executes, and a following statement runs too.
+    run_and_check(
+        "
+        let go =
+            let _ = 1 + 2
+            42
+        ",
+        &[("go", "42")],
+    );
+}
+
+#[test]
 fn string_slice_lowers_to_python_slicing() {
     let py = pyfun::compile("let a = String.slice 0 3 \"hello\"").unwrap();
     assert!(py.contains("return s[start:end]"), "readable slice: {py}");
