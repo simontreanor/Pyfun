@@ -42,8 +42,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    int<'u>` (unqualified prelude, **unit-preserving** like `abs`/`min`/`max`; `round` is a bare builtin,
    the rest lower to `math.floor`/`ceil`/`trunc` + `import math`), and `String.toFloat : string -> Option
    float` (a total parse mirroring `toInt`, closing the fromFloat/toFloat asymmetry).
-6. **`Option.bind`** (S) — plus `Option.toResult`/`filter`; `Result` already has `bind`. The single
-   most-used Option combinator in F#. Effect-polymorphic clone of `Result.bind`.
+6. ~~**`Option.bind`**~~ — ✅ **done 2026-07-02**. Added `Option.bind : (a ->{e} Option b) -> Option a
+   ->{e} Option b` (effect-poly like `Result.bind`), plus the cheap siblings `Option.filter : (a ->{e}
+   bool) -> Option a ->{e} Option a` and `Option.toResult : e -> Option a -> Result a e` (the inverse of
+   `Result.toOption`), completing the Option↔Result symmetry.
 7. **Exponentiation `**`** (S) — float-only like F#'s `**` (sidesteps the int**negative→float trap);
    right-associative, tighter than unary minus (`-2 ** 2 == -4`).
 8. **String slice / substring / indexOf** (S) — `String.slice start end s` (Python `s[a:b]`),

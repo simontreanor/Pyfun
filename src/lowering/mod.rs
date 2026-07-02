@@ -1119,6 +1119,20 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_option_map")
             }
+            "Option.bind" => {
+                self.needs_option = true;
+                coll(self, "_pf_option_bind")
+            }
+            "Option.filter" => {
+                self.needs_option = true;
+                coll(self, "_pf_option_filter")
+            }
+            // toResult constructs Ok/Error (and inspects Some), so flag both.
+            "Option.toResult" => {
+                self.needs_option = true;
+                self.needs_result = true;
+                coll(self, "_pf_option_to_result")
+            }
             "Option.withDefault" => {
                 self.needs_option = true;
                 coll(self, "_pf_option_with_default")
@@ -2005,6 +2019,48 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         orelse: vec![],
                     },
                     PyStmt::Return(call0("None_")),
+                ],
+            ),
+            // Option.bind(f, o) -> f(o._0) if isinstance(o, Some) else None_()
+            // (f already returns an Option, so it is returned as-is.)
+            "_pf_option_bind" => def(
+                helper,
+                &["f", "o"],
+                vec![
+                    PyStmt::If {
+                        test: is_some("o"),
+                        body: vec![PyStmt::Return(call("f", vec![attr(name("o"), "_0")]))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(call0("None_")),
+                ],
+            ),
+            // Option.filter(f, o) -> o if isinstance(o, Some) and f(o._0) else None_()
+            // `and` short-circuits, so f isn't called on a None.
+            "_pf_option_filter" => def1(
+                helper,
+                &["f", "o"],
+                PyExpr::IfExp {
+                    body: Box::new(name("o")),
+                    test: Box::new(binop(
+                        PyBinOp::And,
+                        is_some("o"),
+                        call("f", vec![attr(name("o"), "_0")]),
+                    )),
+                    orelse: Box::new(call0("None_")),
+                },
+            ),
+            // Option.toResult(err, o) -> Ok(o._0) if isinstance(o, Some) else Error(err)
+            "_pf_option_to_result" => def(
+                helper,
+                &["err", "o"],
+                vec![
+                    PyStmt::If {
+                        test: is_some("o"),
+                        body: vec![PyStmt::Return(call1("Ok", attr(name("o"), "_0")))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(call1("Error", name("err"))),
                 ],
             ),
             // Option.withDefault(d, o) -> o._0 if isinstance(o, Some) else d

@@ -266,6 +266,12 @@ let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 let ada = Option.withDefault 0 (Map.tryFind "ada" scores)   # 10
 let nobody = Option.withDefault 0 (Map.tryFind "x" scores)  # 0
 
+# The `Option` module chains lookups: `bind` sequences Option-returning steps,
+# `filter` keeps a value only if it passes, `toResult` bridges to `Result`.
+let doubled = Option.bind (fun n -> Some (n * 2)) (Map.tryFind "ada" scores)  # Some 20
+let bigScore = Option.filter (fun n -> n > 9) (Map.tryFind "alan" scores)     # None (9 <= 9)
+let adaOrErr = Option.toResult "no ada" (Map.tryFind "ada" scores)           # Ok 10
+
 # `List.zip` pairs two lists into a list of tuples; `Map.ofList` builds a map from
 # that pair list (and `Map.toList` is its inverse) — both ride on tuples.
 let names = ["ada", "alan"]
@@ -382,6 +388,9 @@ print firstBig                        # Some(4)  (List.find, first match)
 print (Set.len uniq)                  # 3
 print ada                             # 10
 print nobody                          # 0
+print doubled                         # Some(20)  (Option.bind)
+print bigScore                        # None_     (Option.filter, 9 <= 9)
+print adaOrErr                        # Ok(10)    (Option.toResult)
 print adaAge                          # 36   (zip -> Map.ofList -> tryFind)
 print entries                         # [('ada', 36), ('alan', 41)]
 

@@ -306,6 +306,29 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn e2e_option_bind_filter_to_result() {
+    run_and_check(
+        "
+        let half = fun x -> if x % 2 == 0 then Some (x // 2) else None
+        let a = Option.withDefault 0 (Option.bind half (Some 8))
+        let b = Option.withDefault 0 (Option.bind half (Some 7))
+        let c = Option.withDefault 0 (Option.filter (fun x -> x > 5) (Some 8))
+        let d = Option.withDefault 0 (Option.filter (fun x -> x > 5) (Some 2))
+        let e = Result.withDefault 0 (Option.toResult 0 (Some 42))
+        let f = Result.isError (Option.toResult 0 None)
+        ",
+        &[
+            ("a", "4"),
+            ("b", "0"),
+            ("c", "8"),
+            ("d", "0"),
+            ("e", "42"),
+            ("f", "True"),
+        ],
+    );
+}
+
+#[test]
 fn numeric_conversions_lower_correctly() {
     let py = pyfun::compile(
         "let a = round 3.7\n\

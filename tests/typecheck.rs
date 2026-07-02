@@ -120,6 +120,29 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_option_bind_filter_to_result() {
+    assert!(
+        pyfun::check("let r = Option.bind (fun x -> Some (x + 1)) (Some 1)").is_ok(),
+        "Option.bind"
+    );
+    assert!(pyfun::check("let r = Option.filter (fun x -> x > 0) (Some 3)").is_ok());
+    assert!(pyfun::check("let r = Option.toResult \"none\" (Some 42)").is_ok());
+    // bind chains: Option a -> Option b -> Option c.
+    assert!(
+        pyfun::check(
+            "let r = Option.bind (fun x -> Some (x > 0)) (Option.bind (fun x -> Some (x + 1)) (Some 1))"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn option_bind_requires_an_option_returning_function() {
+    // The classic misuse: passing a plain a -> b (should be a -> Option b).
+    assert_error_contains("let r = Option.bind (fun x -> x + 1) (Some 1)", "Option");
+}
+
+#[test]
 fn accepts_numeric_conversions() {
     // round/floor/ceil/truncate : float<'u> -> int<'u>, unit-preserving.
     assert!(pyfun::check("let r = round 3.7").is_ok());

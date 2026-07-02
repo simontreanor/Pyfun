@@ -408,8 +408,15 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
 /// (constructors `Some`/`None`, seeded like `Result`'s `Ok`/`Error`). The
 /// constructors themselves are global; these are the qualified combinators.
-pub const OPTION_PRELUDE: &[(&str, usize)] =
-    &[("map", 2), ("withDefault", 2), ("isSome", 1), ("isNone", 1)];
+pub const OPTION_PRELUDE: &[(&str, usize)] = &[
+    ("map", 2),
+    ("bind", 2),
+    ("filter", 2),
+    ("withDefault", 2),
+    ("isSome", 1),
+    ("isNone", 1),
+    ("toResult", 2),
+];
 
 /// The `Result` module (`DESIGN.md` §6): combinators over the built-in `Result a e`
 /// type (constructors `Ok`/`Error`, used by the `result {}` CE). `Result.map`/
@@ -1609,12 +1616,45 @@ fn seed_option_prelude(env: &mut Env) {
             ty: pure_fn(arrow_e(a(), b()), arrow_e(opt(a()), opt(b()))),
         },
     );
+    // Option.bind : (a ->{e} Option b) -> Option a ->{e} Option b   (effect-poly)
+    put(
+        "bind",
+        Scheme {
+            vars: vec![0, 1],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![e],
+            mutable: false,
+            ty: pure_fn(arrow_e(a(), opt(b())), arrow_e(opt(a()), opt(b()))),
+        },
+    );
+    // Option.filter : (a ->{e} bool) -> Option a ->{e} Option a   (effect-poly)
+    put(
+        "filter",
+        Scheme {
+            vars: vec![0],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![e],
+            mutable: false,
+            ty: pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), opt(a()))),
+        },
+    );
     put(
         "withDefault",
         scheme(vec![0], pure_fn(a(), pure_fn(opt(a()), a()))),
     );
     put("isSome", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
     put("isNone", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
+    // Option.toResult : e -> Option a -> Result a e   (Some x -> Ok x, None ->
+    // Error e; the inverse of Result.toOption). `b` (var 1) is the error type.
+    let res = |a: Ty, e: Ty| Ty::Con("Result".to_string(), vec![a, e]);
+    put(
+        "toResult",
+        scheme(vec![0, 1], pure_fn(b(), pure_fn(opt(a()), res(a(), b())))),
+    );
 }
 
 /// Seed the `Result` module ([`RESULT_PRELUDE`]) — combinators over the built-in

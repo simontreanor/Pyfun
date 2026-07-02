@@ -285,10 +285,11 @@ is itself unhashable raises at hash time, the same way Python rejects an unhasha
 **Option and Result — the built-in sum helpers (implemented).** `Option a` (constructors `Some`/`None`)
 is seeded exactly like `Result a e` (`Ok`/`Error`): a reserved type with global constructors that lower
 to `Some`/`None_` (resp. `Ok`/`Error`) classes (`None` is mangled off the Python keyword), emitted on
-demand. Each has a module of combinators: `Option.map`/`withDefault`/`isSome`/`isNone`, and
-`Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`. The mapping/binding ones are
-**effect-polymorphic** (like `List.map`). `Map.tryFind` returns an `Option`; `Result.toOption` bridges
-the two (`Ok v → Some v`, `Error _ → None`). A user `type Option`/`Result` is rejected (reserved).
+demand. Each has a module of combinators: `Option.map`/`bind`/`filter`/`withDefault`/`isSome`/`isNone`/
+`toResult`, and `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`. The
+mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Map.tryFind` returns an
+`Option`; the two bridge **both ways** — `Result.toOption` (`Ok v → Some v`, `Error _ → None`) and
+`Option.toResult e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
 
 **Strings — the `String` module (implemented).** Text operations over the built-in `string` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
