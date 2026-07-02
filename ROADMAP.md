@@ -102,6 +102,15 @@ rather than checked — almost none of this is in the type system). Each was ver
   resolution (or row polymorphism, a non-goal).
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
   primitives (int/float/string) compare.
+- **Unit-aware `sqrt : float<'u^2> -> float<'u>`** (M) — √area = length, the one genuinely useful
+  unit-carrying power op (F# special-cases exactly this signature). Today `sqrt` is a dimensionless
+  `extern` (`float -> float`), so `sqrt area` loses the unit. Needs either **rational unit exponents**
+  (to halve `'u^2` → `'u`, and to reject an odd/non-square unit like `<m^3>`) or a bespoke "halve the
+  unit" scheme in the checker — a bounded piece of the unit machinery. **NB:** this is the *only*
+  tractable unit-aware power op — general `x<'u> ** y` is **impossible** in a static unit system (the
+  exponent is a runtime value, so the result unit `'u^y` would depend on it → dependent types); that's
+  why `**` is deliberately dimensionless, and integer powers-with-units are already covered by `*`
+  (`x<m> * x<m> : <m^2>`). Decided 2026-07-02.
 - **Chained comparisons** — ✅ **done**: `a < b < c` is Python-style (means `a < b and b < c`, `b`
   evaluated once), a dedicated `ExprKind::Compare` node lowering 1:1 to Python's native chained
   comparison. A lone comparison stays `Binary`; links may mix `== != < > <= >=`.
