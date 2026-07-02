@@ -49,7 +49,9 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   resolution (or row polymorphism, a non-goal).
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
   primitives (int/float/string) compare.
-- **Chained comparisons** (`a < b < c`, Python-style) (S) — currently left-associative.
+- **Chained comparisons** — ✅ **done**: `a < b < c` is Python-style (means `a < b and b < c`, `b`
+  evaluated once), a dedicated `ExprKind::Compare` node lowering 1:1 to Python's native chained
+  comparison. A lone comparison stays `Binary`; links may mix `== != < > <= >=`.
 - **Operator sections / operators as functions** — ✅ **done**: `(op)` (e.g. `(*)`, `(+)`, `(<)`) is a
   binary operator as a first-class curried function; `(*) 2` partially applies it. `ExprKind::OpFunc(BinOp)`
   desugars to the lambda `fun a b -> a op b` (`desugar::op_func`) at inference and lowering, so the
@@ -177,8 +179,10 @@ rejected. Equality (`== !=`) is `'a -> 'a -> bool` (any type, unconstrained), wi
 `__eq__` generated on ADT classes (`Some 1 == Some 1`). `<` disambiguates from unit annotations by
 adjacency (`5<m>` unit vs `5 < m` comparison — the F# rule). Covered across lexer/parser/typecheck/
 compile/roundtrip tests.
-- **Remaining:** chained comparisons are left-assoc (not Python-style chaining); `<=`/`>=` on ADTs
-  would need a derived ordering (only `comparison`-constrained primitives for now).
+- **Chained comparisons — ✅ done:** `a < b < c` is Python-style (a single `ExprKind::Compare` lowering
+  to Python's native chained comparison — evaluate-once, short-circuit — not the left-assoc `(a < b) < c`).
+- **Remaining:** `<=`/`>=` on ADTs would need a derived ordering (only `comparison`-constrained
+  primitives compare for now).
 
 ### 4c. Logical operators — ✅ done
 `and` / `or` / `not` — all keywords, lowering to the same Python keywords. Spelled the Python way

@@ -496,6 +496,12 @@ impl Resolver {
                 self.walk_expr(rhs);
             }
             ExprKind::Unary { expr, .. } => self.walk_expr(expr),
+            ExprKind::Compare { first, rest } => {
+                self.walk_expr(first);
+                for (_, operand) in rest {
+                    self.walk_expr(operand);
+                }
+            }
             // `(op)` is a leaf — it contains no identifiers to resolve.
             ExprKind::OpFunc(_) => {}
             ExprKind::Pipe { lhs, rhs } => {

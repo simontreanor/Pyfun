@@ -107,6 +107,13 @@ pub enum PyExpr {
         left: Box<PyExpr>,
         right: Box<PyExpr>,
     },
+    /// A chained comparison `left op0 c0 op1 c1 …` (Python's native form, from a
+    /// Pyfun `a < b < c`). `ops`/`comparators` are the same length (≥ 2).
+    Compare {
+        left: Box<PyExpr>,
+        ops: Vec<PyBinOp>,
+        comparators: Vec<PyExpr>,
+    },
     /// `func(args...)`
     Call {
         func: Box<PyExpr>,
@@ -431,6 +438,8 @@ fn prec(e: &PyExpr) -> u8 {
         // Unary minus binds tighter than `*`/`/` (20), as in Python.
         PyExpr::Neg(_) => 30,
         PyExpr::BinOp { op, .. } => op.precedence(),
+        // A chained comparison sits at comparison precedence (5), like its links.
+        PyExpr::Compare { .. } => 5,
         // Atoms / calls / attributes never need wrapping.
         _ => 100,
     }
@@ -471,6 +480,20 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
                 op.symbol(),
                 emit_expr(right, p + 1)
             )
+        }
+        PyExpr::Compare {
+            left,
+            ops,
+            comparators,
+        } => {
+            // Operands emit one level above comparison so a looser child (an
+            // `if`/lambda) is parenthesized; the additive-and-tighter operands a
+            // chain is built from never need it.
+            let mut out = emit_expr(left, 6);
+            for (op, c) in ops.iter().zip(comparators) {
+                out.push_str(&format!(" {} {}", op.symbol(), emit_expr(c, 6)));
+            }
+            out
         }
         PyExpr::Call { func, args } => {
             let args: Vec<String> = args.iter().map(expr).collect();

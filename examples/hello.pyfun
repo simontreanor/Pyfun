@@ -291,6 +291,9 @@ print (answer == 42)                 # True
 print (seven < 10)                   # True
 print (speed < 50<m/s>)              # True   (dimensional comparison)
 print (Some 42 == Some answer)       # True   (structural ADT equality)
+# Chained comparison (Python-style): `lo <= x < hi` means `lo <= x and x < hi`,
+# evaluating `x` once. Lowers to Python's own chained comparison.
+print (0 <= seven < 10)              # True   (chained comparison)
 
 # Logical operators: `and` / `or` / `not` (Python keywords, Python precedence).
 print (seven < 10 and answer == 42)  # True

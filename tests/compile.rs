@@ -306,6 +306,31 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn chained_comparison_lowers_to_native_python_form() {
+    // Lowering to Python's own `a < b < c` is what gives evaluate-once +
+    // short-circuit for free — not a desugaring to `x < y and y < z`.
+    let py = pyfun::compile("let f x = 1 < x < 10\nlet g = 1 == 1 == 1").unwrap();
+    assert!(py.contains("return 1 < x < 10"), "{py}");
+    assert!(py.contains("g = 1 == 1 == 1"), "{py}");
+    assert!(!py.contains("and"), "should not desugar to `and`: {py}");
+}
+
+#[test]
+fn e2e_chained_comparisons() {
+    run_and_check(
+        "
+        let a = 1 < 2 < 3
+        let b = 3 < 2 < 1
+        let c =
+            let x = 5
+            1 < x < 10
+        let d = 1 <= 1 < 2
+        ",
+        &[("a", "True"), ("b", "False"), ("c", "True"), ("d", "True")],
+    );
+}
+
+#[test]
 fn unary_minus_lowers_with_python_precedence() {
     let py = pyfun::compile(
         "let a = -5\n\

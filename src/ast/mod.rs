@@ -329,6 +329,13 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Unary { op, expr } => {
             format!("({} {})", op.symbol(), print_expr(expr))
         }
+        ExprKind::Compare { first, rest } => {
+            let mut s = print_expr(first);
+            for (op, operand) in rest {
+                s.push_str(&format!(" {} {}", op.symbol(), print_expr(operand)));
+            }
+            format!("({s})")
+        }
         ExprKind::OpFunc(op) => format!("({})", op.symbol()),
         ExprKind::Pipe { lhs, rhs } => {
             format!("({} |> {})", print_expr(lhs), print_expr(rhs))

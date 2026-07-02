@@ -744,7 +744,11 @@ impl Parser {
     /// `not`. Left-associative (chained comparisons type-check arm by arm).
     fn parse_comparison(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut lhs = self.parse_additive()?;
+        let first = self.parse_additive()?;
+        // Collect the chain of `op operand` links. Python-style: `a < b < c` is a
+        // *single* chained comparison (`a < b and b < c`, `b` evaluated once), not
+        // the left-associative `(a < b) < c`. A lone link stays a plain `Binary`.
+        let mut rest = Vec::new();
         loop {
             let op = match self.peek() {
                 Tok::EqEq => BinOp::Eq,
@@ -756,17 +760,29 @@ impl Parser {
                 _ => break,
             };
             self.bump();
-            let rhs = self.parse_additive()?;
-            lhs = self.mk(
-                start,
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-            );
+            rest.push((op, self.parse_additive()?));
         }
-        Ok(lhs)
+        match rest.len() {
+            0 => Ok(first),
+            1 => {
+                let (op, rhs) = rest.pop().expect("one link");
+                Ok(self.mk(
+                    start,
+                    ExprKind::Binary {
+                        op,
+                        lhs: Box::new(first),
+                        rhs: Box::new(rhs),
+                    },
+                ))
+            }
+            _ => Ok(self.mk(
+                start,
+                ExprKind::Compare {
+                    first: Box::new(first),
+                    rest,
+                },
+            )),
+        }
     }
 
     fn parse_additive(&mut self) -> Result<Expr, ParseError> {

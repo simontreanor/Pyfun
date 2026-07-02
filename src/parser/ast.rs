@@ -287,6 +287,16 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
 
+    /// A chained comparison `a < b < c` — two or more comparison operators,
+    /// Python-style: means `a < b and b < c` with each operand evaluated once and
+    /// short-circuiting. `rest` holds the `(op, operand)` links (length ≥ 2); a
+    /// *single* comparison stays `Binary`. Lowers 1:1 to Python's native chained
+    /// comparison. Each link's operator may be any of `== != < > <= >=`.
+    Compare {
+        first: Box<Expr>,
+        rest: Vec<(BinOp, Expr)>,
+    },
+
     /// `(op)` — a binary operator as a first-class curried function (an F#-style
     /// operator section), e.g. `(*)` denotes `fun a b -> a * b`. Desugared to that
     /// lambda at inference and lowering (`desugar::op_func`), so ordinary currying,

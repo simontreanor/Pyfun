@@ -669,7 +669,13 @@ constraint with polymorphic literals (step b).
    equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
    `bool` and are looser than arithmetic, tighter than `|>`. Surface wrinkle: `<` opens a unit
    annotation only when *adjacent* to a literal (`5<m>`); spaced (`5 < m`) it is less-than — the F#
-   rule.
+   rule. **Chained comparisons** are Python-style: `a < b < c` means `a < b and b < c` with each
+   operand evaluated once and short-circuiting — *not* the left-associative `(a < b) < c` (a bool
+   compared to `c`). A dedicated `ExprKind::Compare` node (produced when two or more comparison links
+   chain; a single comparison stays `Binary`) **lowers 1:1 to Python's own chained comparison**, so
+   evaluate-once and short-circuit come for free rather than via a desugaring to `and`. Each adjacent
+   pair is typed independently (operands unify; ordering links carry `comparison`, equality links
+   don't), and links may mix operators (`0 <= i < n`, `a == b == c`).
 7. **Logical operators. ✅ implemented.** `and` / `or` / `not` — all keywords, lowering to the same
    Python keywords. Spelled the Python way rather than F#'s `&&`/`||` to stay consistent with the
    Python-familiarity theme of this section (and to lower 1:1). `not` is `bool -> bool`, `and`/`or`

@@ -595,6 +595,28 @@ impl Lowerer {
                 ))
             }
 
+            // A chained comparison lowers 1:1 to Python's native chained comparison
+            // (evaluate-once, short-circuit) — no desugaring to `and` needed.
+            ExprKind::Compare { first, rest } => {
+                let (mut stmts, left) = self.lower_value(first, locals)?;
+                let mut ops = Vec::with_capacity(rest.len());
+                let mut comparators = Vec::with_capacity(rest.len());
+                for (op, operand) in rest {
+                    let (s, v) = self.lower_value(operand, locals)?;
+                    stmts.extend(s);
+                    ops.push(lower_binop(*op));
+                    comparators.push(v);
+                }
+                Ok((
+                    stmts,
+                    PyExpr::Compare {
+                        left: Box::new(left),
+                        ops,
+                        comparators,
+                    },
+                ))
+            }
+
             // `(op)` lowers as its desugared curried lambda `fun a b -> a op b`,
             // so partial application (`(*) 2`) and first-class use go through the
             // ordinary function-lowering path.
@@ -2187,6 +2209,12 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             scan_scope(rhs, assigned, bound);
         }
         ExprKind::Unary { expr, .. } => scan_scope(expr, assigned, bound),
+        ExprKind::Compare { first, rest } => {
+            scan_scope(first, assigned, bound);
+            for (_, operand) in rest {
+                scan_scope(operand, assigned, bound);
+            }
+        }
         ExprKind::Try { body } => scan_scope(body, assigned, bound),
         ExprKind::Annot { value, .. } => scan_scope(value, assigned, bound),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {

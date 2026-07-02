@@ -120,6 +120,23 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_chained_comparisons() {
+    assert!(pyfun::check("let f x = 1 < x < 10").is_ok());
+    assert!(pyfun::check("let g a b c = a <= b < c").is_ok());
+    assert!(pyfun::check("let h = 1 == 1 == 1").is_ok());
+    // Strings are orderable, so a string chain is fine.
+    assert!(pyfun::check("let s = \"a\" < \"b\" < \"c\"").is_ok());
+}
+
+#[test]
+fn rejects_ill_typed_chained_comparisons() {
+    // A chain across types fails to unify.
+    assert_error_contains("let x = 1 < 2 < true", "bool");
+    // An ordering link needs the `comparison` constraint (bool isn't orderable).
+    assert_error_contains("let x = true < false < true", "comparison");
+}
+
+#[test]
 fn accepts_unary_minus() {
     // Negative literals, negation of expressions, and in argument position.
     assert!(pyfun::check("let a = -5").is_ok());

@@ -2373,6 +2373,23 @@ impl Infer {
                 }
             },
 
+            // A chained comparison `a < b < c`: each adjacent pair is typed like a
+            // single comparison — operands unify, ordering links (`< > <= >=`) carry
+            // the `comparison` constraint, equality links (`== !=`) don't — and the
+            // whole chain is `bool`.
+            ExprKind::Compare { first, rest } => {
+                let mut prev = self.infer_expr(first, env)?;
+                for (op, operand) in rest {
+                    let t = self.infer_expr(operand, env)?;
+                    self.unify(&prev, &t, operand.span())?;
+                    if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge) {
+                        self.require_ord(&t, operand.span())?;
+                    }
+                    prev = t;
+                }
+                Ok(Ty::Bool)
+            }
+
             // `(op)` is the curried lambda `fun a b -> a op b`: desugar and infer,
             // so the operator's constraints (num/comparison) fall out for free.
             ExprKind::OpFunc(op) => {

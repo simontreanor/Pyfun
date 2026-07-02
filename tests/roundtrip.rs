@@ -27,6 +27,11 @@ const PROGRAMS: &[&str] = &[
     "let r = a == b",
     "let r = x <= y",
     "let cmp a b = a < b",
+    // Chained comparisons (Python-style), a single node distinct from `(a < b) < c`.
+    "let r = 1 < x < 10",
+    "let r = a < b < c",
+    "let r = a <= b < c",
+    "let r = 1 == 1 == 1",
     // Boolean operators and prefix `not`.
     "let r = a or b and c",
     "let r = not a",
@@ -273,6 +278,26 @@ fn arithmetic_precedence() {
         matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }),
         "right operand of + should be the multiplication"
     );
+}
+
+#[test]
+fn chained_comparison_is_one_node_but_single_stays_binary() {
+    // `a < b < c` is a single chained comparison, not `(a < b) < c`.
+    let module = parse("let r = a < b < c").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Compare { rest, .. } = &binding.value.kind else {
+        panic!("expected a chained comparison, got {:?}", binding.value.kind)
+    };
+    assert_eq!(rest.len(), 2, "two comparison links");
+
+    // A lone comparison stays a plain `Binary`.
+    let module = parse("let r = a < b").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert!(matches!(binding.value.kind, ExprKind::Binary { .. }));
 }
 
 #[test]
