@@ -120,6 +120,23 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_modulo() {
+    assert!(pyfun::check("let r = 10 % 3").is_ok());
+    assert!(pyfun::check("let isEven n = n % 2 == 0").is_ok());
+    assert!(pyfun::check("let r = 5.5 % 2.0").is_ok()); // float modulo
+    // Unit-preserving like `+`/`-`: `10<m> % 3<m> : int<m>`.
+    assert!(pyfun::check("measure m\nlet r = 10<m> % 3<m>\nlet ok = r + 1<m>").is_ok());
+}
+
+#[test]
+fn rejects_ill_typed_modulo() {
+    // Mixed units don't unify.
+    assert_error_contains("measure m\nmeasure s\nlet r = 10<m> % 3<s>", "int<s>");
+    // Non-numeric operands are rejected (the `num` constraint).
+    assert_error_contains("let r = \"a\" % \"b\"", "int");
+}
+
+#[test]
 fn accepts_chained_comparisons() {
     assert!(pyfun::check("let f x = 1 < x < 10").is_ok());
     assert!(pyfun::check("let g a b c = a <= b < c").is_ok());

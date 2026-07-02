@@ -22,6 +22,9 @@ const PROGRAMS: &[&str] = &[
     "let add a b = a + b",
     "let r = 1 + 2 * 3 - 4 / 2",
     "let r = 7 // 2",
+    "let r = 10 % 3",
+    "let r = n % 2 == 0",
+    "let m = (%)",
     // Comparison & equality (looser than arithmetic).
     "let r = 1 + 1 < 3",
     "let r = a == b",

@@ -2133,7 +2133,10 @@ impl Infer {
             return Err(base_clash(self));
         }
         match op {
-            BinOp::Add | BinOp::Sub => {
+            // `%` preserves the (shared) unit like `+`/`-` — `10<m> % 3<m> : int<m>`,
+            // and mixing units is an error — and the numeric base (int%int=int,
+            // float%float=float).
+            BinOp::Add | BinOp::Sub | BinOp::Mod => {
                 if !self.unify_unit(&lu, &ru) {
                     return Err(base_clash(self));
                 }
@@ -2329,9 +2332,12 @@ impl Infer {
             }
 
             ExprKind::Binary { op, lhs, rhs } => match op {
-                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::FloorDiv => {
-                    self.infer_arithmetic(*op, lhs, rhs, span, env)
-                }
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::FloorDiv
+                | BinOp::Mod => self.infer_arithmetic(*op, lhs, rhs, span, env),
                 // Equality: operands of the same type, result `bool` (§7.1). No
                 // constraint — every type has equality (ADTs structurally).
                 BinOp::Eq | BinOp::Ne => {

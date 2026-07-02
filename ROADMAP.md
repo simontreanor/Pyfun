@@ -22,8 +22,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    correctness bug: `lex_string`/`lex_fstring` did `b as char` on raw UTF-8 bytes, so `"café"` emitted
    mojibake. Now a shared `push_char` decodes the whole UTF-8 sequence (via `utf8_len`) in both the string
    and f-string-literal paths; covered by lexer + compile (string-level + encoding-independent e2e) tests.
-2. **Modulo `%`** (S) — no lexer token at all; add `Tok`/`BinOp` at the `*`/`/` precedence tier, → Python
-   `%`. Decide unit semantics (F# preserves the unit) and float `%`. The most-reached-for missing operator.
+2. ~~**Modulo `%`**~~ — ✅ **done 2026-07-02**. `Tok::Percent`/`BinOp::Mod` at the `*`/`/` precedence
+   tier, → Python `%`. Numeric (`num`-constrained), works on int and float, and **unit-preserving like
+   `+`/`-`** (`10<m> % 3<m> : int<m>`; mixed units rejected). `(%)` operator section works. Covered by
+   roundtrip/typecheck/compile tests + hello.pyfun.
 3. **`List` is transform-only** (S–M) — no `get`/`append`/`concat`/`contains`/`isEmpty`/`sort`, and no
    indexing syntax (`xs[0]` parses as application) — despite the "O(1) index" rationale for `List`=Python
    list. Add these to `LIST_PRELUDE` (`get : int -> List a -> Option a`, bounds-checked — no raw `xs[i]`,

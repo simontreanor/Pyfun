@@ -66,6 +66,7 @@ pub enum Tok {
     Star,       // *
     Slash,      // / (true division)
     SlashSlash, // // (floor division)
+    Percent,    // % (modulo)
     PipeOp,     // |>
     Bar,        // |
     Arrow,      // ->

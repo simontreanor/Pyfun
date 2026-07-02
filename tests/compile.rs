@@ -306,6 +306,27 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn modulo_lowers_to_python_percent() {
+    let py = pyfun::compile("let r = 10 % 3\nlet even n = n % 2 == 0").unwrap();
+    assert!(py.contains("r = 10 % 3"), "{py}");
+    assert!(py.contains("return n % 2 == 0"), "{py}");
+}
+
+#[test]
+fn e2e_modulo() {
+    run_and_check(
+        "
+        let a = 10 % 3
+        let b = 5.5 % 2.0
+        let c = -7 % 3
+        let d = (%) 17 5
+        ",
+        // `-7 % 3 == 2` (Python modulo takes the divisor's sign).
+        &[("a", "1"), ("b", "1.5"), ("c", "2"), ("d", "2")],
+    );
+}
+
+#[test]
 fn non_ascii_string_is_not_double_encoded() {
     // The emitted Python must contain the real characters, not the mojibake a
     // per-byte `b as char` produced (`café` -> `cafÃ©`).

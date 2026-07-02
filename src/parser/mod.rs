@@ -816,6 +816,7 @@ impl Parser {
                 Tok::Star => BinOp::Mul,
                 Tok::Slash => BinOp::Div,
                 Tok::SlashSlash => BinOp::FloorDiv,
+                Tok::Percent => BinOp::Mod,
                 _ => break,
             };
             self.bump();
@@ -1430,6 +1431,7 @@ fn binop_from_tok(tok: &Tok) -> Option<BinOp> {
         Tok::Star => BinOp::Mul,
         Tok::Slash => BinOp::Div,
         Tok::SlashSlash => BinOp::FloorDiv,
+        Tok::Percent => BinOp::Mod,
         Tok::EqEq => BinOp::Eq,
         Tok::BangEq => BinOp::Ne,
         Tok::Lt => BinOp::Lt,

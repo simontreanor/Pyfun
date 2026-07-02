@@ -182,6 +182,7 @@ let distance = 100<m>
 let elapsed = 10<s>
 let speed = distance / elapsed       # true division -> float<m/s>
 let trip = distance // 4<m>          # floor division -> int (dimensionless)
+let leftover = distance % 30<m>      # modulo -> int<m> (unit-preserving); 100 % 30 = 10
 
 # `area` is unit-polymorphic: int<'u> -> int<'v> -> int<'u 'v>.
 let area w h = w * h
@@ -282,6 +283,7 @@ print (rank Green)                   # 2
 print floor                          # 20
 print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
+print leftover                       # 10    (modulo, unit-preserving)
 print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
 print depth                          # -20                   (negative literal)

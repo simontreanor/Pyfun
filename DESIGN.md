@@ -624,11 +624,13 @@ constraint with polymorphic literals (step b).
 
 **Decisions:**
 
-1. **`/` is true division; `//` floors. ✅ implemented.** Pyfun `/` is Python `/` (result type
-   `float`, `7 / 2 == 3.5`), and `//` is Python floor division (`7 // 2 == 3`, result `int`). This
+1. **`/` is true division; `//` floors; `%` is modulo. ✅ implemented.** Pyfun `/` is Python `/`
+   (result type `float`, `7 / 2 == 3.5`), `//` is Python floor division (`7 // 2 == 3`, result `int`),
+   and `%` is Python modulo (`10 % 3 == 1`, same `*`/`/` precedence tier). This
    matches Python 3's most well-known numeric fact (the old floor-meaning `/` was the single most
    un-Pythonic thing in the language). To free the `//` spelling, **line comments moved from `//` to
-   `#`** (Python-style — another familiarity win). Bonus: because each operator maps
+   `#`** (Python-style — another familiarity win). `%` is num-constrained and **unit-preserving like
+   `+`/`-`** (`10<m> % 3<m> : int<m>`; mixing units is an error). Bonus: because each operator maps
    1:1 to a Python
    operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
    `//` (the type-directed-lowering problem this would otherwise create disappears).

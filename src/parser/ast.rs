@@ -516,6 +516,9 @@ pub enum BinOp {
     Div,
     /// `//` — floor division (Python `//`), result is `int`.
     FloorDiv,
+    /// `%` — modulo (Python `%`), result matches the operands' numeric type and
+    /// preserves their (shared) unit.
+    Mod,
     /// `==` / `!=` — equality, result `bool` (operands of the same type).
     Eq,
     Ne,
@@ -538,6 +541,7 @@ impl BinOp {
             BinOp::Mul => "*",
             BinOp::Div => "/",
             BinOp::FloorDiv => "//",
+            BinOp::Mod => "%",
             BinOp::Eq => "==",
             BinOp::Ne => "!=",
             BinOp::Lt => "<",

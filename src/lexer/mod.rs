@@ -567,6 +567,7 @@ impl<'a> Lexer<'a> {
             b'-' => Tok::Minus,
             b'*' => Tok::Star,
             b'/' => Tok::Slash,
+            b'%' => Tok::Percent,
             b'|' => Tok::Bar,
             b'!' => Tok::Bang,
             b'^' => Tok::Caret,

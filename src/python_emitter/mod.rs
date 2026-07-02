@@ -164,6 +164,7 @@ pub enum PyBinOp {
     Mul,
     Div,
     FloorDiv,
+    Mod,
     Eq,
     Ne,
     Lt,
@@ -186,6 +187,7 @@ impl PyBinOp {
             // Pyfun mirrors Python: `/` is true division, `//` floors.
             PyBinOp::Div => "/",
             PyBinOp::FloorDiv => "//",
+            PyBinOp::Mod => "%",
             PyBinOp::Eq => "==",
             PyBinOp::Ne => "!=",
             PyBinOp::Lt => "<",
@@ -213,7 +215,7 @@ impl PyBinOp {
             | PyBinOp::Ge
             | PyBinOp::In => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
-            PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv => 20,
+            PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv | PyBinOp::Mod => 20,
         }
     }
 }
