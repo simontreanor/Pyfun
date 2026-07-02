@@ -300,8 +300,16 @@ absolute spans** (`lex_subrange`, bracket depth pre-set so no layout tokens leak
 `ExprKind::Interp { parts: Vec<InterpPart> }`, so diagnostics and LSP navigation reach inside holes.
 *Lowering* is 1:1: `PyExpr::FStr` emits a real Python f-string, holes verbatim, literal chunks with
 their specials and braces re-escaped. This **targets Python 3.12+** (PEP 701), so a hole may freely
-contain a string literal reusing the outer quote (`f"{String.contains "}" s}"`). Format specifiers
-(`:.2f`, `!r`), multi-line `f"""..."""`, and `{x=}` self-documenting holes are deferred. Covered by
+contain a string literal reusing the outer quote (`f"{String.contains "}" s}"`). **Self-documenting
+debug holes `{x=}`** work as in Python: a single `=` as the hole's last non-whitespace character
+echoes the raw hole text (everything the user typed, `=` and surrounding whitespace included) before
+the value, so `f"{x = }"` prints `x = 3`. The `=` must be a genuine marker, not an operator tail —
+the character before it may not be one of `=`/`!`/`<`/`>`, so `{x==y}`/`{x != y}`/`{x <= 1}`/`{x >= 1}`
+stay ordinary holes. Resolved entirely at lex time (`debug_marker` in `lex_hole`): the echo joins the
+preceding literal chunk and the hole's tokens exclude the marker, so parser, checker, lowering, and
+emitter see an ordinary literal + hole (the value is `str()`ed like any hole, not Python's `repr`;
+the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Format specifiers (`:.2f`, `!r`)
+and multi-line `f"""..."""` are deferred. Covered by
 lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
 
 **`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns

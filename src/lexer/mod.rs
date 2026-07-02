@@ -325,8 +325,14 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'{') => {
                     self.pos += 1; // consume `{`
+                    let (hole, echo) = self.lex_hole(start)?;
+                    // A self-documenting hole `{x=}` echoes its raw source text
+                    // (including the `=`) before the value; the echo joins the
+                    // pending literal chunk so adjacent literals stay merged.
+                    if let Some(echo) = echo {
+                        lit.push_str(&echo);
+                    }
                     flush(&mut lit, &mut parts);
-                    let hole = self.lex_hole(start)?;
                     parts.push(FStrPart::Hole(hole));
                 }
                 Some(b'}') => {
@@ -346,8 +352,9 @@ impl<'a> Lexer<'a> {
     /// Scan a hole body (the cursor is just past the opening `{`) up to its matching
     /// `}`, balancing nested `{}` and skipping string literals so a brace or quote
     /// inside them doesn't close the hole early, then lex the captured slice into the
-    /// hole's tokens (with absolute spans).
-    fn lex_hole(&mut self, fstr_start: usize) -> Result<Vec<Token>, LexError> {
+    /// hole's tokens (with absolute spans). Also returns the raw text to echo when
+    /// the hole carries a debug marker (see [`Self::debug_marker`]).
+    fn lex_hole(&mut self, fstr_start: usize) -> Result<(Vec<Token>, Option<String>), LexError> {
         let hole_start = self.pos;
         let mut brace_depth = 0usize;
         loop {
@@ -368,11 +375,38 @@ impl<'a> Lexer<'a> {
                     if hole_start == hole_end {
                         return Err(self.err(hole_start, "empty f-string hole `{}`"));
                     }
-                    return Ok(self.lex_subrange(hole_start, hole_end));
+                    let (expr_end, echo) = self.debug_marker(hole_start, hole_end);
+                    return Ok((self.lex_subrange(hole_start, expr_end), echo));
                 }
                 Some(_) => self.pos += 1,
             }
         }
+    }
+
+    /// Detect a self-documenting debug hole `f"{x=}"` (Python's `{expr=}` form): a
+    /// single `=` as the hole's last non-whitespace character. The `=` must be a
+    /// genuine marker, not the tail of an operator, so the character before it may
+    /// not be one of `=`/`!`/`<`/`>` (`{x==y}`, `{x != y}`, `{x <= 1}`, `{x >= 1}`
+    /// stay ordinary holes). Returns where the hole's *expression* ends (the marker
+    /// excluded) plus, for a debug hole, the raw source text to echo — everything
+    /// the user typed including the `=` and its surrounding whitespace, so
+    /// `f"{x = }"` prints `x = <value>`.
+    fn debug_marker(&self, hole_start: usize, hole_end: usize) -> (usize, Option<String>) {
+        let text = &self.src[hole_start..hole_end];
+        let mut last = text.len();
+        while last > 0 && text[last - 1].is_ascii_whitespace() {
+            last -= 1;
+        }
+        // A marker needs an `=` at the end and an expression (whose final
+        // character isn't an operator tail) before it.
+        if last < 2 || text[last - 1] != b'=' || matches!(text[last - 2], b'=' | b'!' | b'<' | b'>')
+        {
+            return (hole_end, None);
+        }
+        let echo = std::str::from_utf8(text)
+            .expect("hole slice is valid utf-8")
+            .to_string();
+        (hole_start + last - 1, Some(echo))
     }
 
     /// Skip a string literal inside a hole (cursor at the opening `"`), honoring
@@ -654,6 +688,59 @@ mod tests {
         };
         assert_eq!(parts[0], FStrPart::Lit("{x} ".to_string()));
         assert!(matches!(parts[1], FStrPart::Hole(_)));
+    }
+
+    #[test]
+    fn fstring_debug_hole_echoes_its_source() {
+        // `{x=}` echoes the raw hole text (incl. the `=`) as a literal chunk,
+        // merged with any preceding literal, then the ordinary hole follows.
+        let toks = kinds("f\"val {x=}\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr, got {:?}", toks[0]);
+        };
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], FStrPart::Lit("val x=".to_string()));
+        let FStrPart::Hole(hole) = &parts[1] else {
+            panic!("expected a hole");
+        };
+        // The hole's expression excludes the marker; spans stay absolute.
+        assert_eq!(
+            hole.iter().map(|t| t.tok.clone()).collect::<Vec<_>>(),
+            vec![Tok::Ident("x".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn fstring_debug_hole_preserves_whitespace() {
+        // `{x = }` echoes the whitespace around the `=` verbatim (Python's rule).
+        let toks = kinds("f\"{x = }\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr");
+        };
+        assert_eq!(parts[0], FStrPart::Lit("x = ".to_string()));
+        assert!(matches!(parts[1], FStrPart::Hole(_)));
+    }
+
+    #[test]
+    fn fstring_operator_equals_is_not_a_debug_marker() {
+        // `==`/`!=`/`<=`/`>=` at the end of a hole are operators, not markers:
+        // the hole keeps all its tokens and no literal chunk is echoed.
+        for src in [
+            "f\"{x==y}\"",
+            "f\"{x != y}\"",
+            "f\"{x >= 1}\"",
+            "f\"{x <= 1}\"",
+        ] {
+            let toks = kinds(src);
+            let Tok::FStr(parts) = &toks[0] else {
+                panic!("expected FStr in {src}");
+            };
+            assert_eq!(parts.len(), 1, "{src}");
+            let FStrPart::Hole(hole) = &parts[0] else {
+                panic!("expected a hole in {src}");
+            };
+            assert_eq!(hole.len(), 4, "{src}"); // lhs, op, rhs, Eof
+        }
     }
 
     #[test]

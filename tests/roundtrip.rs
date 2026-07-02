@@ -144,6 +144,15 @@ const PROGRAMS: &[&str] = &[
     "let g = f\"upper {String.upper name}\"",
     "let g = f\"a literal brace {{ and {x}\"",
     "let g = f\"no holes at all\"",
+    // Self-documenting debug holes `{x=}` resolve at lex time into an echoed
+    // literal chunk + an ordinary hole, so `f"{x=}"` prints as `f"x={x}"` and
+    // reparses to the same AST (whitespace around the `=` is preserved).
+    "let g = f\"{x=}\"",
+    "let g = f\"{x = }\"",
+    "let g = f\"val {a + b=} end\"",
+    // A trailing `==`/`<=` is an operator, not a debug marker.
+    "let g = f\"{a == b}\"",
+    "let g = f\"{a <= b}\"",
     // `try e` — catch an exception into a `Result` (`DESIGN.md` §6). Binds looser
     // than `+` but tighter than `|>`, so the result pipes out.
     "let r = try (parseInt s)",

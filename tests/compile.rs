@@ -285,6 +285,49 @@ fn e2e_interpolated_strings() {
 }
 
 #[test]
+fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
+    // `{x=}` resolves at lex time to a literal chunk (the raw hole text incl. the
+    // `=`) followed by an ordinary hole, so the emitted Python is `f"x={x}"`.
+    let py = pyfun::compile(
+        "let x = 3\n\
+         let y = 4\n\
+         let a = f\"{x=}\"\n\
+         let b = f\"{x = }\"\n\
+         let c = f\"sum {x + y=} end\"\n\
+         let d = f\"{x==y}\"",
+    )
+    .unwrap();
+    assert!(py.contains("a = f\"x={x}\""), "{py}");
+    // Whitespace around the marker is echoed verbatim.
+    assert!(py.contains("b = f\"x = {x}\""), "{py}");
+    assert!(py.contains("c = f\"sum x + y={x + y} end\""), "{py}");
+    // A trailing `==` is a comparison, not a debug marker: nothing is echoed.
+    assert!(py.contains("d = f\"{x == y}\""), "{py}");
+}
+
+#[test]
+fn e2e_interpolation_debug_holes() {
+    run_and_check(
+        "
+        let x = 3
+        let y = 4
+        let a = f\"{x=}\"
+        let b = f\"{x = }\"
+        let c = f\"{x + y=}\"
+        let d = f\"{x == y}\"
+        let e = f\"{x <= y}\"
+        ",
+        &[
+            ("a", "x=3"),
+            ("b", "x = 3"),
+            ("c", "x + y=7"),
+            ("d", "False"),
+            ("e", "True"),
+        ],
+    );
+}
+
+#[test]
 fn e2e_interpolation_hole_with_nested_string() {
     // A hole may contain a string literal (with its own quotes/braces); on the
     // Python 3.12+ target these reuse the outer quote cleanly.

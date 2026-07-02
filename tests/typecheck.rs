@@ -1162,6 +1162,23 @@ fn interpolation_hole_must_be_well_typed() {
 }
 
 #[test]
+fn interpolation_debug_hole_is_an_ordinary_hole() {
+    // `{x=}` / `{x = }` echo their source text; the expression itself is checked
+    // as usual, so the whole string stays a `string` (any hole type is fine).
+    let src = "let x = 3\n\
+               let a = 4\n\
+               let b = 5\n\
+               let m = f\"{x=} {a + b = }\"\n\
+               let len = String.len m";
+    assert!(pyfun::check(src).is_ok());
+    // An unbound name in a debug hole is still an error.
+    assert!(pyfun::check("let m = f\"{missing=}\"").is_err());
+    // A trailing `==` is a comparison, not a debug marker: `x == y` needs `y`.
+    assert!(pyfun::check("let x = 1\nlet m = f\"{x==y}\"").is_err());
+    assert!(pyfun::check("let x = 1\nlet y = 2\nlet m = f\"{x==y}\"").is_ok());
+}
+
+#[test]
 fn interpolation_propagates_hole_effects() {
     // A pure function may be asserted `pure` even when it builds an f-string from
     // pure holes...
