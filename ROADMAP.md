@@ -50,9 +50,11 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
   primitives (int/float/string) compare.
 - **Chained comparisons** (`a < b < c`, Python-style) (S) — currently left-associative.
-- **Operator sections / operators as functions** (`(*)`, `(+)`, `((*) 2)`) (S) — F#-style; operators are
-  binary syntax only today, so `(*)` doesn't parse. Would lower to a generated lambda (or `operator.mul`).
-  Workaround: a lambda, `fun x -> x * 2`.
+- **Operator sections / operators as functions** — ✅ **done**: `(op)` (e.g. `(*)`, `(+)`, `(<)`) is a
+  binary operator as a first-class curried function; `(*) 2` partially applies it. `ExprKind::OpFunc(BinOp)`
+  desugars to the lambda `fun a b -> a op b` (`desugar::op_func`) at inference and lowering, so the
+  operator's own constraints, currying, and partial application all fall out; the pretty-printer keeps the
+  `(op)` spelling. `and`/`or` are excluded (keywords whose short-circuiting a strict function would drop).
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
 - **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),

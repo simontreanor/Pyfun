@@ -32,6 +32,16 @@ const PROGRAMS: &[&str] = &[
     "let r = not a",
     "let r = not a == b",
     "let chk lo hi x = lo <= x and x <= hi",
+    // Operator sections `(op)` — a binary operator as a curried function.
+    "let mul = (*)",
+    "let add = (+)",
+    "let sub = (-)",
+    "let flr = (//)",
+    "let lt = (<)",
+    "let eq = (==)",
+    "let ne = (!=)",
+    "let double = (*) 2",
+    "let total = List.fold (+) 0 xs",
     // `5<m>` (adjacent, in the units section below) is a unit annotation, whereas
     // `5 < m` (spaced) is a comparison — the printer keeps them distinct.
     "let r = 5 < m",
@@ -253,6 +263,33 @@ fn arithmetic_precedence() {
         matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }),
         "right operand of + should be the multiplication"
     );
+}
+
+#[test]
+fn operator_section_parses_to_op_func() {
+    // `(*)` is an operator section, distinct from grouping `(x)` and unit `()`.
+    let module = parse("let mul = (*)").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert!(matches!(binding.value.kind, ExprKind::OpFunc(BinOp::Mul)));
+
+    // `(*) 2` is ordinary application of the section to one argument.
+    let module = parse("let double = (*) 2").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::App { func, .. } = &binding.value.kind else {
+        panic!("expected an application")
+    };
+    assert!(matches!(func.kind, ExprKind::OpFunc(BinOp::Mul)));
+
+    // A parenthesized expression is still grouping, not a section.
+    let module = parse("let g = (1 + 2)").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert!(matches!(binding.value.kind, ExprKind::Binary { .. }));
 }
 
 #[test]

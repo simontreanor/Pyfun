@@ -2366,6 +2366,13 @@ impl Infer {
                 }
             },
 
+            // `(op)` is the curried lambda `fun a b -> a op b`: desugar and infer,
+            // so the operator's constraints (num/comparison) fall out for free.
+            ExprKind::OpFunc(op) => {
+                let lam = crate::desugar::op_func(*op, span);
+                self.infer_expr(&lam, env)
+            }
+
             ExprKind::If { cond, then, else_ } => {
                 let ct = self.infer_expr(cond, env)?;
                 self.unify(&Ty::Bool, &ct, cond.span())?;

@@ -595,6 +595,14 @@ impl Lowerer {
                 ))
             }
 
+            // `(op)` lowers as its desugared curried lambda `fun a b -> a op b`,
+            // so partial application (`(*) 2`) and first-class use go through the
+            // ordinary function-lowering path.
+            ExprKind::OpFunc(op) => {
+                let lam = crate::desugar::op_func(*op, expr.span());
+                self.lower_value(&lam, locals)
+            }
+
             ExprKind::If { cond, then, else_ } => {
                 let (mut stmts, test) = self.lower_value(cond, locals)?;
                 let (then_stmts, then_val) = self.lower_value(then, locals)?;
@@ -936,6 +944,9 @@ impl Lowerer {
                 crate::types::qualified_name(head).and_then(|q| self.arities.get(&q).copied())
             }
             ExprKind::Fn { params, .. } => Some(params.len()),
+            // An operator section `(op)` is the binary lambda `fun a b -> a op b`,
+            // so partial application (`(*) 2`) curries like any 2-arity function.
+            ExprKind::OpFunc(_) => Some(2),
             _ => None,
         };
 
@@ -2209,6 +2220,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Unit
+        | ExprKind::OpFunc(_)
         | ExprKind::Var(_) => {}
     }
 }

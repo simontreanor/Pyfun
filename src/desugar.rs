@@ -23,7 +23,7 @@
 //! thunk `'t -> m a` (force it by applying to any value).
 
 use crate::lexer::Span;
-use crate::parser::ast::{CeItem, Expr, ExprKind, NodeSpan, Param};
+use crate::parser::ast::{BinOp, CeItem, Expr, ExprKind, NodeSpan, Param};
 
 /// Desugar a user-builder CE body into a plain expression. Returns
 /// `Err((message, span))` for a structurally invalid body (e.g. a non-final
@@ -140,6 +140,39 @@ fn combined_with_rest(
 
 fn mk(kind: ExprKind, span: Span) -> Expr {
     Expr::new(kind, span)
+}
+
+/// `(op)` — a binary operator used as a value, desugared to the curried lambda
+/// `fun a b -> a op b`. Reuses ordinary inference and lowering (which handle the
+/// operator's constraints, currying, and partial application), like the CE
+/// desugarings above; the pretty-printer keeps the faithful `(op)` spelling. The
+/// two params are lambda-bound and the body references only them, so their fixed
+/// names can't capture or clash with anything in the surrounding scope.
+pub fn op_func(op: BinOp, span: Span) -> Expr {
+    let body = mk(
+        ExprKind::Binary {
+            op,
+            lhs: Box::new(var("a", span)),
+            rhs: Box::new(var("b", span)),
+        },
+        span,
+    );
+    mk(
+        ExprKind::Fn {
+            params: vec![
+                Param {
+                    name: "a".to_string(),
+                    span: NodeSpan::new(span),
+                },
+                Param {
+                    name: "b".to_string(),
+                    span: NodeSpan::new(span),
+                },
+            ],
+            body: Box::new(body),
+        },
+        span,
+    )
 }
 
 fn var(name: &str, span: Span) -> Expr {

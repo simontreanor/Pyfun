@@ -106,6 +106,28 @@ fn accepts_partial_application_and_pipe() {
 }
 
 #[test]
+fn accepts_operator_sections() {
+    // A section is a first-class function: applied fully, partially, and as an
+    // argument to a higher-order function.
+    assert!(pyfun::check("let r = (*) 3 4").is_ok());
+    assert!(pyfun::check("let double = (*) 2\nlet r = double 5").is_ok());
+    assert!(pyfun::check("let r = List.fold (+) 0 [1, 2, 3]").is_ok());
+    // Comparison and equality sections keep their result type `bool`.
+    assert!(pyfun::check("let r = (<) 1 2").is_ok());
+    assert!(pyfun::check("let r = (==) 1 1").is_ok());
+    // `(-)` and floor division `(//)`.
+    assert!(pyfun::check("let r = (//) 7 2").is_ok());
+}
+
+#[test]
+fn operator_section_carries_the_operators_constraint() {
+    // `(+)` inherits the `num` constraint, so applying it to bools is rejected.
+    assert_error_contains("let r = (+) true false", "int");
+    // `(<)` inherits `comparison`: bool is not orderable.
+    assert_error_contains("let r = (<) true false", "comparison");
+}
+
+#[test]
 fn accepts_match_over_int_literals() {
     assert!(
         pyfun::check("let f n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"").is_ok()

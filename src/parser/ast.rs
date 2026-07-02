@@ -287,6 +287,14 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
 
+    /// `(op)` — a binary operator as a first-class curried function (an F#-style
+    /// operator section), e.g. `(*)` denotes `fun a b -> a * b`. Desugared to that
+    /// lambda at inference and lowering (`desugar::op_func`), so ordinary currying,
+    /// partial application (`(*) 2`), and the operator's own constraints all fall
+    /// out; the pretty-printer keeps the `(op)` spelling. `and`/`or` are excluded
+    /// (keywords, and a strict function would drop their short-circuiting).
+    OpFunc(BinOp),
+
     /// `lhs |> rhs` — pipe (sugar for `rhs lhs`, kept explicit in the AST).
     Pipe {
         lhs: Box<Expr>,

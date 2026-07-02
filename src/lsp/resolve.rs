@@ -496,6 +496,8 @@ impl Resolver {
                 self.walk_expr(rhs);
             }
             ExprKind::Unary { expr, .. } => self.walk_expr(expr),
+            // `(op)` is a leaf — it contains no identifiers to resolve.
+            ExprKind::OpFunc(_) => {}
             ExprKind::Pipe { lhs, rhs } => {
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);

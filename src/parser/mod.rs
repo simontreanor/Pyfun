@@ -911,9 +911,17 @@ impl Parser {
             }
             Tok::LParen => {
                 self.bump();
-                // `()` is the unit value; `(expr)` is grouping; `(a, b)` is a tuple.
+                // `()` is the unit value; `(expr)` is grouping; `(a, b)` is a tuple;
+                // `(op)` is an operator section (a binary operator as a function).
                 if self.eat(&Tok::RParen) {
                     return Ok(self.mk(start, ExprKind::Unit));
+                }
+                if let Some(op) = binop_from_tok(self.peek())
+                    && matches!(self.peek2(), Tok::RParen)
+                {
+                    self.bump(); // the operator
+                    self.bump(); // `)`
+                    return Ok(self.mk(start, ExprKind::OpFunc(op)));
                 }
                 let first = self.parse_expr()?;
                 if self.eat(&Tok::Comma) {
@@ -1362,6 +1370,27 @@ impl Parser {
             _ => Err(self.error(&format!("expected {what}"))),
         }
     }
+}
+
+/// The `BinOp` an operator section `(op)` denotes, or `None` if the token isn't a
+/// sectionable binary operator. `and`/`or` are deliberately excluded: they are
+/// keywords, and a strict function value would silently drop their short-circuit
+/// evaluation (F# excludes `&&`/`||` for the same reason).
+fn binop_from_tok(tok: &Tok) -> Option<BinOp> {
+    Some(match tok {
+        Tok::Plus => BinOp::Add,
+        Tok::Minus => BinOp::Sub,
+        Tok::Star => BinOp::Mul,
+        Tok::Slash => BinOp::Div,
+        Tok::SlashSlash => BinOp::FloorDiv,
+        Tok::EqEq => BinOp::Eq,
+        Tok::BangEq => BinOp::Ne,
+        Tok::Lt => BinOp::Lt,
+        Tok::Gt => BinOp::Gt,
+        Tok::Le => BinOp::Le,
+        Tok::Ge => BinOp::Ge,
+        _ => return None,
+    })
 }
 
 fn starts_atom(tok: &Tok) -> bool {

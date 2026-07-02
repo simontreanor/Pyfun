@@ -222,6 +222,11 @@ let bigs = List.filter (fun x -> x > 2) ns   # [3, 4, 5]
 let total = List.fold (fun a b -> a + b) 0 ns # 15
 let count = List.len ns                      # 5
 
+# An operator section `(op)` is a binary operator as a curried function, so the
+# fold above shortens to `(+)`; `(*) 2` partially applies it (F#-style).
+let product = List.fold (*) 1 ns             # 120
+let doubled = List.map ((*) 2) ns            # [2, 4, 6, 8, 10]
+
 # Sets and maps lower to Python `set` / `dict`; `Map.tryFind` returns the built-in
 # `Option`, consumed with the `Option` module.
 let uniq = Set.ofList [1, 1, 2, 3]           # {1, 2, 3}
@@ -319,6 +324,8 @@ print squares                         # [1, 4, 9, 16, 25]
 print bigs                            # [3, 4, 5]
 print total                           # 15
 print count                           # 5
+print product                         # 120                  (`(*)` section)
+print doubled                         # [2, 4, 6, 8, 10]     (`(*) 2` section)
 
 # Sets, maps, and options in action.
 print (Set.len uniq)                  # 3

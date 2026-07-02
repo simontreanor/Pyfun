@@ -306,6 +306,33 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn operator_section_lowers_to_a_curried_lambda() {
+    // `(*)` lowers to the binary lambda; a partial application curries via
+    // `functools.partial` (arity 2 is known), like any 2-arity function.
+    let py = pyfun::compile("let mul = (*)\nlet double = (*) 2").unwrap();
+    assert!(py.contains("mul = lambda a, b: a * b"), "{py}");
+    assert!(
+        py.contains("double = functools.partial(lambda a, b: a * b, 2)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn e2e_operator_sections() {
+    run_and_check(
+        "
+        let mul = (*)
+        let double = (*) 2
+        let total = List.fold (+) 0 [1, 2, 3, 4]
+        let cmp = (<) 2 3
+        let a = mul 3 4
+        let b = double 5
+        ",
+        &[("a", "12"), ("b", "10"), ("total", "10"), ("cmp", "True")],
+    );
+}
+
+#[test]
 fn fstring_is_an_application_argument() {
     // An f-string juxtaposed as a call argument (`print f"..."`, no parens) is a
     // single application, not two statements — `starts_atom` must accept `FStr`.

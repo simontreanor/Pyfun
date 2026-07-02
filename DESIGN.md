@@ -668,6 +668,18 @@ constraint with polymorphic literals (step b).
    Python-familiarity theme of this section (and to lower 1:1). `not` is `bool -> bool`, `and`/`or`
    are `bool -> bool -> bool`. Precedence mirrors Python — `or` < `and` < `not` < comparison — so
    `not a == b` is `not (a == b)` and emitted Python needs minimal parentheses.
+8. **Operator sections. ✅ implemented.** A binary operator wrapped in parentheses, `(op)`, is that
+   operator as a first-class curried function — `(*)`, `(+)`, `(-)`, `(/)`, `(//)`, `(==)`, `(!=)`,
+   `(<)`, `(>)`, `(<=)`, `(>=)` — and `(*) 2` partially applies it (F#-style). It parses to
+   `ExprKind::OpFunc(BinOp)` (the parser's `(`-atom disambiguates a lone operator-then-`)` from unit
+   `()`, grouping `(e)`, and tuples `(a, b)`) and **desugars to the lambda `fun a b -> a op b`**
+   (`desugar::op_func`) at both inference and lowering, so the operator's own constraint
+   (`num`/`comparison`), currying, and partial application all fall out with no bespoke checker or
+   emitter code — the same desugar-at-use tactic the computation expressions use. The pretty-printer
+   keeps the faithful `(op)` spelling. `and`/`or` are **excluded**: they are keywords, and a strict
+   function value would silently drop their short-circuit evaluation (F# excludes `&&`/`||` for the
+   same reason). This makes point-free style with the `List`/`Seq` combinators natural: `List.fold (+)
+   0 xs`, `List.map ((*) 2) xs`.
 
 **Why a *closed* set of built-in constraints, not user type classes.** `num` and `comparison` are
 baked into the compiler; there is **no `class`/`instance` surface syntax**. The set stays closed,
