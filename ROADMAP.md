@@ -38,9 +38,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    `6.674e-11<m^3 / kg s^2>`. Lexer-only (`lex_number`): the exponent sign is consumed in the lexer (not
    left to unary minus), a number with an exponent is a float even without a `.`, and `e` is only consumed
    when a valid exponent follows (so `2exp`/`1e` stay int-then-identifier — back-compat).
-5. **Numeric conversions** (S) — `round`/`floor`/`ceil`/`truncate` and `String.toFloat : string -> Option
-   float` (mirror the existing `toInt`; today you can `fromFloat` but not parse one back). Decide unit
-   interaction (`round : float<'u> -> int<'u>`?).
+5. ~~**Numeric conversions**~~ — ✅ **done 2026-07-02**. `round`/`floor`/`ceil`/`truncate : float<'u> ->
+   int<'u>` (unqualified prelude, **unit-preserving** like `abs`/`min`/`max`; `round` is a bare builtin,
+   the rest lower to `math.floor`/`ceil`/`trunc` + `import math`), and `String.toFloat : string -> Option
+   float` (a total parse mirroring `toInt`, closing the fromFloat/toFloat asymmetry).
 6. **`Option.bind`** (S) — plus `Option.toResult`/`filter`; `Result` already has `bind`. The single
    most-used Option combinator in F#. Effect-polymorphic clone of `Result.bind`.
 7. **Exponentiation `**`** (S) — float-only like F#'s `**` (sidesteps the int**negative→float trap);

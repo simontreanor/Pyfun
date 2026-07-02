@@ -120,6 +120,27 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_numeric_conversions() {
+    // round/floor/ceil/truncate : float<'u> -> int<'u>, unit-preserving.
+    assert!(pyfun::check("let r = round 3.7").is_ok());
+    assert!(pyfun::check("let r = floor 3.2\nlet s = ceil 3.2\nlet t = truncate 3.9").is_ok());
+    assert!(pyfun::check("measure m\nlet r = round 2.5<m>\nlet ok = r + 1<m>").is_ok());
+    // The result is an int, so it mixes with int arithmetic.
+    assert!(pyfun::check("let r = floor 3.7 + 1").is_ok());
+    // String.toFloat : string -> Option float.
+    assert!(pyfun::check("let r = Option.withDefault 0.0 (String.toFloat \"3.14\")").is_ok());
+}
+
+#[test]
+fn round_preserves_units() {
+    // The unit rides through the conversion, so a metre stays a metre.
+    assert_error_contains(
+        "measure m\nmeasure s\nlet r = round 2.5<m>\nlet bad = r + 1<s>",
+        "int<s>",
+    );
+}
+
+#[test]
 fn accepts_scientific_notation() {
     assert!(pyfun::check("let x = 1e6").is_ok());
     assert!(pyfun::check("let x = 2.5e-3").is_ok());

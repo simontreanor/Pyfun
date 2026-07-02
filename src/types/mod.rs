@@ -280,7 +280,16 @@ const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 /// reads the arities so a *partial* application of a builtin (e.g. `max 0`) still
 /// lowers correctly. The Python name equals the Pyfun name for every entry, so no
 /// call-site renaming is needed — the simplest honest interop surface.
-pub const PRELUDE: &[(&str, usize)] = &[("print", 1), ("abs", 1), ("min", 2), ("max", 2)];
+pub const PRELUDE: &[(&str, usize)] = &[
+    ("print", 1),
+    ("abs", 1),
+    ("min", 2),
+    ("max", 2),
+    ("round", 1),
+    ("floor", 1),
+    ("ceil", 1),
+    ("truncate", 1),
+];
 
 /// The list prelude (`DESIGN.md` §6): functions over the eager `List a` type
 /// (which lowers to a Python list — a dynamic array, so index/`len` are O(1),
@@ -372,6 +381,7 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("fromInt", 1),
     ("fromFloat", 1),
     ("toInt", 1),
+    ("toFloat", 1),
     ("toList", 1),
 ];
 
@@ -1268,6 +1278,24 @@ fn seed_prelude(env: &mut Env) {
     for name in ["min", "max"] {
         env.insert(name.to_string(), scheme(binary()));
     }
+    // round / floor / ceil / truncate : float<'u> -> int<'u>  (pure, unit-preserving,
+    // like abs/min/max). Concrete float→int (not num-polymorphic), one shared unit.
+    let f_to_i = Scheme {
+        vars: vec![],
+        uvars: vec![PRELUDE_UVAR],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty: Ty::Fun(
+            Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
+            Box::new(Ty::Int(Unit::var(PRELUDE_UVAR))),
+            Effect::pure(),
+        ),
+    };
+    for name in ["round", "floor", "ceil", "truncate"] {
+        env.insert(name.to_string(), f_to_i.clone());
+    }
 }
 
 /// Seed the list prelude ([`LIST_PRELUDE`]) — functions over the eager `List a`.
@@ -1500,6 +1528,8 @@ fn seed_string_prelude(env: &mut Env) {
     put("fromInt", pure_fn(int(), str_()));
     put("fromFloat", pure_fn(float(), str_()));
     put("toInt", pure_fn(str_(), opt(int())));
+    // String.toFloat : string -> Option float  (a total parse, mirrors toInt).
+    put("toFloat", pure_fn(str_(), opt(float())));
     // Each element of the result is a single-character string (no `char` type).
     put("toList", pure_fn(str_(), list(str_())));
 }

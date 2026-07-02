@@ -1014,6 +1014,22 @@ impl Lowerer {
                 }
                 return dotted_path(&target);
             }
+            // Prelude conversions that live in Python's `math` (not bare builtins):
+            // `floor`/`ceil`/`truncate` → `math.floor`/`ceil`/`trunc` (+ import).
+            // `round` is a bare builtin, so it falls through to `Name`.
+            let math_fn = match name {
+                "floor" => Some("floor"),
+                "ceil" => Some("ceil"),
+                "truncate" => Some("trunc"),
+                _ => None,
+            };
+            if let Some(py) = math_fn {
+                self.needed_imports.insert("math".to_string());
+                return PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name("math".to_string())),
+                    attr: py.to_string(),
+                };
+            }
         }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
@@ -1178,6 +1194,11 @@ impl Lowerer {
             "String.startsWith" => coll(self, "_pf_str_starts_with"),
             "String.endsWith" => coll(self, "_pf_str_ends_with"),
             "String.replace" => coll(self, "_pf_str_replace"),
+            // `String.toFloat` is total (guarded `float(s)`), like `toInt`.
+            "String.toFloat" => {
+                self.needs_option = true;
+                coll(self, "_pf_str_to_float")
+            }
             // `String.toInt` is total (guarded `int(s)`), so it constructs Some/None.
             "String.toInt" => {
                 self.needs_option = true;
@@ -2183,6 +2204,17 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["s"],
                 vec![PyStmt::Try {
                     body: vec![PyStmt::Return(call1("Some", call("int", vec![name("s")])))],
+                    exc_type: Some("ValueError".to_string()),
+                    binding: None,
+                    handler: vec![PyStmt::Return(call0("None_"))],
+                }],
+            ),
+            // String.toFloat(s) -> total parse: Some(float(s)) or None_ on ValueError
+            "_pf_str_to_float" => def(
+                helper,
+                &["s"],
+                vec![PyStmt::Try {
+                    body: vec![PyStmt::Return(call1("Some", call("float", vec![name("s")])))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
                     handler: vec![PyStmt::Return(call0("None_"))],

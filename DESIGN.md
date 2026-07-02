@@ -167,7 +167,10 @@ Treat interop type-mapping and FFI surfaces as load-bearing architecture.
 
 **The prelude (first realized interop surface).** A small set of built-in functions gives programs
 something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorphic numerics
-`abs`/`min`/`max : int<'u> -> …`, plus a `unit` type whose one value is written `()` (both lower to
+`abs`/`min`/`max : int<'u> -> …`, plus the **unit-preserving numeric conversions**
+`round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
+`truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
+staying *unqualified* Pyfun names), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the honest result of an effectful call). Each is a *typed view over a Python builtin*: the single
 source of truth is `types::PRELUDE` (names + arities, read by lowering so a partial application like
 `max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun

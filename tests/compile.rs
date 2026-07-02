@@ -306,6 +306,46 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn numeric_conversions_lower_correctly() {
+    let py = pyfun::compile(
+        "let a = round 3.7\n\
+         let b = floor 3.2\n\
+         let c = ceil 3.2\n\
+         let d = truncate 3.9",
+    )
+    .unwrap();
+    assert!(py.contains("import math"), "{py}");
+    assert!(py.contains("a = round(3.7)"), "round is a bare builtin: {py}");
+    assert!(py.contains("b = math.floor(3.2)"), "{py}");
+    assert!(py.contains("c = math.ceil(3.2)"), "{py}");
+    assert!(py.contains("d = math.trunc(3.9)"), "truncate -> math.trunc: {py}");
+}
+
+#[test]
+fn e2e_numeric_conversions() {
+    run_and_check(
+        "
+        let a = round 3.7
+        let b = floor 3.7
+        let c = ceil 3.2
+        let d = truncate 3.9
+        let e = floor (-2.5)
+        let f = Option.withDefault 0.0 (String.toFloat \"3.5\")
+        let g = Option.withDefault 0.0 (String.toFloat \"nope\")
+        ",
+        &[
+            ("a", "4"),
+            ("b", "3"),
+            ("c", "4"),
+            ("d", "3"),
+            ("e", "-3"),
+            ("f", "3.5"),
+            ("g", "0.0"),
+        ],
+    );
+}
+
+#[test]
 fn scientific_notation_lowers_to_float() {
     let py = pyfun::compile("let a = 1e6\nlet b = 2.5e-3\nlet g = 6.674e-11").unwrap();
     assert!(py.contains("a = 1000000.0"), "{py}");
