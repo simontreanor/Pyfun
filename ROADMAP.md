@@ -140,13 +140,17 @@ rather than checked — almost none of this is in the type system). Each was ver
 - **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
   and **`{x=}`** self-documenting holes landed too; still deferred are **format specifiers** (`{x:.2f}`,
   `{v!r}` — a mini-language) and **multi-line** `f"""..."""` (Pyfun has no triple-quoted strings).
-- **Type annotations** (L) — `let x : T = …`, params `(x: T)`, return types. **DESIGN.md promised these**
-  ("annotations optional but semantic") but no syntax exists yet; the doc was corrected to say deferred.
-  F# users annotate constantly (docs, API boundaries, pinning a `num` default, disambiguating records) —
-  and annotations are the enabler for lifting the unique-field-name restriction below. **Design tension
-  (`DESIGN.md` §7.2):** a depth-0 `:` is now the `match`/`case` block opener, and §8.3 leans on `:` being
-  unused elsewhere — so `let x : int` would need a disambiguating rule or a different spelling. That, plus
-  check-against-inferred with generalization, is why this is L not M.
+- **Type annotations** (L) — **parked (deprioritized 2026-07-02).** `let x : T = …`, params `(x: T)`,
+  return types. *Not necessary*: HM inference is complete, so the compiler needs none; the identity is
+  "F#-level safety without ceremony," and types are already surfaced by LSP hover / `pyfun check` / REPL
+  `:type`. They'd buy API-doc signatures, error *localization*, `num` pinning, and (the one real unlock)
+  enabling the unique-field-name lift below — but they cost the most for the least new capability and
+  fight a load-bearing syntax decision: a depth-0 `:` is the `match`/`case` block opener and §8.3 leans
+  on `:` being unused elsewhere, so `let x : int` needs a disambiguating rule (hence L). **Revisit only
+  on a concrete driver:** (a) error messages become a real pain — in which case improve HM *diagnostics*
+  directly, cheaper and helps all code; (b) lifting the field-name restriction; (c) a deliberate F#-parity
+  call. **Cheap partial slice if wanted:** param annotations `(x: T)` are feasible on their own (inside
+  brackets `:` is free — record fields already use it), covering most of the doc/localization value.
 - **Function composition `>>` / `<<`** (S) — F#-style `f >> g` = `fun x -> g (f x)`; low priority now that
   `|>` + operator sections landed. Would desugar to a lambda like the sections.
 - **Raw strings `r"C:\path"`** (S) — a new string-prefix lexer mode (like `f"`) that skips escape
