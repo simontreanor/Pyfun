@@ -209,6 +209,12 @@ let truncated = truncate speed       # 10   (float<m/s> -> int<m/s>, unit kept)
 # String.toFloat is a total parse (Option float), mirroring String.toInt.
 let parsedF = Option.withDefault 0.0 (String.toFloat "2.71828")  # 2.71828
 
+# Exponentiation `**` is float-only, right-associative, and binds tighter than
+# unary minus (so `-2.0 ** 2.0` is `-(2.0 ** 2.0)`, like Python).
+let cube = 3.0 ** 3.0                # 27.0
+let tower = 2.0 ** 3.0 ** 2.0        # 512.0  (right-assoc: 2 ^ (3 ^ 2))
+let negPow = -2.0 ** 2.0            # -4.0   (`**` tighter than unary minus)
+
 # Externs: typed imports of arbitrary Python callables (`DESIGN.md` §6). The
 # Pyfun name equals the Python name unless a `= target` clause gives a dotted
 # path (which is imported automatically). Type variables are bare lowercase, as
@@ -320,6 +326,9 @@ print planck                         # 6.626e-34    (scientific notation)
 print rounded                        # 4     (round, float -> int)
 print truncated                      # 10    (truncate, unit-preserving)
 print parsedF                        # 2.71828  (String.toFloat)
+print cube                            # 27.0  (exponentiation)
+print tower                           # 512.0  (right-associative `**`)
+print negPow                          # -4.0  (`**` binds tighter than unary minus)
 print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
 print depth                          # -20                   (negative literal)

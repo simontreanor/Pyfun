@@ -171,6 +171,7 @@ pub enum PyBinOp {
     Div,
     FloorDiv,
     Mod,
+    Pow,
     Eq,
     Ne,
     Lt,
@@ -194,6 +195,7 @@ impl PyBinOp {
             PyBinOp::Div => "/",
             PyBinOp::FloorDiv => "//",
             PyBinOp::Mod => "%",
+            PyBinOp::Pow => "**",
             PyBinOp::Eq => "==",
             PyBinOp::Ne => "!=",
             PyBinOp::Lt => "<",
@@ -222,6 +224,8 @@ impl PyBinOp {
             | PyBinOp::In => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv | PyBinOp::Mod => 20,
+            // `**` binds tighter than unary minus (Neg = 30), as in Python.
+            PyBinOp::Pow => 40,
         }
     }
 }
@@ -481,13 +485,14 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         PyExpr::BinOp { op, left, right } => {
             let p = op.precedence();
             // Left-associative: left child at same precedence is fine; right
-            // child must bind strictly tighter to avoid reassociation.
-            format!(
-                "{} {} {}",
-                emit_expr(left, p),
-                op.symbol(),
-                emit_expr(right, p + 1)
-            )
+            // child must bind strictly tighter to avoid reassociation. `**` is
+            // right-associative, so the sides swap.
+            let (lp, rp) = if *op == PyBinOp::Pow {
+                (p + 1, p)
+            } else {
+                (p, p + 1)
+            };
+            format!("{} {} {}", emit_expr(left, lp), op.symbol(), emit_expr(right, rp))
         }
         PyExpr::Compare {
             left,

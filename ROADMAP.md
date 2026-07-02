@@ -46,8 +46,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    ->{e} Option b` (effect-poly like `Result.bind`), plus the cheap siblings `Option.filter : (a ->{e}
    bool) -> Option a ->{e} Option a` and `Option.toResult : e -> Option a -> Result a e` (the inverse of
    `Result.toOption`), completing the Option↔Result symmetry.
-7. **Exponentiation `**`** (S) — float-only like F#'s `**` (sidesteps the int**negative→float trap);
-   right-associative, tighter than unary minus (`-2 ** 2 == -4`).
+7. ~~**Exponentiation `**`**~~ — ✅ **done 2026-07-02**. `BinOp::Pow`, float-only + dimensionless
+   (`float -> float -> float`, sidestepping the int**negative→float trap and units-through-a-runtime-
+   exponent), right-associative and tighter than unary minus (`-2.0 ** 2.0 == -4`, `2.0 ** 3.0 ** 2.0 ==
+   512`), lowering to Python `**`. Num literals coerce to float, and the `(**)` section works.
 8. **String slice / substring / indexOf** (S) — `String.slice start end s` (Python `s[a:b]`),
    `String.tryIndexOf : string -> string -> Option int`. Compounds with #3 (no `List.get` either).
 9. **Mutual recursion** (M) — `let isEven … and isOdd …`; today "no cross-binding mutual recursion" (was a

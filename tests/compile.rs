@@ -306,6 +306,29 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn exponentiation_lowers_right_assoc() {
+    let py = pyfun::compile("let a = 2.0 ** 3.0 ** 2.0\nlet b = -2.0 ** 2.0").unwrap();
+    // Right-associative, so no parens needed on the nested `**`.
+    assert!(py.contains("a = 2.0 ** 3.0 ** 2.0"), "{py}");
+    // `**` binds tighter than unary minus: `-2.0 ** 2.0` is `-(2.0 ** 2.0)`.
+    assert!(py.contains("b = -2.0 ** 2.0"), "{py}");
+}
+
+#[test]
+fn e2e_exponentiation() {
+    run_and_check(
+        "
+        let a = 2.0 ** 8.0
+        let b = 2.0 ** 3.0 ** 2.0
+        let c = 2.0 ** -1.0
+        let d = -2.0 ** 2.0
+        ",
+        // b: 2^(3^2)=2^9=512; d: -(2^2)=-4.
+        &[("a", "256.0"), ("b", "512.0"), ("c", "0.5"), ("d", "-4.0")],
+    );
+}
+
+#[test]
 fn e2e_option_bind_filter_to_result() {
     run_and_check(
         "

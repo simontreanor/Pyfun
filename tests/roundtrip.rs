@@ -6,7 +6,7 @@
 //! operator precedence.
 
 use pyfun::parse;
-use pyfun::syntax::{BinOp, ExprKind, Item};
+use pyfun::syntax::{BinOp, ExprKind, Item, UnOp};
 
 /// Programs exercising every Phase 1 construct.
 const PROGRAMS: &[&str] = &[
@@ -29,6 +29,11 @@ const PROGRAMS: &[&str] = &[
     "let r = 10 % 3",
     "let r = n % 2 == 0",
     "let m = (%)",
+    // Exponentiation: right-associative, tighter than unary minus.
+    "let r = 2.0 ** 8.0",
+    "let r = 2.0 ** 3.0 ** 2.0",
+    "let r = -2.0 ** 2.0",
+    "let p = (**)",
     // Comparison & equality (looser than arithmetic).
     "let r = 1 + 1 < 3",
     "let r = a == b",
@@ -289,6 +294,41 @@ fn arithmetic_precedence() {
         matches!(rhs.kind, ExprKind::Binary { op: BinOp::Mul, .. }),
         "right operand of + should be the multiplication"
     );
+}
+
+#[test]
+fn exponentiation_is_right_assoc_and_binds_tighter_than_unary_minus() {
+    // `2 ** 3 ** 2` is `2 ** (3 ** 2)` — the right operand is another `**`.
+    let module = parse("let r = 2.0 ** 3.0 ** 2.0").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Binary {
+        op: BinOp::Pow,
+        rhs,
+        ..
+    } = &binding.value.kind
+    else {
+        panic!("expected `**` at the root, got {:?}", binding.value.kind)
+    };
+    assert!(
+        matches!(rhs.kind, ExprKind::Binary { op: BinOp::Pow, .. }),
+        "right operand should be the nested `**` (right-associative)"
+    );
+
+    // `-2 ** 2` is `-(2 ** 2)` — negation wraps the power, not the other way.
+    let module = parse("let r = -2.0 ** 2.0").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Unary {
+        op: UnOp::Neg,
+        expr,
+    } = &binding.value.kind
+    else {
+        panic!("expected negation at the root, got {:?}", binding.value.kind)
+    };
+    assert!(matches!(expr.kind, ExprKind::Binary { op: BinOp::Pow, .. }));
 }
 
 #[test]

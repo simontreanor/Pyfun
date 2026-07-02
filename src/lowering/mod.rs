@@ -1637,6 +1637,7 @@ fn lower_binop(op: BinOp) -> PyBinOp {
         BinOp::Div => PyBinOp::Div,
         BinOp::FloorDiv => PyBinOp::FloorDiv,
         BinOp::Mod => PyBinOp::Mod,
+        BinOp::Pow => PyBinOp::Pow,
         BinOp::Eq => PyBinOp::Eq,
         BinOp::Ne => PyBinOp::Ne,
         BinOp::Lt => PyBinOp::Lt,

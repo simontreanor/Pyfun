@@ -519,6 +519,10 @@ pub enum BinOp {
     /// `%` — modulo (Python `%`), result matches the operands' numeric type and
     /// preserves their (shared) unit.
     Mod,
+    /// `**` — exponentiation (Python `**`). Float-only and dimensionless
+    /// (`float -> float -> float`); right-associative, binds tighter than unary
+    /// minus (`-2 ** 2 == -4`).
+    Pow,
     /// `==` / `!=` — equality, result `bool` (operands of the same type).
     Eq,
     Ne,
@@ -542,6 +546,7 @@ impl BinOp {
             BinOp::Div => "/",
             BinOp::FloorDiv => "//",
             BinOp::Mod => "%",
+            BinOp::Pow => "**",
             BinOp::Eq => "==",
             BinOp::Ne => "!=",
             BinOp::Lt => "<",

@@ -64,6 +64,7 @@ pub enum Tok {
     Plus,       // +
     Minus,      // -
     Star,       // *
+    StarStar,   // ** (exponentiation)
     Slash,      // / (true division)
     SlashSlash, // // (floor division)
     Percent,    // % (modulo)

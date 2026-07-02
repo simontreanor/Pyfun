@@ -641,9 +641,13 @@ constraint with polymorphic literals (step b).
 
 **Decisions:**
 
-1. **`/` is true division; `//` floors; `%` is modulo. ✅ implemented.** Pyfun `/` is Python `/`
-   (result type `float`, `7 / 2 == 3.5`), `//` is Python floor division (`7 // 2 == 3`, result `int`),
-   and `%` is Python modulo (`10 % 3 == 1`, same `*`/`/` precedence tier). This
+1. **`/` is true division; `//` floors; `%` is modulo; `**` exponentiates. ✅ implemented.** Pyfun `/`
+   is Python `/` (result type `float`, `7 / 2 == 3.5`), `//` is Python floor division (`7 // 2 == 3`,
+   result `int`), `%` is Python modulo (`10 % 3 == 1`, same `*`/`/` precedence tier), and `**` is Python
+   exponentiation — **float-only and dimensionless** (`float -> float -> float`; a runtime exponent
+   can't be dimensionally checked, and `int ** -1` isn't an int, so following F# it stays float),
+   **right-associative**, and **tighter than unary minus** (`-2.0 ** 2.0 == -4`, `2.0 ** 3.0 ** 2.0 ==
+   512`). This
    matches Python 3's most well-known numeric fact (the old floor-meaning `/` was the single most
    un-Pythonic thing in the language). To free the `//` spelling, **line comments moved from `//` to
    `#`** (Python-style — another familiarity win). `%` is num-constrained and **unit-preserving like

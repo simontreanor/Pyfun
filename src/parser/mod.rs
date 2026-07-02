@@ -851,7 +851,29 @@ impl Parser {
                 },
             ));
         }
-        self.parse_application()
+        self.parse_power()
+    }
+
+    /// Exponentiation `a ** b` — binds tighter than unary minus (`-2 ** 2` is
+    /// `-(2 ** 2)`) and is **right-associative** (`2 ** 3 ** 2` is `2 ** (3 ** 2)`).
+    /// The exponent is parsed at the unary level (a Python `factor`), so both the
+    /// right-associativity and a signed exponent (`2 ** -3`) fall out.
+    fn parse_power(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let lhs = self.parse_application()?;
+        if matches!(self.peek(), Tok::StarStar) {
+            self.bump();
+            let rhs = self.parse_unary()?;
+            return Ok(self.mk(
+                start,
+                ExprKind::Binary {
+                    op: BinOp::Pow,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            ));
+        }
+        Ok(lhs)
     }
 
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
@@ -1432,6 +1454,7 @@ fn binop_from_tok(tok: &Tok) -> Option<BinOp> {
         Tok::Slash => BinOp::Div,
         Tok::SlashSlash => BinOp::FloorDiv,
         Tok::Percent => BinOp::Mod,
+        Tok::StarStar => BinOp::Pow,
         Tok::EqEq => BinOp::Eq,
         Tok::BangEq => BinOp::Ne,
         Tok::Lt => BinOp::Lt,

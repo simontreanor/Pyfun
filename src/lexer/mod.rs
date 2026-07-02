@@ -570,6 +570,11 @@ impl<'a> Lexer<'a> {
             self.push(Tok::SlashSlash, start);
             return Ok(());
         }
+        if c == b'*' && self.peek2() == Some(b'*') {
+            self.pos += 2;
+            self.push(Tok::StarStar, start);
+            return Ok(());
+        }
         // Two-char comparison / equality operators (checked before `=` `!` `<` `>`).
         if let Some(tok) = match (c, self.peek2()) {
             (b'=', Some(b'=')) => Some(Tok::EqEq),
@@ -927,6 +932,21 @@ mod tests {
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
         );
+    }
+
+    #[test]
+    fn double_star_is_exponentiation() {
+        // `**` is one token, distinct from two `*`.
+        assert_eq!(
+            kinds("2 ** 3"),
+            vec![Tok::Int(2), Tok::StarStar, Tok::Int(3), Tok::Eof]
+        );
+        assert_eq!(kinds("a * b"), vec![
+            Tok::Ident("a".to_string()),
+            Tok::Star,
+            Tok::Ident("b".to_string()),
+            Tok::Eof
+        ]);
     }
 
     #[test]

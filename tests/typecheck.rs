@@ -120,6 +120,24 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_exponentiation() {
+    assert!(pyfun::check("let r = 2.0 ** 8.0").is_ok());
+    assert!(pyfun::check("let r = 2 ** 10").is_ok()); // num literals coerce to float
+    assert!(pyfun::check("let r = 2.0 ** -1.0").is_ok()); // negative exponent
+    assert!(pyfun::check("let r = 2.0 ** 3.0 ** 2.0").is_ok()); // right-assoc chain
+}
+
+#[test]
+fn exponentiation_is_float_only_and_dimensionless() {
+    // Units can't ride through a runtime exponent.
+    assert_error_contains("measure m\nlet r = 2.0<m> ** 2.0", "float<m>");
+    // Non-numeric operands are rejected.
+    assert_error_contains("let r = true ** 2.0", "float");
+    // The result is a float, so an int context rejects it.
+    assert_error_contains("let r = List.get (2 ** 3) [1, 2]", "float");
+}
+
+#[test]
 fn accepts_option_bind_filter_to_result() {
     assert!(
         pyfun::check("let r = Option.bind (fun x -> Some (x + 1)) (Some 1)").is_ok(),

@@ -2469,6 +2469,16 @@ impl Infer {
                 | BinOp::Div
                 | BinOp::FloorDiv
                 | BinOp::Mod => self.infer_arithmetic(*op, lhs, rhs, span, env),
+                // `**` is float-only and dimensionless (units + a runtime exponent
+                // can't be dimensionally checked). Num literals coerce to float.
+                BinOp::Pow => {
+                    let float = || Ty::Float(Unit::dimensionless());
+                    let lt = self.infer_expr(lhs, env)?;
+                    self.unify(&float(), &lt, lhs.span())?;
+                    let rt = self.infer_expr(rhs, env)?;
+                    self.unify(&float(), &rt, rhs.span())?;
+                    Ok(float())
+                }
                 // Equality: operands of the same type, result `bool` (§7.1). No
                 // constraint — every type has equality (ADTs structurally).
                 BinOp::Eq | BinOp::Ne => {
