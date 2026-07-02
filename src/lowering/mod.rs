@@ -680,6 +680,7 @@ impl Lowerer {
                 let (stmts, value) = self.lower_value(expr, locals)?;
                 let lowered = match op {
                     crate::parser::ast::UnOp::Not => PyExpr::Not(Box::new(value)),
+                    crate::parser::ast::UnOp::Neg => PyExpr::Neg(Box::new(value)),
                 };
                 Ok((stmts, lowered))
             }

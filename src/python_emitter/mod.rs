@@ -132,6 +132,8 @@ pub enum PyExpr {
     Await(Box<PyExpr>),
     /// `not value`
     Not(Box<PyExpr>),
+    /// `-value` — arithmetic negation.
+    Neg(Box<PyExpr>),
     /// A list display `[a, b, c]`.
     List(Vec<PyExpr>),
     /// A tuple display `(a, b, c)` (always two or more elements in Pyfun).
@@ -426,6 +428,8 @@ fn prec(e: &PyExpr) -> u8 {
         PyExpr::Await(_) => 3,
         // `not` sits between `and` (3) and comparison (5), as in Python.
         PyExpr::Not(_) => 4,
+        // Unary minus binds tighter than `*`/`/` (20), as in Python.
+        PyExpr::Neg(_) => 30,
         PyExpr::BinOp { op, .. } => op.precedence(),
         // Atoms / calls / attributes never need wrapping.
         _ => 100,
@@ -488,6 +492,10 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.
         PyExpr::Not(inner) => format!("not {}", emit_expr(inner, 4)),
+        // Emit the operand at unary minus's own level (like `not`), so a tighter
+        // atom stays bare (`-x`, `-f(a)`) while a looser binop is parenthesized
+        // (`-(a + b)`).
+        PyExpr::Neg(inner) => format!("-{}", emit_expr(inner, 30)),
         PyExpr::List(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();
             format!("[{}]", elems.join(", "))

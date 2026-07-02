@@ -120,6 +120,28 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_unary_minus() {
+    // Negative literals, negation of expressions, and in argument position.
+    assert!(pyfun::check("let a = -5").is_ok());
+    assert!(pyfun::check("let a = -3 + 10\nlet b = 2 * -3").is_ok());
+    assert!(pyfun::check("let a = abs (-5)").is_ok());
+    assert!(pyfun::check("let neg x = -x\nlet a = neg 3").is_ok());
+    // Unit-preserving: `-5<m>` stays `int<m>`, so it adds to `3<m>`.
+    assert!(pyfun::check("measure m\nlet d = -5<m>\nlet e = d + 3<m>").is_ok());
+    // A negative integer literal pattern.
+    assert!(
+        pyfun::check("let f n =\n  match n:\n    case -1: 0\n    case _: 1").is_ok(),
+        "negative literal pattern should type-check"
+    );
+}
+
+#[test]
+fn rejects_negation_of_non_numeric() {
+    assert_error_contains("let x = -true", "int");
+    assert_error_contains("let x = -\"hi\"", "int");
+}
+
+#[test]
 fn operator_section_carries_the_operators_constraint() {
     // `(+)` inherits the `num` constraint, so applying it to bools is rejected.
     assert_error_contains("let r = (+) true false", "int");

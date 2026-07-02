@@ -306,6 +306,40 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn unary_minus_lowers_with_python_precedence() {
+    let py = pyfun::compile(
+        "let a = -5\n\
+         let b = 2 * -3\n\
+         let c = -(4 + 1)\n\
+         let d = 0 - -7",
+    )
+    .unwrap();
+    assert!(py.contains("a = -5"), "{py}");
+    // Unary minus binds tighter than `*`, so no parens are needed around `-3`.
+    assert!(py.contains("b = 2 * -3"), "{py}");
+    // A looser `+` operand is parenthesized.
+    assert!(py.contains("c = -(4 + 1)"), "{py}");
+    assert!(py.contains("d = 0 - -7"), "{py}");
+}
+
+#[test]
+fn e2e_unary_minus() {
+    run_and_check(
+        "
+        let a = -5
+        let b = abs (-5)
+        let c = 2 * -3
+        let d = -(4 + 1)
+        let sign =
+            match -1:
+                case -1: \"neg\"
+                case _: \"other\"
+        ",
+        &[("a", "-5"), ("b", "5"), ("c", "-6"), ("d", "-5"), ("sign", "neg")],
+    );
+}
+
+#[test]
 fn operator_section_lowers_to_a_curried_lambda() {
     // `(*)` lowers to the binary lambda; a partial application curries via
     // `functools.partial` (arity 2 is known), like any 2-arity function.

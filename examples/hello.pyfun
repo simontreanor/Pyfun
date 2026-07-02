@@ -188,6 +188,12 @@ let area w h = w * h
 let floor = area 4<m> 5<m>            # int<m^2>
 # `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
+# Prefix negation `-e`: numeric and unit-preserving. It's a prefix operator (not a
+# negative-literal token), so `-` is subtraction with a left operand and negation
+# without — `depth - 2` subtracts, `-depth` negates.
+let depth = -20<m>                    # int<m>, a negative literal
+let rebound = -(3 + 4)               # -7 (a looser operand is parenthesized)
+
 # Externs: typed imports of arbitrary Python callables (`DESIGN.md` §6). The
 # Pyfun name equals the Python name unless a `= target` clause gives a dotted
 # path (which is imported automatically). Type variables are bare lowercase, as
@@ -275,6 +281,8 @@ print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
 print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
+print depth                          # -20                   (negative literal)
+print rebound                        # -7                    (`-(3 + 4)`)
 
 # Comparison (`comparison 'a => …`) and equality (`'a -> 'a -> bool`, structural
 # for ADTs) both yield bool. `<` is comparison here because of the space; `5<m>`

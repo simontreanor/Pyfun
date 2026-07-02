@@ -637,6 +637,13 @@ constraint with polymorphic literals (step b).
    *and* units — the property a hard-coded int-default would throw away. No type annotations are ever
    required (Pyfun has none anyway). Implemented as a `Ty::Num(var, unit)` variant resolved by a tiny
    `num` union-find, with `num` variables generalized/instantiated alongside type and unit variables.
+   **Prefix negation `-e`** (`UnOp::Neg`) is `num`-constrained and **unit-preserving** (`-5<m> :
+   int<m>`). It is a **parser-level prefix operator**, deliberately *not* a lexer negative-literal:
+   a signed-literal token would make `x-1` lex as `x` applied to `-1` (the ML/F# whitespace trap), so
+   instead `-` is subtraction when it has a left operand and negation when it doesn't. It binds tighter
+   than `*`/`/` and looser than application (`-f x` = `-(f x)`, `2 * -3` = `2 * (-3)`), coexists with
+   the `(-)` operator section, and enables **negative integer literal patterns** (`case -1:`, the sign
+   folded into the pattern, as Python's `match` allows). Lowers to Python `-x`.
 3. **Polymorphic numeric literals; default `int`. ✅ implemented.** An integer literal `1` has type
    `num 'a => 'a` and adapts to context, so mixed-literal arithmetic just works the Python way:
    `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`. An unresolved numeric defaults

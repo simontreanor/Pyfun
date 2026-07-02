@@ -545,6 +545,8 @@ impl BinOp {
 pub enum UnOp {
     /// `not e` — logical negation.
     Not,
+    /// `-e` — arithmetic negation (numeric, unit-preserving).
+    Neg,
 }
 
 impl UnOp {
@@ -552,6 +554,7 @@ impl UnOp {
     pub fn symbol(self) -> &'static str {
         match self {
             UnOp::Not => "not",
+            UnOp::Neg => "-",
         }
     }
 }

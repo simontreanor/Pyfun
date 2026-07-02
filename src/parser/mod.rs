@@ -794,7 +794,7 @@ impl Parser {
 
     fn parse_multiplicative(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut lhs = self.parse_application()?;
+        let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
                 Tok::Star => BinOp::Mul,
@@ -803,7 +803,7 @@ impl Parser {
                 _ => break,
             };
             self.bump();
-            let rhs = self.parse_application()?;
+            let rhs = self.parse_unary()?;
             lhs = self.mk(
                 start,
                 ExprKind::Binary {
@@ -814,6 +814,27 @@ impl Parser {
             );
         }
         Ok(lhs)
+    }
+
+    /// Prefix arithmetic negation `-e`, binding tighter than `*`/`/` and looser
+    /// than application (`-f x` is `-(f x)`, `2 * -3` is `2 * (-3)`). A prefix
+    /// operator, not a lexer negative-literal, so `x-1` stays subtraction and only
+    /// `f (-1)` (parenthesized) applies `f` to a negative. `-` is subtraction when
+    /// it has a left operand (handled in `parse_additive`); here it has none.
+    fn parse_unary(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        if matches!(self.peek(), Tok::Minus) {
+            self.bump();
+            let operand = self.parse_unary()?;
+            return Ok(self.mk(
+                start,
+                ExprKind::Unary {
+                    op: UnOp::Neg,
+                    expr: Box::new(operand),
+                },
+            ));
+        }
+        self.parse_application()
     }
 
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
@@ -1274,6 +1295,16 @@ impl Parser {
             Tok::Int(n) => {
                 self.bump();
                 Ok(Pattern::Int(n))
+            }
+            // A negative integer literal pattern `case -1:` — the sign folds into
+            // the literal (Python's `match` likewise allows `-` before a number in a
+            // literal pattern). Only integers have literal patterns, so `- Int` only.
+            Tok::Minus if matches!(self.peek2(), Tok::Int(_)) => {
+                self.bump();
+                let Tok::Int(n) = self.bump() else {
+                    unreachable!("peek2 guaranteed an integer")
+                };
+                Ok(Pattern::Int(-n))
             }
             Tok::Str(s) => {
                 self.bump();

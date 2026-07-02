@@ -31,6 +31,14 @@ const PROGRAMS: &[&str] = &[
     "let r = a or b and c",
     "let r = not a",
     "let r = not a == b",
+    // Prefix arithmetic negation.
+    "let a = -5",
+    "let b = abs (-5)",
+    "let c = -3 + 10",
+    "let d = 2 * -3",
+    "let e = -(4 + 1)",
+    "let f = 0 - -7",
+    "let g = -x",
     "let chk lo hi x = lo <= x and x <= hi",
     // Operator sections `(op)` — a binary operator as a curried function.
     "let mul = (*)",
@@ -53,6 +61,8 @@ const PROGRAMS: &[&str] = &[
     "let grade n =\n  if n >= 90 then \"A\"\n  elif n >= 80 then \"B\"\n  else \"F\"",
     "let compose = fun f g x -> f (g x)",
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
+    // A negative integer literal pattern.
+    "let sign n =\n  match n:\n    case -1: \"neg\"\n    case 0: \"zero\"\n    case _: \"pos\"",
     "let unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
     "let nested =\n  match p:\n    case Pair (Some a) b: a\n    case _: b",
     // Record patterns: shorthand, explicit, subset, and nested sub-patterns. The

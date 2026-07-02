@@ -157,6 +157,12 @@ Python-familiar numerics via a single closed built-in constraint. Both steps shi
   polymorphic over int/float **and units**. Implemented as `Ty::Num(var, unit)` + a `num` union-find,
   generalized/instantiated like type and unit vars. No annotations; no user-extensible type classes;
   no F# `inline`/SRTP (Python dispatches operators at runtime). `+ - *` stay numeric.
+- **✅ Prefix negation `-e`** (`UnOp::Neg`): `num`-constrained, **unit-preserving** (`-5<m> : int<m>`).
+  A parser-level prefix operator (not a lexer negative-literal, avoiding the `x-1` whitespace trap):
+  `-` is subtraction with a left operand, negation without; binds tighter than `*`/`/`, looser than
+  application. Coexists with the `(-)` section; enables negative integer literal patterns (`case -1:`).
+  Lowers to Python `-x`. (This closed a real gap — negatives were previously only reachable via
+  `0 - n`.)
 - **Unlocks:** real numeric programming; makes units genuinely useful (physics is floats — they get
   dimensional checking for free, e.g. `10.5<m> / 2.0<s> : float<m/s>`).
 - **Remaining nearby work:** a guiding error for `+` on strings. Minor wart: a literal unified to

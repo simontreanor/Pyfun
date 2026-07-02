@@ -2364,6 +2364,13 @@ impl Infer {
                     self.unify(&Ty::Bool, &t, expr.span())?;
                     Ok(Ty::Bool)
                 }
+                // Arithmetic negation: numeric, preserving the operand's unit
+                // (`-5<m> : int<m>`).
+                UnOp::Neg => {
+                    let t = self.infer_expr(expr, env)?;
+                    let (base, unit) = self.expect_num(&t, expr.span())?;
+                    Ok(self.num_ty(base, self.apply_unit(&unit)))
+                }
             },
 
             // `(op)` is the curried lambda `fun a b -> a op b`: desugar and infer,
