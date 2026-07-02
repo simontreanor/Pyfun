@@ -83,6 +83,12 @@ let rank c =
     case Green: 2
     case Blue: 3
 
+# Mutual recursion works implicitly (no `rec`/`and`): `isEven` sees `isOdd` and
+# vice versa, defined in either order.
+let isEven n = if n == 0 then true else isOdd (n - 1)
+let isOdd n = if n == 0 then false else isEven (n - 1)
+let tenEven = isEven 10               # true
+
 # Or-patterns: `case a | b:` matches any alternative (Python-identical). All
 # alternatives must bind the same variables (here, none).
 let size n =
@@ -333,6 +339,7 @@ let debugLine = f"{parsed=}"                                    # "parsed=41"
 # printed numbers are plain Python numbers.
 print answer                         # 42
 print stillFortyTwo                   # Some(42)  (as-pattern binds the whole value)
+print tenEven                          # True  (mutual recursion: isEven/isOdd)
 print (fact 5)                       # 120  (recursive)
 print seven                          # 7
 print (rank Green)                   # 2

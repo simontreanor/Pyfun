@@ -54,8 +54,15 @@ rather than checked — almost none of this is in the type system). Each was ver
    string -> string` (Python `s[start:end]` — total, end-exclusive, clamps out-of-range; via a new
    `PyExpr::Slice` node so it emits readable `s[start:end]`) and `String.tryIndexOf : string -> string ->
    Option int` (via `str.find`, `None` when absent — total, no `IndexError`, like `List.get`).
-9. **Mutual recursion** (M) — `let isEven … and isOdd …`; today "no cross-binding mutual recursion" (was a
-   drip-fed aside). Needs an `and` grouping or SCC binding groups in `infer_binding`; monomorphic-in-group.
+9. **Mutual recursion** — ✅ **done 2026-07-02**. Mutually-recursive top-level functions type-check
+   together, in any order (`isEven`/`isOdd`) — **implicit, no `and` keyword** (which would clash with the
+   boolean `and`). `run` finds cycles among top-level `let`s via scope-accurate free-variable analysis
+   (`collect_free`) + SCC (`strongly_connected`); each all-function cycle is inferred as a group
+   (`infer_mutual_group`: pre-bind mono, infer all bodies, tie knots, generalize each against the outer
+   env — so the group is monomorphic within itself but polymorphic to the rest, preserving `id`-style
+   let-polymorphism). Value cycles stay rejected. Lowers unchanged (Python defs resolve names at call
+   time). **Limitation:** one-way forward references between *independent* (non-cyclic) top-level bindings
+   still need declare-before-use — only genuine cycles are grouped.
 10. ~~**`as`-patterns**~~ — ✅ **done 2026-07-02**. `case p as x:` binds the whole matched value to `x`
     alongside destructuring (`Pattern::As`, `as` a keyword binding looser than `|`). **Transparent for
     exhaustiveness** (peeled in the usefulness algorithm — `Circle r as w` covers exactly Circle, `_ as x`

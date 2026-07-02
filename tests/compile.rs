@@ -306,6 +306,21 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn e2e_mutual_recursion() {
+    // Mutually-recursive functions lower to plain Python defs (which resolve names
+    // at call time, so no reordering is needed) and run.
+    run_and_check(
+        "
+        let isEven = fun n -> if n == 0 then true else isOdd (n - 1)
+        let isOdd = fun n -> if n == 0 then false else isEven (n - 1)
+        let a = isEven 10
+        let b = isOdd 10
+        ",
+        &[("a", "True"), ("b", "False")],
+    );
+}
+
+#[test]
 fn as_pattern_lowers_to_python_as() {
     let py = pyfun::compile(
         "let f o =\n  match o:\n    case Some v as w: w\n    case None: None",

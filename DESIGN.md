@@ -436,7 +436,17 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   …`) is in scope in its own body, like Python's `def` — no `rec` keyword. A plain value binding still cannot
   self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in Python). Mechanism:
   pre-bind `f : α` (fresh) before inferring the body, unify, then generalize (standard monomorphic-
-  recursion HM); lowering is unchanged (Python functions are already recursive). **Tail-call optimization
+  recursion HM); lowering is unchanged (Python functions are already recursive). **Mutual recursion**
+  (landed) extends this to *groups*: `run` builds the dependency graph among top-level `let` bindings
+  (scope-accurate free variables, `collect_free`), finds cycles by SCC (`strongly_connected`), and infers
+  each all-function cycle together (`infer_mutual_group`) — pre-bind every member monomorphically, infer
+  all bodies (so `isEven` sees `isOdd` and vice versa, in any order), tie each knot, then generalize each
+  against the *outer* env. Grouping only genuine cycles keeps let-polymorphism intact (an independent
+  helper stays its own singleton SCC and generalizes normally). It's **implicit — no `and` keyword**
+  (which would clash with the boolean `and`). A value cycle (`let a = b\nlet b = a`) is not a function
+  group, so it stays rejected; and a one-way forward reference between *independent* (non-cyclic) bindings
+  still requires declare-before-use. Lowering is unchanged (Python module-level `def`s resolve names at
+  call time). **Tail-call optimization
   is deferred** — CPython does no TCO and caps recursion (~1000 frames), so deep recursion can
   `RecursionError`, exactly like hand-written Python; the **stack-safe path is the `List`/`Seq`
   combinators** (they lower to Python's iterative `reduce`/`map`). A future slice may rewrite

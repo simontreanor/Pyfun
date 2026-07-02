@@ -702,13 +702,110 @@ fn run(
     // Names of this module's top-level `let` values, for its export interface.
     let mut exported: Vec<String> = Vec::new();
 
-    for item in &module.items {
+    // Mutual-recursion grouping: find cycles among top-level `let` bindings so
+    // mutually-recursive functions (and forward references between them) type-check.
+    // Only all-function cycles are grouped (a value cycle stays declare-before-use,
+    // erroring as before); each group is processed at its first member's position.
+    enum Role {
+        /// Process this whole group here (member item indices, in source order).
+        Leader(Vec<usize>),
+        /// A non-first member of a group already processed at its leader.
+        Skip,
+    }
+    let roles: HashMap<usize, Role> = {
+        let lets: Vec<(usize, &LetBinding)> = module
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| match it {
+                Item::Let(b) => Some((i, b)),
+                _ => None,
+            })
+            .collect();
+        let name_to_local: HashMap<&str, usize> = lets
+            .iter()
+            .enumerate()
+            .map(|(local, (_, b))| (b.name.as_str(), local))
+            .collect();
+        let succ: Vec<Vec<usize>> = lets
+            .iter()
+            .map(|(_, b)| {
+                let mut bound = HashSet::new();
+                for p in &b.params {
+                    bound.insert(p.name.clone());
+                }
+                let mut refs = HashSet::new();
+                collect_free(&b.value, &bound, &mut refs);
+                let mut out: Vec<usize> = refs
+                    .iter()
+                    .filter_map(|n| name_to_local.get(n.as_str()).copied())
+                    .collect();
+                out.sort_unstable();
+                out.dedup();
+                out
+            })
+            .collect();
+        // A binding is a "function" (safe to pre-bind in a cycle) if it takes
+        // parameters or its value is a lambda — the same test the lowerer uses for
+        // arity. A value cycle (`let a = b\nlet b = a`) is not grouped, so it stays
+        // declare-before-use and errors as before.
+        let is_fn = |b: &LetBinding| {
+            !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. })
+        };
+        let mut roles = HashMap::new();
+        for comp in strongly_connected(&succ) {
+            // Only group genuine multi-member cycles whose members are all functions.
+            if comp.len() < 2 || !comp.iter().all(|&l| is_fn(lets[l].1)) {
+                continue;
+            }
+            let mut member_items: Vec<usize> = comp.iter().map(|&l| lets[l].0).collect();
+            member_items.sort_unstable();
+            for (k, &item_idx) in member_items.iter().enumerate() {
+                if k == 0 {
+                    roles.insert(item_idx, Role::Leader(member_items.clone()));
+                } else {
+                    roles.insert(item_idx, Role::Skip);
+                }
+            }
+        }
+        roles
+    };
+
+    for (idx, item) in module.items.iter().enumerate() {
         match item {
             // Measures, types, and externs are all handled by the pre-pass.
             Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
             // `import` is resolved by the multi-file driver, which feeds the
             // imported schemes in via `seed`; the item itself binds nothing here.
             Item::Import { .. } => {}
+            Item::Let(_) if matches!(roles.get(&idx), Some(Role::Skip)) => {
+                // Already inferred with its group's leader.
+            }
+            Item::Let(_) if matches!(roles.get(&idx), Some(Role::Leader(_))) => {
+                let Some(Role::Leader(members)) = roles.get(&idx) else {
+                    unreachable!()
+                };
+                let group: Vec<&LetBinding> = members
+                    .iter()
+                    .map(|&mi| match &module.items[mi] {
+                        Item::Let(b) => b,
+                        _ => unreachable!("group members are `let` items"),
+                    })
+                    .collect();
+                for (name, res) in inf.infer_mutual_group(&group, &env) {
+                    exported.push(name.clone());
+                    match res {
+                        Ok(scheme) => {
+                            env.insert(name, scheme);
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            let ty = inf.fresh();
+                            env.insert(name, Scheme::mono(ty));
+                        }
+                    }
+                }
+            }
             Item::Let(binding) => {
                 exported.push(binding.name.clone());
                 match inf.infer_binding(binding, &env) {
@@ -1202,6 +1299,186 @@ fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
 /// The top-level alternatives a pattern denotes: an or-pattern flattens to its
 /// (recursively flattened) alternatives, anything else is itself (`DESIGN.md`
 /// §7.2). Used to expand or-patterns for exhaustiveness.
+/// Collect the free variable names of `expr` — references not bound by an
+/// enclosing param / lambda / block-`let` / `match` pattern / CE binding. Used to
+/// build the top-level dependency graph for mutual-recursion grouping.
+fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Var(n) => {
+            if !bound.contains(n) {
+                out.insert(n.clone());
+            }
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Unit
+        | ExprKind::OpFunc(_) => {}
+        ExprKind::Interp { parts } => {
+            for part in parts {
+                if let InterpPart::Expr(e) = part {
+                    collect_free(e, bound, out);
+                }
+            }
+        }
+        ExprKind::Fn { params, body } => {
+            let mut b = bound.clone();
+            for p in params {
+                b.insert(p.name.clone());
+            }
+            collect_free(body, &b, out);
+        }
+        ExprKind::App { func, arg } => {
+            collect_free(func, bound, out);
+            collect_free(arg, bound, out);
+        }
+        ExprKind::If { cond, then, else_ } => {
+            collect_free(cond, bound, out);
+            collect_free(then, bound, out);
+            collect_free(else_, bound, out);
+        }
+        ExprKind::Try { body } => collect_free(body, bound, out),
+        ExprKind::Match { scrutinee, arms } => {
+            collect_free(scrutinee, bound, out);
+            for arm in arms {
+                let mut b = bound.clone();
+                pattern_names(&arm.pattern, &mut b);
+                if let Some(g) = &arm.guard {
+                    collect_free(g, &b, out);
+                }
+                collect_free(&arm.body, &b, out);
+            }
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_free(lhs, bound, out);
+            collect_free(rhs, bound, out);
+        }
+        ExprKind::Unary { expr, .. } => collect_free(expr, bound, out),
+        ExprKind::Compare { first, rest } => {
+            collect_free(first, bound, out);
+            for (_, e) in rest {
+                collect_free(e, bound, out);
+            }
+        }
+        ExprKind::Pipe { lhs, rhs } => {
+            collect_free(lhs, bound, out);
+            collect_free(rhs, bound, out);
+        }
+        ExprKind::Ce { items, .. } => {
+            let mut b = bound.clone();
+            for item in items {
+                match item {
+                    CeItem::Let { name, value, .. } | CeItem::LetBang { name, value, .. } => {
+                        collect_free(value, &b, out);
+                        b.insert(name.clone());
+                    }
+                    CeItem::DoBang(e)
+                    | CeItem::Return(e)
+                    | CeItem::ReturnBang(e)
+                    | CeItem::Yield(e)
+                    | CeItem::YieldBang(e) => collect_free(e, &b, out),
+                }
+            }
+        }
+        ExprKind::Annot { value, .. } => collect_free(value, bound, out),
+        ExprKind::List { elems } | ExprKind::Tuple { elems } => {
+            for e in elems {
+                collect_free(e, bound, out);
+            }
+        }
+        ExprKind::Record { fields, .. } => {
+            for f in fields {
+                collect_free(&f.value, bound, out);
+            }
+        }
+        ExprKind::RecordUpdate { base, fields } => {
+            collect_free(base, bound, out);
+            for f in fields {
+                collect_free(&f.value, bound, out);
+            }
+        }
+        ExprKind::Field { base, .. } => collect_free(base, bound, out),
+        ExprKind::Block { stmts } => {
+            let mut b = bound.clone();
+            for stmt in stmts {
+                match stmt {
+                    BlockStmt::Let(binding) => {
+                        let mut vb = b.clone();
+                        for p in &binding.params {
+                            vb.insert(p.name.clone());
+                        }
+                        collect_free(&binding.value, &vb, out);
+                        b.insert(binding.name.clone());
+                    }
+                    BlockStmt::Expr(e) => collect_free(e, &b, out),
+                }
+            }
+        }
+        ExprKind::Assign { value, .. } => collect_free(value, bound, out),
+    }
+}
+
+/// Collect the variables a pattern binds (for shadowing in [`collect_free`]).
+fn pattern_names(pat: &Pattern, out: &mut HashSet<String>) {
+    match pat {
+        Pattern::Var { name, .. } => {
+            out.insert(name.clone());
+        }
+        Pattern::Ctor { args, .. } => args.iter().for_each(|a| pattern_names(a, out)),
+        Pattern::Record { fields, .. } => fields.iter().for_each(|f| pattern_names(&f.pattern, out)),
+        Pattern::Tuple { elems } => elems.iter().for_each(|e| pattern_names(e, out)),
+        Pattern::Or(alts) => {
+            if let Some(a) = alts.first() {
+                pattern_names(a, out);
+            }
+        }
+        Pattern::As { pattern, name, .. } => {
+            out.insert(name.clone());
+            pattern_names(pattern, out);
+        }
+        Pattern::Wildcard | Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => {}
+    }
+}
+
+/// Strongly-connected components of a directed graph given each node's successors,
+/// via reachability (n is small — the top-level binding count). Two distinct nodes
+/// share a component iff each reaches the other. Returned as node-index lists; the
+/// order is by ascending first member.
+fn strongly_connected(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let n = succ.len();
+    let reach: Vec<HashSet<usize>> = (0..n)
+        .map(|i| {
+            let mut seen = HashSet::new();
+            let mut stack = succ[i].clone();
+            while let Some(j) = stack.pop() {
+                if seen.insert(j) {
+                    stack.extend(succ[j].iter().copied());
+                }
+            }
+            seen
+        })
+        .collect();
+    let mut comp_of = vec![None; n];
+    let mut comps = Vec::new();
+    for i in 0..n {
+        if comp_of[i].is_some() {
+            continue;
+        }
+        let cid = comps.len();
+        comp_of[i] = Some(cid);
+        let mut members = vec![i];
+        for j in (i + 1)..n {
+            if comp_of[j].is_none() && reach[i].contains(&j) && reach[j].contains(&i) {
+                comp_of[j] = Some(cid);
+                members.push(j);
+            }
+        }
+        comps.push(members);
+    }
+    comps
+}
+
 fn expand_or(pat: &Pattern) -> Vec<Pattern> {
     match pat {
         Pattern::Or(alts) => alts.iter().flat_map(expand_or).collect(),
@@ -2404,6 +2681,78 @@ impl Infer {
             self.generalize(env, &ty)
         };
         Ok((scheme, self.apply_eff(&body_eff)))
+    }
+
+    /// Infer a group of mutually-recursive **function** bindings together
+    /// (`DESIGN.md` §7.1): pre-bind every member at a fresh monomorphic type so
+    /// each body sees the others, infer all bodies, tie each recursive knot, then
+    /// generalize each against the *outer* env (not the group's own mono bindings) —
+    /// so the group is monomorphic within itself but each member stays polymorphic
+    /// to the rest of the module. Extends `infer_binding`'s single-binding
+    /// self-recursion across the group. Returns one `(name, scheme-or-error)` per
+    /// member, in the given order. Callers pass only all-function groups.
+    fn infer_mutual_group(
+        &mut self,
+        group: &[&LetBinding],
+        outer_env: &Env,
+    ) -> Vec<(String, Result<Scheme, TypeError>)> {
+        // Pre-bind each member's name at a fresh monomorphic type.
+        let mut body_env = outer_env.clone();
+        let mut self_tys = Vec::with_capacity(group.len());
+        for b in group {
+            let t = self.fresh();
+            body_env.insert(b.name.clone(), Scheme::mono(t.clone()));
+            self_tys.push(t);
+        }
+        // Infer each body against the group env plus its own params; tie the knot.
+        let mut inferred: Vec<Result<(Ty, Effect), TypeError>> = Vec::with_capacity(group.len());
+        for (b, self_ty) in group.iter().zip(&self_tys) {
+            let outer_eff = std::mem::replace(&mut self.cur_eff, Effect::pure());
+            let mut fn_env = body_env.clone();
+            let mut param_tys = Vec::with_capacity(b.params.len());
+            for p in &b.params {
+                let pty = self.fresh();
+                param_tys.push(pty.clone());
+                if self.record_types {
+                    self.recorded.push((p.span.span(), pty.clone()));
+                }
+                fn_env.insert(p.name.clone(), Scheme::mono(pty));
+            }
+            let res = self.infer_expr(&b.value, &fn_env).and_then(|body_ty| {
+                let mut ty = body_ty;
+                let mut eff = self.cur_eff.clone();
+                for p in param_tys.into_iter().rev() {
+                    ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
+                    eff = Effect::pure();
+                }
+                self.unify(self_ty, &ty, b.value.span())?;
+                Ok(ty)
+            });
+            let body_eff = self.cur_eff.clone();
+            self.cur_eff = outer_eff; // a function definition leaks no effect
+            inferred.push(res.map(|ty| (ty, body_eff)));
+        }
+        // Generalize each against the outer env (the mono pre-bindings live only in
+        // `body_env`, so they do not block generalization of the members' vars).
+        group
+            .iter()
+            .zip(inferred)
+            .map(|(b, res)| {
+                let scheme = res.and_then(|(ty, body_eff)| {
+                    if b.pure && self.apply_eff(&body_eff).io {
+                        return Err(TypeError {
+                            message: format!("`{}` is declared `pure` but performs `io`", b.name),
+                            span: b.value.span(),
+                        });
+                    }
+                    if self.record_types {
+                        self.recorded.push((b.name_span.span(), ty.clone()));
+                    }
+                    Ok(self.generalize(outer_env, &ty))
+                });
+                (b.name.clone(), scheme)
+            })
+            .collect()
     }
 
     /// Infer the type of `expr`, recording it for hover when `record_types` is

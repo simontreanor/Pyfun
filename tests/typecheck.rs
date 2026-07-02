@@ -90,13 +90,41 @@ fn recursion_does_not_break_let_generalization() {
 }
 
 #[test]
-fn mutual_recursion_across_bindings_is_unbound() {
-    // Declare-before-use: `isEven` cannot see the later `isOdd` (no mutual recursion;
-    // `DESIGN.md` §6.1).
-    assert_error_contains(
-        "let isEven n = if n == 0 then true else isOdd (n - 1)\n\
-         let isOdd n = if n == 0 then false else isEven (n - 1)",
-        "unbound name `isOdd`",
+fn accepts_mutual_recursion() {
+    // Mutually-recursive functions form a cycle and type-check together, in either
+    // order — `isEven` sees the later `isOdd` and vice versa.
+    assert!(
+        pyfun::check(
+            "let isEven n = if n == 0 then true else isOdd (n - 1)\n\
+             let isOdd n = if n == 0 then false else isEven (n - 1)"
+        )
+        .is_ok()
+    );
+    // A three-way cycle also groups.
+    assert!(
+        pyfun::check(
+            "let a n = if n == 0 then 0 else b (n - 1)\n\
+             let b n = if n == 0 then 1 else c (n - 1)\n\
+             let c n = if n == 0 then 2 else a (n - 1)"
+        )
+        .is_ok()
+    );
+    // A recursive *value* cycle is still rejected (mutual recursion is for functions).
+    assert!(pyfun::check("let a = b\nlet b = a").is_err());
+}
+
+#[test]
+fn mutual_recursion_preserves_polymorphism() {
+    // Grouping is by genuine cycle (SCC), so an independent polymorphic helper used
+    // by two recursive functions at different types still generalizes.
+    assert!(
+        pyfun::check(
+            "let id x = x\n\
+             let ping n = if n == 0 then id 0 else pong (n - 1)\n\
+             let pong n = if n == 0 then id 1 else ping (n - 1)\n\
+             let flag = id true"
+        )
+        .is_ok()
     );
 }
 
