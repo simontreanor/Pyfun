@@ -663,7 +663,11 @@ constraint with polymorphic literals (step b).
    folded into the pattern, as Python's `match` allows). Lowers to Python `-x`.
 3. **Polymorphic numeric literals; default `int`. ✅ implemented.** An integer literal `1` has type
    `num 'a => 'a` and adapts to context, so mixed-literal arithmetic just works the Python way:
-   `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`. An unresolved numeric defaults
+   `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`, and include **scientific notation**
+   (`1e6`, `2.5e-3`, `1E3`, `6.674e-11<m^3 / kg s^2>`): the lexer consumes the exponent (including its
+   sign, so `e-3` isn't handed to unary minus), a number carrying an exponent is `float` even with no
+   `.`, and `e` is only consumed when a real exponent follows (so `2exp`/`1e` stay integer-then-identifier).
+   An unresolved numeric defaults
    to `int` — operationally automatic rather than a separate pass: it *displays* as `int`, and since
    it lowers to an int literal that Python coerces in arithmetic, results stay correct. (Minor wart:
    a literal whose type unifies to `float` still emits as an int literal, so a *bare* such literal

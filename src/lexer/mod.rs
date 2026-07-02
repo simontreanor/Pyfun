@@ -449,11 +449,33 @@ impl<'a> Lexer<'a> {
         }
         // A '.' followed by a digit makes this a float; a trailing '.' is not
         // consumed (it isn't valid in the Phase 1 subset).
-        let is_float = self.peek() == Some(b'.') && matches!(self.peek2(), Some(b'0'..=b'9'));
+        let mut is_float = self.peek() == Some(b'.') && matches!(self.peek2(), Some(b'0'..=b'9'));
         if is_float {
             self.pos += 1; // consume '.'
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.pos += 1;
+            }
+        }
+        // Optional exponent: `e`/`E`, an optional sign, then digits (`1e6`,
+        // `2.5e-3`, `6.674e-11`). A number with an exponent is a float even without
+        // a fractional part. The sign is consumed here (not left to unary minus).
+        // Only consume `e` when a valid exponent follows, else it's an identifier
+        // (so `x1` after a number, or `1en` with no digits, still lexes sensibly).
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            let has_exponent = match self.peek2() {
+                Some(b'0'..=b'9') => true,
+                Some(b'+' | b'-') => matches!(self.src.get(self.pos + 2), Some(b'0'..=b'9')),
+                _ => false,
+            };
+            if has_exponent {
+                is_float = true;
+                self.pos += 1; // 'e' / 'E'
+                if matches!(self.peek(), Some(b'+' | b'-')) {
+                    self.pos += 1; // exponent sign
+                }
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
+                    self.pos += 1;
+                }
             }
         }
         let text = self.slice(start, self.pos);
@@ -904,6 +926,26 @@ mod tests {
         assert_eq!(
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn scientific_notation_floats() {
+        // Exponent (with optional sign, upper/lowercase e); a number with an
+        // exponent is a float even without a fractional part.
+        assert_eq!(kinds("1e6"), vec![Tok::Float(1e6), Tok::Eof]);
+        assert_eq!(kinds("2.5e-3"), vec![Tok::Float(2.5e-3), Tok::Eof]);
+        assert_eq!(kinds("1E3"), vec![Tok::Float(1e3), Tok::Eof]);
+        assert_eq!(kinds("1e+4"), vec![Tok::Float(1e4), Tok::Eof]);
+        // Back-compat: an `e` with no valid exponent is a separate identifier, not
+        // part of the number (so `2exp` is `2` then `exp`, `1e` is `1` then `e`).
+        assert_eq!(
+            kinds("2exp"),
+            vec![Tok::Int(2), Tok::Ident("exp".to_string()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("1e"),
+            vec![Tok::Int(1), Tok::Ident("e".to_string()), Tok::Eof]
         );
     }
 

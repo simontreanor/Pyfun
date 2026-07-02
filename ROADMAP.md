@@ -34,8 +34,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    effect-poly. **No `xs[0]` surface syntax** (would risk `IndexError`; `get` is the total path) and **no
    cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal). NB immutable-style, so
    repeated `concat` to build a list is O(n²) — use `map`/`fold`/`Seq`.
-4. **Scientific-notation float literals** (S) — `1e6`, `2.5e-3`, `6.674e-11<m^3 / kg s^2>`; lexer-only,
-   but the exponent sign must be consumed in the lexer. Blocks the units-of-measure showcase's own domain.
+4. ~~**Scientific-notation float literals**~~ — ✅ **done 2026-07-02**. `1e6`, `2.5e-3`, `1E3`, `1e+4`,
+   `6.674e-11<m^3 / kg s^2>`. Lexer-only (`lex_number`): the exponent sign is consumed in the lexer (not
+   left to unary minus), a number with an exponent is a float even without a `.`, and `e` is only consumed
+   when a valid exponent follows (so `2exp`/`1e` stay int-then-identifier — back-compat).
 5. **Numeric conversions** (S) — `round`/`floor`/`ceil`/`truncate` and `String.toFloat : string -> Option
    float` (mirror the existing `toInt`; today you can `fromFloat` but not parse one back). Decide unit
    interaction (`round : float<'u> -> int<'u>`?).

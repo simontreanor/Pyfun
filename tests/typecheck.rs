@@ -120,6 +120,18 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_scientific_notation() {
+    assert!(pyfun::check("let x = 1e6").is_ok());
+    assert!(pyfun::check("let x = 2.5e-3").is_ok());
+    // A number with an exponent is a float, so it mixes with float arithmetic.
+    assert!(pyfun::check("let x = 1e6 + 2.0").is_ok());
+    // Scientific notation with a unit annotation (the physics case).
+    assert!(pyfun::check("measure m\nlet x = 3.0e8<m>").is_ok());
+    // It's a float, not num-polymorphic — an int context rejects it.
+    assert_error_contains("let r = List.get 1e6 [1, 2]", "float");
+}
+
+#[test]
 fn accepts_list_completeness_ops() {
     assert!(pyfun::check("let r = List.get 0 [1, 2, 3]").is_ok()); // : Option int
     assert!(pyfun::check("let r = List.isEmpty [1]").is_ok());

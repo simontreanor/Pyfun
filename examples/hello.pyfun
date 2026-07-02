@@ -189,6 +189,11 @@ let area w h = w * h
 let floor = area 4<m> 5<m>            # int<m^2>
 # `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
+# Float literals support scientific notation (`1e6`, `2.5e-3`) — the exponent sign
+# is part of the literal. Physics constants read naturally, units and all:
+let lightSpeed = 3.0e8<m/s>          # float<m/s>
+let planck = 6.626e-34               # float
+
 # Prefix negation `-e`: numeric and unit-preserving. It's a prefix operator (not a
 # negative-literal token), so `-` is subtraction with a left operand and negation
 # without — `depth - 2` subtracts, `-depth` negates.
@@ -295,6 +300,8 @@ print floor                          # 20
 print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
 print leftover                       # 10    (modulo, unit-preserving)
+print lightSpeed                     # 300000000.0  (scientific notation, unit erased)
+print planck                         # 6.626e-34    (scientific notation)
 print stress                         # 5.0   (derived-measure alias, erased)
 print (max distance 50<m>)           # 100
 print depth                          # -20                   (negative literal)

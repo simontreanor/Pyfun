@@ -306,6 +306,26 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn scientific_notation_lowers_to_float() {
+    let py = pyfun::compile("let a = 1e6\nlet b = 2.5e-3\nlet g = 6.674e-11").unwrap();
+    assert!(py.contains("a = 1000000.0"), "{py}");
+    assert!(py.contains("b = 0.0025"), "{py}");
+    assert!(py.contains("g = 6.674e-11"), "{py}");
+}
+
+#[test]
+fn e2e_scientific_notation() {
+    run_and_check(
+        "
+        let a = 1e3
+        let b = 2.5e-1
+        let c = 1e3 + 1.0
+        ",
+        &[("a", "1000.0"), ("b", "0.25"), ("c", "1001.0")],
+    );
+}
+
+#[test]
 fn list_completeness_ops_lower_to_helpers() {
     let py = pyfun::compile(
         "let a = List.get 0 [1, 2]\n\

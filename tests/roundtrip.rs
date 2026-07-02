@@ -13,6 +13,10 @@ const PROGRAMS: &[&str] = &[
     "let x = 1",
     "let mut y = 2",
     "let pi = 3.14",
+    // Scientific-notation float literals.
+    "let big = 1e6",
+    "let small = 2.5e-3",
+    "let grav = 6.674e-11",
     "let greeting = \"hello\\nworld\"",
     "let yes = true",
     // The unit value `()`.
