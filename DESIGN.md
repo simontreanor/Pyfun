@@ -203,9 +203,14 @@ erased to nothing themselves; only their reference sites and imports survive low
 **Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
 like Pyfun records and tuples). The big-O is Python's, *not*
-F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). So the
-linked-list idioms (`cons`/`head`/`tail`, `match`-on-cons) are a poor fit and are deferred along with
-list patterns; the bulk operations are the API. The list operations are
+F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). `List` is
+therefore the analogue of F#'s **array**, not F#'s linked `list`. So a singly-linked `list` and its
+idioms (`cons`/`head`/`tail`, `x :: xs` cons-decomposition in `match`) are a **non-goal**: a cons-cell
+type would lower to un-Pythonic linked nodes, and its recursive idiom is stack-unsafe without TCO (also
+a non-goal — CPython has none). Python has no built-in singly-linked list either (`deque` is
+doubly-ended). The array-appropriate, Python-native counterpart — **sequence patterns** `case []` /
+`case [x]` / `case [first, *rest]` over `List` — is deferred (real, not a non-goal). For now the bulk
+operations are the API. The list operations are
 `List.map`/`List.filter`/`List.fold`/`List.len`/`List.sum`/`List.rev`/`List.range`/`List.zip` — **module-
 qualified** (see *Built-in modules* below), single source of truth `types::LIST_PRELUDE` +
 `seed_list_prelude`. `List.len`/`List.sum` map name-for-name onto the Python builtins; the rest lower

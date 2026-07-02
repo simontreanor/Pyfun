@@ -21,6 +21,13 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
   Python dispatches operators at runtime.
 - **Row polymorphism** — out of scope; the global-unique-field-name rule stands unless that rule is lifted.
+- **A singly-linked `list` + `cons`/`head`/`tail` patterns** (F#'s `list`) — Pyfun's `List` *is* F#'s
+  *array* (a Python `list`: O(1) index/len). A cons-cell type would lower to un-Pythonic linked-node
+  classes (fighting the readable-Python ethos), and its signature idiom — recursive `x :: xs`
+  decomposition — is stack-unsafe without TCO (a non-goal, since CPython has none). Same reasoning as
+  the `Array` and TCO non-goals. Python has no built-in singly-linked list anyway (`deque` is
+  doubly-ended, a different structure). What people actually want here is **sequence patterns on the
+  existing `List`** (see Deferred) — Python-native and big-O-honest — not a new linked type.
 - **Macros** and a **package manager** — out of scope for the compiler (a future Python runtime package
   could default to `uv`).
 - **Imperative `raise`/`finally`/exception hierarchy** — Pyfun signals failure with `Error`, not by
@@ -30,8 +37,14 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
-- **List patterns + `cons`/`head`/`tail`** (M–L) — deferred until a big-O-honest representation is chosen
-  (the eager `List` is a Python array; these want a linked list, so it's a *new type*, not just syntax).
+- **Sequence patterns on `List`** (M) — `case []`, `case [x]`, `case [first, *rest]` in `match` over the
+  existing `List` (a Python array). Python-native (`match` supports these on lists), big-O-honest (`*rest`
+  is a visible O(n) slice-copy, not a free cons), and slots into the Python-framed `match` — the tuple work
+  already emits `PyPattern::Sequence`. Needs an empty/`[…]`/`[…, *rest]` pattern node, unification against
+  `List a`, and exhaustiveness (`[]` vs non-empty over an infinite-length type → needs a rest/wildcard
+  arm). Optionally paired with `List.head : List a -> Option a` / `List.tail` / `List.uncons` combinators
+  (no new patterns needed). This is the useful, Python-aligned piece of the old "list patterns" item; the
+  linked-list `cons`/`head`/`tail` half is now a non-goal (see above).
 - **Lift the unique-field-name restriction** (L) — needs type annotations or type-directed field
   resolution (or row polymorphism, a non-goal).
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
@@ -236,8 +249,8 @@ and `Option.map` are **effect-polymorphic**; `Map.tryFind` returns `Option`; `Ma
 `List (k, v)`) bridge through **tuples**. Lists keep `[1,2,3]` literals; the hashed collections have no
 literals (`{…}` is taken) and
 no constructors. Keys/elements must be hashable at runtime — primitives and ADT/record values both are
-(generated structural `__hash__`). `cons`/`head`/
-`tail` + list patterns deferred; the lazy counterpart is the `seq {}` CE. Covered by
+(generated structural `__hash__`). A singly-linked `list` + `cons`/`head`/`tail` is a non-goal (`List`
+*is* F#'s array); sequence patterns on `List` are deferred; the lazy counterpart is the `seq {}` CE. Covered by
 `tests/{typecheck,compile,roundtrip,run}.rs` + `examples/hello.pyfun`.
   The `Option`, `Result`, and `Seq` modules have landed too: `Option.map`/`withDefault`/`isSome`/
   `isNone`; `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`; and the lazy
@@ -355,6 +368,7 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
    Closure capture of a reassigned `mut` (`nonlocal`/`global`) **landed**. **Tuples** (structural
    `(a, b)` literals/patterns/types, deep-exhaustive) **landed**. Remaining in this band:
-   list patterns + `cons`/`head`/`tail` (awaiting a big-O-honest representation).
+   sequence patterns on `List` (`case [first, *rest]`, Python-native + big-O-honest); the linked-list
+   `cons`/`head`/`tail` variant is now a non-goal.
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.
