@@ -24,6 +24,8 @@ use pyfun::diagnostics::{self, Level};
 use pyfun::project::{self, ProjectError};
 use pyfun::syntax::{Item, Module};
 
+mod repl;
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
@@ -48,6 +50,7 @@ fn main() -> ExitCode {
             None => fail("`parse` needs a file path"),
         },
         Some("lsp") => lsp_server(),
+        Some("repl") => repl::run(),
         // Shorthand: a bare path means `compile <path>` to stdout.
         Some(path) => compile(path, None),
     }
@@ -65,6 +68,7 @@ fn help() {
     eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
+    eprintln!("  pyfun repl                                interactive read-eval-print loop");
     eprintln!("  pyfun <file.pyfun>                        shorthand for `compile`");
 }
 

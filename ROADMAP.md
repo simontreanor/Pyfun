@@ -156,7 +156,15 @@ rather than checked — almost none of this is in the type system). Each was ver
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).
 *Tooling*
-- **REPL** (M) — natural follow-on to `pyfun run`.
+- **REPL** — ✅ **done 2026-07-02**: `pyfun repl` (`src/repl.rs`). Keeps session **definitions** as
+  accumulated Pyfun source; each entry is type-checked (via `analyze`) against them — a definition is
+  remembered and echoes its inferred type (GHCi-style `name : type`), an expression is compiled with the
+  accumulated defs and run once through Python, printing its value (nothing for a `unit`-typed expr, whose
+  effect still runs). Commands: `:type`, `:{ … :}` (multi-line — needed to enter mutually-recursive
+  functions as one group), `:reset`, `:help`, `:quit` (or Ctrl-D). **MVP limitations:** entries are
+  single-line unless in a `:{` block; state = the definitions, which re-run on each expression eval, so
+  *pure* defs feel persistent but a top-level effect or `let mut` doesn't carry across entries (a
+  persistent-Python-process design is the future step). Covered by `tests/repl.rs`.
 - **Project-wide LSP cache + truly incremental reparse** (M–L) — performance, not capability; the
   per-document version cache already avoids redundant re-analysis.
 - **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
@@ -322,10 +330,9 @@ compile/roundtrip; `hello.pyfun` shows newton/pascal.
 ### 8. End-to-end `run` command — ✅ done
 `pyfun run foo.pyfun` compiles (gated on type-checking) then executes the emitted Python by piping
 it to `python`/`python3` via stdin, inheriting the program's stdout/stderr and propagating its exit
-status. A REPL is the natural follow-on. Note: without a prelude (#9) there is still no `print`, so
-a valid program runs silently — `run`'s observable value today is exit status and propagated runtime
-errors (e.g. the non-exhaustive-match guard). Covered by `tests/run.rs`.
-- **Effort/risk:** Low. **Status:** landed.
+status. Covered by `tests/run.rs`.
+- **Effort/risk:** Low. **Status:** landed. **Follow-on `pyfun repl` also landed** (see the Deferred
+  list's REPL entry) — interactive read-eval-print built on the same compile-and-run-Python pipeline.
 
 ### 9. Standard library / prelude — ✅ MVP prelude + general FFI (`extern`) + lists landed
 A set of built-in functions Pyfun programs can call. The MVP prelude has landed: `print : 'a ->
