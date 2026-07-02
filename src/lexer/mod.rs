@@ -306,14 +306,8 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'\\') => {
                     self.pos += 1;
-                    match self.peek() {
-                        Some(b'"') => lit.push('"'),
-                        Some(b'\\') => lit.push('\\'),
-                        Some(b'n') => lit.push('\n'),
-                        Some(b't') => lit.push('\t'),
-                        _ => return Err(self.err(self.pos, "invalid escape sequence")),
-                    }
-                    self.pos += 1;
+                    let c = self.lex_escape()?;
+                    lit.push(c);
                 }
                 Some(b'{') if self.peek2() == Some(b'{') => {
                     lit.push('{');
@@ -535,18 +529,53 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'\\') => {
                     self.pos += 1;
-                    match self.peek() {
-                        Some(b'"') => value.push('"'),
-                        Some(b'\\') => value.push('\\'),
-                        Some(b'n') => value.push('\n'),
-                        Some(b't') => value.push('\t'),
-                        _ => return Err(self.err(self.pos, "invalid escape sequence")),
-                    }
-                    self.pos += 1;
+                    let c = self.lex_escape()?;
+                    value.push(c);
                 }
                 Some(_) => self.push_char(&mut value),
             }
         }
+    }
+
+    /// Decode a string escape, cursor just past the `\`, consuming the whole escape
+    /// and returning the character. Shared by `lex_string` and `lex_fstring`.
+    /// Supports `\"` `\\` `\n` `\t` `\r` and `\u{HEX}` (Rust-style, 1–6 hex digits).
+    fn lex_escape(&mut self) -> Result<char, LexError> {
+        let c = match self.peek() {
+            Some(b'"') => '"',
+            Some(b'\\') => '\\',
+            Some(b'n') => '\n',
+            Some(b't') => '\t',
+            Some(b'r') => '\r',
+            Some(b'u') => return self.lex_unicode_escape(),
+            _ => return Err(self.err(self.pos.saturating_sub(1), "invalid escape sequence")),
+        };
+        self.pos += 1;
+        Ok(c)
+    }
+
+    /// Decode a `\u{HEX}` escape, cursor at the `u`. Braces are required (Rust-style,
+    /// so any 1–6 digit code point works without Python's `\uXXXX`/`\U…` split).
+    fn lex_unicode_escape(&mut self) -> Result<char, LexError> {
+        let esc_start = self.pos.saturating_sub(1); // the `\`, for error spans
+        self.pos += 1; // consume `u`
+        if self.peek() != Some(b'{') {
+            return Err(self.err(esc_start, "expected `{` after `\\u` (write `\\u{1F600}`)"));
+        }
+        self.pos += 1; // consume `{`
+        let hex_start = self.pos;
+        while matches!(self.peek(), Some(c) if is_radix_digit(c, 16)) {
+            self.pos += 1;
+        }
+        let hex = self.slice(hex_start, self.pos).to_string();
+        if self.peek() != Some(b'}') {
+            return Err(self.err(esc_start, "expected `}` to close `\\u{...}`"));
+        }
+        self.pos += 1; // consume `}`
+        let code =
+            u32::from_str_radix(&hex, 16).map_err(|_| self.err(esc_start, "invalid `\\u{...}` escape"))?;
+        char::from_u32(code)
+            .ok_or_else(|| self.err(esc_start, "invalid Unicode code point in `\\u{...}`"))
     }
 
     /// Append the (possibly multi-byte) UTF-8 character at the cursor to `out`,
@@ -966,6 +995,17 @@ mod tests {
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
         );
+        // `\r` and Rust-style `\u{HEX}` (1–6 hex digits).
+        assert_eq!(kinds(r#""a\r\nb""#), vec![Tok::Str("a\r\nb".to_string()), Tok::Eof]);
+        assert_eq!(kinds(r#""\u{e9}""#), vec![Tok::Str("é".to_string()), Tok::Eof]);
+        assert_eq!(
+            kinds(r#""hi \u{1F600}""#),
+            vec![Tok::Str("hi 😀".to_string()), Tok::Eof]
+        );
+        // Errors: unknown escape, `\u` without braces, bad code point.
+        assert!(lex(r#""\z""#).is_err());
+        assert!(lex(r#""\u41""#).is_err());
+        assert!(lex(r#""\u{110000}""#).is_err()); // > U+10FFFF
     }
 
     #[test]

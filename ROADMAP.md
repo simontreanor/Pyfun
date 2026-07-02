@@ -60,10 +60,12 @@ rather than checked — almost none of this is in the type system). Each was ver
     lowers 1:1 to Python `case p as x`.
 11. **`let _ = e` discard** (S) — discard a non-unit result without inventing a dummy name (pairs with the
     "non-final block statements must be `unit`" rule).
-12. **Numeric-literal ergonomics** — ✅ **done 2026-07-02** (`1_000_000` digit separators and
-    `0xFF`/`0o17`/`0b101` alternate bases, incl. hex with separators `0xDEAD_BEEF`; `_` consumed only
-    between digits, values normalize to decimal in the AST). **String escapes** (`\r`/`\u{…}`/raw strings)
-    remain (S) — still only `\"`/`\\`/`\n`/`\t`.
+12. **Literal ergonomics** — ✅ **done 2026-07-02**. Numeric: `1_000_000` digit separators and
+    `0xFF`/`0o17`/`0b101` alternate bases (incl. hex with separators `0xDEAD_BEEF`; `_` only between
+    digits, values normalize to decimal). String escapes: added `\r` and Rust-style **`\u{HEX}`** (1–6
+    hex digits; decodes at lex time, and the emitter now re-escapes `\r`); factored a shared `lex_escape`
+    used by both string and f-string lexing. **Raw strings** (`r"C:\path"`) remain deferred (S) — a new
+    string-prefix lexer mode like `f"`, low-demand.
 
 ### Non-goals (won't build unless a concrete need appears, with the reason)
 - **Visibility (`pub`)** — Pyfun is all-public, the Python-natural model; enforced privacy fights the ethos.
@@ -137,6 +139,9 @@ rather than checked — almost none of this is in the type system). Each was ver
   check-against-inferred with generalization, is why this is L not M.
 - **Function composition `>>` / `<<`** (S) — F#-style `f >> g` = `fun x -> g (f x)`; low priority now that
   `|>` + operator sections landed. Would desugar to a lambda like the sections.
+- **Raw strings `r"C:\path"`** (S) — a new string-prefix lexer mode (like `f"`) that skips escape
+  processing; handy for Windows paths and regex-via-`extern`. String escapes otherwise cover `\"`/`\\`/
+  `\n`/`\t`/`\r`/`\u{…}`.
 *Cross-module (file-modules follow-ons)*
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).

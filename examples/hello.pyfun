@@ -306,6 +306,8 @@ let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
 # Non-ASCII string literals are real UTF-8 (not one Latin-1 byte per char), so
 # `String.len "café"` is 4, not 5 — and the emitted Python is correctly encoded.
 let cafeLen = String.len "café"                # 4 (é is one character)
+# Escapes: \" \\ \n \t \r and Rust-style \u{HEX} (decoded to the character).
+let emojiLen = String.len "hi \u{1F600}"       # 4 ("hi " + 😀)
 
 # String interpolation: `f"...{expr}..."` (Python-style). Holes take any full
 # expression and are stringified; `{{`/`}}` are literal braces. Lowers 1:1 to a
@@ -423,6 +425,7 @@ print (String.len title)             # 12
 print parsed                          # 41   (total parse of "41")
 print unparsed                        # 0    (String.toInt "x" -> None)
 print cafeLen                         # 4    (UTF-8 "café" is 4 characters)
+print emojiLen                        # 4    (\u{1F600} is one character)
 print scoreLine                       # Ada scored 41 (ADA)   (f-string)
 print sumLine                         # 41 doubled is 82
 print debugLine                       # parsed=41             (f-string `{x=}`)

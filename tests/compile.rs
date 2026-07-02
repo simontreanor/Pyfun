@@ -417,6 +417,21 @@ fn e2e_numeric_conversions() {
 }
 
 #[test]
+fn e2e_string_escapes() {
+    // `\r`/`\u{...}` decode correctly and re-emit as valid Python (the emitter
+    // re-escapes `\r`, else a raw CR would break the literal). Output is
+    // encoding-independent: char counts, not the glyphs.
+    run_and_check(
+        "
+        let crlf = String.len \"a\\r\\nb\"
+        let emoji = String.len \"hi \\u{1F600}\"
+        let accent = String.len \"caf\\u{e9}\"
+        ",
+        &[("crlf", "4"), ("emoji", "4"), ("accent", "4")],
+    );
+}
+
+#[test]
 fn e2e_digit_separators_and_bases() {
     run_and_check(
         "
