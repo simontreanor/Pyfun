@@ -1370,6 +1370,7 @@ fn starts_atom(tok: &Tok) -> bool {
         Tok::Int(_)
             | Tok::Float(_)
             | Tok::Str(_)
+            | Tok::FStr(_)
             | Tok::True
             | Tok::False
             | Tok::Ident(_)

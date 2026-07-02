@@ -306,6 +306,14 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn fstring_is_an_application_argument() {
+    // An f-string juxtaposed as a call argument (`print f"..."`, no parens) is a
+    // single application, not two statements — `starts_atom` must accept `FStr`.
+    let py = pyfun::compile("let x = 5\nlet main = print f\"x is {x}\"").unwrap();
+    assert!(py.contains("main = print(f\"x is {x}\")"), "{py}");
+}
+
+#[test]
 fn e2e_interpolation_debug_holes() {
     run_and_check(
         "
