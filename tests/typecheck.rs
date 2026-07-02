@@ -120,6 +120,15 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_string_slice_and_index_of() {
+    assert!(pyfun::check("let r = String.slice 0 3 \"hello\"").is_ok());
+    assert!(pyfun::check("let r = String.tryIndexOf \"l\" \"hello\"").is_ok()); // : Option int
+    assert!(pyfun::check("let r = Option.withDefault 0 (String.tryIndexOf \"l\" \"hi\")").is_ok());
+    // slice bounds are ints, not strings.
+    assert_error_contains("let r = String.slice \"a\" 3 \"hello\"", "int");
+}
+
+#[test]
 fn accepts_exponentiation() {
     assert!(pyfun::check("let r = 2.0 ** 8.0").is_ok());
     assert!(pyfun::check("let r = 2 ** 10").is_ok()); // num literals coerce to float

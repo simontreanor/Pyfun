@@ -50,8 +50,10 @@ rather than checked — almost none of this is in the type system). Each was ver
    (`float -> float -> float`, sidestepping the int**negative→float trap and units-through-a-runtime-
    exponent), right-associative and tighter than unary minus (`-2.0 ** 2.0 == -4`, `2.0 ** 3.0 ** 2.0 ==
    512`), lowering to Python `**`. Num literals coerce to float, and the `(**)` section works.
-8. **String slice / substring / indexOf** (S) — `String.slice start end s` (Python `s[a:b]`),
-   `String.tryIndexOf : string -> string -> Option int`. Compounds with #3 (no `List.get` either).
+8. ~~**String slice / substring / indexOf**~~ — ✅ **done 2026-07-02**. `String.slice : int -> int ->
+   string -> string` (Python `s[start:end]` — total, end-exclusive, clamps out-of-range; via a new
+   `PyExpr::Slice` node so it emits readable `s[start:end]`) and `String.tryIndexOf : string -> string ->
+   Option int` (via `str.find`, `None` when absent — total, no `IndexError`, like `List.get`).
 9. **Mutual recursion** (M) — `let isEven … and isOdd …`; today "no cross-binding mutual recursion" (was a
    drip-fed aside). Needs an `and` grouping or SCC binding groups in `infer_binding`; monomorphic-in-group.
 10. **`as`-patterns** (S–M) — `case Some v as w:`; a `Pattern::As` binding, recurse for exhaustiveness,

@@ -294,7 +294,11 @@ mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Ma
 **Strings — the `String` module (implemented).** Text operations over the built-in `string` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
 `upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
-`toList` (single source of truth `types::STRING_PRELUDE` + `seed_string_prelude`). **Naming follows the
+`toFloat`/`toList`/`slice`/`tryIndexOf` (single source of truth `types::STRING_PRELUDE` +
+`seed_string_prelude`). `slice start end s` → `s[start:end]` (total Python slicing, end-exclusive,
+clamps out-of-range; emitted via a `PyExpr::Slice` node so the output reads `s[a:b]`); `tryIndexOf sub s
+: … -> Option int` uses `str.find` and returns `None` when absent (total — no `IndexError`, like
+`List.get`). **Naming follows the
 `List` precedent** — use Python's word where it has a natural one (`len`/`upper`/`lower`/`strip`/`split`/
 `join`/`replace`, matching Python's `str` methods, and consistent with `List.len`), and Pyfun's own
 convention otherwise (the `contains`/`ofList`-style `toInt`/`toList`/`fromInt` family, and camelCase for

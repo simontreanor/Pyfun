@@ -306,6 +306,31 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn string_slice_lowers_to_python_slicing() {
+    let py = pyfun::compile("let a = String.slice 0 3 \"hello\"").unwrap();
+    assert!(py.contains("return s[start:end]"), "readable slice: {py}");
+}
+
+#[test]
+fn e2e_string_slice_and_index_of() {
+    run_and_check(
+        "
+        let s = \"hello world\"
+        let a = String.slice 0 5 s
+        let b = String.slice 6 100 s
+        let c = Option.withDefault (0 - 1) (String.tryIndexOf \"world\" s)
+        let d = Option.withDefault (0 - 1) (String.tryIndexOf \"zzz\" s)
+        ",
+        &[
+            ("a", "hello"),
+            ("b", "world"),   // out-of-range end clamps (total)
+            ("c", "6"),
+            ("d", "-1"),      // not found -> None -> default
+        ],
+    );
+}
+
+#[test]
 fn exponentiation_lowers_right_assoc() {
     let py = pyfun::compile("let a = 2.0 ** 3.0 ** 2.0\nlet b = -2.0 ** 2.0").unwrap();
     // Right-associative, so no parens needed on the nested `**`.

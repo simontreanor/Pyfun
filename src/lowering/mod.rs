@@ -1208,6 +1208,11 @@ impl Lowerer {
             "String.startsWith" => coll(self, "_pf_str_starts_with"),
             "String.endsWith" => coll(self, "_pf_str_ends_with"),
             "String.replace" => coll(self, "_pf_str_replace"),
+            "String.slice" => coll(self, "_pf_str_slice"),
+            "String.tryIndexOf" => {
+                self.needs_option = true;
+                coll(self, "_pf_str_index_of")
+            }
             // `String.toFloat` is total (guarded `float(s)`), like `toInt`.
             "String.toFloat" => {
                 self.needs_option = true;
@@ -2254,6 +2259,37 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 helper,
                 &["old", "new", "s"],
                 method(name("s"), "replace", vec![name("old"), name("new")]),
+            ),
+            // String.slice(start, end, s) -> s[start:end]  (total, Python slicing)
+            "_pf_str_slice" => def1(
+                helper,
+                &["start", "end", "s"],
+                PyExpr::Slice {
+                    value: Box::new(name("s")),
+                    lower: Box::new(name("start")),
+                    upper: Box::new(name("end")),
+                },
+            ),
+            // String.tryIndexOf(sub, s): i = s.find(sub); Some(i) if i >= 0 else None_
+            // (`find` returns -1 when absent, so this is total.)
+            "_pf_str_index_of" => def(
+                helper,
+                &["sub", "s"],
+                vec![
+                    PyStmt::Assign {
+                        target: "i".to_string(),
+                        value: method(name("s"), "find", vec![name("sub")]),
+                    },
+                    PyStmt::Return(PyExpr::IfExp {
+                        body: Box::new(call1("Some", name("i"))),
+                        test: Box::new(PyExpr::Compare {
+                            left: Box::new(name("i")),
+                            ops: vec![PyBinOp::Ge],
+                            comparators: vec![PyExpr::Int(0)],
+                        }),
+                        orelse: Box::new(call0("None_")),
+                    }),
+                ],
             ),
             // String.toInt(s) -> total parse: Some(int(s)) or None_ on ValueError
             "_pf_str_to_int" => def(

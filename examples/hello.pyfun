@@ -293,6 +293,10 @@ let title = String.concat "Hello, " "World"   # "Hello, World"
 let loud = String.upper title                 # "HELLO, WORLD"
 let words = String.split ", " title           # ["Hello", "World"]
 let csv = String.join "," words               # "Hello,World"
+# `slice` is total Python slicing (clamps out of range); `tryIndexOf` returns an
+# Option (None when absent), so neither can raise.
+let sub = String.slice 0 5 title              # "Hello"
+let commaAt = Option.withDefault (0 - 1) (String.tryIndexOf "," title)  # 5
 let parsed = Option.withDefault 0 (String.toInt "41")   # 41
 let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
 # Non-ASCII string literals are real UTF-8 (not one Latin-1 byte per char), so
@@ -407,6 +411,8 @@ print entries                         # [('ada', 36), ('alan', 41)]
 print loud                            # HELLO, WORLD
 print words                           # ['Hello', 'World']
 print csv                             # Hello,World
+print sub                             # Hello  (String.slice, total)
+print commaAt                         # 5      (String.tryIndexOf -> Option int)
 print (String.len title)             # 12
 print parsed                          # 41   (total parse of "41")
 print unparsed                        # 0    (String.toInt "x" -> None)

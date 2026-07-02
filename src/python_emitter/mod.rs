@@ -141,6 +141,12 @@ pub enum PyExpr {
         value: Box<PyExpr>,
         index: Box<PyExpr>,
     },
+    /// `value[lower:upper]` — slicing (used by `String.slice`; total, like Python).
+    Slice {
+        value: Box<PyExpr>,
+        lower: Box<PyExpr>,
+        upper: Box<PyExpr>,
+    },
     /// `await value`
     Await(Box<PyExpr>),
     /// `not value`
@@ -527,6 +533,16 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         PyExpr::Subscript { value, index } => {
             format!("{}[{}]", emit_expr(value, 100), emit_expr(index, 0))
         }
+        PyExpr::Slice {
+            value,
+            lower,
+            upper,
+        } => format!(
+            "{}[{}:{}]",
+            emit_expr(value, 100),
+            emit_expr(lower, 0),
+            emit_expr(upper, 0)
+        ),
         PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.

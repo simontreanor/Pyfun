@@ -383,6 +383,8 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("toInt", 1),
     ("toFloat", 1),
     ("toList", 1),
+    ("slice", 3),
+    ("tryIndexOf", 2),
 ];
 
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
@@ -1539,6 +1541,14 @@ fn seed_string_prelude(env: &mut Env) {
     put("toFloat", pure_fn(str_(), opt(float())));
     // Each element of the result is a single-character string (no `char` type).
     put("toList", pure_fn(str_(), list(str_())));
+    // String.slice start end s -> s[start:end]  (Python slice semantics: total,
+    // end-exclusive, clamps out-of-range).
+    put(
+        "slice",
+        pure_fn(int(), pure_fn(int(), pure_fn(str_(), str_()))),
+    );
+    // String.tryIndexOf sub s -> Some i (first occurrence) or None if absent.
+    put("tryIndexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
 }
 
 /// Seed the `Map` module ([`MAP_PRELUDE`]) — pure functions over `Map k v`
