@@ -341,10 +341,7 @@ impl<'a> Lexer<'a> {
                         "single `}` in f-string; write `}}` for a literal brace",
                     ));
                 }
-                Some(b) => {
-                    lit.push(b as char);
-                    self.pos += 1;
-                }
+                Some(_) => self.push_char(&mut lit),
             }
         }
     }
@@ -496,12 +493,24 @@ impl<'a> Lexer<'a> {
                     }
                     self.pos += 1;
                 }
-                Some(b) => {
-                    value.push(b as char);
-                    self.pos += 1;
-                }
+                Some(_) => self.push_char(&mut value),
             }
         }
+    }
+
+    /// Append the (possibly multi-byte) UTF-8 character at the cursor to `out`,
+    /// advancing past its whole byte sequence. `self.src` came from a `&str`, so it
+    /// is valid UTF-8; pushing `b as char` per byte instead would turn every
+    /// non-ASCII byte into its own Latin-1 codepoint, and re-encoding on emit would
+    /// double-UTF-8-encode the text (`"café"` → mojibake).
+    fn push_char(&mut self, out: &mut String) {
+        let start = self.pos;
+        let end = (start + utf8_len(self.src[start])).min(self.src.len());
+        match std::str::from_utf8(&self.src[start..end]) {
+            Ok(s) => out.push_str(s),
+            Err(_) => out.push('\u{FFFD}'),
+        }
+        self.pos = end;
     }
 
     fn lex_ident(&mut self, start: usize) {
@@ -606,6 +615,19 @@ fn is_ident_start(c: u8) -> bool {
 
 fn is_ident_continue(c: u8) -> bool {
     c == b'_' || c.is_ascii_alphanumeric()
+}
+
+/// The byte length of the UTF-8 sequence beginning with lead byte `b`. On a
+/// continuation or invalid byte, returns 1 to guarantee forward progress (the
+/// caller replaces the malformed slice with U+FFFD).
+fn utf8_len(b: u8) -> usize {
+    match b {
+        _ if b < 0x80 => 1,
+        _ if b >> 5 == 0b110 => 2,
+        _ if b >> 4 == 0b1110 => 3,
+        _ if b >> 3 == 0b11110 => 4,
+        _ => 1,
+    }
 }
 
 #[cfg(test)]
@@ -882,6 +904,25 @@ mod tests {
             kinds(r#""a\nb""#),
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
         );
+    }
+
+    #[test]
+    fn non_ascii_string_keeps_its_characters() {
+        // Multi-byte UTF-8 (2-byte é, 3-byte →, 4-byte 🎉) must lex to the real
+        // characters, not one Latin-1 codepoint per byte (which would double-encode
+        // on emit). `String::len` counts chars, so this pins the char count too.
+        let Tok::Str(s) = &kinds("\"café → 🎉\"")[0] else {
+            panic!("expected a string literal")
+        };
+        assert_eq!(s, "café → 🎉");
+        // café(4) + space + → + space + 🎉 = 8 characters (13 bytes).
+        assert_eq!(s.chars().count(), 8);
+
+        // Same for f-string literal chunks.
+        let Tok::FStr(parts) = &kinds("f\"café {x}\"")[0] else {
+            panic!("expected an f-string")
+        };
+        assert_eq!(parts[0], FStrPart::Lit("café ".to_string()));
     }
 
     #[test]

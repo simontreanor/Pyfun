@@ -306,6 +306,29 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn non_ascii_string_is_not_double_encoded() {
+    // The emitted Python must contain the real characters, not the mojibake a
+    // per-byte `b as char` produced (`café` -> `cafÃ©`).
+    let py = pyfun::compile("let s = \"café → 🎉\"").unwrap();
+    assert!(py.contains("s = \"café → 🎉\""), "{py}");
+    assert!(!py.contains("Ã"), "double-encoded output: {py}");
+}
+
+#[test]
+fn e2e_non_ascii_string_length() {
+    // Encoding-independent (output is a plain integer, no console-encoding
+    // dependency): a correctly-lexed "café" has 4 characters; the old per-byte bug
+    // gave 5+. Also covers a multi-byte f-string literal chunk.
+    run_and_check(
+        "
+        let n = String.len \"café\"
+        let m = String.len f\"→🎉 {n}\"
+        ",
+        &[("n", "4"), ("m", "4")],
+    );
+}
+
+#[test]
 fn chained_comparison_lowers_to_native_python_form() {
     // Lowering to Python's own `a < b < c` is what gives evaluate-once +
     // short-circuit for free — not a desugaring to `x < y and y < z`.

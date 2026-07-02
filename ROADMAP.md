@@ -11,18 +11,17 @@ The single forward-looking list of **everything not yet built**, so nothing is d
 buckets: **overlooked essentials** (table-stakes gaps, higher priority than the rest), **non-goals**
 (decided against), **deferred** (real features, no current demand — build on request), and **warts**
 (small polish). The narrative sections below record what *has* shipped.
-Nothing here blocks normal use *except* the string-encoding bug flagged below; the language is
-otherwise feature-complete for its MVP showcase + Phase 2 file-based modules. Effort is rough: **S** ≈
-a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
+Nothing here blocks normal use; the language is feature-complete for its MVP showcase + Phase 2
+file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
 
 ### Overlooked essentials (2026-07-02 audit — table-stakes, highest priority)
 Found by a gap-audit after the unary-minus miss (the same root cause: lexer + prelude basics *assumed*
 rather than checked — almost none of this is in the type system). Each was verified with a failing
 `pyfun check`; none was previously tracked. Ordered by priority.
-1. **Non-ASCII string literals are double-UTF-8-encoded** (S) — 🔴 **silent correctness bug**:
-   `lex_string`/`lex_fstring` do `b as char` on raw UTF-8 bytes, so `"café"` emits mojibake
-   (`caf\xc3\x83\xc2\xa9`); it only *looks* right on a cp1252 Windows console. Fix: iterate `char`s /
-   decode the byte run in both. **The one backlog item that is an actual bug, not a missing feature.**
+1. ~~**Non-ASCII string literals are double-UTF-8-encoded**~~ — ✅ **fixed 2026-07-02**. Was a silent
+   correctness bug: `lex_string`/`lex_fstring` did `b as char` on raw UTF-8 bytes, so `"café"` emitted
+   mojibake. Now a shared `push_char` decodes the whole UTF-8 sequence (via `utf8_len`) in both the string
+   and f-string-literal paths; covered by lexer + compile (string-level + encoding-independent e2e) tests.
 2. **Modulo `%`** (S) — no lexer token at all; add `Tok`/`BinOp` at the `*`/`/` precedence tier, → Python
    `%`. Decide unit semantics (F# preserves the unit) and float `%`. The most-reached-for missing operator.
 3. **`List` is transform-only** (S–M) — no `get`/`append`/`concat`/`contains`/`isEmpty`/`sort`, and no
