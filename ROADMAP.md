@@ -26,10 +26,14 @@ rather than checked — almost none of this is in the type system). Each was ver
    tier, → Python `%`. Numeric (`num`-constrained), works on int and float, and **unit-preserving like
    `+`/`-`** (`10<m> % 3<m> : int<m>`; mixed units rejected). `(%)` operator section works. Covered by
    roundtrip/typecheck/compile tests + hello.pyfun.
-3. **`List` is transform-only** (S–M) — no `get`/`append`/`concat`/`contains`/`isEmpty`/`sort`, and no
-   indexing syntax (`xs[0]` parses as application) — despite the "O(1) index" rationale for `List`=Python
-   list. Add these to `LIST_PRELUDE` (`get : int -> List a -> Option a`, bounds-checked — no raw `xs[i]`,
-   Pyfun doesn't raise). Decide whether to also add `xs[0]` sugar.
+3. ~~**`List` is transform-only**~~ — ✅ **done 2026-07-02**. Added `get`/`isEmpty`/`contains`/`concat`/
+   `sort`/`find` to `LIST_PRELUDE`, each with honest big-O: **`get : int -> List a -> Option a`** O(1)
+   bounds-checked total (no raw `xs[i]`, no `IndexError`); **`isEmpty`** O(1); **`contains`** O(n) linear
+   (`Set` is the O(1) alternative); **`concat`** O(n+m) fresh list; **`sort : comparison a => List a ->
+   List a`** O(n log n); **`find : (a ->{e} bool) -> List a ->{e} Option a`** O(n), lazy/first-match,
+   effect-poly. **No `xs[0]` surface syntax** (would risk `IndexError`; `get` is the total path) and **no
+   cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal). NB immutable-style, so
+   repeated `concat` to build a list is O(n²) — use `map`/`fold`/`Seq`.
 4. **Scientific-notation float literals** (S) — `1e6`, `2.5e-3`, `6.674e-11<m^3 / kg s^2>`; lexer-only,
    but the exponent sign must be consumed in the lexer. Blocks the units-of-measure showcase's own domain.
 5. **Numeric conversions** (S) — `round`/`floor`/`ceil`/`truncate` and `String.toFloat : string -> Option

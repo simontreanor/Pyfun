@@ -58,6 +58,10 @@ const PROGRAMS: &[&str] = &[
     "let ne = (!=)",
     "let double = (*) 2",
     "let total = List.fold (+) 0 xs",
+    "let first = List.get 0 xs",
+    "let joined = List.concat xs ys",
+    "let sorted = List.sort xs",
+    "let hit = List.find (fun x -> x > 0) xs",
     // `5<m>` (adjacent, in the units section below) is a unit annotation, whereas
     // `5 < m` (spaced) is a comparison — the printer keeps them distinct.
     "let r = 5 < m",

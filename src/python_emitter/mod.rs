@@ -135,6 +135,12 @@ pub enum PyExpr {
         value: Box<PyExpr>,
         attr: String,
     },
+    /// `value[index]` — subscripting (used by `List.get`; there is no Pyfun
+    /// surface `xs[i]` syntax — access is the total `List.get : … -> Option a`).
+    Subscript {
+        value: Box<PyExpr>,
+        index: Box<PyExpr>,
+    },
     /// `await value`
     Await(Box<PyExpr>),
     /// `not value`
@@ -513,6 +519,9 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             format!("lambda {}: {}", params.join(", "), emit_expr(body, 2))
         }
         PyExpr::Attribute { value, attr } => format!("{}.{attr}", emit_expr(value, 100)),
+        PyExpr::Subscript { value, index } => {
+            format!("{}[{}]", emit_expr(value, 100), emit_expr(index, 0))
+        }
         PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.

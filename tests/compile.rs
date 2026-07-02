@@ -306,6 +306,49 @@ fn debug_hole_lowers_to_an_echoed_literal_plus_hole() {
 }
 
 #[test]
+fn list_completeness_ops_lower_to_helpers() {
+    let py = pyfun::compile(
+        "let a = List.get 0 [1, 2]\n\
+         let b = List.isEmpty [1]\n\
+         let c = List.contains 2 [1, 2]\n\
+         let d = List.concat [1] [2]\n\
+         let e = List.sort [2, 1]",
+    )
+    .unwrap();
+    // get is total (bounds-checked, no raw IndexError) and yields Some/None.
+    assert!(py.contains("Some(xs[i]) if 0 <= i < len(xs) else None_()"), "{py}");
+    assert!(py.contains("len(xs) == 0"), "{py}"); // isEmpty
+    assert!(py.contains("return x in xs"), "{py}"); // contains
+    assert!(py.contains("return xs + ys"), "{py}"); // concat
+    assert!(py.contains("return sorted(xs)"), "{py}"); // sort
+}
+
+#[test]
+fn e2e_list_completeness_ops() {
+    run_and_check(
+        "
+        let xs = [3, 1, 2]
+        let a = Option.withDefault 0 (List.get 0 xs)
+        let b = Option.withDefault 0 (List.get 9 xs)
+        let c = List.contains 2 xs
+        let d = List.concat xs [4]
+        let e = List.sort xs
+        let f = Option.withDefault 0 (List.find (fun x -> x > 1) xs)
+        let g = List.isEmpty []
+        ",
+        &[
+            ("a", "3"),
+            ("b", "0"),
+            ("c", "True"),
+            ("d", "[3, 1, 2, 4]"),
+            ("e", "[1, 2, 3]"),
+            ("f", "3"),
+            ("g", "True"),
+        ],
+    );
+}
+
+#[test]
 fn modulo_lowers_to_python_percent() {
     let py = pyfun::compile("let r = 10 % 3\nlet even n = n % 2 == 0").unwrap();
     assert!(py.contains("r = 10 % 3"), "{py}");

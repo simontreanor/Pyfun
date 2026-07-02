@@ -298,6 +298,12 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("rev", 1),
     ("range", 2),
     ("zip", 2),
+    ("get", 2),
+    ("isEmpty", 1),
+    ("contains", 2),
+    ("concat", 2),
+    ("sort", 1),
+    ("find", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -1318,6 +1324,49 @@ fn seed_list_prelude(env: &mut Env) {
             ),
         ),
     );
+    let option = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    // List.get : int -> List a -> Option a   (pure, O(1) — bounds-checked, total)
+    env.insert(
+        "List.get".to_string(),
+        mono(
+            vec![0],
+            pure_fn(int(), pure_fn(list(Ty::Var(0)), option(Ty::Var(0)))),
+        ),
+    );
+    // List.isEmpty : List a -> bool   (pure, O(1))
+    env.insert(
+        "List.isEmpty".to_string(),
+        mono(vec![0], pure_fn(list(Ty::Var(0)), Ty::Bool)),
+    );
+    // List.contains : a -> List a -> bool   (pure, O(n) linear scan; `Set` is O(1))
+    env.insert(
+        "List.contains".to_string(),
+        mono(
+            vec![0],
+            pure_fn(Ty::Var(0), pure_fn(list(Ty::Var(0)), Ty::Bool)),
+        ),
+    );
+    // List.concat : List a -> List a -> List a   (pure, O(n+m))
+    env.insert(
+        "List.concat".to_string(),
+        mono(
+            vec![0],
+            pure_fn(list(Ty::Var(0)), pure_fn(list(Ty::Var(0)), list(Ty::Var(0)))),
+        ),
+    );
+    // List.sort : comparison a => List a -> List a   (pure, O(n log n))
+    env.insert(
+        "List.sort".to_string(),
+        Scheme {
+            vars: vec![0],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![0],
+            eff_vars: vec![],
+            mutable: false,
+            ty: pure_fn(list(Ty::Var(0)), list(Ty::Var(0))),
+        },
+    );
 
     // Effect-polymorphic schemes share one bound effect variable `e` (id 0).
     let e = 0u32;
@@ -1361,6 +1410,18 @@ fn seed_list_prelude(env: &mut Env) {
             pure_fn(
                 arrow_e(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(0))),
                 pure_fn(Ty::Var(0), arrow_e(list(Ty::Var(1)), Ty::Var(0))),
+            ),
+        ),
+    );
+    // List.find : (a ->{e} bool) -> List a ->{e} Option a   (O(n), stops at the
+    // first match; effect-polymorphic like filter)
+    env.insert(
+        "List.find".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                arrow_e(Ty::Var(0), Ty::Bool),
+                arrow_e(list(Ty::Var(0)), option(Ty::Var(0))),
             ),
         ),
     );

@@ -120,6 +120,29 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_list_completeness_ops() {
+    assert!(pyfun::check("let r = List.get 0 [1, 2, 3]").is_ok()); // : Option int
+    assert!(pyfun::check("let r = List.isEmpty [1]").is_ok());
+    assert!(pyfun::check("let r = List.contains 2 [1, 2]").is_ok());
+    assert!(pyfun::check("let r = List.concat [1] [2, 3]").is_ok());
+    assert!(pyfun::check("let r = List.sort [3, 1, 2]").is_ok());
+    assert!(pyfun::check("let r = List.sort [\"b\", \"a\"]").is_ok()); // strings orderable
+    assert!(pyfun::check("let r = List.find (fun x -> x > 1) [1, 2, 3]").is_ok());
+    // `get`/`find` yield `Option`, consumed by the Option module.
+    assert!(pyfun::check("let r = Option.withDefault 0 (List.get 0 [1, 2])").is_ok());
+}
+
+#[test]
+fn rejects_ill_typed_list_ops() {
+    // `sort` carries the `comparison` constraint: bools aren't orderable.
+    assert_error_contains("let r = List.sort [true, false]", "comparison");
+    // `get`'s index is an int.
+    assert_error_contains("let r = List.get \"x\" [1, 2]", "int");
+    // `contains` element must match the list's element type.
+    assert_error_contains("let r = List.contains \"a\" [1, 2]", "string");
+}
+
+#[test]
 fn accepts_modulo() {
     assert!(pyfun::check("let r = 10 % 3").is_ok());
     assert!(pyfun::check("let isEven n = n % 2 == 0").is_ok());

@@ -225,6 +225,19 @@ makes the whole call `io` and that flows out (a single bound effect variable lin
 to the traversal arrow). The lazy counterpart already exists as the `seq {}` computation expression
 (§8.1).
 
+The **completeness ops** — `get`/`isEmpty`/`contains`/`concat`/`sort`/`find` — round out the array,
+each with big-O honest to a Python `list`: `get : int -> List a -> Option a` is **O(1)** and
+**bounds-checked → total** (there is deliberately *no* `xs[i]` surface syntax, since bare indexing would
+risk a Python `IndexError`, violating the no-runtime-surprises rule); `isEmpty` is O(1); `contains` is
+**O(n)** linear (use `Set` for O(1) membership); `concat` is O(n+m) returning a fresh list; `sort :
+comparison a => List a -> List a` is O(n log n) (`sorted`, so it carries the `comparison` constraint —
+ADT ordering is out of scope); and `find : (a ->{e} bool) -> List a ->{e} Option a` is O(n),
+**first-match/lazy** (`next(map(Some, filter …))`) and effect-polymorphic like `filter`. There is
+deliberately **no cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal); and
+because the ops are immutable-style, building a list by repeated `concat` is O(n²), so construction
+stays `map`/`fold`/comprehension/`Seq`. `get`/`find` return the built-in `Option` (setting `needs_option`),
+and `get` introduced a `PyExpr::Subscript` node.
+
 **Tuples — the structural product (implemented).** `(a, b, c)` is a tuple: an anonymous, **structural**
 product of two or more values — Pyfun's first structural type (records are nominal, resolved by a field
 registry; a tuple type is just its element list, `Ty::Tuple(Vec<Ty>)`, unified element-wise by arity

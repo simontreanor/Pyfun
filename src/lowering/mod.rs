@@ -1058,6 +1058,19 @@ impl Lowerer {
             "List.rev" => list(self, "_pf_rev"),
             "List.range" => list(self, "_pf_range"),
             "List.zip" => list(self, "_pf_zip"),
+            "List.isEmpty" => list(self, "_pf_is_empty"),
+            "List.contains" => list(self, "_pf_list_contains"),
+            "List.concat" => list(self, "_pf_concat"),
+            "List.sort" => list(self, "_pf_sort"),
+            // `get`/`find` construct `Some`/`None`, so flag the Option prelude.
+            "List.get" => {
+                self.needs_option = true;
+                coll(self, "_pf_list_get")
+            }
+            "List.find" => {
+                self.needs_option = true;
+                coll(self, "_pf_list_find")
+            }
             // Set
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
@@ -1762,6 +1775,38 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["xs", "ys"],
                 call("list", vec![call("zip", vec![name("xs"), name("ys")])]),
             ),
+            // _pf_is_empty(xs) -> len(xs) == 0   (O(1))
+            "_pf_is_empty" => def(
+                "_pf_is_empty",
+                &["xs"],
+                PyExpr::Compare {
+                    left: Box::new(call("len", vec![name("xs")])),
+                    ops: vec![PyBinOp::Eq],
+                    comparators: vec![PyExpr::Int(0)],
+                },
+            ),
+            // _pf_list_contains(x, xs) -> x in xs   (O(n) linear scan)
+            "_pf_list_contains" => def(
+                "_pf_list_contains",
+                &["x", "xs"],
+                PyExpr::BinOp {
+                    op: PyBinOp::In,
+                    left: Box::new(name("x")),
+                    right: Box::new(name("xs")),
+                },
+            ),
+            // _pf_concat(xs, ys) -> xs + ys   (a fresh list, O(n+m))
+            "_pf_concat" => def(
+                "_pf_concat",
+                &["xs", "ys"],
+                PyExpr::BinOp {
+                    op: PyBinOp::Add,
+                    left: Box::new(name("xs")),
+                    right: Box::new(name("ys")),
+                },
+            ),
+            // _pf_sort(xs) -> sorted(xs)   (a fresh list, O(n log n))
+            "_pf_sort" => def("_pf_sort", &["xs"], call("sorted", vec![name("xs")])),
             other => unreachable!("unknown list helper {other}"),
         })
         .collect()
@@ -2041,6 +2086,40 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     },
                     PyStmt::Return(call0("None_")),
                 ],
+            ),
+            // List.get(i, xs) -> Some(xs[i]) if 0 <= i < len(xs) else None_()
+            // Bounds-checked (negatives too), so it's total — no Python IndexError.
+            "_pf_list_get" => def1(
+                helper,
+                &["i", "xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call1(
+                        "Some",
+                        PyExpr::Subscript {
+                            value: Box::new(name("xs")),
+                            index: Box::new(name("i")),
+                        },
+                    )),
+                    test: Box::new(PyExpr::Compare {
+                        left: Box::new(PyExpr::Int(0)),
+                        ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                        comparators: vec![name("i"), call("len", vec![name("xs")])],
+                    }),
+                    orelse: Box::new(call0("None_")),
+                },
+            ),
+            // List.find(f, xs) -> next(map(Some, filter(f, xs)), None_())
+            // Lazy: `filter` + `next` stop at the first match (no full scan).
+            "_pf_list_find" => def1(
+                helper,
+                &["f", "xs"],
+                call(
+                    "next",
+                    vec![
+                        call("map", vec![name("Some"), call("filter", vec![name("f"), name("xs")])]),
+                        call0("None_"),
+                    ],
+                ),
             ),
             // Seq.take(n, xs) -> itertools.islice(xs, n)  (reorders args; stays lazy)
             "_pf_seq_take" => def1(
