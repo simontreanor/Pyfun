@@ -42,9 +42,9 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   Workaround: a lambda, `fun x -> x * 2`.
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
-- **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+);
-  still deferred are **format specifiers** (`{x:.2f}`, `{v!r}` — a mini-language), **multi-line** `f"""..."""`
-  (Pyfun has no triple-quoted strings), and **`{x=}`** self-documenting holes.
+- **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
+  and **`{x=}`** self-documenting holes landed too; still deferred are **format specifiers** (`{x:.2f}`,
+  `{v!r}` — a mini-language) and **multi-line** `f"""..."""` (Pyfun has no triple-quoted strings).
 *Cross-module (file-modules follow-ons)*
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).
