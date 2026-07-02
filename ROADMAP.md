@@ -7,11 +7,47 @@ design and [`GUIDE.md`](./GUIDE.md) for current status.
 
 ## Backlog — the full remaining picture
 
-The single forward-looking list of **everything not yet built**, so nothing is drip-fed. Three
-buckets: **non-goals** (decided against), **deferred** (real features, no current demand — build on
-request), and **warts** (small polish). The narrative sections below record what *has* shipped.
-Nothing here blocks normal use; the language is feature-complete for its MVP showcase + Phase 2
-file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
+The single forward-looking list of **everything not yet built**, so nothing is drip-fed. Four
+buckets: **overlooked essentials** (table-stakes gaps, higher priority than the rest), **non-goals**
+(decided against), **deferred** (real features, no current demand — build on request), and **warts**
+(small polish). The narrative sections below record what *has* shipped.
+Nothing here blocks normal use *except* the string-encoding bug flagged below; the language is
+otherwise feature-complete for its MVP showcase + Phase 2 file-based modules. Effort is rough: **S** ≈
+a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
+
+### Overlooked essentials (2026-07-02 audit — table-stakes, highest priority)
+Found by a gap-audit after the unary-minus miss (the same root cause: lexer + prelude basics *assumed*
+rather than checked — almost none of this is in the type system). Each was verified with a failing
+`pyfun check`; none was previously tracked. Ordered by priority.
+1. **Non-ASCII string literals are double-UTF-8-encoded** (S) — 🔴 **silent correctness bug**:
+   `lex_string`/`lex_fstring` do `b as char` on raw UTF-8 bytes, so `"café"` emits mojibake
+   (`caf\xc3\x83\xc2\xa9`); it only *looks* right on a cp1252 Windows console. Fix: iterate `char`s /
+   decode the byte run in both. **The one backlog item that is an actual bug, not a missing feature.**
+2. **Modulo `%`** (S) — no lexer token at all; add `Tok`/`BinOp` at the `*`/`/` precedence tier, → Python
+   `%`. Decide unit semantics (F# preserves the unit) and float `%`. The most-reached-for missing operator.
+3. **`List` is transform-only** (S–M) — no `get`/`append`/`concat`/`contains`/`isEmpty`/`sort`, and no
+   indexing syntax (`xs[0]` parses as application) — despite the "O(1) index" rationale for `List`=Python
+   list. Add these to `LIST_PRELUDE` (`get : int -> List a -> Option a`, bounds-checked — no raw `xs[i]`,
+   Pyfun doesn't raise). Decide whether to also add `xs[0]` sugar.
+4. **Scientific-notation float literals** (S) — `1e6`, `2.5e-3`, `6.674e-11<m^3 / kg s^2>`; lexer-only,
+   but the exponent sign must be consumed in the lexer. Blocks the units-of-measure showcase's own domain.
+5. **Numeric conversions** (S) — `round`/`floor`/`ceil`/`truncate` and `String.toFloat : string -> Option
+   float` (mirror the existing `toInt`; today you can `fromFloat` but not parse one back). Decide unit
+   interaction (`round : float<'u> -> int<'u>`?).
+6. **`Option.bind`** (S) — plus `Option.toResult`/`filter`; `Result` already has `bind`. The single
+   most-used Option combinator in F#. Effect-polymorphic clone of `Result.bind`.
+7. **Exponentiation `**`** (S) — float-only like F#'s `**` (sidesteps the int**negative→float trap);
+   right-associative, tighter than unary minus (`-2 ** 2 == -4`).
+8. **String slice / substring / indexOf** (S) — `String.slice start end s` (Python `s[a:b]`),
+   `String.tryIndexOf : string -> string -> Option int`. Compounds with #3 (no `List.get` either).
+9. **Mutual recursion** (M) — `let isEven … and isOdd …`; today "no cross-binding mutual recursion" (was a
+   drip-fed aside). Needs an `and` grouping or SCC binding groups in `infer_binding`; monomorphic-in-group.
+10. **`as`-patterns** (S–M) — `case Some v as w:`; a `Pattern::As` binding, recurse for exhaustiveness,
+    lowers 1:1 to Python `case p as x`.
+11. **`let _ = e` discard** (S) — discard a non-unit result without inventing a dummy name (pairs with the
+    "non-final block statements must be `unit`" rule).
+12. **String escapes + numeric-literal ergonomics** (S each) — `\r`/`\u{…}`/raw strings; `1_000` digit
+    separators; `0xFF`/`0o17`/`0b101` (all currently lex as int-then-identifier).
 
 ### Non-goals (won't build unless a concrete need appears, with the reason)
 - **Visibility (`pub`)** — Pyfun is all-public, the Python-natural model; enforced privacy fights the ethos.
@@ -30,6 +66,11 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   existing `List`** (see Deferred) — Python-native and big-O-honest — not a new linked type.
 - **Macros** and a **package manager** — out of scope for the compiler (a future Python runtime package
   could default to `uv`).
+- **Imperative loops (`while` / `for … in`)** — FP-first: iteration is the `List`/`Seq` combinators
+  (`map`/`filter`/`fold`) plus recursion. `let mut` exists for local accumulation inside an expression,
+  not to drive a loop. (Decided 2026-07-02 during the gap audit.)
+- **Else-less `if`** — `if` is an *expression*, so both branches are required; a conditional side effect
+  is `if c then eff else ()` (the `else` branch is `unit`). No statement-form `if` without `else`.
 - **Imperative `raise`/`finally`/exception hierarchy** — Pyfun signals failure with `Error`, not by
   raising; the `try e : Result a Exception` expression (done) catches at the FFI boundary, and
   `result {}` + the `Result` module compose the rest. A `raise`/`finally` statement form would duplicate
@@ -62,6 +103,15 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
 - **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
   and **`{x=}`** self-documenting holes landed too; still deferred are **format specifiers** (`{x:.2f}`,
   `{v!r}` — a mini-language) and **multi-line** `f"""..."""` (Pyfun has no triple-quoted strings).
+- **Type annotations** (L) — `let x : T = …`, params `(x: T)`, return types. **DESIGN.md promised these**
+  ("annotations optional but semantic") but no syntax exists yet; the doc was corrected to say deferred.
+  F# users annotate constantly (docs, API boundaries, pinning a `num` default, disambiguating records) —
+  and annotations are the enabler for lifting the unique-field-name restriction below. **Design tension
+  (`DESIGN.md` §7.2):** a depth-0 `:` is now the `match`/`case` block opener, and §8.3 leans on `:` being
+  unused elsewhere — so `let x : int` would need a disambiguating rule or a different spelling. That, plus
+  check-against-inferred with generalization, is why this is L not M.
+- **Function composition `>>` / `<<`** (S) — F#-style `f >> g` = `fun x -> g (f x)`; low priority now that
+  `|>` + operator sections landed. Would desugar to a lambda like the sections.
 *Cross-module (file-modules follow-ons)*
 - **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
   are blocked by the global field-uniqueness invariant (the hard part).
@@ -76,6 +126,10 @@ file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused da
   `String.concat` (the concatenation path). `+` stays numeric; overloading it for strings is deferred.
 - **A bare literal unified to `float` prints `7` not `7.0`** (S) — arithmetic coerces, so computed
   values are unaffected; only a bare displayed literal looks like an int.
+- **Float literal patterns give a parse error, not a guiding one** (S) — `case 1.5:` fails with "expected
+  a pattern, found float". Matching on floats is intentionally unsupported (int/string literal patterns are
+  the leaves), but the error should *say* so rather than read as a generic parse failure. (Decided
+  2026-07-02: reject with a hint, don't implement float patterns.)
 
 ---
 

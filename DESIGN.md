@@ -49,7 +49,9 @@ parse → type-infer/check → exhaustiveness check → immutability check → e
 
 What the compiler enforces, mirroring (and exceeding) F#:
 
-- **Type safety** — Hindley–Milner inference; annotations optional but semantic.
+- **Type safety** — Hindley–Milner inference (no annotations required). *Optional* type annotations
+  (`let x : T`, `(x: T)`) are **not yet implemented** — a deferred feature (see ROADMAP); today
+  everything is inferred.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
 - **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
   binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
