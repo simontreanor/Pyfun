@@ -297,6 +297,8 @@ let ordered = List.sort [3, 1, 2]            # [1, 2, 3]
 # then field-by-field (Red < Green < Blue).
 let sortedColors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
 let redFirst = Red < Green                       # true
+# Built-in Option/Result order too: None < Some, Ok < Error (payloads orderable).
+let sortedOpts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
 let firstBig = List.find (fun x -> x > 3) ns # Some 4
 
 # Sets and maps lower to Python `set` / `dict`; `Map.tryFind` returns the built-in
@@ -443,6 +445,7 @@ print hasThree                        # True (List.contains, O(n))
 print joined                          # [1, 2, 3, 4, 5, 6, 7]  (List.concat)
 print ordered                         # [1, 2, 3]  (List.sort, O(n log n))
 print sortedColors                    # [Red, Green, Blue]  (derived ADT ordering)
+print sortedOpts                      # [None_, Some(1), Some(3)]  (Option orders)
 print redFirst                        # True
 print firstBig                        # Some(4)  (List.find, first match)
 

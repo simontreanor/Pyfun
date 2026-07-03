@@ -1030,11 +1030,19 @@ fn payload_variant_order_key_includes_fields() {
 }
 
 #[test]
-fn builtin_prelude_classes_get_no_ordering() {
-    // `Some`/`None_` (and `Ok`/`Error`) are scoped out of derived ordering.
+fn builtin_option_and_result_get_ordering_but_exception_does_not() {
+    // `Some`/`None_`/`Ok`/`Error` derive ordering (like a user sum type); the
+    // reserved `Exception` record (the `try` payload) does not.
     let py = pyfun::compile("let x = Some 1").unwrap();
     assert!(py.contains("class Some:"), "{py}");
-    assert!(!py.contains("_pf_order_key"), "prelude gets no ordering: {py}");
+    assert!(py.contains("_pf_order_key"), "Option gets ordering: {py}");
+    let py = pyfun::compile("let x = try (Some 1)").unwrap();
+    assert!(py.contains("class _Exception:"), "{py}");
+    // The Exception class has no ordering key (only Some/None_ do here).
+    assert!(
+        !py.contains("(0, self.errorKind"),
+        "Exception gets no ordering: {py}"
+    );
 }
 
 #[test]

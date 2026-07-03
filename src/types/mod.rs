@@ -279,16 +279,11 @@ const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 /// classes extended, `Set`/`Map` have no natural order, and `Exception` is reserved.
 /// Only *user* sum types and records (plus tuples) are orderable — these are excluded
 /// even though some appear in `type_ctors`/`records`. A deferred follow-on.
-const RESERVED_UNORDERED: [&str; 8] = [
-    "List",
-    "Set",
-    "Map",
-    "Option",
-    "Result",
-    "Async",
-    "Seq",
-    "Exception",
-];
+// Built-in `Con` types that do NOT derive ordering. `Option`/`Result` DO (their
+// prelude classes carry ordering methods, `None < Some`, `Ok < Error`); `List`
+// lowers to a Python list (a follow-on could order it lexicographically), `Set`/
+// `Map` have no natural order, and `Async`/`Seq`/`Exception` aren't comparable.
+const RESERVED_UNORDERED: [&str; 6] = ["List", "Set", "Map", "Async", "Seq", "Exception"];
 
 /// A depth cap on the structural-ordering check, so a pathological *non-regular*
 /// recursive type (whose expansion never repeats a `(name, args)` key) can't loop

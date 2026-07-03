@@ -134,9 +134,11 @@ rather than checked — almost none of this is in the type system). Each was ver
   (keyed on `(name, args)`; `MAX_ORD_DEPTH` bounds non-regular recursion); the deferred-var `ord` mechanism
   flows a late-resolved `comparison 'a` through it. Codegen: each user variant/record class emits
   `_pf_order_key = (variant_index, fields…)` + `__lt__`/`__le__`/`__gt__`/`__ge__` (tuples need none — Python
-  tuples already order). **Follow-on (scoped out):** built-in `Option`/`Result` (would need their prelude
-  classes extended with ordering) and `Set`/`Map`/`List` (no natural element-wise order) — comparing them
-  is still a type error. Covered by typecheck/compile tests + `examples/hello.pyfun`.
+  tuples already order). **Built-in `Option`/`Result` also order** (done 2026-07-03 as the follow-on):
+  `None < Some`, `Ok < Error`, orderable when their payloads are (their prelude classes now emit the same
+  ordering methods; nested `Some (Ok x)` composes). Still not ordered: `Set`/`Map`/`Exception` (no natural
+  order) and `List` (a possible lexicographic follow-on). Covered by typecheck/compile tests +
+  `examples/hello.pyfun`.
 - **Unit-aware `sqrt : float<'u^2> -> float<'u>`** (M) — √area = length, the one genuinely useful
   unit-carrying power op (F# special-cases exactly this signature). Today `sqrt` is a dimensionless
   `extern` (`float -> float`), so `sqrt area` loses the unit. Needs either **rational unit exponents**
@@ -350,8 +352,9 @@ compile/roundtrip tests.
 - **Chained comparisons — ✅ done:** `a < b < c` is Python-style (a single `ExprKind::Compare` lowering
   to Python's native chained comparison — evaluate-once, short-circuit — not the left-assoc `(a < b) < c`).
 - **Derived ordering — ✅ done 2026-07-03:** `< > <= >=` (and `List.sort`) now work on user sum types,
-  records, and tuples, compared structurally (variant declaration order then fields; lexicographic tuples).
-  Built-in `Option`/`Result`/`Set`/`Map` ordering remains a scoped-out follow-on. See the backlog entry.
+  records, and tuples, compared structurally (variant declaration order then fields; lexicographic tuples),
+  plus built-in `Option`/`Result` (`None < Some`, `Ok < Error`). `Set`/`Map`/`List` stay unordered. See the
+  backlog entry.
 
 ### 4c. Logical operators — ✅ done
 `and` / `or` / `not` — all keywords, lowering to the same Python keywords. Spelled the Python way

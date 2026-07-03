@@ -1820,16 +1820,18 @@ fn call1(name: &str, arg: PyExpr) -> PyExpr {
 
 /// The `Ok`/`Error` classes backing the `result` computation expression.
 fn result_prelude() -> Vec<PyStmt> {
+    // Ordered `Ok < Error` (Ok is variant 0), so `Result a e` derives ordering
+    // like a user sum type when its payloads are orderable.
     vec![
         PyStmt::ClassDef {
             name: "Ok".to_string(),
             fields: vec!["_0".to_string()],
-            order: None,
+            order: Some(0),
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
             fields: vec!["_0".to_string()],
-            order: None,
+            order: Some(1),
         },
     ]
 }
@@ -1850,16 +1852,18 @@ fn exception_prelude() -> Vec<PyStmt> {
 /// to dodge the Python keyword). Structural `__eq__`/`__repr__`/`__match_args__` come
 /// from `emit_class`, like any data constructor.
 fn option_prelude() -> Vec<PyStmt> {
+    // Ordered `None < Some` (None is variant 0), so `Option a` derives ordering
+    // like a user sum type when `a` is orderable.
     vec![
         PyStmt::ClassDef {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
-            order: None,
+            order: Some(1),
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
             fields: vec![],
-            order: None,
+            order: Some(0),
         },
     ]
 }

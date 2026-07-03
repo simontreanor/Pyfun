@@ -1053,15 +1053,17 @@ fn rejects_ordering_of_a_parameterized_type_at_an_unorderable_arg() {
 }
 
 #[test]
-fn rejects_ordering_of_builtin_option_and_result() {
-    // Built-in `Option`/`Result` are scoped out of derived ordering (their prelude
-    // classes have no ordering methods) — a deferred follow-on.
+fn accepts_ordering_of_builtin_option_and_result() {
+    // Built-in `Option`/`Result` derive ordering (`None < Some`, `Ok < Error`) when
+    // their payloads are orderable — like a user sum type.
+    assert!(pyfun::check("let r = None < Some 1").is_ok());
+    assert!(pyfun::check("let r = Some 1 < Some 2").is_ok());
+    assert!(pyfun::check("let r = Ok 1 < Error 0").is_ok());
+    // Nested: `Option (Result int e)` orders through both.
+    assert!(pyfun::check("let r = Some (Ok 1) < Some (Ok 2)").is_ok());
+    // But only when the payload is orderable — `Some` of a function is not.
     assert_error_contains(
-        "let bad a b = a < b\nlet t = bad (Some 1) (Some 2)",
-        "does not support comparison",
-    );
-    assert_error_contains(
-        "let bad a b = a < b\nlet t = bad (Ok 1) (Ok 2)",
+        "let bad a b = a < b\nlet t = bad (Some (fun n -> n)) (Some (fun n -> n))",
         "does not support comparison",
     );
 }
