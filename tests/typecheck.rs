@@ -493,6 +493,89 @@ fn reports_nested_witness_for_missing_inner_constructor() {
     );
 }
 
+// ---------- list / sequence patterns (`DESIGN.md` §7.2) ----------
+
+#[test]
+fn accepts_empty_and_cons_as_exhaustive_list_match() {
+    // `List` is modeled as `Nil | Cons`, so `[] | [x, *rest]` is exhaustive with no
+    // wildcard.
+    let src = "let sum xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case []: 0\n\
+               \x20 \x20 case [x, *rest]: x + sum rest";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn accepts_fixed_length_and_prefix_list_patterns() {
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case []: 0\n\
+               \x20 \x20 case [x]: x\n\
+               \x20 \x20 case [x, y]: x + y\n\
+               \x20 \x20 case [a, b, *rest]: a + b";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn a_lone_star_list_pattern_is_a_catch_all() {
+    let src = "let f xs =\n  match xs:\n    case [*all]: all";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_empty_only_list_match_with_cons_witness() {
+    assert_error_contains(
+        "let f xs =\n  match xs:\n    case []: 0",
+        "`[_, *_]` is not matched",
+    );
+}
+
+#[test]
+fn rejects_singleton_only_list_match_with_nil_witness() {
+    assert_error_contains(
+        "let f xs =\n  match xs:\n    case [x]: x",
+        "`[]` is not matched",
+    );
+}
+
+#[test]
+fn list_pattern_element_type_is_enforced() {
+    // Elements bind at the list's element type; a `[1, ...]` pattern forces `int`,
+    // so applying `f` to a bool list is a type error.
+    assert_error_contains(
+        "let f xs =\n\
+         \x20 match xs:\n\
+         \x20 \x20 case [1, *r]: r\n\
+         \x20 \x20 case _: xs\n\
+         let bad = f [true, false]",
+        "int",
+    );
+}
+
+#[test]
+fn list_pattern_rest_binds_a_list() {
+    // The rest binder is itself a `List`, so it can flow into a `List` operation.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case [x, *rest]: x + List.sum rest\n\
+               \x20 \x20 case []: 0";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn accepts_nested_element_patterns_in_a_list() {
+    // Deep exhaustiveness recurses through the `Cons` head: covering both `Some` and
+    // `None` for the head element (with a `*rest` tail) plus `[]` is complete — no
+    // wildcard needed.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case [Some x, *rest]: x\n\
+               \x20 \x20 case [None, *rest]: 0\n\
+               \x20 \x20 case []: 0";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
 #[test]
 fn reports_record_witness_for_missing_field_combination() {
     assert_error_contains(

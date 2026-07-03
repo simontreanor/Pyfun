@@ -100,6 +100,12 @@ const PROGRAMS: &[&str] = &[
     "let f b =\n  match b:\n    case Box { item = Some n }: n\n    case _: 0",
     // A qualified (cross-module) record pattern.
     "let f q =\n  match q:\n    case Geometry.Point { x, y }: x",
+    // List/sequence patterns: empty, fixed, prefix+star, lone star, nested elements.
+    "let f xs =\n  match xs:\n    case []: 0\n    case [x, *rest]: x",
+    "let f xs =\n  match xs:\n    case []: 0\n    case [x]: x\n    case [x, y]: y\n    case [a, *rest]: a",
+    "let f xs =\n  match xs:\n    case [*all]: all",
+    "let f xs =\n  match xs:\n    case [Some x, *rest]: x\n    case _: 0",
+    "let f xs =\n  match xs:\n    case [0, y]: y\n    case _: 0",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.

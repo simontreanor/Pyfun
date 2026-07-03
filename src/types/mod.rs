@@ -1415,6 +1415,12 @@ enum Tag {
     Record(String),
     /// A tuple's single implicit constructor, carrying its arity.
     Tuple(usize),
+    /// The empty list `[]`. `List` is modeled as `Nil | Cons a (List a)` *inside the
+    /// usefulness algorithm only* (no real ADT, no lowering change), so sequence
+    /// patterns get proper exhaustiveness (`DESIGN.md` §7.2).
+    Nil,
+    /// A non-empty list — `Cons head tail`, arity 2 (element type, `List` tail type).
+    Cons,
 }
 
 /// A witness value produced when a `match` is non-exhaustive — a constructor
@@ -1433,9 +1439,24 @@ fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
         .iter()
         .filter_map(|row| {
             let (head, rest) = row.split_first().expect("non-empty row");
-            matches!(head, Pattern::Wildcard | Pattern::Var { .. }).then(|| rest.to_vec())
+            is_wildcard_like(head).then(|| rest.to_vec())
         })
         .collect()
+}
+
+/// Whether a pattern acts as a **catch-all** column head (a wildcard, a variable,
+/// or a lone-star list pattern `[*r]` whose binder is itself a catch-all). Such a
+/// head matches an absent constructor, so its row is kept — with the head column
+/// dropped — in the [`default_matrix`]. `[*r]` is equivalent to `r` (the star binds
+/// the whole list), so it is a catch-all exactly when `r` is (`DESIGN.md` §7.2).
+fn is_wildcard_like(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Wildcard | Pattern::Var { .. } => true,
+        Pattern::List { prefix, rest } if prefix.is_empty() => {
+            rest.as_deref().is_some_and(is_wildcard_like)
+        }
+        _ => false,
+    }
 }
 
 /// The top-level alternatives a pattern denotes: an or-pattern flattens to its
@@ -1570,6 +1591,12 @@ fn pattern_names(pat: &Pattern, out: &mut HashSet<String>) {
         Pattern::Ctor { args, .. } => args.iter().for_each(|a| pattern_names(a, out)),
         Pattern::Record { fields, .. } => fields.iter().for_each(|f| pattern_names(&f.pattern, out)),
         Pattern::Tuple { elems } => elems.iter().for_each(|e| pattern_names(e, out)),
+        Pattern::List { prefix, rest } => {
+            prefix.iter().for_each(|p| pattern_names(p, out));
+            if let Some(r) = rest {
+                pattern_names(r, out);
+            }
+        }
         Pattern::Or(alts) => {
             if let Some(a) = alts.first() {
                 pattern_names(a, out);
@@ -3733,6 +3760,21 @@ impl Infer {
                 }
                 Ok(())
             }
+            // `[a, b, *rest]` — a sequence pattern over `List a`: each prefix element
+            // binds against `a`, and the star's binder against the tail `List a`
+            // (`DESIGN.md` §7.2).
+            Pattern::List { prefix, rest } => {
+                let elem = self.fresh();
+                let list_ty = Ty::Con("List".to_string(), vec![elem.clone()]);
+                self.unify(&list_ty, scrut_ty, span)?;
+                for sub in prefix {
+                    self.bind_pattern(sub, &elem, span, env)?;
+                }
+                if let Some(r) = rest {
+                    self.bind_pattern(r, &list_ty, span, env)?;
+                }
+                Ok(())
+            }
             // Every alternative matches the same scrutinee type and must bind the
             // same variables at the same types (`DESIGN.md` §7.2). Bind the first
             // into a temp scope, then unify each other alternative's bindings
@@ -3896,6 +3938,20 @@ impl Infer {
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
             Pattern::Record { ty, .. } => Some(Tag::Record(self.canonical_record(ty))),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
+            // A list pattern's head constructor: a non-empty prefix is Cons; `[]` is
+            // Nil; a lone star `[*r]` is *equivalent to `r`* (the star binds the whole
+            // list), so it delegates — `[*rest]`/`[*_]` → `None` (a catch-all)
+            // (`DESIGN.md` §7.2).
+            Pattern::List { prefix, rest } => {
+                if !prefix.is_empty() {
+                    Some(Tag::Cons)
+                } else {
+                    match rest {
+                        None => Some(Tag::Nil),
+                        Some(r) => self.pattern_tag(r),
+                    }
+                }
+            }
             // An as-pattern is transparent — its tag is the inner pattern's.
             Pattern::As { pattern, .. } => self.pattern_tag(pattern),
             // Or-patterns are expanded away in `useful` before this is reached.
@@ -3913,6 +3969,9 @@ impl Infer {
             // once a tuple pattern is present; exhaustiveness recurses into the
             // element columns (like records).
             Ty::Tuple(elems) => Some(vec![Tag::Tuple(elems.len())]),
+            // `List a` is modeled as the finite 2-constructor `Nil | Cons a (List a)`,
+            // so `[] | [x, *rest]` is exhaustive without a wildcard (`DESIGN.md` §7.2).
+            Ty::Con(name, _) if name == "List" => Some(vec![Tag::Nil, Tag::Cons]),
             Ty::Con(name, _) => {
                 if let Some(ctors) = self.decls.type_ctors.get(name) {
                     (!ctors.is_empty()).then(|| ctors.iter().map(|c| Tag::Sum(c.clone())).collect())
@@ -3930,10 +3989,12 @@ impl Infer {
     /// The number of sub-patterns a constructor binds (its arity).
     fn tag_arity(&self, tag: &Tag) -> usize {
         match tag {
-            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) => 0,
+            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) | Tag::Nil => 0,
             Tag::Sum(name) => self.decls.ctors[name].arity,
             Tag::Record(name) => self.decls.records[name].fields.len(),
             Tag::Tuple(n) => *n,
+            // `Cons head tail` — head + list tail.
+            Tag::Cons => 2,
         }
     }
 
@@ -3941,7 +4002,16 @@ impl Infer {
     /// parameters pinned by unifying the constructor's result with the column).
     fn tag_field_types(&mut self, ty: &Ty, tag: &Tag) -> Vec<Ty> {
         match tag {
-            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) => Vec::new(),
+            Tag::Bool(_) | Tag::Int(_) | Tag::Str(_) | Tag::Nil => Vec::new(),
+            // `Cons head tail` at `List a`: head is `a`, tail is `List a`. The element
+            // type is the column's type argument (a fresh var if not yet a `List`).
+            Tag::Cons => {
+                let elem = match self.apply(ty) {
+                    Ty::Con(name, args) if name == "List" && args.len() == 1 => args[0].clone(),
+                    _ => self.fresh(),
+                };
+                vec![elem.clone(), Ty::Con("List".to_string(), vec![elem])]
+            }
             Tag::Sum(name) => {
                 let info = self.decls.ctors[name].clone();
                 let cty = self.instantiate(&info.scheme);
@@ -4001,6 +4071,31 @@ impl Infer {
                 Some(slots)
             }
             Pattern::Tuple { elems } => (*tag == Tag::Tuple(elems.len())).then(|| elems.clone()),
+            // A list pattern against the `Nil | Cons` model (`DESIGN.md` §7.2).
+            Pattern::List { prefix, rest } => {
+                if prefix.is_empty() {
+                    match rest {
+                        // `[]` matches only Nil (0 sub-patterns).
+                        None => (*tag == Tag::Nil).then(Vec::new),
+                        // A lone star `[*r]` ≡ `r` (binds the whole list): delegate.
+                        Some(r) => self.row_head(r, tag, arity),
+                    }
+                } else if *tag == Tag::Cons {
+                    // A non-empty `[a, rest…]` is `Cons a (tail-list-pattern)`: head =
+                    // the first element, tail = the list pattern of the remaining
+                    // prefix + the same star (`[a]` → `[a, []]`, `[a,b,*r]` → `[a,
+                    // [b,*r]]`).
+                    let (first, remaining) = prefix.split_first().expect("non-empty prefix");
+                    let tail = Pattern::List {
+                        prefix: remaining.to_vec(),
+                        rest: rest.clone(),
+                    };
+                    Some(vec![first.clone(), tail])
+                } else {
+                    // A non-empty list never matches Nil.
+                    None
+                }
+            }
             // An as-pattern specializes exactly like its inner pattern.
             Pattern::As { pattern, .. } => self.row_head(pattern, tag, arity),
             // Or-patterns are expanded away in `useful` before specialization.
@@ -4046,6 +4141,30 @@ impl Infer {
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({parts})")
+            }
+            // The empty list.
+            Wit::Con(Tag::Nil, _) => "[]".to_string(),
+            // A non-empty list — walk the `Cons` spine into a readable list form:
+            // `[a, b]` when the tail bottoms out at Nil, `[a, *_]` when it is an open
+            // wildcard (an uncovered non-empty list of unknown length).
+            Wit::Con(Tag::Cons, _) => {
+                let mut elems = Vec::new();
+                let mut cur = w;
+                loop {
+                    match cur {
+                        Wit::Con(Tag::Cons, args) => {
+                            elems.push(self.render_witness(&args[0], false));
+                            cur = &args[1];
+                        }
+                        Wit::Con(Tag::Nil, _) => break,
+                        _ => {
+                            // An open tail (wildcard): the list continues arbitrarily.
+                            elems.push("*_".to_string());
+                            break;
+                        }
+                    }
+                }
+                format!("[{}]", elems.join(", "))
             }
         }
     }

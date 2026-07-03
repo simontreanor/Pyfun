@@ -1430,8 +1430,57 @@ impl Parser {
                 self.expect(&Tok::RParen, "`)`")?;
                 Ok(first)
             }
+            Tok::LBracket => self.parse_list_pattern(),
             _ => Err(self.error("expected a pattern")),
         }
+    }
+
+    /// Parse a list/sequence pattern `[a, b, *rest]` (`DESIGN.md` §7.2). Elements are
+    /// comma-separated; an element is a normal pattern, or `*pat` — the rest binder,
+    /// which (first-cut scope) must be the **last** element. `[]` is allowed. At most
+    /// one star.
+    fn parse_list_pattern(&mut self) -> Result<Pattern, ParseError> {
+        self.expect(&Tok::LBracket, "`[`")?;
+        let mut prefix = Vec::new();
+        let mut rest = None;
+        while !matches!(self.peek(), Tok::RBracket) {
+            if self.eat(&Tok::Star) {
+                // The trailing rest binder `*rest` / `*_` — a variable or wildcard
+                // (it binds the remaining tail list). It must be the *last* element.
+                let start = self.cur_start();
+                let binder = match self.peek().clone() {
+                    Tok::Underscore => {
+                        self.bump();
+                        Pattern::Wildcard
+                    }
+                    Tok::Ident(name) if !is_upper(&name) => {
+                        self.bump();
+                        Pattern::Var {
+                            name,
+                            span: NodeSpan::new(Span::new(start, self.prev_end())),
+                        }
+                    }
+                    _ => {
+                        return Err(
+                            self.error("the `*` rest binder must be a variable or `_`")
+                        );
+                    }
+                };
+                rest = Some(Box::new(binder));
+                if !matches!(self.peek(), Tok::RBracket) {
+                    return Err(
+                        self.error("the `*` rest element must be last in a list pattern")
+                    );
+                }
+                break;
+            }
+            prefix.push(self.parse_pattern()?);
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RBracket, "`]`")?;
+        Ok(Pattern::List { prefix, rest })
     }
 
     /// Parse the `{ name [= pattern] (, name [= pattern])* }` body of a
@@ -1543,7 +1592,13 @@ fn starts_atom_pattern(tok: &Tok) -> bool {
     // (`DESIGN.md` §8.3).
     matches!(
         tok,
-        Tok::Underscore | Tok::Ident(_) | Tok::Int(_) | Tok::True | Tok::False | Tok::LParen
+        Tok::Underscore
+            | Tok::Ident(_)
+            | Tok::Int(_)
+            | Tok::True
+            | Tok::False
+            | Tok::LParen
+            | Tok::LBracket
     )
 }
 

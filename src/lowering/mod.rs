@@ -1373,6 +1373,17 @@ impl Lowerer {
                 let lowered = elems.iter().map(|e| self.lower_pattern(e)).collect();
                 PyPattern::Sequence(lowered)
             }
+            // `[a, b, *rest]` → a Python list sequence pattern (brackets). The star
+            // becomes a capture name (`*rest`) or `*_` for a wildcard rest.
+            Pattern::List { prefix, rest } => {
+                let elems = prefix.iter().map(|p| self.lower_pattern(p)).collect();
+                let star = rest.as_deref().map(|r| match r {
+                    Pattern::Var { name, .. } => name.clone(),
+                    // `*_` and any other rest binder discard into a wildcard capture.
+                    _ => "_".to_string(),
+                });
+                PyPattern::ListSeq { elems, star }
+            }
             Pattern::Or(alts) => {
                 let lowered = alts.iter().map(|p| self.lower_pattern(p)).collect();
                 PyPattern::Or(lowered)
@@ -2404,6 +2415,14 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
             .flat_map(|f| pattern_bindings(&f.pattern))
             .collect(),
         Pattern::Tuple { elems } => elems.iter().flat_map(pattern_bindings).collect(),
+        // A list pattern binds its prefix elements' vars plus the rest binder.
+        Pattern::List { prefix, rest } => {
+            let mut v: Vec<String> = prefix.iter().flat_map(pattern_bindings).collect();
+            if let Some(r) = rest {
+                v.extend(pattern_bindings(r));
+            }
+            v
+        }
         // Every alternative binds the same variables (enforced by the checker), so
         // the first alternative's bindings are representative.
         Pattern::Or(alts) => alts.first().map(pattern_bindings).unwrap_or_default(),
@@ -2431,6 +2450,11 @@ fn is_irrefutable(pattern: &Pattern) -> bool {
         Pattern::Wildcard | Pattern::Var { .. } => true,
         Pattern::Record { fields, .. } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
+        // A list pattern is irrefutable only when it is a lone star `[*rest]`/`[*_]`
+        // (which matches any list); `[]` and fixed/prefixed lengths are refutable.
+        Pattern::List { prefix, rest } => {
+            prefix.is_empty() && rest.as_deref().is_some_and(is_irrefutable)
+        }
         Pattern::Or(alts) => alts.iter().any(is_irrefutable),
         // The `x` binding is irrefutable; refutability is the inner pattern's.
         Pattern::As { pattern, .. } => is_irrefutable(pattern),

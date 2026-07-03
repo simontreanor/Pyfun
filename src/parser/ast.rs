@@ -492,6 +492,18 @@ pub enum Pattern {
     Tuple {
         elems: Vec<Pattern>,
     },
+    /// `[a, b, *rest]` — a sequence pattern over a `List` (`DESIGN.md` §7.2).
+    /// `prefix` are the fixed leading element patterns; `rest` is the trailing
+    /// star's sub-pattern (`*rest` → `Var`, `*_` → `Wildcard`), or `None` when there
+    /// is no star. So `[]` → prefix `[]`, rest `None`; `[a, b]` → prefix `[a, b]`,
+    /// rest `None`; `[a, *r]` → prefix `[a]`, rest `Some(r)`; `[*r]` → prefix `[]`,
+    /// rest `Some(r)`. The star (when present) is always last (first-cut scope); it
+    /// binds the remaining tail, itself a `List`. Lowers to a Python list sequence
+    /// pattern `case [a, b, *rest]:` (brackets, unlike a tuple's parens).
+    List {
+        prefix: Vec<Pattern>,
+        rest: Option<Box<Pattern>>,
+    },
     /// `a | b | c` — an or-pattern (`DESIGN.md` §7.2): matches if any alternative
     /// does. All alternatives must bind the same variables at the same types; lowers
     /// to a Python or-pattern `case a | b | c:`. Two or more alternatives.

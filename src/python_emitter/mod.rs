@@ -88,6 +88,14 @@ pub enum PyPattern {
     },
     /// `case (a, b)` — a sequence pattern, used for tuple patterns.
     Sequence(Vec<PyPattern>),
+    /// `case [a, b, *rest]` — a **list** sequence pattern (brackets), used for list
+    /// patterns. `elems` are the fixed leading sub-patterns; `star` is the trailing
+    /// rest capture name (`rest` for `*rest`, `_` for `*_`), or `None` for a fixed
+    /// length. Brackets (not parens) so it matches a Python `list` structurally.
+    ListSeq {
+        elems: Vec<PyPattern>,
+        star: Option<String>,
+    },
     /// `case a | b | c` — an or-pattern.
     Or(Vec<PyPattern>),
     /// `case p as name` — an as-pattern (bind the whole matched value).
@@ -426,6 +434,13 @@ fn pattern(pat: &PyPattern) -> String {
         PyPattern::Sequence(elems) => {
             let elems: Vec<String> = elems.iter().map(pattern).collect();
             format!("({})", elems.join(", "))
+        }
+        PyPattern::ListSeq { elems, star } => {
+            let mut parts: Vec<String> = elems.iter().map(pattern).collect();
+            if let Some(name) = star {
+                parts.push(format!("*{name}"));
+            }
+            format!("[{}]", parts.join(", "))
         }
         PyPattern::Or(alts) => {
             let alts: Vec<String> = alts.iter().map(pattern).collect();

@@ -1036,6 +1036,63 @@ fn e2e_nested_tuple_pattern() {
 }
 
 #[test]
+fn list_pattern_lowers_to_a_bracket_sequence_pattern() {
+    // List patterns emit bracket sequence patterns (`case [..]`), distinct from a
+    // tuple's paren `case (..)`; the star becomes a Python `*rest` capture.
+    let py = pyfun::compile(
+        "let f xs =\n  match xs:\n    case []: 0\n    case [x, *rest]: x",
+    )
+    .unwrap();
+    assert!(py.contains("case []:"), "{py}");
+    assert!(py.contains("case [x, *rest]:"), "{py}");
+}
+
+#[test]
+fn wildcard_rest_lowers_to_star_underscore() {
+    let py =
+        pyfun::compile("let f xs =\n  match xs:\n    case [x, *_]: x\n    case []: 0").unwrap();
+    assert!(py.contains("case [x, *_]:"), "{py}");
+}
+
+#[test]
+fn e2e_list_sum_with_sequence_patterns() {
+    run_and_check(
+        "
+        let sum xs =
+          match xs:
+            case []: 0
+            case [x, *rest]: x + sum rest
+        let total = sum [1, 2, 3, 4]
+        let empty = sum []
+        ",
+        &[("total", "10"), ("empty", "0")],
+    );
+}
+
+#[test]
+fn e2e_list_fixed_length_and_nested_patterns() {
+    run_and_check(
+        "
+        let describe xs =
+          match xs:
+            case []: 0
+            case [x]: 1
+            case [x, y]: 2
+            case [x, y, *rest]: 3
+        let head xs =
+          match xs:
+            case [Some x, *rest]: x
+            case _: 0
+        let a = describe [10, 20, 30]
+        let b = describe [7]
+        let c = describe []
+        let d = head [Some 42, None]
+        ",
+        &[("a", "3"), ("b", "1"), ("c", "0"), ("d", "42")],
+    );
+}
+
+#[test]
 fn e2e_record_pattern_match() {
     run_and_check(
         "

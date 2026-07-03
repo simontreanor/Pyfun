@@ -383,6 +383,14 @@ impl Resolver {
                     self.walk_pattern(e);
                 }
             }
+            Pattern::List { prefix, rest } => {
+                for p in prefix {
+                    self.walk_pattern(p);
+                }
+                if let Some(r) = rest {
+                    self.walk_pattern(r);
+                }
+            }
             Pattern::Or(alts) => {
                 for alt in alts {
                     self.walk_pattern(alt);
@@ -660,6 +668,14 @@ fn pattern_vars(pattern: &Pattern, out: &mut HashMap<String, Span>) {
         Pattern::Tuple { elems } => {
             for e in elems {
                 pattern_vars(e, out);
+            }
+        }
+        Pattern::List { prefix, rest } => {
+            for p in prefix {
+                pattern_vars(p, out);
+            }
+            if let Some(r) = rest {
+                pattern_vars(r, out);
             }
         }
         // Every alternative binds the same variables (enforced by the checker), so

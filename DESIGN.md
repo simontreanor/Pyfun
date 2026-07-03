@@ -809,6 +809,17 @@ value and the part that carries Pyfun's FP surface:
 - Tuple patterns `case (a, b):`, literal patterns, `_`, and **tagged record patterns** `case Point { x =
   0, y }:` (§8.3) are as before. Record patterns keep `{ … }` rather than becoming Python class/mapping
   patterns — consistent with tagged construction, and Pyfun has no `{ }` mapping-pattern to collide with.
+- **Sequence patterns over `List`** `case [a, b, *rest]:` — `[]`, `[a]`, `[a, b, …]`, `[a, *rest]`,
+  `[*rest]` (the star binds the tail, itself a `List`; `*_` discards it). *First cut:* the star must be
+  **last** (or absent) and there is at most one — a non-last star (`[*init, last]`) is a parse error
+  (`the `*` rest element must be last`); front/middle stars are a deferred follow-on. The rest binder is a
+  variable or `_`. Modelled as `Pattern::List { prefix, rest }`; **exhaustiveness models `List` as the
+  finite `Nil | Cons a (List a)` inside the usefulness algorithm only** (no real ADT, no lowering change) —
+  so `[] | [x, *rest]` is exhaustive with no wildcard, `case []:` alone reports the witness `[_, *_]`, and
+  a lone star `[*rest]` is a catch-all (it is equivalent to `rest`, so it delegates in
+  `pattern_tag`/`row_head`/`default_matrix`). Elements bind at the list's element type, so nested patterns
+  (`case [Some x, *rest]:`, `case [0, y]:`) work and type-check. Lowers to a Python **list** sequence
+  pattern `case [a, b, *rest]:` (brackets, `PyPattern::ListSeq`, distinct from a tuple's paren `Sequence`).
 
 **Two slots this framing frees (Python-identical), both implemented:**
 - **Or-patterns.** With arms delimited by `case`, `|` inside a pattern means alternation, as in Python:

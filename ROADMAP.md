@@ -112,14 +112,18 @@ rather than checked — almost none of this is in the type system). Each was ver
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
-- **Sequence patterns on `List`** (M) — `case []`, `case [x]`, `case [first, *rest]` in `match` over the
-  existing `List` (a Python array). Python-native (`match` supports these on lists), big-O-honest (`*rest`
-  is a visible O(n) slice-copy, not a free cons), and slots into the Python-framed `match` — the tuple work
-  already emits `PyPattern::Sequence`. Needs an empty/`[…]`/`[…, *rest]` pattern node, unification against
-  `List a`, and exhaustiveness (`[]` vs non-empty over an infinite-length type → needs a rest/wildcard
-  arm). Optionally paired with `List.head : List a -> Option a` / `List.tail` / `List.uncons` combinators
-  (no new patterns needed). This is the useful, Python-aligned piece of the old "list patterns" item; the
-  linked-list `cons`/`head`/`tail` half is now a non-goal (see above).
+- **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
+  `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
+  big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing
+  star's var/`_`, or `None`); **first cut: the star must be last** (non-last `[*init, last]` is a parse
+  error — a follow-on). Exhaustiveness models `List` as `Nil | Cons a (List a)` **inside the usefulness
+  algorithm only** (no ADT, no lowering change): `Tag::Nil`/`Tag::Cons`, `ctor_signature(List) = [Nil,
+  Cons]`, and a lone star `[*r] ≡ r` delegates in `pattern_tag`/`row_head`/`default_matrix` — so
+  `[] | [x, *rest]` is exhaustive without a wildcard and `case []:` alone reports witness `[_, *_]`. Lowers
+  to a Python **list** sequence pattern (`PyPattern::ListSeq` → `case [x, *rest]:`, brackets — distinct from
+  a tuple's paren `Sequence`). Nested element patterns (`case [Some x, *rest]:`) type-check + are
+  deep-exhaustive. Covered by `tests/{roundtrip,typecheck,compile}.rs`. **Deferred follow-on:** a non-last
+  star (`[*init, last]`, `[a, *mid, z]`). The linked-list `cons`/`head`/`tail` half is a non-goal (above).
 - **Lift the unique-field-name restriction** (L) — needs type annotations or type-directed field
   resolution (or row polymorphism, a non-goal).
 - **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
@@ -403,7 +407,8 @@ and `Option.map` are **effect-polymorphic**; `Map.tryFind` returns `Option`; `Ma
 literals (`{…}` is taken) and
 no constructors. Keys/elements must be hashable at runtime — primitives and ADT/record values both are
 (generated structural `__hash__`). A singly-linked `list` + `cons`/`head`/`tail` is a non-goal (`List`
-*is* F#'s array); sequence patterns on `List` are deferred; the lazy counterpart is the `seq {}` CE. Covered by
+*is* F#'s array); **sequence patterns on `List` (`case [x, *rest]`) have landed** (see the Deferred
+section's now-done entry); the lazy counterpart is the `seq {}` CE. Covered by
 `tests/{typecheck,compile,roundtrip,run}.rs` + `examples/hello.pyfun`.
   The `Option`, `Result`, and `Seq` modules have landed too: `Option.map`/`withDefault`/`isSome`/
   `isNone`; `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`; and the lazy
@@ -524,8 +529,9 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
    Closure capture of a reassigned `mut` (`nonlocal`/`global`) **landed**. **Tuples** (structural
-   `(a, b)` literals/patterns/types, deep-exhaustive) **landed**. Remaining in this band:
-   sequence patterns on `List` (`case [first, *rest]`, Python-native + big-O-honest); the linked-list
-   `cons`/`head`/`tail` variant is now a non-goal.
+   `(a, b)` literals/patterns/types, deep-exhaustive) **landed**. **Sequence patterns on `List`**
+   (`case [x, *rest]`, `Nil | Cons` exhaustiveness modeling, `PyPattern::ListSeq`) **landed 2026-07-03**;
+   the only remaining slice is a non-last star (`[*init, last]`). The linked-list `cons`/`head`/`tail`
+   variant is a non-goal.
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
    reparse, doc-comment hover.
