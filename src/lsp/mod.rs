@@ -36,6 +36,7 @@ pub mod resolve;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -183,16 +184,70 @@ struct Doc {
     version: u64,
 }
 
-/// The server state: open documents by URI, a per-document **analysis cache**
-/// (so repeated requests on an unchanged document reuse one parse + type-check —
-/// the "incremental" half), plus a flag set by `exit`.
+/// A content fingerprint for cache validation. An analysis is a pure function
+/// of the entry document's text plus the text of every imported module file it
+/// consulted, so equal fingerprints of all of them prove an equal result.
+fn fingerprint(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The module files an analysis (or an exports computation) consulted: each
+/// file's URI with the fingerprint of the content found there — `None` when the
+/// file was missing/unreadable, recording the *absence* so that creating the
+/// file later also invalidates.
+type Deps = Vec<(String, Option<u64>)>;
+
+/// A cached per-document analysis: valid while the document is still at
+/// `version` **and** every imported module file consulted during the analysis
+/// (`deps`) still has the same content fingerprint — so editing an imported
+/// file (in an open buffer or on disk) re-analyzes its dependents on their
+/// next request.
+struct CachedAnalysis {
+    version: u64,
+    deps: Deps,
+    analysis: Rc<Analysis>,
+}
+
+/// A project-wide cached module interface, keyed by the module file's URI: its
+/// checked exports plus every file its computation consulted (itself first,
+/// then its transitive imports). Fresh iff every dep fingerprint still matches,
+/// in which case the exports are provably identical (they are a pure function
+/// of those sources).
+struct CachedExports {
+    deps: Deps,
+    exports: crate::types::ModuleExports,
+}
+
+/// State for one import-resolution pass (one analysis): modules already
+/// resolved in this pass — mirroring the per-call memo of
+/// `project::resolve_imports` — and the DFS `visiting` set that breaks import
+/// cycles. The memoized flag marks a **tainted** result: one computed in a
+/// cycle context (an import was skipped because it was being visited), which is
+/// context-dependent and must not enter the project-wide exports cache.
+#[derive(Default)]
+struct ResolvePass {
+    memo: HashMap<String, (crate::types::ModuleExports, bool)>,
+    visiting: HashSet<String>,
+}
+
+/// The server state: open documents by URI, the two-level **analysis cache**
+/// (per-document analyses plus project-wide module interfaces, both validated
+/// by content fingerprints — the "incremental" half), plus a flag set by
+/// `exit`.
 #[derive(Default)]
 pub struct Server {
     documents: HashMap<String, Doc>,
-    /// Cached analysis per URI, tagged with the document version it was computed
-    /// from; a stale entry (older version) is recomputed on demand. `RefCell`
+    /// Cached analysis per URI, tagged with the document version and the
+    /// imported files it was computed from; a stale entry (older version, or a
+    /// changed/appeared/vanished import) is recomputed on demand. `RefCell`
     /// because the read handlers take `&self`.
-    cache: RefCell<HashMap<String, (u64, Rc<Analysis>)>>,
+    cache: RefCell<HashMap<String, CachedAnalysis>>,
+    /// Project-wide cache of imported modules' export interfaces, keyed by the
+    /// module file's URI, so two open documents importing `Geometry` share one
+    /// parse + check of `geometry.pyfun` across requests (`DESIGN.md` §9).
+    exports: RefCell<HashMap<String, CachedExports>>,
     /// Monotonic clock stamping each document edit with a fresh version.
     clock: u64,
     pub exit: bool,
@@ -323,27 +378,173 @@ impl Server {
         self.documents.get(uri).map(|d| d.text.as_str())
     }
 
-    /// The analysis of `uri`, served from the cache when the document is
-    /// unchanged since it was computed, otherwise analyzed fresh and cached. This
-    /// is what makes repeated requests (hover, then go-to-def, then references) on
-    /// one document version share a single parse + type-check.
+    /// The analysis of `uri`, served from the cache when the document **and
+    /// every imported file its analysis consulted** are unchanged since it was
+    /// computed, otherwise analyzed fresh and cached. This is what makes
+    /// repeated requests (hover, then go-to-def, then references) on one
+    /// document version share a single parse + type-check — and what re-analyzes
+    /// a dependent when one of its imports changes.
     fn analysis(&self, uri: &str) -> Option<Rc<Analysis>> {
         let doc = self.documents.get(uri)?;
-        if let Some((version, analysis)) = self.cache.borrow().get(uri)
-            && *version == doc.version
+        if let Some(entry) = self.cache.borrow().get(uri)
+            && entry.version == doc.version
+            && self.deps_fresh(&entry.deps)
         {
-            return Some(analysis.clone());
+            return Some(entry.analysis.clone());
         }
-        // Resolve `import`s relative to the document's own directory, so a
-        // multi-module file checks cleanly (`DESIGN.md` §6.1). A non-`file:` URI
-        // (or a path without a parent) just analyzes without imports.
-        let path = uri_to_path(uri);
-        let dir = path.as_deref().and_then(std::path::Path::parent);
-        let analysis = Rc::new(crate::analyze_in_dir(&doc.text, dir));
-        self.cache
-            .borrow_mut()
-            .insert(uri.to_string(), (doc.version, analysis.clone()));
+        // Resolve `import`s against sibling modules (open buffer preferred,
+        // else disk — `DESIGN.md` §6.1), reusing the project-wide exports
+        // cache, and record every file consulted (`deps`) so this entry is
+        // invalidated when one of them changes.
+        let mut deps = Vec::new();
+        let analysis = Rc::new(crate::analyze_with_imports(&doc.text, |module| {
+            self.resolve_imports_cached(uri, module, &mut deps)
+        }));
+        self.cache.borrow_mut().insert(
+            uri.to_string(),
+            CachedAnalysis {
+                version: doc.version,
+                deps,
+                analysis: analysis.clone(),
+            },
+        );
         Some(analysis)
+    }
+
+    /// The current source of the module file at `uri`: the open buffer when the
+    /// file is open in the editor, else the on-disk content (the convention of
+    /// every cross-file feature, e.g. [`locate_cross_file`](Self::locate_cross_file)
+    /// — so an unsaved edit to an imported file is seen).
+    fn module_source(&self, uri: &str) -> Option<String> {
+        if let Some(doc) = self.documents.get(uri) {
+            return Some(doc.text.clone());
+        }
+        std::fs::read_to_string(uri_to_path(uri)?).ok()
+    }
+
+    /// The fingerprint of the module file at `uri` as it stands right now
+    /// (open buffer preferred, else disk); `None` when it is unreadable.
+    fn current_fingerprint(&self, uri: &str) -> Option<u64> {
+        if let Some(doc) = self.documents.get(uri) {
+            return Some(fingerprint(&doc.text));
+        }
+        let source = std::fs::read_to_string(uri_to_path(uri)?).ok()?;
+        Some(fingerprint(&source))
+    }
+
+    /// Whether every recorded dependency still has the content it had when the
+    /// cache entry was computed (including still-absent for a `None` entry).
+    fn deps_fresh(&self, deps: &Deps) -> bool {
+        deps.iter()
+            .all(|(uri, fp)| self.current_fingerprint(uri) == *fp)
+    }
+
+    /// Resolve `module`'s imports to their export interfaces, mirroring the
+    /// forgiving `project::resolve_imports` (a missing/broken/cyclic import is
+    /// simply omitted) but through the caches: see
+    /// [`resolve_exports_cached`](Self::resolve_exports_cached). `deps` collects
+    /// every file consulted, for the caller's own cache validation.
+    fn resolve_imports_cached(
+        &self,
+        uri: &str,
+        module: &crate::syntax::Module,
+        deps: &mut Deps,
+    ) -> HashMap<String, crate::types::ModuleExports> {
+        let mut pass = ResolvePass::default();
+        let mut out = HashMap::new();
+        // The entry document's own analysis is keyed by its version + deps (its
+        // cycle context is fixed — resolution always starts here), so taint
+        // only matters for the shared exports cache, not at this level.
+        let mut tainted = false;
+        for item in &module.items {
+            if let crate::syntax::Item::Import { name, .. } = item
+                && let Some(exports) =
+                    self.resolve_exports_cached(uri, name, &mut pass, deps, &mut tainted)
+            {
+                out.insert(name.clone(), exports);
+            }
+        }
+        out
+    }
+
+    /// Resolve the export interface of the imported module `name` (a sibling of
+    /// `base_uri`), mirroring the compiler-side `project::resolve_exports`
+    /// (parse + recursively resolve its own imports + `check_module`; a missing
+    /// file, parse error, or cycle yields `None`) with three editor additions:
+    /// the source comes from the open buffer when the file is open (else disk);
+    /// the **project-wide exports cache** is consulted first — an entry is
+    /// reused when every file its computation consulted still fingerprints the
+    /// same, which proves the exports identical; and every file consulted here
+    /// is appended to `deps` so the caller's cache entry can be validated the
+    /// same way later.
+    ///
+    /// `caller_tainted` is set when the result is context-dependent — a cycle
+    /// made us skip an import — in which case it must not enter the project-wide
+    /// cache (a different entry document would resolve the cycle from a
+    /// different side); the per-pass memo still reuses it within this pass.
+    fn resolve_exports_cached(
+        &self,
+        base_uri: &str,
+        name: &str,
+        pass: &mut ResolvePass,
+        deps: &mut Deps,
+        caller_tainted: &mut bool,
+    ) -> Option<crate::types::ModuleExports> {
+        if pass.visiting.contains(name) {
+            *caller_tainted = true; // the caller is checked without this import
+            return None;
+        }
+        if let Some((exports, tainted)) = pass.memo.get(name) {
+            *caller_tainted |= *tainted;
+            return Some(exports.clone());
+        }
+        let uri = sibling_uri(base_uri, &crate::project::module_file_name(name));
+        let Some(source) = self.module_source(&uri) else {
+            deps.push((uri, None)); // record the absence: creating it invalidates
+            return None;
+        };
+        // Project-wide cache hit: this module and everything its computation
+        // read are unchanged, so its exports are identical.
+        if let Some(entry) = self.exports.borrow().get(&uri)
+            && self.deps_fresh(&entry.deps)
+        {
+            deps.extend(entry.deps.iter().cloned());
+            pass.memo
+                .insert(name.to_string(), (entry.exports.clone(), false));
+            return Some(entry.exports.clone());
+        }
+        let mut my_deps = vec![(uri.clone(), Some(fingerprint(&source)))];
+        let Ok(module) = crate::parse(&source) else {
+            deps.extend(my_deps); // fingerprinted, so fixing the file invalidates
+            return None;
+        };
+        pass.visiting.insert(name.to_string());
+        let mut imports = HashMap::new();
+        let mut tainted = false;
+        for item in &module.items {
+            if let crate::syntax::Item::Import { name: import, .. } = item
+                && let Some(exports) =
+                    self.resolve_exports_cached(&uri, import, pass, &mut my_deps, &mut tainted)
+            {
+                imports.insert(import.clone(), exports);
+            }
+        }
+        pass.visiting.remove(name);
+        let (_errors, exports) = crate::types::check_module(&module, &imports);
+        deps.extend(my_deps.iter().cloned());
+        if !tainted {
+            self.exports.borrow_mut().insert(
+                uri,
+                CachedExports {
+                    deps: my_deps,
+                    exports: exports.clone(),
+                },
+            );
+        }
+        pass.memo
+            .insert(name.to_string(), (exports.clone(), tainted));
+        *caller_tainted |= tainted;
+        Some(exports)
     }
 
     /// Build a `publishDiagnostics` notification for `uri` from its analysis.
@@ -2150,6 +2351,175 @@ mod tests {
         server.handle(&json::parse(&change_msg(uri, "let n = 2")).unwrap());
         let c = server.analysis(uri).unwrap();
         assert!(!Rc::ptr_eq(&a, &c), "edited document served stale analysis");
+    }
+
+    /// Diagnostics currently published for `uri`, recomputed via the cache path.
+    fn diags_of(server: &Server, uri: &str) -> Vec<Json> {
+        server
+            .diagnostics_for(uri)
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .to_vec()
+    }
+
+    #[test]
+    fn editing_an_imported_file_reanalyzes_dependents() {
+        // Both files are open buffers under a common (virtual) directory — the
+        // resolver prefers open buffers, so no on-disk files are needed.
+        let mut server = Server::default();
+        let geom_uri = "file:///proj/geometry.pyfun";
+        let main_uri = "file:///proj/main.pyfun";
+        server.handle(&json::parse(&open_msg(geom_uri, "let area w h = w * h")).unwrap());
+        let out = server.handle(
+            &json::parse(&open_msg(
+                main_uri,
+                "import Geometry\nlet r = Geometry.area 4 5",
+            ))
+            .unwrap(),
+        );
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(diags.is_empty(), "expected clean analysis, got {diags:?}");
+
+        // Editing the *imported* buffer must invalidate the dependent's cached
+        // analysis: `area` disappears, so main's next analysis flags the member.
+        server.handle(&json::parse(&change_msg(geom_uri, "let volume x = x")).unwrap());
+        let diags = diags_of(&server, main_uri);
+        assert_eq!(diags.len(), 1, "stale import served: {diags:?}");
+        // And back: restoring `area` re-analyzes clean again.
+        server.handle(&json::parse(&change_msg(geom_uri, "let area w h = w * h")).unwrap());
+        let diags = diags_of(&server, main_uri);
+        assert!(diags.is_empty(), "restored import still stale: {diags:?}");
+    }
+
+    #[test]
+    fn analysis_cache_validates_import_fingerprints() {
+        let mut server = Server::default();
+        let geom_uri = "file:///proj2/geometry.pyfun";
+        let main_uri = "file:///proj2/main.pyfun";
+        server.handle(&json::parse(&open_msg(geom_uri, "let area w h = w * h")).unwrap());
+        server.handle(
+            &json::parse(&open_msg(
+                main_uri,
+                "import Geometry\nlet r = Geometry.area 4 5",
+            ))
+            .unwrap(),
+        );
+        // Unchanged everywhere → the same Rc is served.
+        let a = server.analysis(main_uri).unwrap();
+        assert!(Rc::ptr_eq(&a, &server.analysis(main_uri).unwrap()));
+        // A content-identical edit to the import bumps its version but not its
+        // fingerprint: the dependent's analysis is still reused.
+        server.handle(&json::parse(&change_msg(geom_uri, "let area w h = w * h")).unwrap());
+        assert!(
+            Rc::ptr_eq(&a, &server.analysis(main_uri).unwrap()),
+            "content-identical import edit re-analyzed the dependent"
+        );
+        // A real edit to the import busts the dependent's cache entry.
+        server.handle(&json::parse(&change_msg(geom_uri, "let area w h = w + h")).unwrap());
+        let b = server.analysis(main_uri).unwrap();
+        assert!(
+            !Rc::ptr_eq(&a, &b),
+            "changed import served a stale analysis"
+        );
+        assert!(Rc::ptr_eq(&b, &server.analysis(main_uri).unwrap()));
+    }
+
+    #[test]
+    fn imported_file_changed_on_disk_invalidates_the_cache() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_diskinv_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("geometry.pyfun"), "let area w h = w * h").unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+
+        let mut server = Server::default();
+        let out = server.handle(
+            &json::parse(&open_msg(
+                &main_uri,
+                "import Geometry\nlet r = Geometry.area 4 5",
+            ))
+            .unwrap(),
+        );
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert!(diags.is_empty(), "expected clean analysis, got {diags:?}");
+        let a = server.analysis(&main_uri).unwrap();
+
+        // Rewrite the import on disk (it is not open in the editor): the content
+        // fingerprint changes, so the dependent re-analyzes on its next request.
+        std::fs::write(dir.join("geometry.pyfun"), "let volume x = x").unwrap();
+        let diags = diags_of(&server, &main_uri);
+        assert_eq!(diags.len(), 1, "disk change not seen: {diags:?}");
+        assert!(!Rc::ptr_eq(&a, &server.analysis(&main_uri).unwrap()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exports_cache_is_shared_project_wide() {
+        // Two dependents of `Geometry` share one cached interface entry rather
+        // than each re-parsing + re-checking geometry.pyfun.
+        let mut server = Server::default();
+        let geom_uri = "file:///proj3/geometry.pyfun";
+        server.handle(&json::parse(&open_msg(geom_uri, "let area w h = w * h")).unwrap());
+        for (uri, name) in [
+            ("file:///proj3/alpha.pyfun", "a"),
+            ("file:///proj3/beta.pyfun", "b"),
+        ] {
+            let out = server.handle(
+                &json::parse(&open_msg(
+                    uri,
+                    &format!("import Geometry\nlet {name} = Geometry.area 1 2"),
+                ))
+                .unwrap(),
+            );
+            let diags = out[0]
+                .get("params")
+                .unwrap()
+                .get("diagnostics")
+                .unwrap()
+                .as_array()
+                .unwrap();
+            assert!(diags.is_empty(), "{uri}: {diags:?}");
+        }
+        assert_eq!(
+            server.exports.borrow().len(),
+            1,
+            "one shared interface entry serves both dependents"
+        );
+    }
+
+    #[test]
+    fn cyclic_imports_stay_out_of_the_project_cache() {
+        // `alpha` and `beta` import each other. Resolution bails on the cycle
+        // (as the forgiving `project::resolve_imports` does), and the resulting
+        // context-dependent interfaces must not be cached project-wide — a
+        // different entry document resolves the cycle from a different side.
+        let mut server = Server::default();
+        let alpha = "file:///cyc/alpha.pyfun";
+        let beta = "file:///cyc/beta.pyfun";
+        server.handle(&json::parse(&open_msg(alpha, "import Beta\nlet a = 1")).unwrap());
+        server.handle(&json::parse(&open_msg(beta, "import Alpha\nlet b = Alpha.a")).unwrap());
+        assert!(server.analysis(alpha).is_some());
+        assert!(server.analysis(beta).is_some());
+        assert!(
+            server.exports.borrow().is_empty(),
+            "cycle-context interfaces must not be cached"
+        );
     }
 
     #[test]

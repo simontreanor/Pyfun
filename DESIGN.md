@@ -584,10 +584,11 @@ import) and seeds the type-check (`types::check_collecting_with_imports`), so a 
 type-checks `Geometry.area` cleanly instead of flagging "not a member" — while a genuine cross-module type
 error is still reported. The server maps the document's `file:` URI to a directory (`uri_to_path`,
 percent-decoding + the Windows `/C:/` fixup) and passes it in; a non-`file:` URI or a no-imports file is
-analyzed exactly as before. **Limitations (acceptable for the MVP, documented):** imported modules are read
-from *disk*, not the editor's unsaved buffers, and the per-URI/version cache is not invalidated when an
-imported file changes (re-open/edit the dependent file to refresh). **Rich cross-file navigation is
-deferred** (today's per-URI, version-cached analysis stays the core). *Cross-file navigation follow-on
+analyzed exactly as before. **Both former MVP limitations were fixed with the project-wide LSP cache
+(2026-07-03, §9):** imported modules are now read from the editor's **open buffer** when the file is open
+(else disk, matching every other cross-file feature), and a document's cached analysis records the imported
+files it consulted (with content fingerprints), so editing an imported file — in a buffer or on disk —
+invalidates its dependents on their next request. *Cross-file navigation follow-on
 (landed):* (1) **go-to-definition crosses files** — a qualified reference to an imported file module
 (`Geometry.area`, `Geometry.Circle`) jumps to the definition in that module's `.pyfun`
 (`resolve::qualified_at` records expression-position qualified refs with spans; the server resolves the
@@ -607,7 +608,7 @@ no qualified-type syntax, so a type name appears only in its own file's annotati
 field types, `extern` types). `TypeExpr::Con` and the `type` declaration each carry a name span, the
 resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name occurrences, and
 `resolve::type_at` / `type_use_references` drive go-to-definition, find-references, and rename (a type
-renames to an uppercase type name; builtins are refused). **Still deferred:** a project-wide LSP cache.
+renames to an uppercase type name; builtins are refused). The **project-wide LSP cache landed** (§9).
 
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
 (construct + qualified-pattern-match + cross-boundary exhaustiveness), **cross-module records** (§8.3),
@@ -621,8 +622,8 @@ all-public by design, the Python-natural model, so enforced visibility would fig
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
 X import y` / `open`; nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*`
-runtime; a project-wide LSP cache. (Cross-module **records, externs, and measures** all **landed
-2026-07-03**, §6.1/§8.3.)
+runtime. (Cross-module **records, externs, and measures** all **landed
+2026-07-03**, §6.1/§8.3; the **project-wide LSP cache** also landed 2026-07-03, §9.)
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
@@ -1332,6 +1333,34 @@ features, all reusing the existing front end:
   "incremental" half is a per-document analysis cache keyed on a monotonic version
   stamp: repeated requests on an unchanged document (hover, then go-to-def, then
   references) reuse one parse + type-check instead of redoing it each time.
+- **Project-wide cache + import invalidation** (2026-07-03) — import-aware analysis
+  is cached at two levels, both validated by **content fingerprints** (a
+  `DefaultHasher` of the source text; an analysis is a pure function of the entry
+  text plus every imported source it consulted, so equal fingerprints prove an
+  equal result). (1) Each per-document cache entry (`CachedAnalysis`) records the
+  imported module files its analysis consulted — `deps: (uri, Option<fingerprint>)`,
+  with `None` recording the file's *absence* so that creating it later also
+  invalidates. A cache hit requires the document version *and* every dep
+  fingerprint to match, so editing an imported file — in an open buffer **or on
+  disk** — re-analyzes its dependents on their next request. (2) A **project-wide
+  exports cache** (`Server.exports`, `CachedExports` keyed by module-file URI)
+  memoizes each imported module's checked interface (`ModuleExports`) together
+  with its own dep list, so two open documents importing `Geometry` share one
+  parse + check of `geometry.pyfun` across requests instead of each redoing it.
+  Imported sources are read from the **open buffer when the file is open** (else
+  disk), the same convention as the other cross-file features — this is what makes
+  unsaved edits to an import visible at all. The resolver
+  (`Server::resolve_exports_cached`, driven through `lib::analyze_with_imports`,
+  which injects import resolution into the recovering analysis) mirrors the
+  forgiving `project::resolve_imports` semantics exactly — missing/broken/cyclic
+  imports are omitted — with one care point: an interface computed in an import-
+  *cycle* context is context-dependent (a different entry document resolves the
+  cycle from a different side), so such "tainted" results live only in a per-pass
+  memo (mirroring the old per-call cache) and never enter the project-wide cache.
+  Diagnostics for a dependent are still *published* only when that document is
+  next analyzed (its own open/change, or any request touching it) — proactively
+  re-publishing dependents' diagnostics on an import edit would be a behavior
+  change and stays deferred.
 
 The AST changes that enable local navigation: function/binding parameters are
 `Param { name, span }` (was `Vec<String>`), `Pattern::Var { name, span }` (was
@@ -1339,13 +1368,14 @@ The AST changes that enable local navigation: function/binding parameters are
 spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/structural
 equality is unaffected; lowering erases them (`param_names`).
 
-Deferred (next LSP slices, `ROADMAP` #10): *truly* incremental reparsing (today a
-change re-analyzes the whole document — fine at this size; the version cache only
-avoids redundant re-analysis between requests on the *same* version, not partial
-reparse on edit); resilience to *lexing* errors (only parse errors recover today);
-workspace symbols (project-wide, vs. today's per-document outline); and a separate
-effect line in hover. (Doc-comment hover has **shipped** — `##` doc comments, §7,
-render below the type.) The `editors/vscode/` client is intentionally thin —
+Deferred: *truly* incremental reparsing — an edit still re-analyzes the whole
+document — and deliberately so, decided against rather than postponed (2026-07-03):
+a whole-file lex + parse + check is milliseconds at realistic Pyfun file sizes, the
+two caches above already eliminate all *redundant* whole-file work (unchanged
+documents, unchanged imports, shared imports), and region-based reparse would
+complicate the offside-rule lexer and the recovering parser for no perceptible
+latency win at this scale. (Doc-comment hover has **shipped** — `##` doc comments,
+§7, rendered below the type.) The `editors/vscode/` client is intentionally thin —
 all language smarts live in the Rust server.
 
 **Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic

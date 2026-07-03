@@ -110,6 +110,7 @@ Window** in the host so it relaunches the server.
 
 The client is deliberately thin — it only launches `pyfun lsp` and wires up
 document sync. Every feature above is implemented in the Rust server (`src/lsp/`).
-Remaining LSP work is low-value at this scale: truly incremental reparse and
-workspace symbols — see `ROADMAP.md` #10. (Doc-comment hover — `##` doc
-comments rendered below the type — landed.)
+Doc-comment hover (`##` doc comments rendered below the type) landed 2026-07-03.
+Truly incremental reparse was decided against — whole-file analysis is
+milliseconds at this scale and the server's fingerprint-validated caches already
+remove all redundant re-analysis — see `ROADMAP.md`.

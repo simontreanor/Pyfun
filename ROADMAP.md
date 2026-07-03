@@ -250,8 +250,20 @@ rather than checked — almost none of this is in the type system). Each was ver
   single-line unless in a `:{` block; state = the definitions, which re-run on each expression eval, so
   *pure* defs feel persistent but a top-level effect or `let mut` doesn't carry across entries (a
   persistent-Python-process design is the future step). Covered by `tests/repl.rs`.
-- **Project-wide LSP cache + truly incremental reparse** (M–L) — performance, not capability; the
-  per-document version cache already avoids redundant re-analysis.
+- **Project-wide LSP cache + truly incremental reparse** — ✅ **cache half done 2026-07-03**;
+  reparse half **decided against**. Import-aware analysis is now cached at two fingerprint-validated
+  levels (`DESIGN.md` §9): each per-document entry records the imported files it consulted (content
+  fingerprints, `None` = absent), so a hit needs the doc version *and* all deps to match — **editing an
+  imported file (open buffer or on disk) re-analyzes dependents** on their next request, fixing the old
+  "cache not invalidated on import change" MVP limitation; and a **project-wide exports cache**
+  (`ModuleExports` per module-file URI + its own dep list) shares one parse + check of a common import
+  across all open documents. Imported sources read open-buffer-first (else disk); cycle-context
+  interfaces are "tainted" and stay out of the shared cache. No behavior change — same diagnostics/
+  hover/nav/rename, just not recomputed. **Truly incremental reparse is not worth it here**: whole-file
+  lex + parse + check is milliseconds at realistic file sizes, the caches remove all redundant
+  whole-file work, and region reparse would complicate the offside lexer + recovering parser for no
+  perceptible win. Covered by `src/lsp` unit tests (invalidation via buffer + disk, fingerprint reuse,
+  shared exports, cycle taint) + a `tests/lsp.rs` e2e (hover reflects an imported buffer's edit).
 - **Doc-comment syntax + richer hover** — ✅ **done 2026-07-03**: `##` doc comments (column 0, one or
   more lines) attach to the following top-level `let`/`type`/`extern` as AST metadata
   (`doc: Option<String>`), are re-emitted by the pretty-printer (roundtrip-safe), erase at lowering,
@@ -599,7 +611,8 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    `Record`/`Pattern::Record` arms of the resolver now push a `QualRef` for a dotted tag). **Cross-module
    records, externs, and measures all landed 2026-07-03** (construct/pattern/update/access an imported
    record with a use-site field-ambiguity multimap; imported externs bound + routed; measures merged
-   unqualified with an alias-conflict check). Still deferred: a project-wide LSP cache.
+   unqualified with an alias-conflict check). The **project-wide LSP cache landed 2026-07-03** (see
+   *Tooling* above).
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.
@@ -608,5 +621,6 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    (`case [x, *rest]`, `Nil | Cons` exhaustiveness modeling, `PyPattern::ListSeq`) **landed 2026-07-03**;
    the only remaining slice is a non-last star (`[*init, last]`). The linked-list `cons`/`head`/`tail`
    variant is a non-goal.
-3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
-   reparse (doc-comment hover landed 2026-07-03).
+3. **#10 LSP tail** — workspace symbols **landed** (with cross-file nav); the project-wide cache
+   **landed 2026-07-03**; doc-comment hover **landed 2026-07-03**; truly incremental reparse
+   **decided against** (whole-file analysis is milliseconds at this scale — see *Tooling* above).

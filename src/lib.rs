@@ -81,19 +81,32 @@ pub fn analyze(source: &str) -> Analysis {
 
 /// Like [`analyze`], but resolves `import`s relative to `dir` so a multi-module
 /// file checks cleanly in the editor (`DESIGN.md` §6.1). When `dir` is `None`
-/// (or no imports resolve) this is exactly [`analyze`]. The LSP passes the
-/// directory of the document's file; imported modules are read from sibling
-/// `<name>.pyfun` files (best-effort — missing/broken imports are skipped).
+/// (or no imports resolve) this is exactly [`analyze`]. Imported modules are
+/// read from sibling `<name>.pyfun` files (best-effort — missing/broken imports
+/// are skipped).
 pub fn analyze_in_dir(source: &str, dir: Option<&std::path::Path>) -> Analysis {
+    analyze_with_imports(source, |module| match dir {
+        Some(d) => project::resolve_imports(d, module),
+        None => std::collections::HashMap::new(),
+    })
+}
+
+/// Like [`analyze`], but with import resolution injected: once `source` is
+/// (recovering-)parsed, `resolve` maps the module to its imports' export
+/// interfaces, which seed the type check
+/// (`types::check_collecting_with_imports`; an empty map is exactly
+/// [`analyze`]). [`analyze_in_dir`] passes the disk-reading
+/// `project::resolve_imports`; the LSP server passes its cached,
+/// open-buffer-aware resolver (`DESIGN.md` §9), which also records the files it
+/// consulted so the analysis can be invalidated when an imported file changes.
+pub fn analyze_with_imports(
+    source: &str,
+    resolve: impl FnOnce(&syntax::Module) -> std::collections::HashMap<String, types::ModuleExports>,
+) -> Analysis {
     let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
-    let (type_errors, types) = match dir {
-        Some(d) => {
-            let imports = project::resolve_imports(d, &module);
-            types::check_collecting_with_imports(&module, &imports)
-        }
-        None => types::check_collecting(&module),
-    };
+    let imports = resolve(&module);
+    let (type_errors, types) = types::check_collecting_with_imports(&module, &imports);
     // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
     // by position so cascading errors read top-to-bottom.
     let mut syntax_errors: Vec<_> = lex_errors
@@ -138,7 +151,9 @@ pub fn compile(source: &str) -> Result<String, CompileError> {
 /// Lowering consults this only for value-position integer literals, so a `float`
 /// entry for a non-literal node is harmless (spans of distinct nodes never
 /// collide). See [`compile`] and `lowering`'s `float_literals`.
-pub(crate) fn float_literal_spans(types: &[types::TypeSpan]) -> std::collections::HashSet<lexer::Span> {
+pub(crate) fn float_literal_spans(
+    types: &[types::TypeSpan],
+) -> std::collections::HashSet<lexer::Span> {
     types
         .iter()
         .filter(|t| t.ty == "float" || t.ty.starts_with("float<"))

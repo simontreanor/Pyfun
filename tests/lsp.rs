@@ -504,6 +504,80 @@ fn serves_resilient_analysis_on_a_half_typed_file() {
 }
 
 #[test]
+fn reanalyzes_a_dependent_when_an_imported_buffer_changes() {
+    // `main` imports `Geometry`; both are open buffers (nothing on disk).
+    // Editing geometry.pyfun must invalidate main's cached analysis, so the
+    // second hover reflects `area`'s new type without main itself changing.
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///proj/geometry.pyfun","text":"let area w h = w * h"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///proj/main.pyfun","text":"import Geometry\nlet r = Geometry.area"}}}"#,
+        ),
+        // Hover over `area` in `Geometry.area` (line 1, character 18).
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///proj/main.pyfun"},"position":{"line":1,"character":18}}}"#,
+        ),
+        // Edit the *imported* buffer: `area` becomes string -> string.
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///proj/geometry.pyfun"},"contentChanges":[{"text":"let area s = String.upper s"}]}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///proj/main.pyfun"},"position":{"line":1,"character":18}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let messages = unframe(&out);
+    let hover_value = |id: i64| -> String {
+        messages
+            .iter()
+            .find(|m| m.get("id").and_then(Json::as_i64) == Some(id))
+            .expect("hover response")
+            .get("result")
+            .unwrap()
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // Before the edit, `area` is the numeric two-argument function.
+    let before = hover_value(2);
+    assert!(before.contains("int"), "hover before edit: {before:?}");
+    // After editing only the imported buffer, the dependent re-analyzes.
+    let after = hover_value(3);
+    assert!(
+        after.contains("string -> string"),
+        "hover after import edit: {after:?}"
+    );
+}
+
+#[test]
 fn serves_rename() {
     let exe = env!("CARGO_BIN_EXE_pyfun");
     let mut child = Command::new(exe)
