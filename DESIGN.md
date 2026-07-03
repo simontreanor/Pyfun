@@ -778,6 +778,13 @@ constraint with polymorphic literals (step b).
    body embeds the operands, which may reference outer variables, so the lambda parameter is picked free of
    both operands' free variables (`_pf_x`, else `_pf_x0`, …) — no capture. Pairs naturally with the
    combinators: `List.map (double >> inc) xs`.
+10. **Backward pipe `<|`. ✅ implemented.** `f <| x` == `f x` (F#'s `<|`, Haskell's `$`), added for
+    symmetry so the pipe/compose quad `|>` `<|` `>>` `<<` is complete. It's modeled as a `backward` flag on
+    the existing `ExprKind::Pipe` (forward `|>` applies `rhs` to `lhs`; backward `<|` applies `lhs` to
+    `rhs`), lexed as `Tok::PipeLeft` (`<|`, before single `<`), at the lowest precedence with `|>` but
+    **right-associative** (`f <| g <| x` = `f (g x)`). It lowers to plain application by flattening through
+    `flatten_app` exactly like `|>`, so there is no new lowering path. Its whole use is dropping parens on a
+    trailing argument (`print <| List.sum xs`); `|>` remains the idiomatic left-to-right pipeline.
 
 **Why a *closed* set of built-in constraints, not user type classes.** `num` and `comparison` are
 baked into the compiler; there is **no `class`/`instance` surface syntax**. The set stays closed,

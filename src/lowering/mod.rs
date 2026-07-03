@@ -1718,10 +1718,16 @@ fn flatten_app<'a>(expr: &'a Expr, args: &mut Vec<&'a Expr>) -> &'a Expr {
             args.push(arg);
             head
         }
-        ExprKind::Pipe { lhs, rhs } => {
-            // `lhs |> rhs` == `rhs lhs`: flatten the callee spine, then the value.
-            let head = flatten_app(rhs, args);
-            args.push(lhs);
+        ExprKind::Pipe {
+            lhs,
+            rhs,
+            backward,
+        } => {
+            // `lhs |> rhs` == `rhs lhs`; `lhs <| rhs` == `lhs rhs`. Flatten the
+            // callee spine, then push the argument.
+            let (callee, arg) = if *backward { (lhs, rhs) } else { (rhs, lhs) };
+            let head = flatten_app(callee, args);
+            args.push(arg);
             head
         }
         _ => expr,
@@ -2521,7 +2527,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             scan_scope(func, assigned, bound);
             scan_scope(arg, assigned, bound);
         }
-        ExprKind::Pipe { lhs, rhs } | ExprKind::Compose { lhs, rhs, .. } => {
+        ExprKind::Pipe { lhs, rhs, .. } | ExprKind::Compose { lhs, rhs, .. } => {
             scan_scope(lhs, assigned, bound);
             scan_scope(rhs, assigned, bound);
         }

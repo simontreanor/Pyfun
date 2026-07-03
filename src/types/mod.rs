@@ -1524,7 +1524,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
                 collect_free(e, bound, out);
             }
         }
-        ExprKind::Pipe { lhs, rhs } | ExprKind::Compose { lhs, rhs, .. } => {
+        ExprKind::Pipe { lhs, rhs, .. } | ExprKind::Compose { lhs, rhs, .. } => {
             collect_free(lhs, bound, out);
             collect_free(rhs, bound, out);
         }
@@ -3140,7 +3140,14 @@ impl Infer {
             }
 
             ExprKind::App { func, arg } => self.infer_apply(func, arg, span, env),
-            ExprKind::Pipe { lhs, rhs } => self.infer_apply(rhs, lhs, span, env),
+            // `lhs |> rhs` applies `rhs` to `lhs`; `lhs <| rhs` applies `lhs` to `rhs`.
+            ExprKind::Pipe { lhs, rhs, backward } => {
+                if *backward {
+                    self.infer_apply(lhs, rhs, span, env)
+                } else {
+                    self.infer_apply(rhs, lhs, span, env)
+                }
+            }
 
             ExprKind::Match { scrutinee, arms } => {
                 let scrut_ty = self.infer_expr(scrutinee, env)?;

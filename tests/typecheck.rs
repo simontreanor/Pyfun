@@ -131,6 +131,9 @@ fn mutual_recursion_preserves_polymorphism() {
 #[test]
 fn accepts_partial_application_and_pipe() {
     assert!(pyfun::check("let add a b = a + b\nlet inc = add 1\nlet r = 5 |> inc").is_ok());
+    // Backward pipe `<|` applies the left function to the right argument.
+    assert!(pyfun::check("let add a b = a + b\nlet inc = add 1\nlet r = inc <| 5").is_ok());
+    assert!(pyfun::check("let inc n = n + 1\nlet r = inc <| inc <| 5").is_ok()); // right-assoc
 }
 
 #[test]

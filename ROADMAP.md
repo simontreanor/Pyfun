@@ -168,6 +168,11 @@ rather than checked — almost none of this is in the type system). Each was ver
   (`desugar::compose`) at inference + lowering, like the operator sections. Capture-safe: the lambda param
   is chosen free of both operands' free vars (`_pf_x`, …). Covered by roundtrip/typecheck/compile +
   `examples/hello.pyfun`.
+- **Backward pipe `<|`** — ✅ **done 2026-07-03** (added for `|>`/`<|`/`>>`/`<<` symmetry). `f <| x` == `f x`
+  (apply the left function to the right argument; F#'s `<|` / Haskell's `$`). `Tok::PipeLeft`; a `backward`
+  flag on `ExprKind::Pipe` (forward applies rhs to lhs, backward applies lhs to rhs); **right-associative**
+  (`f <| g <| x` = `f (g x)`), lowest precedence with `|>`. Lowers to plain application (flattens through
+  `flatten_app` like `|>`). Covered by lexer/roundtrip/typecheck/compile tests.
 - **Raw strings `r"C:\path"`** — ✅ **done 2026-07-03**. **Lexer-only** (`lex_raw_string`, mirrors the
   `f"` interception): an adjacent `r"` reads to the closing `"` with no escape processing (backslashes
   literal), following Python's rule that `\` keeps itself + the next char and `\"` does not terminate. It

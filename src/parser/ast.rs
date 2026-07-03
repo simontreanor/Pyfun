@@ -305,10 +305,13 @@ pub enum ExprKind {
     /// (keywords, and a strict function would drop their short-circuiting).
     OpFunc(BinOp),
 
-    /// `lhs |> rhs` — pipe (sugar for `rhs lhs`, kept explicit in the AST).
+    /// A pipe, kept explicit in the AST. Forward `lhs |> rhs` (`backward: false`)
+    /// is sugar for `rhs lhs`; backward `lhs <| rhs` (`backward: true`) is sugar
+    /// for `lhs rhs` (apply the left function to the right argument).
     Pipe {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
+        backward: bool,
     },
 
     /// Function composition: `lhs >> rhs` (left-to-right, `right_to_left = false`:

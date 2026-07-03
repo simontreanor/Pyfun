@@ -1424,6 +1424,29 @@ fn e2e_pipe_and_composition() {
 }
 
 #[test]
+fn backward_pipe_lowers_to_application() {
+    // `f <| x` is `f(x)`; `f <| g <| x` is right-associative `f(g(x))`.
+    let py = pyfun::compile("let inc n = n + 1\nlet a = inc <| 5\nlet b = inc <| inc <| 5").unwrap();
+    assert!(py.contains("a = inc(5)"), "{py}");
+    assert!(py.contains("b = inc(inc(5))"), "{py}");
+}
+
+#[test]
+fn e2e_backward_pipe() {
+    run_and_check(
+        "
+        let inc n = n + 1
+        let twice n = n * 2
+        let a = inc <| 5
+        let b = inc <| twice <| 5
+        let c = twice <| inc 5
+        ",
+        // b: inc(twice(5))=11; c: twice(inc(5))=12.
+        &[("a", "6"), ("b", "11"), ("c", "12")],
+    );
+}
+
+#[test]
 fn e2e_elif_chain_selects_the_right_branch() {
     // `elif` is sugar for `else if`; the chain compiles to nested conditionals and
     // picks the first matching branch (here via nested ternaries, all-expression).

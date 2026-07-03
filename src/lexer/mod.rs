@@ -682,6 +682,11 @@ impl<'a> Lexer<'a> {
             self.push(Tok::LtLt, start);
             return Ok(());
         }
+        if c == b'<' && self.peek2() == Some(b'|') {
+            self.pos += 2;
+            self.push(Tok::PipeLeft, start);
+            return Ok(());
+        }
         // Two-char comparison / equality operators (checked before `=` `!` `<` `>`).
         if let Some(tok) = match (c, self.peek2()) {
             (b'=', Some(b'=')) => Some(Tok::EqEq),
@@ -781,6 +786,21 @@ mod tests {
     #[test]
     fn distinguishes_pipe_from_bar() {
         assert_eq!(kinds("|> |"), vec![Tok::PipeOp, Tok::Bar, Tok::Eof]);
+    }
+
+    #[test]
+    fn backward_pipe_is_one_token() {
+        // `<|` is distinct from `<` `|`, `<<`, `<=`, `<-`.
+        assert_eq!(
+            kinds("a <| b"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::PipeLeft,
+                Tok::Ident("b".to_string()),
+                Tok::Eof
+            ]
+        );
+        assert_eq!(kinds("<< <| <="), vec![Tok::LtLt, Tok::PipeLeft, Tok::Le, Tok::Eof]);
     }
 
     #[test]

@@ -76,6 +76,9 @@ const PROGRAMS: &[&str] = &[
     "let r = 5 < m",
     "let curried = f a b c",
     "let piped = x |> f |> g a",
+    // Backward pipe `<|` — right-associative (`f <| g <| x` = `f (g x)`).
+    "let back = f <| x",
+    "let chain = f <| g <| x",
     // Function composition `>>` / `<<`: left-associative, tighter than `|>`.
     "let h = f >> g",
     "let h = f << g",
@@ -287,7 +290,7 @@ fn pipe_binds_looser_than_application() {
     let Item::Let(binding) = &module.items[0] else {
         panic!("expected a let binding")
     };
-    let ExprKind::Pipe { lhs, rhs } = &binding.value.kind else {
+    let ExprKind::Pipe { lhs, rhs, .. } = &binding.value.kind else {
         panic!("expected a pipe")
     };
     assert_eq!(lhs.kind, ExprKind::Var("x".to_string()));
@@ -304,13 +307,30 @@ fn composition_binds_tighter_than_pipe() {
     let Item::Let(binding) = &module.items[0] else {
         panic!("expected a let binding")
     };
-    let ExprKind::Pipe { lhs, rhs } = &binding.value.kind else {
+    let ExprKind::Pipe { lhs, rhs, .. } = &binding.value.kind else {
         panic!("expected a pipe")
     };
     assert_eq!(lhs.kind, ExprKind::Var("x".to_string()));
     assert!(
         matches!(rhs.kind, ExprKind::Compose { .. }),
         "rhs of pipe should be a composition"
+    );
+}
+
+#[test]
+fn backward_pipe_is_right_associative() {
+    // `f <| g <| x` = `f <| (g <| x)` — the rhs is itself a backward pipe.
+    let module = parse("let r = f <| g <| x").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Pipe { rhs, backward, .. } = &binding.value.kind else {
+        panic!("expected a pipe")
+    };
+    assert!(*backward, "outer pipe should be backward");
+    assert!(
+        matches!(rhs.kind, ExprKind::Pipe { backward: true, .. }),
+        "rhs should be the nested backward pipe (right-associative)"
     );
 }
 

@@ -680,18 +680,36 @@ impl Parser {
         })
     }
 
+    /// Pipes: forward `|>` (left-associative) and backward `<|` (right-associative,
+    /// `f <| g <| x` = `f (g x)`), both at the lowest precedence.
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let mut lhs = self.parse_compose()?;
-        while self.eat(&Tok::PipeOp) {
-            let rhs = self.parse_compose()?;
-            lhs = self.mk(
-                start,
-                ExprKind::Pipe {
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                },
-            );
+        loop {
+            if self.eat(&Tok::PipeOp) {
+                let rhs = self.parse_compose()?;
+                lhs = self.mk(
+                    start,
+                    ExprKind::Pipe {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                        backward: false,
+                    },
+                );
+            } else if self.eat(&Tok::PipeLeft) {
+                // Right-associative: the whole remaining pipe is the argument.
+                let rhs = self.parse_pipe()?;
+                return Ok(self.mk(
+                    start,
+                    ExprKind::Pipe {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                        backward: true,
+                    },
+                ));
+            } else {
+                break;
+            }
         }
         Ok(lhs)
     }
@@ -1703,6 +1721,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Slash => "/",
         Tok::SlashSlash => "//",
         Tok::PipeOp => "|>",
+        Tok::PipeLeft => "<|",
         Tok::Bar => "|",
         Tok::Arrow => "->",
         Tok::LParen => "(",

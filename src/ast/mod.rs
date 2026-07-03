@@ -337,8 +337,9 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("({s})")
         }
         ExprKind::OpFunc(op) => format!("({})", op.symbol()),
-        ExprKind::Pipe { lhs, rhs } => {
-            format!("({} |> {})", print_expr(lhs), print_expr(rhs))
+        ExprKind::Pipe { lhs, rhs, backward } => {
+            let op = if *backward { "<|" } else { "|>" };
+            format!("({} {op} {})", print_expr(lhs), print_expr(rhs))
         }
         ExprKind::Compose {
             lhs,

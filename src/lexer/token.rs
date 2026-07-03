@@ -70,6 +70,7 @@ pub enum Tok {
     SlashSlash, // // (floor division)
     Percent,    // % (modulo)
     PipeOp,     // |>
+    PipeLeft,   // <| (backward pipe: `f <| x` == `f x`)
     Bar,        // |
     Arrow,      // ->
     Bang,       // !

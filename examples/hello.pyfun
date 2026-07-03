@@ -124,6 +124,9 @@ let incThenDouble = inc >> twice
 let doubleThenInc = inc << twice
 let eight = incThenDouble 3            # twice (inc 3) = 8
 let sevenC = doubleThenInc 3           # inc (twice 3) = 7
+# Backward pipe `<|` applies a function to an argument (F#'s `<|`), dropping parens
+# on the right: `inc <| twice 3` = `inc (twice 3)`. Right-associative.
+let sevenB = inc <| twice 3            # inc (twice 3) = 7
 
 # In-file modules: a namespace of `let` bindings. Members see each other
 # unqualified inside (`area` calls `square`); outside they are `Geom.member`.
@@ -356,6 +359,7 @@ print (fact 5)                       # 120  (recursive)
 print seven                          # 7
 print eight                          # 8   (inc >> twice)
 print sevenC                         # 7   (inc << twice)
+print sevenB                         # 7   (inc <| twice 3, backward pipe)
 print (rank Green)                   # 2
 print floor                          # 20
 print speed                          # 10.0  (true division)
