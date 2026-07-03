@@ -8,16 +8,18 @@ design and [`GUIDE.md`](./GUIDE.md) for current status.
 ## Backlog — the full remaining picture
 
 The single forward-looking list of **everything not yet built**, so nothing is drip-fed. Four
-buckets: **overlooked essentials** (table-stakes gaps, higher priority than the rest), **non-goals**
-(decided against), **deferred** (real features, no current demand — build on request), and **warts**
-(small polish). The narrative sections below record what *has* shipped.
+buckets: **overlooked essentials** (table-stakes gaps — now ✅ all cleared, kept as the audit record),
+**non-goals** (decided against), **deferred** (real features, no current demand — build on request), and
+**warts** (small polish — now ✅ all cleared). The narrative sections below record what *has* shipped.
+As of 2026-07-03 the only genuinely-open work lives in **deferred**; essentials and warts are done.
 Nothing here blocks normal use; the language is feature-complete for its MVP showcase + Phase 2
 file-based modules. Effort is rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
 
-### Overlooked essentials (2026-07-02 audit — table-stakes, highest priority)
+### Overlooked essentials (2026-07-02 audit — table-stakes) — ✅ all 12 cleared
 Found by a gap-audit after the unary-minus miss (the same root cause: lexer + prelude basics *assumed*
 rather than checked — almost none of this is in the type system). Each was verified with a failing
-`pyfun check`; none was previously tracked. Ordered by priority.
+`pyfun check`; none was previously tracked. **All twelve are now done** (the last, raw strings, landed
+2026-07-03); kept here as the audit record. Ordered by original priority.
 1. ~~**Non-ASCII string literals are double-UTF-8-encoded**~~ — ✅ **fixed 2026-07-02**. Was a silent
    correctness bug: `lex_string`/`lex_fstring` did `b as char` on raw UTF-8 bytes, so `"café"` emitted
    mojibake. Now a shared `push_char` decodes the whole UTF-8 sequence (via `utf8_len`) in both the string
@@ -124,8 +126,14 @@ rather than checked — almost none of this is in the type system). Each was ver
   a tuple's paren `Sequence`). Nested element patterns (`case [Some x, *rest]:`) type-check + are
   deep-exhaustive. Covered by `tests/{roundtrip,typecheck,compile}.rs`. **Deferred follow-on:** a non-last
   star (`[*init, last]`, `[a, *mid, z]`). The linked-list `cons`/`head`/`tail` half is a non-goal (above).
-- **Lift the unique-field-name restriction** (L) — needs type annotations or type-directed field
-  resolution (or row polymorphism, a non-goal).
+- **Lift the unique-field-name restriction** — ✅ **done 2026-07-03** (with cross-module records). This
+  was estimated **L** on the assumption it needed type annotations, type-directed field resolution, or row
+  polymorphism (a non-goal) — but a **lazy, use-site multimap** solved it with none of those: `field_owner`
+  is now `HashMap<String, Vec<String>>`, and a bare `p.x` resolves iff **exactly one** visible record
+  declares `x` — **2+** is an ambiguity error *at that access site* (never at declaration/import), **0** is
+  "unknown field". Two records (in- or cross-module) may freely share `x`/`name`/`id`; tagged
+  construction/patterns (`Point { x = 1 }`) are never ambiguous since they name the type. See the
+  cross-module-records entry below and `DESIGN.md` §8.3.
 - **Derived ordering for ADTs** — ✅ **done 2026-07-03**. `< > <= >=` (and `List.sort`) now work on
   **user sum types, records, and tuples**, compared structurally: a sum orders by variant *declaration
   order* then field-by-field (`Red < Green < Blue`, any `Circle` < any `Rect`), a record field-by-field, a
@@ -231,7 +239,7 @@ rather than checked — almost none of this is in the type system). Each was ver
   per-document version cache already avoids redundant re-analysis.
 - **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
 
-### Warts (small, low priority)
+### Warts (small, low priority) — ✅ all cleared
 All three original warts were **fixed 2026-07-03** (one sitting):
 - ~~**No guiding error for `+` on strings**~~ — ✅ the numeric mismatch from `expect_num` now becomes
   `` `+` is numeric and does not concatenate strings — use `String.concat a b` `` when either operand is a
