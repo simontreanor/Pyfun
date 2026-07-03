@@ -176,8 +176,16 @@ rather than checked — almost none of this is in the type system). Each was ver
   desugars to the lambda `fun a b -> a op b` (`desugar::op_func`) at inference and lowering, so the
   operator's own constraints, currying, and partial application all fall out; the pretty-printer keeps the
   `(op)` spelling. `and`/`or` are excluded (keywords whose short-circuiting a strict function would drop).
-- **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
-  today there is one `io` label and declared function arrows are treated as pure.
+- **More effect labels + effect annotations on declared arrows** — ✅ **done 2026-07-03**. The `Effect`
+  is now a set of concrete labels (`EffLabel::Io`/`EffLabel::Async`, `labels: BTreeSet<EffLabel>`) plus
+  effect vars, so it generalizes/instantiates/unifies over a *set* and displays sorted (`->{io, async}`).
+  Declared function arrows in `type` decls and `extern` signatures take `->{label, …}` annotations
+  (`extern fetch : string ->{async} string`), threaded into the seeded scheme (a bare `->` stays pure);
+  `let pure` rejects any concrete label. Full backward compatibility — `io`-only code is unchanged, effects
+  still erase at lowering. **Still deferred there:** wiring the `async {}` CE to actually *produce* the
+  `async` label (it's representable/annotatable/inferrable now, not yet CE-linked), and effect subsumption
+  (declared effects are exact, not lower bounds). Covered by typecheck (multi-label inference, `let pure`
+  per label, declared-arrow flow, `io, async` display) + roundtrip (`->{...}` syntax) tests.
 - **f-string extras** (S–M) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
   and **`{x=}`** self-documenting holes landed too; still deferred is **multi-line** `f"""..."""` (Pyfun
   has no triple-quoted strings). **Format specifiers** (`{x:.2f}`, `{v!r}`) are now a **non-goal** — see

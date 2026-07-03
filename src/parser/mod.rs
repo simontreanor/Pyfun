@@ -425,15 +425,33 @@ impl Parser {
         })
     }
 
-    /// A type expression: an application optionally followed by `-> result`.
+    /// A type expression: an application optionally followed by `-> result`,
+    /// where the arrow may carry an effect annotation (`->{io} result`,
+    /// `->{io, async} result` — `DESIGN.md` §4). A bare `->` stays pure.
     fn parse_type(&mut self) -> Result<TypeExpr, ParseError> {
         let head = self.parse_type_app()?;
         if self.eat(&Tok::Arrow) {
+            let effects = self.parse_effect_annotation()?;
             let result = self.parse_type()?;
-            Ok(TypeExpr::Fun(Box::new(head), Box::new(result)))
+            Ok(TypeExpr::Fun(Box::new(head), Box::new(result), effects))
         } else {
             Ok(head)
         }
+    }
+
+    /// An optional effect annotation right after `->` in a type: `{label, …}`.
+    /// Labels are lowercase identifiers, collected as written — the type checker
+    /// validates them against the known label set (`io`, `async`).
+    fn parse_effect_annotation(&mut self) -> Result<Vec<String>, ParseError> {
+        if !self.eat(&Tok::LBrace) {
+            return Ok(Vec::new());
+        }
+        let mut labels = vec![self.parse_ident("effect label")?];
+        while self.eat(&Tok::Comma) {
+            labels.push(self.parse_ident("effect label")?);
+        }
+        self.expect(&Tok::RBrace, "`}`")?;
+        Ok(labels)
     }
 
     fn parse_type_app(&mut self) -> Result<TypeExpr, ParseError> {

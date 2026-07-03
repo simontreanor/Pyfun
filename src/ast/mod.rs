@@ -157,7 +157,17 @@ fn print_variant(variant: &VariantDecl) -> String {
 /// Print a full type expression (may contain `->`).
 fn print_type(ty: &TypeExpr) -> String {
     match ty {
-        TypeExpr::Fun(a, b) => format!("{} -> {}", print_type_atom(a), print_type(b)),
+        TypeExpr::Fun(a, b, effects) if effects.is_empty() => {
+            format!("{} -> {}", print_type_atom(a), print_type(b))
+        }
+        // A declared-effect arrow prints its labels back as written
+        // (`->{io, async}`), so the annotation round-trips faithfully.
+        TypeExpr::Fun(a, b, effects) => format!(
+            "{} ->{{{}}} {}",
+            print_type_atom(a),
+            effects.join(", "),
+            print_type(b)
+        ),
         TypeExpr::Con(name, _, args) if args.is_empty() => name.clone(),
         TypeExpr::Con(name, _, args) => {
             let args: Vec<String> = args.iter().map(print_type_atom).collect();

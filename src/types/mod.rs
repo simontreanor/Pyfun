@@ -137,14 +137,49 @@ impl Unit {
     }
 }
 
-/// An effect: what a function performs when called. The MVP tracks a single
-/// concrete label, `io` (printing, mutation via `<-`), plus a set of effect
+/// A concrete effect label (`DESIGN.md` §4). The declaration order here is the
+/// canonical display/sort order (`io` before `async`), so a multi-label arrow
+/// always renders deterministically (`->{io, async}`). Extending the label set is
+/// a matter of adding a variant plus its `name`/`from_name` entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EffLabel {
+    /// Observable side effects: printing, `<-` mutation, the (non-`pure`) Python
+    /// FFI boundary.
+    Io,
+    /// Asynchronous execution. Inference-level only for now: representable,
+    /// annotatable (`->{async}`), and displayable; the `async {}` CE still types
+    /// via its `Async a` value form (whether it *produces* this label is an open
+    /// design point — `DESIGN.md` §4).
+    Async,
+}
+
+impl EffLabel {
+    fn name(self) -> &'static str {
+        match self {
+            EffLabel::Io => "io",
+            EffLabel::Async => "async",
+        }
+    }
+
+    /// Look a surface label name up (used for `->{...}` annotations in declared
+    /// types). `None` for an unknown label.
+    fn from_name(name: &str) -> Option<EffLabel> {
+        match name {
+            "io" => Some(EffLabel::Io),
+            "async" => Some(EffLabel::Async),
+            _ => None,
+        }
+    }
+}
+
+/// An effect: what a function performs when called. A set of concrete *labels*
+/// (`io` — printing, mutation via `<-` —, `async`, …) plus a set of effect
 /// *variables* that make a function effect-polymorphic (its effect depends on its
 /// arguments). The empty effect is pure. Effects ride on function arrows and are
 /// **fully erased at lowering** (`DESIGN.md` §4).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Effect {
-    io: bool,
+    labels: std::collections::BTreeSet<EffLabel>,
     vars: std::collections::BTreeSet<u32>,
 }
 
@@ -153,42 +188,62 @@ impl Effect {
         Effect::default()
     }
 
-    fn io() -> Effect {
+    fn label(l: EffLabel) -> Effect {
+        let mut labels = std::collections::BTreeSet::new();
+        labels.insert(l);
         Effect {
-            io: true,
+            labels,
             vars: std::collections::BTreeSet::new(),
         }
+    }
+
+    fn io() -> Effect {
+        Effect::label(EffLabel::Io)
     }
 
     fn var(id: u32) -> Effect {
         let mut vars = std::collections::BTreeSet::new();
         vars.insert(id);
-        Effect { io: false, vars }
+        Effect {
+            labels: std::collections::BTreeSet::new(),
+            vars,
+        }
     }
 
     /// Union of two effects (used to accumulate the effect of an expression).
     fn union(&self, other: &Effect) -> Effect {
         Effect {
-            io: self.io || other.io,
+            labels: self.labels.union(&other.labels).cloned().collect(),
             vars: self.vars.union(&other.vars).copied().collect(),
         }
     }
 
-    /// `Some(v)` iff this is exactly one bare variable (no `io`) — the case that
-    /// unifies most-generally by binding `v`.
+    /// `Some(v)` iff this is exactly one bare variable (no concrete labels) — the
+    /// case that unifies most-generally by binding `v`.
     fn as_single_var(&self) -> Option<u32> {
-        if !self.io && self.vars.len() == 1 {
+        if self.labels.is_empty() && self.vars.len() == 1 {
             self.vars.iter().next().copied()
         } else {
             None
         }
+    }
+
+    /// Render the concrete labels in canonical order, e.g. `io, async` — the
+    /// deterministic body of a displayed `->{io, async}` arrow and of `let pure`
+    /// violation messages.
+    fn show_labels(&self) -> String {
+        self.labels
+            .iter()
+            .map(|l| l.name())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
 /// Substitute effect variables in `eff` according to `emap` (used by instantiation).
 fn subst_eff(eff: &Effect, emap: &HashMap<u32, Effect>) -> Effect {
     let mut out = Effect {
-        io: eff.io,
+        labels: eff.labels.clone(),
         vars: std::collections::BTreeSet::new(),
     };
     for v in &eff.vars {
@@ -531,8 +586,7 @@ fn closest_member(module: &str, name: &str, env: &Env) -> Option<String> {
     let within_threshold = dist <= (nlen.max(mlen) / 3).max(2);
     // Abbreviation confusion (`length` → `len`, `string` → `str`): one name is a
     // prefix of the other. Guarded on length ≥ 3 so tiny fragments don't over-match.
-    let prefix_related =
-        nlen.min(mlen) >= 3 && (name.starts_with(best) || best.starts_with(name));
+    let prefix_related = nlen.min(mlen) >= 3 && (name.starts_with(best) || best.starts_with(name));
     (within_threshold || prefix_related).then(|| best.to_string())
 }
 
@@ -848,9 +902,8 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         // parameters or its value is a lambda — the same test the lowerer uses for
         // arity. A value cycle (`let a = b\nlet b = a`) is not grouped, so it stays
         // declare-before-use and errors as before.
-        let is_fn = |b: &LetBinding| {
-            !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. })
-        };
+        let is_fn =
+            |b: &LetBinding| !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. });
         let mut roles = HashMap::new();
         for comp in strongly_connected(&succ) {
             // Only group genuine multi-member cycles whose members are all functions.
@@ -1384,7 +1437,13 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
         collect_type_vars(&decl.ty, &mut var_map);
         match resolve(&decl.ty, &var_map, &decls.type_arity, span) {
             Ok(mut ty) => {
-                if !decl.pure {
+                // Effectful-by-default boundary: the innermost arrow gets `io`
+                // unless the binding asserts `pure` — or the innermost arrow
+                // carries an explicit `->{...}` annotation, which is trusted as
+                // written (e.g. `extern fetch : string ->{async} string`). An
+                // annotation elsewhere (say on a higher-order *argument* arrow)
+                // does not suppress the default: the extern still calls Python.
+                if !decl.pure && !innermost_arrow_annotated(&decl.ty) {
                     set_innermost_io(&mut ty);
                 }
                 env.insert(
@@ -1413,7 +1472,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
 /// which (unlike `type` declarations) have no explicit parameter list.
 fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
     match ty {
-        TypeExpr::Fun(a, b) => {
+        TypeExpr::Fun(a, b, _) => {
             collect_type_vars(a, map);
             collect_type_vars(b, map);
         }
@@ -1434,6 +1493,22 @@ fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
                 collect_type_vars(a, map);
             }
         }
+    }
+}
+
+/// Whether the innermost (rightmost) arrow of a declared type carries an explicit
+/// `->{...}` effect annotation. Such an `extern` is trusted as written and skips
+/// the `io`-by-default rule (`DESIGN.md` §4/§6).
+fn innermost_arrow_annotated(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Fun(_, ret, effects) => {
+            if matches!(**ret, TypeExpr::Fun(..)) {
+                innermost_arrow_annotated(ret)
+            } else {
+                !effects.is_empty()
+            }
+        }
+        _ => false,
     }
 }
 
@@ -1635,7 +1710,9 @@ fn pattern_names(pat: &Pattern, out: &mut HashSet<String>) {
             out.insert(name.clone());
         }
         Pattern::Ctor { args, .. } => args.iter().for_each(|a| pattern_names(a, out)),
-        Pattern::Record { fields, .. } => fields.iter().for_each(|f| pattern_names(&f.pattern, out)),
+        Pattern::Record { fields, .. } => {
+            fields.iter().for_each(|f| pattern_names(&f.pattern, out))
+        }
         Pattern::Tuple { elems } => elems.iter().for_each(|e| pattern_names(e, out)),
         Pattern::List { prefix, rest } => {
             prefix.iter().for_each(|p| pattern_names(p, out));
@@ -1937,7 +2014,10 @@ fn seed_list_prelude(env: &mut Env) {
         "List.concat".to_string(),
         mono(
             vec![0],
-            pure_fn(list(Ty::Var(0)), pure_fn(list(Ty::Var(0)), list(Ty::Var(0)))),
+            pure_fn(
+                list(Ty::Var(0)),
+                pure_fn(list(Ty::Var(0)), list(Ty::Var(0))),
+            ),
         ),
     );
     // List.sort : comparison a => List a -> List a   (pure, O(n log n))
@@ -2082,7 +2162,10 @@ fn seed_string_prelude(env: &mut Env) {
     put("startsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
     put("endsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
     // String.replace old new s
-    put("replace", pure_fn(str_(), pure_fn(str_(), pure_fn(str_(), str_()))));
+    put(
+        "replace",
+        pure_fn(str_(), pure_fn(str_(), pure_fn(str_(), str_()))),
+    );
     put("fromInt", pure_fn(int(), str_()));
     put("fromFloat", pure_fn(float(), str_()));
     put("toInt", pure_fn(str_(), opt(int())));
@@ -2516,14 +2599,32 @@ fn resolve(
     span: Span,
 ) -> Result<Ty, TypeError> {
     match ty {
-        // A function type written in a declaration (e.g. an ADT/record field) has
-        // no effect syntax yet, so it is treated as pure. Effect annotations in
-        // declared types are a later refinement (`DESIGN.md` §4).
-        TypeExpr::Fun(a, b) => Ok(Ty::Fun(
-            Box::new(resolve(a, params, type_arity, span)?),
-            Box::new(resolve(b, params, type_arity, span)?),
-            Effect::pure(),
-        )),
+        // A function type written in a declaration (an ADT/record field or an
+        // `extern` signature) carries the effect labels of its `->{...}`
+        // annotation; a bare `->` stays pure (`DESIGN.md` §4).
+        TypeExpr::Fun(a, b, effects) => {
+            let mut eff = Effect::pure();
+            for name in effects {
+                match EffLabel::from_name(name) {
+                    Some(label) => {
+                        eff.labels.insert(label);
+                    }
+                    None => {
+                        return Err(TypeError {
+                            message: format!(
+                                "unknown effect label `{name}` (known labels: `io`, `async`)"
+                            ),
+                            span,
+                        });
+                    }
+                }
+            }
+            Ok(Ty::Fun(
+                Box::new(resolve(a, params, type_arity, span)?),
+                Box::new(resolve(b, params, type_arity, span)?),
+                eff,
+            ))
+        }
         TypeExpr::Tuple(elems) => {
             let resolved: Result<Vec<Ty>, TypeError> = elems
                 .iter()
@@ -2654,7 +2755,7 @@ impl Infer {
     /// Resolve an effect through the effect substitution, unioning bound vars.
     fn apply_eff(&self, eff: &Effect) -> Effect {
         let mut out = Effect {
-            io: eff.io,
+            labels: eff.labels.clone(),
             vars: std::collections::BTreeSet::new(),
         };
         for v in &eff.vars {
@@ -2679,8 +2780,8 @@ impl Infer {
     }
 
     /// Unify two effects (latent effects of two arrows being unified). Binds a
-    /// bare effect variable most-generally; widens to the joined `io` otherwise;
-    /// fails only when two closed effects disagree on `io`.
+    /// bare effect variable most-generally; widens to the joined label set
+    /// otherwise; fails only when two closed effects disagree on their labels.
     fn unify_eff(&mut self, a: &Effect, b: &Effect) -> bool {
         let a = self.apply_eff(a);
         let b = self.apply_eff(b);
@@ -2700,11 +2801,11 @@ impl Infer {
             return true;
         }
         if a.vars.is_empty() && b.vars.is_empty() {
-            return false; // two closed effects, `io` differs
+            return false; // two closed effects, their label sets differ
         }
-        // Conservatively widen: close every involved variable to the joined `io`.
+        // Conservatively widen: close every involved variable to the joined labels.
         let joined = Effect {
-            io: a.io || b.io,
+            labels: a.labels.union(&b.labels).cloned().collect(),
             vars: std::collections::BTreeSet::new(),
         };
         for v in a.vars.iter().chain(b.vars.iter()) {
@@ -3023,11 +3124,16 @@ impl Infer {
         };
         let ty = ty_res?;
 
-        // `let pure` asserts the binding introduces no `io` of its own (effect
-        // variables — "pure up to its arguments" — are fine).
-        if binding.pure && self.apply_eff(&body_eff).io {
+        // `let pure` asserts the binding introduces no concrete effect of its own
+        // (effect variables — "pure up to its arguments" — are fine).
+        let resolved_body_eff = self.apply_eff(&body_eff);
+        if binding.pure && !resolved_body_eff.labels.is_empty() {
             return Err(TypeError {
-                message: format!("`{}` is declared `pure` but performs `io`", binding.name),
+                message: format!(
+                    "`{}` is declared `pure` but performs `{}`",
+                    binding.name,
+                    resolved_body_eff.show_labels()
+                ),
                 span: binding.value.span(),
             });
         }
@@ -3116,9 +3222,14 @@ impl Infer {
             .zip(inferred)
             .map(|(b, res)| {
                 let scheme = res.and_then(|(ty, body_eff)| {
-                    if b.pure && self.apply_eff(&body_eff).io {
+                    let body_eff = self.apply_eff(&body_eff);
+                    if b.pure && !body_eff.labels.is_empty() {
                         return Err(TypeError {
-                            message: format!("`{}` is declared `pure` but performs `io`", b.name),
+                            message: format!(
+                                "`{}` is declared `pure` but performs `{}`",
+                                b.name,
+                                body_eff.show_labels()
+                            ),
                             span: b.value.span(),
                         });
                     }
@@ -3288,12 +3399,8 @@ impl Infer {
                 rhs,
                 right_to_left,
             } => {
-                let lam = crate::desugar::compose(
-                    (**lhs).clone(),
-                    (**rhs).clone(),
-                    *right_to_left,
-                    span,
-                );
+                let lam =
+                    crate::desugar::compose((**lhs).clone(), (**rhs).clone(), *right_to_left, span);
                 self.infer_expr(&lam, env)
             }
 
@@ -4816,12 +4923,16 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
                 out.push('(');
             }
             show_into(a, namer, out, true);
-            // Render the latent effect only when it is concretely `io`; a pure or
-            // purely-polymorphic arrow stays the familiar `->`.
-            if eff.io {
-                out.push_str(" ->{io} ");
-            } else {
+            // Render the latent effect only when it carries concrete labels
+            // (`->{io}`, `->{async}`, `->{io, async}` — canonical order, so the
+            // display is deterministic); a pure or purely-polymorphic arrow stays
+            // the familiar `->`.
+            if eff.labels.is_empty() {
                 out.push_str(" -> ");
+            } else {
+                out.push_str(" ->{");
+                out.push_str(&eff.show_labels());
+                out.push_str("} ");
             }
             show_into(b, namer, out, false);
             if atom {

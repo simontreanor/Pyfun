@@ -505,10 +505,7 @@ fn a_cross_module_extern_binds_in_its_module_and_routes_from_the_consumer() {
         "Main",
         &[
             ("Mathx", "extern sqrt : float -> float = math.sqrt"),
-            (
-                "Main",
-                "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r",
-            ),
+            ("Main", "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r"),
         ],
     );
     // The defining module binds the extern at top level (so it is referenceable as
@@ -528,10 +525,7 @@ fn e2e_a_cross_module_extern_runs() {
         "Main",
         &[
             ("Mathx", "extern sqrt : float -> float = math.sqrt"),
-            (
-                "Main",
-                "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r",
-            ),
+            ("Main", "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r"),
         ],
     );
     let dir = Scratch::new("e2e_extern");
@@ -572,7 +566,9 @@ fn an_unexported_extern_is_not_a_member() {
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].errors[0].message.contains("not a member of `Mathx`"),
+        errors[0].errors[0]
+            .message
+            .contains("not a member of `Mathx`"),
         "got: {}",
         errors[0].errors[0].message
     );
@@ -591,17 +587,13 @@ fn an_imported_impure_extern_keeps_its_effect_across_the_boundary() {
                 "extern log : string -> unit = builtins.print\n\
                  extern pure ident : int -> int = builtins.abs",
             ),
-            (
-                "Main",
-                "import Logx\nlet pure bad s = Logx.log s",
-            ),
+            ("Main", "import Logx\nlet pure bad s = Logx.log s"),
         ],
     );
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].errors[0].message.contains("pure")
-            && errors[0].errors[0].message.contains("io"),
+        errors[0].errors[0].message.contains("pure") && errors[0].errors[0].message.contains("io"),
         "got: {}",
         errors[0].errors[0].message
     );
@@ -666,10 +658,7 @@ fn e2e_a_cross_module_measure_annotated_value_runs() {
 fn using_a_measure_without_importing_its_module_is_an_error() {
     let project = build_mem(
         "Main",
-        &[
-            ("Units", "measure m"),
-            ("Main", "let d = 100<m>"),
-        ],
+        &[("Units", "measure m"), ("Main", "let d = 100<m>")],
     );
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);

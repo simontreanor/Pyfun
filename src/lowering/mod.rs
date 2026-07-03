@@ -953,7 +953,12 @@ impl Lowerer {
     /// class's declared field order (the type checker guarantees the literal names
     /// exactly the record's fields). The record is the literal's **tag** (which may be
     /// qualified for an imported record, `Geometry.Point` → `geometry.Point(...)`).
-    fn lower_record(&mut self, ty: &str, fields: &[FieldInit], locals: &HashSet<String>) -> Lowered {
+    fn lower_record(
+        &mut self,
+        ty: &str,
+        fields: &[FieldInit],
+        locals: &HashSet<String>,
+    ) -> Lowered {
         let order = self.record_fields[ty].clone();
         let class = self.record_class_name(ty);
         let (stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
@@ -1766,11 +1771,7 @@ fn flatten_app<'a>(expr: &'a Expr, args: &mut Vec<&'a Expr>) -> &'a Expr {
             args.push(arg);
             head
         }
-        ExprKind::Pipe {
-            lhs,
-            rhs,
-            backward,
-        } => {
+        ExprKind::Pipe { lhs, rhs, backward } => {
             // `lhs |> rhs` == `rhs lhs`; `lhs <| rhs` == `lhs rhs`. Flatten the
             // callee spine, then push the argument.
             let (callee, arg) = if *backward { (lhs, rhs) } else { (rhs, lhs) };
@@ -1807,7 +1808,7 @@ fn lower_binop(op: BinOp) -> PyBinOp {
 /// project driver can export an imported extern's arity for cross-module currying.
 pub fn arrow_arity(ty: &TypeExpr) -> usize {
     match ty {
-        TypeExpr::Fun(_, ret) => 1 + arrow_arity(ret),
+        TypeExpr::Fun(_, ret, _) => 1 + arrow_arity(ret),
         TypeExpr::Con(..) | TypeExpr::Tuple(_) => 0,
     }
 }
@@ -2393,7 +2394,10 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 call(
                     "next",
                     vec![
-                        call("map", vec![name("Some"), call("filter", vec![name("f"), name("xs")])]),
+                        call(
+                            "map",
+                            vec![name("Some"), call("filter", vec![name("f"), name("xs")])],
+                        ),
                         call0("None_"),
                     ],
                 ),
@@ -2411,7 +2415,11 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 },
             ),
             // String.concat(a, b) -> a + b
-            "_pf_str_concat" => def1(helper, &["a", "b"], binop(PyBinOp::Add, name("a"), name("b"))),
+            "_pf_str_concat" => def1(
+                helper,
+                &["a", "b"],
+                binop(PyBinOp::Add, name("a"), name("b")),
+            ),
             // String.join(sep, xs) -> sep.join(xs)
             "_pf_str_join" => def1(
                 helper,
@@ -2501,7 +2509,10 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 helper,
                 &["s"],
                 vec![PyStmt::Try {
-                    body: vec![PyStmt::Return(call1("Some", call("float", vec![name("s")])))],
+                    body: vec![PyStmt::Return(call1(
+                        "Some",
+                        call("float", vec![name("s")]),
+                    ))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
                     handler: vec![PyStmt::Return(call0("None_"))],

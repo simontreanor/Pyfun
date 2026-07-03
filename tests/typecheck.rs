@@ -169,10 +169,7 @@ fn rejects_composition_of_incompatible_functions() {
     // `>>` requires the output of the first to match the input of the second:
     // `String.len : string -> int`, then `String.upper : string -> string` — feeding
     // an `int` to `String.upper` is a type error.
-    assert_error_contains(
-        "let f = String.len >> String.upper\nlet r = f \"x\"",
-        "int",
-    );
+    assert_error_contains("let f = String.len >> String.upper\nlet r = f \"x\"", "int");
 }
 
 #[test]
@@ -979,8 +976,10 @@ fn accepts_ordering_of_a_sum_type() {
     // variant then field.
     assert!(pyfun::check("type Color = Red | Green | Blue\nlet r = Red < Blue").is_ok());
     assert!(
-        pyfun::check("type Shape = Circle float | Rect float float\nlet r = Circle 1.0 < Rect 0.0 0.0")
-            .is_ok()
+        pyfun::check(
+            "type Shape = Circle float | Rect float float\nlet r = Circle 1.0 < Rect 0.0 0.0"
+        )
+        .is_ok()
     );
     // `List.sort` uses the `comparison` constraint — now satisfied by user sum types.
     assert!(pyfun::check("type Color = Red | Green | Blue\nlet s = List.sort [Blue, Red]").is_ok());
@@ -1016,7 +1015,8 @@ fn accepts_ordering_of_a_recursive_type() {
 fn accepts_ordering_of_a_parameterized_type_at_an_orderable_arg() {
     // `Box a` is orderable when `a` is (its field type instantiates to `a`).
     assert!(
-        pyfun::check("type Box a = { item: a }\nlet r = Box { item = 1 } < Box { item = 2 }").is_ok()
+        pyfun::check("type Box a = { item: a }\nlet r = Box { item = 1 } < Box { item = 2 }")
+            .is_ok()
     );
 }
 
@@ -1074,10 +1074,7 @@ fn deferred_ordering_constraint_flows_to_a_concrete_adt() {
     // resolves the deferred constraint through the recursive ord check (accepted),
     // while a bad application (function-carrying variant) is rejected.
     assert!(
-        pyfun::check(
-            "type Color = Red | Green\nlet lt a b = a < b\nlet r = lt Red Green"
-        )
-        .is_ok()
+        pyfun::check("type Color = Red | Green\nlet lt a b = a < b\nlet r = lt Red Green").is_ok()
     );
     assert_error_contains(
         "type F = Fn (int -> int)\n\
@@ -1200,10 +1197,7 @@ fn a_bare_access_of_a_shared_field_is_ambiguous() {
 fn a_distinct_field_still_resolves_when_another_is_shared() {
     // `y` is unique to A even though `x` is shared, so `p.y` resolves fine.
     assert!(
-        pyfun::check(
-            "type A = { x: int, y: int }\ntype B = { x: int }\nlet gy p = p.y"
-        )
-        .is_ok()
+        pyfun::check("type A = { x: int, y: int }\ntype B = { x: int }\nlet gy p = p.y").is_ok()
     );
 }
 
@@ -1441,6 +1435,122 @@ fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
     assert!(pyfun::check(src).is_ok());
 }
 
+// ---------- effect labels + declared-arrow annotations (DESIGN §4) ----------
+
+#[test]
+fn annotated_async_extern_carries_the_async_label() {
+    // The `->{async}` annotation is trusted as written: `fetch` performs `async`
+    // (not the boundary's default `io`), so the `pure` violation names `async`.
+    assert_error_contains(
+        "extern fetch: string ->{async} string = httpx.get\nlet pure go u = fetch u",
+        "declared `pure` but performs `async`",
+    );
+}
+
+#[test]
+fn labels_union_across_calls_and_display_in_canonical_order() {
+    // A body that prints (io) and fetches (async) accumulates both labels; the
+    // `pure` violation renders the set deterministically, `io` first.
+    let src = "extern fetch: string ->{async} string = httpx.get\n\
+               let pure shout u =\n    print u\n    fetch u";
+    assert_error_contains(src, "declared `pure` but performs `io, async`");
+}
+
+#[test]
+fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
+    // `->{async, io}` written backwards still displays canonically as
+    // `->{io, async}` (labels live in an ordered set).
+    let src = "extern push: string ->{async, io} unit = hub.push\nlet go s = push s";
+    let analysis = pyfun::analyze(src);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .types
+            .iter()
+            .any(|t| t.ty == "string ->{io, async} unit"),
+        "expected a `string ->{{io, async}} unit` entry, got {:?}",
+        analysis.types
+    );
+}
+
+#[test]
+fn inferred_multi_label_arrow_displays_on_the_binding() {
+    // `go` both prints and fetches, so its inferred arrow shows both labels.
+    let src = "extern fetch: string ->{async} string = httpx.get\n\
+               let go u =\n    print u\n    fetch u";
+    let analysis = pyfun::analyze(src);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis
+            .types
+            .iter()
+            .any(|t| t.ty == "string ->{io, async} string"),
+        "expected a `string ->{{io, async}} string` entry, got {:?}",
+        analysis.types
+    );
+}
+
+#[test]
+fn partial_application_of_an_annotated_extern_is_pure() {
+    // Like the io default, a declared label sits on the innermost arrow: the
+    // effect happens at full application only.
+    let src = "extern post: string -> string ->{async} string = httpx.post\n\
+               let pure prep = post \"host\"";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn declared_io_arrow_in_a_type_decl_flows_through_matching() {
+    // A ctor field declared `string ->{io} unit` yields an effectful function
+    // when matched out — calling it makes the caller impure.
+    let src = "type Handler = H (string ->{io} unit)\n\
+               let pure run h =\n  match h:\n    case H f: f \"x\"";
+    assert_error_contains(src, "declared `pure` but performs `io`");
+}
+
+#[test]
+fn declared_io_arrow_accepts_an_io_function() {
+    // `print : 'a ->{io} unit` matches the declared `->{io}` field exactly.
+    let src = "type Handler = H (string ->{io} unit)\nlet h = H print";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn declared_effect_arrows_are_exact_no_subeffecting() {
+    // Pinned current semantics: there is no sub-effecting, so a *pure* function
+    // does not satisfy a declared `->{io}` arrow (closed effect sets must match
+    // exactly). Effect subsumption is a possible follow-on (`DESIGN.md` §4).
+    let src = "type Handler = H (string ->{io} unit)\nlet h = H (fun s -> ())";
+    assert!(pyfun::check(src).is_err());
+}
+
+#[test]
+fn annotation_on_an_argument_arrow_keeps_the_boundary_io_default() {
+    // Only an *innermost*-arrow annotation opts out of effectful-by-default: an
+    // annotation on a higher-order argument doesn't make the extern itself pure.
+    assert_error_contains(
+        "extern register: (string ->{io} unit) -> unit = hub.register\n\
+         let pure setup f = register f",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn rejects_an_unknown_effect_label() {
+    assert_error_contains(
+        "extern spook: string ->{spooky} unit = ghost.boo",
+        "unknown effect label `spooky`",
+    );
+}
+
 // ---------- lists (the eager `List` collection, `DESIGN.md` §6) ----------
 
 #[test]
@@ -1638,16 +1748,15 @@ fn string_literal_patterns_typecheck_over_strings() {
     assert!(pyfun::check(src).is_ok());
     // Matching a string literal against a non-string scrutinee is a type error.
     assert!(
-        pyfun::check("let f n =\n  match n:\n    case \"x\": 1\n    case _: 0\nlet r = f 5").is_err()
+        pyfun::check("let f n =\n  match n:\n    case \"x\": 1\n    case _: 0\nlet r = f 5")
+            .is_err()
     );
 }
 
 #[test]
 fn string_match_needs_a_wildcard_to_be_exhaustive() {
     // `string` is infinite, so enumerating literals is never exhaustive.
-    assert!(
-        pyfun::check("let f s =\n  match s:\n    case \"a\": 1\n    case \"b\": 2").is_err()
-    );
+    assert!(pyfun::check("let f s =\n  match s:\n    case \"a\": 1\n    case \"b\": 2").is_err());
 }
 
 #[test]
@@ -1750,13 +1859,11 @@ fn unknown_member_with_no_close_name_gives_no_suggestion() {
     // A genuinely absent function isn't force-fit to a bad suggestion.
     let msgs = errors("let r = String.frobnicate \"x\"");
     assert!(
-        msgs.iter().any(|m| m.contains("is not a member of `String`")),
+        msgs.iter()
+            .any(|m| m.contains("is not a member of `String`")),
         "{msgs:?}"
     );
-    assert!(
-        !msgs.iter().any(|m| m.contains("did you mean")),
-        "{msgs:?}"
-    );
+    assert!(!msgs.iter().any(|m| m.contains("did you mean")), "{msgs:?}");
 }
 
 #[test]
