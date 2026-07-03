@@ -394,17 +394,40 @@ impl Server {
             .iter()
             .filter(|t| t.span.start <= offset && offset < t.span.end)
             .min_by_key(|t| t.span.end - t.span.start);
-        match best {
-            None => Json::Null,
-            Some(t) => obj(vec![
+        // A `##` doc comment attached to the declaration under the cursor — the
+        // declaration name itself or any reference resolving to it — is appended
+        // below the type (`DESIGN.md` §9).
+        let doc = analysis.module.as_ref().and_then(|module| {
+            let (span, target) = resolve::symbol_at(module, offset)?;
+            match target {
+                resolve::Target::Module(name) => item_doc(module, &name).map(|d| (span, d)),
+                resolve::Target::Local(_) => None,
+            }
+        });
+        match (best, doc) {
+            (None, None) => Json::Null,
+            (Some(t), doc) => {
+                let mut value = format!("```pyfun\n{}\n```", t.ty);
+                if let Some((_, doc)) = doc {
+                    value.push_str("\n\n---\n\n");
+                    value.push_str(&doc);
+                }
+                obj(vec![
+                    (
+                        "contents",
+                        obj(vec![("kind", str("markdown")), ("value", str(value))]),
+                    ),
+                    ("range", span_range(text, t.span)),
+                ])
+            }
+            // No inferred type under the cursor (e.g. an `extern` or `type` name,
+            // which the collecting pass doesn't record) but the symbol has a doc.
+            (None, Some((span, doc))) => obj(vec![
                 (
                     "contents",
-                    obj(vec![
-                        ("kind", str("markdown")),
-                        ("value", str(format!("```pyfun\n{}\n```", t.ty))),
-                    ]),
+                    obj(vec![("kind", str("markdown")), ("value", str(doc))]),
                 ),
-                ("range", span_range(text, t.span)),
+                ("range", span_range(text, span)),
             ]),
         }
     }
@@ -1017,6 +1040,18 @@ fn is_ctor_identifier(name: &str) -> bool {
 /// The declaration span of a *user* type `name` (a `type`/record decl in this
 /// module), if any — so only user types, not builtins, are go-to-def / rename
 /// targets.
+/// The doc comment attached to the module-level declaration named `name`
+/// (a top-level `let`, `type`, or `extern`), if any.
+fn item_doc(module: &crate::syntax::Module, name: &str) -> Option<String> {
+    use crate::syntax::Item;
+    module.items.iter().find_map(|item| match item {
+        Item::Let(binding) if binding.name == name => binding.doc.clone(),
+        Item::Type(decl) if decl.name == name => decl.doc.clone(),
+        Item::Extern(decl) if decl.name == name => decl.doc.clone(),
+        _ => None,
+    })
+}
+
 fn user_type_decl_span(module: &crate::syntax::Module, name: &str) -> Option<crate::lexer::Span> {
     resolve::definitions(module).into_iter().find_map(|s| {
         (s.name == name
@@ -1303,6 +1338,57 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(value.contains("int"), "hover value was {value:?}");
+    }
+
+    /// Extract the hover markdown `value` from a handled hover response.
+    fn hover_value(server: &mut Server, uri: &str, line: i64, character: i64) -> String {
+        let out = server.handle(&json::parse(&hover_msg(uri, line, character)).unwrap());
+        out[0]
+            .get("result")
+            .unwrap()
+            .get("contents")
+            .unwrap()
+            .get("value")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn hover_appends_doc_comment_on_declaration_and_reference() {
+        let mut server = Server::default();
+        let uri = "file:///doc.pyfun";
+        let src = "## Doubles a number.\nlet double x = x * 2\nlet r = double 4";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        // Hover the declaration name `double` (line 1, char 5): type + doc.
+        let value = hover_value(&mut server, uri, 1, 5);
+        assert!(value.contains("int"), "hover value was {value:?}");
+        assert!(
+            value.contains("Doubles a number."),
+            "hover value was {value:?}"
+        );
+        // Hover the *reference* `double` (line 2, char 9): same doc.
+        let value = hover_value(&mut server, uri, 2, 9);
+        assert!(
+            value.contains("Doubles a number."),
+            "hover value was {value:?}"
+        );
+        // An undocumented symbol shows no doc separator.
+        let value = hover_value(&mut server, uri, 2, 4); // `r`
+        assert!(!value.contains("---"), "hover value was {value:?}");
+    }
+
+    #[test]
+    fn hover_shows_doc_alone_on_a_type_declaration_name() {
+        // A `type` name has no entry in the inferred-type table, so the hover is
+        // doc-only.
+        let mut server = Server::default();
+        let uri = "file:///doct.pyfun";
+        let src = "## A 2D point.\ntype Point = { x: int, y: int }";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let value = hover_value(&mut server, uri, 1, 6);
+        assert!(value.contains("A 2D point."), "hover value was {value:?}");
     }
 
     #[test]

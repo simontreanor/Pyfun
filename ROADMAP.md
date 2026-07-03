@@ -252,7 +252,13 @@ rather than checked — almost none of this is in the type system). Each was ver
   persistent-Python-process design is the future step). Covered by `tests/repl.rs`.
 - **Project-wide LSP cache + truly incremental reparse** (M–L) — performance, not capability; the
   per-document version cache already avoids redundant re-analysis.
-- **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
+- **Doc-comment syntax + richer hover** — ✅ **done 2026-07-03**: `##` doc comments (column 0, one or
+  more lines) attach to the following top-level `let`/`type`/`extern` as AST metadata
+  (`doc: Option<String>`), are re-emitted by the pretty-printer (roundtrip-safe), erase at lowering,
+  and surface in LSP hover — appended below the inferred type on the declaration name or any
+  reference to it; a documented `type`/`extern` name with no recorded type hovers to the doc alone.
+  Ordinary `#` comments (and `##` indented/trailing/bracketed) are untouched. Syntax + rationale in
+  `DESIGN.md` §7; hover in §9. (A *separate effect line* in hover remains the deferred remainder.)
 
 ### Warts (small, low priority) — ✅ all cleared
 All three original warts were **fixed 2026-07-03** (one sitting):
@@ -536,7 +542,7 @@ foundation.
 - **Still to do (lower-value tail):** *truly* incremental reparsing (a red-green-tree subsystem — the
   version cache already avoids redundant re-analysis between requests; partial reparse on edit is
   disproportionate at this file size); workspace symbols (project-wide, vs. today's per-document
-  outline); richer hover (needs doc-comment *syntax* — a language feature — or a separate effect line).
+  outline); a separate effect line in hover (doc-comment hover — `##` docs — shipped 2026-07-03).
 - **Effort/risk:** the headline features all landed; the remaining tail is low-value at current scale.
 
 ## Suggested sequencing
@@ -603,4 +609,4 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    the only remaining slice is a non-last star (`[*init, last]`). The linked-list `cons`/`head`/`tail`
    variant is a non-goal.
 3. **#10 LSP tail (optional, low-value at this scale)** — workspace symbols, truly incremental
-   reparse, doc-comment hover.
+   reparse (doc-comment hover landed 2026-07-03).

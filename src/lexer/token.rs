@@ -93,6 +93,13 @@ pub enum Tok {
     Dot,        // . (record field access)
     Underscore, // _
 
+    /// A doc-comment line: `## text` at column 0 (bracket depth 0). Ordinary `#`
+    /// comments — and `##` anywhere else (indented, trailing, inside brackets) —
+    /// remain trivia; only this top-level form is attached, by the parser, to the
+    /// following `let`/`type`/`extern` declaration (`DESIGN.md` §7). The payload
+    /// is the line's text with the `## ` marker stripped.
+    Doc(String),
+
     /// A statement separator, inserted by the lexer's offside rule between
     /// statements at the same layout column (outside any brackets) so consecutive
     /// statements don't merge into one juxtaposition. See the lexer.

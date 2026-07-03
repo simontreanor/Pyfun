@@ -191,6 +191,11 @@ impl<'a> Lexer<'a> {
         if c.is_ascii_digit() || c == b'"' || c == b'(' || c == b'{' || c == b'[' {
             return true;
         }
+        // A `#` here can only be a doc comment (`skip_trivia` stopped at it), which
+        // begins a new statement (it attaches to the *following* declaration).
+        if c == b'#' {
+            return true;
+        }
         if c == b'_' {
             return false;
         }
@@ -245,7 +250,13 @@ impl<'a> Lexer<'a> {
                 Some(b) if b.is_ascii_whitespace() => self.pos += 1,
                 // A `#` line comment runs to end of line; its terminating newline
                 // is handled by the `\n` arm on the next iteration, so it counts.
+                // Exception: `##` at column 0 (bracket depth 0) is a *doc comment*
+                // — stop so the main loop lexes it as a [`Tok::Doc`] token. `##`
+                // indented, trailing, or inside brackets stays an ordinary comment.
                 Some(b'#') => {
+                    if self.peek2() == Some(b'#') && self.depth == 0 && self.column() == 0 {
+                        return newline;
+                    }
                     while let Some(b) = self.peek() {
                         if b == b'\n' {
                             break;
@@ -256,6 +267,28 @@ impl<'a> Lexer<'a> {
                 _ => return newline,
             }
         }
+    }
+
+    /// Lex one doc-comment line (`## text`, cursor on the first `#`) into a
+    /// [`Tok::Doc`]. One space after `##` is the conventional separator and is
+    /// stripped; the rest of the line (which may itself start with `#`) is the
+    /// payload. The terminating newline is left for `skip_trivia`.
+    fn lex_doc(&mut self, start: usize) {
+        self.pos += 2; // skip `##`
+        if self.peek() == Some(b' ') {
+            self.pos += 1;
+        }
+        let text_start = self.pos;
+        while let Some(b) = self.peek() {
+            if b == b'\n' {
+                break;
+            }
+            self.pos += 1;
+        }
+        let text = String::from_utf8_lossy(&self.src[text_start..self.pos])
+            .trim_end()
+            .to_string();
+        self.push(Tok::Doc(text), start);
     }
 
     fn push(&mut self, tok: Tok, start: usize) {
@@ -271,6 +304,12 @@ impl<'a> Lexer<'a> {
         match c {
             b'0'..=b'9' => self.lex_number(start),
             b'"' => self.lex_string(start),
+            // Only a doc comment (`##` at column 0, depth 0) reaches here —
+            // `skip_trivia` consumes every other `#` comment.
+            b'#' => {
+                self.lex_doc(start);
+                Ok(())
+            }
             // An adjacent `f"` (no space) opens an interpolated string. `f "x"` with a
             // space stays ordinary application, matching Python; only the pathological
             // adjacent `f"x"` changes meaning (it was `f` applied to `"x"`).
@@ -608,8 +647,8 @@ impl<'a> Lexer<'a> {
             return Err(self.err(esc_start, "expected `}` to close `\\u{...}`"));
         }
         self.pos += 1; // consume `}`
-        let code =
-            u32::from_str_radix(&hex, 16).map_err(|_| self.err(esc_start, "invalid `\\u{...}` escape"))?;
+        let code = u32::from_str_radix(&hex, 16)
+            .map_err(|_| self.err(esc_start, "invalid `\\u{...}` escape"))?;
         char::from_u32(code)
             .ok_or_else(|| self.err(esc_start, "invalid Unicode code point in `\\u{...}`"))
     }
@@ -789,6 +828,44 @@ mod tests {
     }
 
     #[test]
+    fn doc_comment_at_column_zero_is_a_token() {
+        // `## text` at column 0 lexes as a Doc token (one space after `##`
+        // stripped); the following declaration starts its own statement.
+        assert_eq!(
+            kinds("## adds one\nlet inc = 1"),
+            vec![
+                Tok::Doc("adds one".to_string()),
+                Tok::Sep,
+                Tok::Let,
+                Tok::Ident("inc".to_string()),
+                Tok::Eq,
+                Tok::Int(1),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn non_doc_hash_comments_stay_trivia() {
+        // Single `#`, trailing `##`, and indented `##` are all ordinary comments.
+        assert_eq!(
+            kinds("# note\nlet x = 1 ## trailing"),
+            vec![
+                Tok::Let,
+                Tok::Ident("x".to_string()),
+                Tok::Eq,
+                Tok::Int(1),
+                Tok::Eof
+            ]
+        );
+        let toks = kinds("let f a =\n    ## note\n    a + 1");
+        assert!(
+            !toks.iter().any(|t| matches!(t, Tok::Doc(_))),
+            "indented ## must stay a comment, got {toks:?}"
+        );
+    }
+
+    #[test]
     fn backward_pipe_is_one_token() {
         // `<|` is distinct from `<` `|`, `<<`, `<=`, `<-`.
         assert_eq!(
@@ -800,7 +877,10 @@ mod tests {
                 Tok::Eof
             ]
         );
-        assert_eq!(kinds("<< <| <="), vec![Tok::LtLt, Tok::PipeLeft, Tok::Le, Tok::Eof]);
+        assert_eq!(
+            kinds("<< <| <="),
+            vec![Tok::LtLt, Tok::PipeLeft, Tok::Le, Tok::Eof]
+        );
     }
 
     #[test]
@@ -931,7 +1011,11 @@ mod tests {
         // an interpolated string.
         assert_eq!(
             kinds("f \"x\""),
-            vec![Tok::Ident("f".to_string()), Tok::Str("x".to_string()), Tok::Eof]
+            vec![
+                Tok::Ident("f".to_string()),
+                Tok::Str("x".to_string()),
+                Tok::Eof
+            ]
         );
     }
 
@@ -1084,7 +1168,11 @@ mod tests {
         // string (matching the `f"..."` rule).
         assert_eq!(
             kinds(r#"r "x""#),
-            vec![Tok::Ident("r".to_string()), Tok::Str("x".to_string()), Tok::Eof]
+            vec![
+                Tok::Ident("r".to_string()),
+                Tok::Str("x".to_string()),
+                Tok::Eof
+            ]
         );
     }
 
@@ -1144,8 +1232,14 @@ mod tests {
             vec![Tok::Str("a\nb".to_string()), Tok::Eof]
         );
         // `\r` and Rust-style `\u{HEX}` (1–6 hex digits).
-        assert_eq!(kinds(r#""a\r\nb""#), vec![Tok::Str("a\r\nb".to_string()), Tok::Eof]);
-        assert_eq!(kinds(r#""\u{e9}""#), vec![Tok::Str("é".to_string()), Tok::Eof]);
+        assert_eq!(
+            kinds(r#""a\r\nb""#),
+            vec![Tok::Str("a\r\nb".to_string()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds(r#""\u{e9}""#),
+            vec![Tok::Str("é".to_string()), Tok::Eof]
+        );
         assert_eq!(
             kinds(r#""hi \u{1F600}""#),
             vec![Tok::Str("hi 😀".to_string()), Tok::Eof]
@@ -1164,12 +1258,12 @@ mod tests {
         assert_eq!(kinds("0o17"), vec![Tok::Int(15), Tok::Eof]);
         assert_eq!(kinds("0b1010"), vec![Tok::Int(10), Tok::Eof]);
         assert_eq!(kinds("0xDEAD_BEEF"), vec![Tok::Int(0xDEAD_BEEF), Tok::Eof]);
-        assert_eq!(kinds("1_234.567_5"), vec![Tok::Float(1_234.567_5), Tok::Eof]);
-        // A trailing `_` (not between digits) is left for the next token.
         assert_eq!(
-            kinds("1_ "),
-            vec![Tok::Int(1), Tok::Underscore, Tok::Eof]
+            kinds("1_234.567_5"),
+            vec![Tok::Float(1_234.567_5), Tok::Eof]
         );
+        // A trailing `_` (not between digits) is left for the next token.
+        assert_eq!(kinds("1_ "), vec![Tok::Int(1), Tok::Underscore, Tok::Eof]);
     }
 
     #[test]
@@ -1179,12 +1273,15 @@ mod tests {
             kinds("2 ** 3"),
             vec![Tok::Int(2), Tok::StarStar, Tok::Int(3), Tok::Eof]
         );
-        assert_eq!(kinds("a * b"), vec![
-            Tok::Ident("a".to_string()),
-            Tok::Star,
-            Tok::Ident("b".to_string()),
-            Tok::Eof
-        ]);
+        assert_eq!(
+            kinds("a * b"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::Star,
+                Tok::Ident("b".to_string()),
+                Tok::Eof
+            ]
+        );
     }
 
     #[test]

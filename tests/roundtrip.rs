@@ -247,6 +247,13 @@ const PROGRAMS: &[&str] = &[
     // Qualified constructor patterns (an imported sum type, `DESIGN.md` §6.1).
     "let f s =\n  match s:\n    case Geometry.Circle r: r\n    case Geometry.Rect w h: w",
     "let g k =\n  match k:\n    case Color.Red: 1\n    case Color.Other: 2",
+    // Doc comments (`## …` at column 0) attach to the following declaration and
+    // are re-emitted by the printer, so they survive the roundtrip.
+    "## Doubles a number.\nlet double x = x * 2",
+    "## Line one.\n## Line two.\nlet x = 1",
+    "## A shape.\ntype Shape = Circle float | Rect float float",
+    "## Square root from Python.\nextern sqrt : float -> float = math.sqrt",
+    "## Documented.\nlet a = 1\nlet b = 2",
 ];
 
 #[test]
@@ -411,7 +418,10 @@ fn exponentiation_is_right_assoc_and_binds_tighter_than_unary_minus() {
         expr,
     } = &binding.value.kind
     else {
-        panic!("expected negation at the root, got {:?}", binding.value.kind)
+        panic!(
+            "expected negation at the root, got {:?}",
+            binding.value.kind
+        )
     };
     assert!(matches!(expr.kind, ExprKind::Binary { op: BinOp::Pow, .. }));
 }
@@ -424,7 +434,10 @@ fn chained_comparison_is_one_node_but_single_stays_binary() {
         panic!("expected a let binding")
     };
     let ExprKind::Compare { rest, .. } = &binding.value.kind else {
-        panic!("expected a chained comparison, got {:?}", binding.value.kind)
+        panic!(
+            "expected a chained comparison, got {:?}",
+            binding.value.kind
+        )
     };
     assert_eq!(rest.len(), 2, "two comparison links");
 
@@ -506,4 +519,59 @@ fn reports_errors_for_malformed_input() {
     assert!(parse("if x then y").is_err()); // missing else
     assert!(parse("match x:").is_err()); // no arms
     assert!(parse("(1 + 2").is_err()); // unbalanced paren
+}
+
+#[test]
+fn doc_comment_attaches_to_the_following_declaration() {
+    // `## …` lines at column 0 join (with `\n`) onto the next top-level
+    // `let`/`type`/`extern`; the printer re-emits them, one `## ` line each.
+    let module = parse("## Adds one\n## to a number.\nlet inc x = x + 1").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert_eq!(binding.doc.as_deref(), Some("Adds one\nto a number."));
+    let printed = pyfun::ast::print_module(&module);
+    assert!(
+        printed.contains("## Adds one\n## to a number.\nlet inc"),
+        "printed was:\n{printed}"
+    );
+}
+
+#[test]
+fn doc_comment_attaches_to_type_and_extern_declarations() {
+    let module =
+        parse("## A colour.\ntype Color = Red | Green\n## Python sqrt.\nextern sqrt : float -> float = math.sqrt")
+            .unwrap();
+    let Item::Type(decl) = &module.items[0] else {
+        panic!("expected a type declaration")
+    };
+    assert_eq!(decl.doc.as_deref(), Some("A colour."));
+    let Item::Extern(decl) = &module.items[1] else {
+        panic!("expected an extern declaration")
+    };
+    assert_eq!(decl.doc.as_deref(), Some("Python sqrt."));
+}
+
+#[test]
+fn ordinary_comments_and_non_doc_positions_stay_undocumented() {
+    // A single-`#` comment is not a doc; an indented or trailing `##` stays an
+    // ordinary comment; a doc before a second binding doesn't leak to the first.
+    let module =
+        parse("# plain comment\nlet a = 1 ## trailing\n## Documented.\nlet b = 2").unwrap();
+    let Item::Let(a) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert_eq!(a.doc, None);
+    let Item::Let(b) = &module.items[1] else {
+        panic!("expected a let binding")
+    };
+    assert_eq!(b.doc.as_deref(), Some("Documented."));
+}
+
+#[test]
+fn trailing_doc_lines_without_a_declaration_are_dropped() {
+    // A doc at EOF (or before a non-documentable item) has nothing to attach to;
+    // it is accepted and dropped like an ordinary comment.
+    let module = parse("let a = 1\n## dangling note").unwrap();
+    assert_eq!(module.items.len(), 1);
 }

@@ -21,6 +21,25 @@ pub fn print_module(module: &Module) -> String {
     out
 }
 
+/// Render the doc-comment lines attached to a declaration (`## …` per line,
+/// column 0), ready to prefix the declaration itself. Re-emitting the doc is what
+/// makes it survive the parse→print→parse roundtrip: the reprinted lines re-lex
+/// as `Tok::Doc` and re-attach to the same item.
+fn print_doc(doc: &Option<String>) -> String {
+    let Some(doc) = doc else {
+        return String::new();
+    };
+    doc.split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                "##\n".to_string()
+            } else {
+                format!("## {line}\n")
+            }
+        })
+        .collect()
+}
+
 /// Render a single top-level item.
 pub fn print_item(item: &Item) -> String {
     match item {
@@ -30,9 +49,9 @@ pub fn print_item(item: &Item) -> String {
             Some(body) => format!("measure {name} = {}", print_unit(body)),
             None => format!("measure {name}"),
         },
-        Item::Type(decl) => print_type_decl(decl),
-        Item::Extern(decl) => print_extern(decl),
-        Item::Let(binding) => print_let(binding, 0),
+        Item::Type(decl) => format!("{}{}", print_doc(&decl.doc), print_type_decl(decl)),
+        Item::Extern(decl) => format!("{}{}", print_doc(&decl.doc), print_extern(decl)),
+        Item::Let(binding) => format!("{}{}", print_doc(&binding.doc), print_let(binding, 0)),
         Item::Module { name, items, .. } => {
             let mut s = format!("module {name} =\n");
             let lines: Vec<String> = items

@@ -82,6 +82,10 @@ pub enum Item {
 /// identifiers (as in `type` declarations); they are collected and generalized.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternDecl {
+    /// Doc-comment lines (`## …` at column 0 immediately preceding the
+    /// declaration), joined with `\n`. Attached metadata: the pretty-printer
+    /// re-emits it (so it round-trips), LSP hover surfaces it, lowering ignores it.
+    pub doc: Option<String>,
     /// `extern pure …` — assert the boundary introduces no effect (no `io`).
     pub pure: bool,
     pub name: String,
@@ -104,6 +108,10 @@ pub struct UnitExpr {
 /// (`DESIGN.md` §7 convention).
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecl {
+    /// Doc-comment lines (`## …` at column 0 immediately preceding the
+    /// declaration), joined with `\n`. Attached metadata: the pretty-printer
+    /// re-emits it (so it round-trips), LSP hover surfaces it, lowering ignores it.
+    pub doc: Option<String>,
     pub name: String,
     /// The span of the declared type name, so an editor can find-references /
     /// rename it. `NodeSpan` compares equal — invisible to roundtrip.
@@ -161,6 +169,12 @@ pub enum TypeExpr {
 /// appears both as a top-level [`Item`] and as a local [`BlockStmt`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct LetBinding {
+    /// Doc-comment lines (`## …` at column 0 immediately preceding a *top-level*
+    /// binding), joined with `\n`. Always `None` on local/module-member bindings
+    /// (doc comments attach at top level only, MVP). Attached metadata: the
+    /// pretty-printer re-emits it (so it round-trips), LSP hover surfaces it,
+    /// lowering ignores it.
+    pub doc: Option<String>,
     pub mutable: bool,
     /// `let pure …` — an opt-in assertion that the binding introduces no effect
     /// (no `io`). Checked in the type phase; erased at lowering.

@@ -161,11 +161,34 @@ impl Parser {
         let mut items = Vec::new();
         self.skip_seps();
         while !self.at_eof() {
-            items.push(self.parse_item()?);
+            let doc = self.collect_docs();
+            if self.at_eof() {
+                break; // trailing doc lines with no declaration to attach to
+            }
+            let mut item = self.parse_item()?;
+            attach_doc(&mut item, doc);
+            items.push(item);
             // An item is delimited by the offside-inserted separators (or EOF).
             self.skip_seps();
         }
         Ok(Module { items })
+    }
+
+    /// Consume a run of doc-comment lines (`Tok::Doc`, separated by the offside
+    /// `Sep`s) preceding a top-level item, joining them with `\n`. `None` when the
+    /// next token is not a doc comment.
+    fn collect_docs(&mut self) -> Option<String> {
+        let mut lines: Vec<String> = Vec::new();
+        while let Tok::Doc(text) = self.peek() {
+            lines.push(text.clone());
+            self.bump();
+            self.skip_seps();
+        }
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        }
     }
 
     /// Error-recovering variant of [`Self::parse_module`]: parse items one by one,
@@ -177,9 +200,16 @@ impl Parser {
         let mut errors = Vec::new();
         self.skip_seps();
         while !self.at_eof() {
+            let doc = self.collect_docs();
+            if self.at_eof() {
+                break; // trailing doc lines with no declaration to attach to
+            }
             let before = self.pos;
             match self.parse_item() {
-                Ok(item) => items.push(item),
+                Ok(mut item) => {
+                    attach_doc(&mut item, doc);
+                    items.push(item);
+                }
                 Err(e) => {
                     errors.push(e);
                     // Guarantee progress even if `parse_item` consumed nothing,
@@ -317,6 +347,7 @@ impl Parser {
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
+            doc: None,
             pure,
             name,
             ty,
@@ -350,6 +381,7 @@ impl Parser {
         };
         let span = crate::parser::ast::NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(TypeDecl {
+            doc: None,
             name,
             name_span,
             params,
@@ -489,6 +521,7 @@ impl Parser {
         self.expect(&Tok::Eq, "`=`")?;
         let value = self.parse_block_or_expr()?;
         Ok(LetBinding {
+            doc: None,
             mutable,
             pure,
             name,
@@ -1479,9 +1512,7 @@ impl Parser {
             // 0.3`, `NaN ≠ NaN`). Point at the guard alternative rather than the
             // generic "expected a pattern". Covers `case 1.5:` and `case -1.5:`.
             Tok::Float(_) => Err(self.float_pattern_error()),
-            Tok::Minus if matches!(self.peek2(), Tok::Float(_)) => {
-                Err(self.float_pattern_error())
-            }
+            Tok::Minus if matches!(self.peek2(), Tok::Float(_)) => Err(self.float_pattern_error()),
             _ => Err(self.error("expected a pattern")),
         }
     }
@@ -1523,16 +1554,12 @@ impl Parser {
                         }
                     }
                     _ => {
-                        return Err(
-                            self.error("the `*` rest binder must be a variable or `_`")
-                        );
+                        return Err(self.error("the `*` rest binder must be a variable or `_`"));
                     }
                 };
                 rest = Some(Box::new(binder));
                 if !matches!(self.peek(), Tok::RBracket) {
-                    return Err(
-                        self.error("the `*` rest element must be last in a list pattern")
-                    );
+                    return Err(self.error("the `*` rest element must be last in a list pattern"));
                 }
                 break;
             }
@@ -1679,6 +1706,20 @@ fn is_upper(name: &str) -> bool {
     name.chars().next().is_some_and(|c| c.is_uppercase())
 }
 
+/// Attach collected doc-comment text to the item it precedes. Docs attach to the
+/// documentable declarations — `let` / `type` / `extern` (MVP: top level only);
+/// preceding anything else (`measure`, `module`, `import`, an expression) they are
+/// accepted and dropped, like an ordinary comment.
+fn attach_doc(item: &mut Item, doc: Option<String>) {
+    let Some(doc) = doc else { return };
+    match item {
+        Item::Let(binding) => binding.doc = Some(doc),
+        Item::Type(decl) => decl.doc = Some(doc),
+        Item::Extern(decl) => decl.doc = Some(doc),
+        _ => {}
+    }
+}
+
 /// A short human-readable name for a token, used in error messages.
 fn describe(tok: &Tok) -> String {
     match tok {
@@ -1687,6 +1728,7 @@ fn describe(tok: &Tok) -> String {
         Tok::Str(_) => "string literal".to_string(),
         Tok::Ident(name) => format!("identifier `{name}`"),
         Tok::Eof => "end of input".to_string(),
+        Tok::Doc(_) => "doc comment".to_string(),
         Tok::Sep => "end of statement".to_string(),
         Tok::Indent => "start of an indented block".to_string(),
         Tok::Dedent => "end of block".to_string(),

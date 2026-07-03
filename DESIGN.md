@@ -670,6 +670,29 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
+**Doc comments (implemented).** A line starting with `##` at **column 0** is a *doc comment*: one
+or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
+declaration (joined with newlines, the conventional single space after `##` stripped) and surface
+in LSP hover (§9). Design rationale — the minimal option that can't silently re-purpose existing
+comments:
+- **`##` doubles the existing comment marker**, the same move as Rust's `///` over `//`; no new
+  character class, and a plain `#` comment is never promoted to documentation by accident (the
+  alternative — attaching any plain `#` comment that precedes a declaration — would turn every
+  such comment into hover text).
+- **Ordinary comments are untouched:** `##` indented, trailing after code, or inside brackets stays
+  plain trivia — only the column-0, bracket-depth-0 form lexes as `Tok::Doc`. The one behavioural
+  change is that a column-0 `##` line *between* the statements of a top-level multi-line binding
+  now reads as a new top-level statement (as Rust's `///` would); plain `#` remains the
+  place-anywhere comment.
+- **Roundtrip-safe as attached metadata:** the parser stores the text on the declaration node
+  (`doc: Option<String>` on `LetBinding`/`TypeDecl`/`ExternDecl` — AST metadata, not free-floating
+  trivia, so navigation/analysis are unaffected), and the pretty-printer re-emits `## ` lines
+  before the declaration — so docs survive parse→print→parse while every other comment is still
+  dropped by the canonical printer. Docs erase at lowering (no change to emitted Python).
+- **MVP scope:** top level only (no local/module-member docs); a doc with nothing documentable
+  after it (EOF, or a `measure`/`module`/`import`/expression) is accepted and dropped like a
+  comment; no markdown processing — hover shows the text verbatim.
+
 **Statement separation & blocks (general offside rule, implemented).** Indentation is turned into
 block structure by a layout rule, not semicolons or braces. At lexing time a layout stack of block
 columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
@@ -1248,7 +1271,12 @@ features, all reusing the existing front end:
   parameter, and pattern variable, then resolves each entry against the final
   substitution and renders it. Bindings carry a `name_span`, and parameters /
   pattern variables carry their own spans, so a function name hovers to its full
-  inferred signature and a parameter hovers to its element type.
+  inferred signature and a parameter hovers to its element type. **Doc comments
+  surface here too:** a `##` doc attached to a top-level `let`/`type`/`extern` (§7)
+  is appended below the type (separated by a rule) when hovering the declaration
+  name *or any reference resolving to it* (`resolve::symbol_at` → the item's `doc`);
+  a documented symbol with no recorded type (a `type` or `extern` name) hovers to
+  the doc text alone.
 - **Go-to-definition** — jump from a reference to its definition, **module-level or
   local**. Backed by a dependency-free name resolver (`src/lsp/resolve.rs`) that
   walks the parsed AST (independent of the type checker, so it works on any program
@@ -1315,8 +1343,9 @@ Deferred (next LSP slices, `ROADMAP` #10): *truly* incremental reparsing (today 
 change re-analyzes the whole document — fine at this size; the version cache only
 avoids redundant re-analysis between requests on the *same* version, not partial
 reparse on edit); resilience to *lexing* errors (only parse errors recover today);
-workspace symbols (project-wide, vs. today's per-document outline); and richer hover
-(docs, separate effect line). The `editors/vscode/` client is intentionally thin —
+workspace symbols (project-wide, vs. today's per-document outline); and a separate
+effect line in hover. (Doc-comment hover has **shipped** — `##` doc comments, §7,
+render below the type.) The `editors/vscode/` client is intentionally thin —
 all language smarts live in the Rust server.
 
 **Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
