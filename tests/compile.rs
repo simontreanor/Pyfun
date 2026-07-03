@@ -1005,6 +1005,96 @@ fn adt_classes_get_structural_hash() {
 }
 
 #[test]
+fn adt_classes_get_derived_ordering() {
+    // Each user variant class gets `<`/`<=`/`>`/`>=` keyed on
+    // `(variant_index, fields…)`; the index sorts by declaration order.
+    let py = pyfun::compile("type Color = Red | Green | Blue\nlet x = Red").unwrap();
+    assert!(py.contains("def _pf_order_key(self):"), "{py}");
+    assert!(py.contains("def __lt__(self, other):"), "{py}");
+    assert!(
+        py.contains("return self._pf_order_key() < other._pf_order_key()"),
+        "{py}"
+    );
+    // Nullary variants key on just the index (a 1-tuple); indices are 0, 1, 2.
+    assert!(py.contains("return (0,)"), "Red index 0: {py}");
+    assert!(py.contains("return (1,)"), "Green index 1: {py}");
+    assert!(py.contains("return (2,)"), "Blue index 2: {py}");
+}
+
+#[test]
+fn payload_variant_order_key_includes_fields() {
+    let py = pyfun::compile("type Shape = Circle float | Rect float float\nlet x = Circle 1.0")
+        .unwrap();
+    assert!(py.contains("return (0, self._0)"), "Circle: {py}");
+    assert!(py.contains("return (1, self._0, self._1)"), "Rect: {py}");
+}
+
+#[test]
+fn builtin_prelude_classes_get_no_ordering() {
+    // `Some`/`None_` (and `Ok`/`Error`) are scoped out of derived ordering.
+    let py = pyfun::compile("let x = Some 1").unwrap();
+    assert!(py.contains("class Some:"), "{py}");
+    assert!(!py.contains("_pf_order_key"), "prelude gets no ordering: {py}");
+}
+
+#[test]
+fn e2e_sort_a_sum_type_by_variant_order() {
+    run_and_check(
+        "
+        type Color = Red | Green | Blue
+        let sorted = List.sort [Blue, Red, Green]
+        let a = Red < Green
+        let b = Green < Blue
+        ",
+        &[("sorted", "[Red, Green, Blue]"), ("a", "True"), ("b", "True")],
+    );
+}
+
+#[test]
+fn e2e_sum_orders_by_variant_then_field() {
+    run_and_check(
+        "
+        type Shape = Circle float | Rect float float
+        let a = Circle 1.0 < Circle 2.0
+        let b = Circle 9.0 < Rect 0.0 0.0
+        let c = Rect 1.0 2.0 < Rect 1.0 3.0
+        ",
+        &[("a", "True"), ("b", "True"), ("c", "True")],
+    );
+}
+
+#[test]
+fn e2e_sort_records_and_tuples() {
+    run_and_check(
+        "
+        type Point = { x: int, y: int }
+        let pts = List.sort [Point { x = 2, y = 0 }, Point { x = 1, y = 9 }, Point { x = 1, y = 3 }]
+        let tups = List.sort [(1, 3), (1, 2), (0, 9)]
+        ",
+        // Records sort field-by-field; tuples lexicographically.
+        &[
+            (
+                "pts",
+                "[Point(1, 3), Point(1, 9), Point(2, 0)]",
+            ),
+            ("tups", "[(0, 9), (1, 2), (1, 3)]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_sort_a_recursive_type() {
+    run_and_check(
+        "
+        type Tree = Leaf int | Node Tree Tree
+        let sorted = List.sort [Node (Leaf 2) (Leaf 3), Leaf 5, Leaf 1]
+        ",
+        // Leaf (variant 0) < Node (variant 1); Leaf 1 < Leaf 5 by field.
+        &[("sorted", "[Leaf(1), Leaf(5), Node(Leaf(2), Leaf(3))]")],
+    );
+}
+
+#[test]
 fn record_lowers_to_class_with_named_fields() {
     let py =
         pyfun::compile("type Point = { x: int, y: int }\nlet p = Point { y = 4, x = 3 }").unwrap();

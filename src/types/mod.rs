@@ -274,6 +274,28 @@ type Env = HashMap<String, Scheme>;
 
 const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 
+/// Built-in container/reserved `Con` types that do **not** derive structural
+/// ordering (`DESIGN.md` §7.1): `Option`/`Result` would need their bespoke prelude
+/// classes extended, `Set`/`Map` have no natural order, and `Exception` is reserved.
+/// Only *user* sum types and records (plus tuples) are orderable — these are excluded
+/// even though some appear in `type_ctors`/`records`. A deferred follow-on.
+const RESERVED_UNORDERED: [&str; 8] = [
+    "List",
+    "Set",
+    "Map",
+    "Option",
+    "Result",
+    "Async",
+    "Seq",
+    "Exception",
+];
+
+/// A depth cap on the structural-ordering check, so a pathological *non-regular*
+/// recursive type (whose expansion never repeats a `(name, args)` key) can't loop
+/// the checker forever. Far beyond any realistic type's structural depth; exceeding
+/// it is reported rather than hung on (a sound, conservative rejection).
+const MAX_ORD_DEPTH: usize = 100;
+
 /// Prelude functions backed directly by Python builtins (`DESIGN.md` §6). This is
 /// the single source of truth shared by the type checker (whose schemes live in
 /// [`seed_prelude`], kept in sync with the arities here) and by lowering, which
@@ -2745,20 +2767,105 @@ impl Infer {
     }
 
     /// Require `ty` to support ordering comparison (`< > <= >=`): the `comparison`
-    /// constraint, satisfied by `int`/`float`/`string` (numbers and strings). A
-    /// bare type variable gains the constraint and is checked once it resolves.
+    /// constraint, satisfied by `int`/`float`/`string` (numbers and strings), plus
+    /// **tuples** and **user sum types / records** compared structurally
+    /// (`DESIGN.md` §7.1). A bare type variable gains the constraint and is checked
+    /// once it resolves (the [`unify`](Self::unify) hook re-runs this).
     fn require_ord(&mut self, ty: &Ty, span: Span) -> Result<(), TypeError> {
-        match self.apply(ty) {
+        let mut visiting = HashSet::new();
+        self.require_ord_rec(ty, span, &mut visiting)
+    }
+
+    /// The recursive core of [`require_ord`]. `visiting` holds the structural keys
+    /// (`show`) of the `Con` types currently being expanded, so a recursive type
+    /// (`type Tree = Leaf int | Node Tree Tree`) terminates: re-visiting the same
+    /// `(name, args)` is treated as satisfied, sound by structural induction (a
+    /// recursive type is orderable iff its non-recursive parts are). Keying on the
+    /// full applied type distinguishes a recursive occurrence `List a` from a genuine
+    /// nesting `List (List a)`.
+    fn require_ord_rec(
+        &mut self,
+        ty: &Ty,
+        span: Span,
+        visiting: &mut HashSet<String>,
+    ) -> Result<(), TypeError> {
+        let applied = self.apply(ty);
+        let unsupported = |t: &Ty| TypeError {
+            message: format!("type {} does not support comparison (`<`)", show(t)),
+            span,
+        };
+        match &applied {
             Ty::Int(_) | Ty::Float(_) | Ty::Num(_, _) | Ty::Str => Ok(()),
             Ty::Var(n) => {
-                self.ord.insert(n);
+                self.ord.insert(*n);
                 Ok(())
             }
-            other => Err(TypeError {
-                message: format!("type {} does not support comparison (`<`)", show(&other)),
-                span,
-            }),
+            // A tuple is orderable iff every element is (lexicographic, matching the
+            // Python tuple it lowers to — no codegen needed).
+            Ty::Tuple(elems) => {
+                let elems = elems.clone();
+                for e in &elems {
+                    self.require_ord_rec(e, span, visiting)?;
+                }
+                Ok(())
+            }
+            Ty::Con(name, args) => {
+                let name = name.clone();
+                let args = args.clone();
+                // Only *user* sum types / records derive ordering; built-in containers
+                // and reserved types (`Option`/`Result`/`Set`/`Map`/…) do not.
+                let is_user = !RESERVED_UNORDERED.contains(&name.as_str())
+                    && (self.decls.type_ctors.contains_key(&name)
+                        || self.decls.records.contains_key(&name));
+                if !is_user {
+                    return Err(unsupported(&applied));
+                }
+                // Recursion guard (and memo): a re-visited type is satisfied.
+                if !visiting.insert(show(&applied)) {
+                    return Ok(());
+                }
+                if visiting.len() > MAX_ORD_DEPTH {
+                    return Err(TypeError {
+                        message: format!(
+                            "type {} is too deeply nested to check for comparison",
+                            show(&applied)
+                        ),
+                        span,
+                    });
+                }
+                for ft in self.ord_field_types(&name, &args) {
+                    self.require_ord_rec(&ft, span, visiting)?;
+                }
+                Ok(())
+            }
+            other => Err(unsupported(other)),
         }
+    }
+
+    /// The field types a user sum type / record contributes to its ordering key, with
+    /// the type parameters substituted by `args` (a ctor/record field type uses bound
+    /// vars `0..params_count`). For a sum type: every constructor's fields, in
+    /// declaration order; for a record: its fields.
+    fn ord_field_types(&self, name: &str, args: &[Ty]) -> Vec<Ty> {
+        let tmap: HashMap<u32, Ty> = args
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, t)| (i as u32, t))
+            .collect();
+        let (eu, en, ee) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let subst = |t: &Ty| subst_all(t, &tmap, &eu, &en, &ee);
+        let mut out = Vec::new();
+        if let Some(ctors) = self.decls.type_ctors.get(name) {
+            for cn in ctors {
+                let info = &self.decls.ctors[cn];
+                let (fields, _) = split_fun(&info.scheme.ty, info.arity);
+                out.extend(fields.iter().map(&subst));
+            }
+        } else if let Some(rec) = self.decls.records.get(name) {
+            out.extend(rec.fields.iter().map(|(_, t)| subst(t)));
+        }
+        out
     }
 
     /// Infer a binding's scheme and its effect. The body's effect lands on the

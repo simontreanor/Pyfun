@@ -331,20 +331,24 @@ impl Lowerer {
             if let Item::Type(decl) = item {
                 match &decl.kind {
                     TypeDeclKind::Sum(variants) => {
-                        for variant in variants {
+                        // The variant's declaration index is its ordering rank, so a
+                        // user sum type derives structural `<` (`DESIGN.md` §7.1).
+                        for (index, variant) in variants.iter().enumerate() {
                             let fields =
                                 (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
                             classes.push(PyStmt::ClassDef {
                                 name: py_ctor_name(&variant.name),
                                 fields,
+                                order: Some(index),
                             });
                         }
                     }
-                    // Records lower to a class with their real field names.
+                    // Records lower to a single class (ordering rank 0).
                     TypeDeclKind::Record(fields) => {
                         classes.push(PyStmt::ClassDef {
                             name: decl.name.clone(),
                             fields: fields.iter().map(|f| f.name.clone()).collect(),
+                            order: Some(0),
                         });
                     }
                 }
@@ -1820,10 +1824,12 @@ fn result_prelude() -> Vec<PyStmt> {
         PyStmt::ClassDef {
             name: "Ok".to_string(),
             fields: vec!["_0".to_string()],
+            order: None,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
             fields: vec!["_0".to_string()],
+            order: None,
         },
     ]
 }
@@ -1836,6 +1842,7 @@ fn exception_prelude() -> Vec<PyStmt> {
     vec![PyStmt::ClassDef {
         name: "_Exception".to_string(),
         fields: vec!["errorKind".to_string(), "errorMessage".to_string()],
+        order: None,
     }]
 }
 
@@ -1847,10 +1854,12 @@ fn option_prelude() -> Vec<PyStmt> {
         PyStmt::ClassDef {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
+            order: None,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
             fields: vec![],
+            order: None,
         },
     ]
 }

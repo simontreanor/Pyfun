@@ -126,8 +126,17 @@ rather than checked — almost none of this is in the type system). Each was ver
   star (`[*init, last]`, `[a, *mid, z]`). The linked-list `cons`/`head`/`tail` half is a non-goal (above).
 - **Lift the unique-field-name restriction** (L) — needs type annotations or type-directed field
   resolution (or row polymorphism, a non-goal).
-- **Derived ordering for ADTs** (M) — `<=`/`>=`/sort on user types; today only `comparison`-constrained
-  primitives (int/float/string) compare.
+- **Derived ordering for ADTs** — ✅ **done 2026-07-03**. `< > <= >=` (and `List.sort`) now work on
+  **user sum types, records, and tuples**, compared structurally: a sum orders by variant *declaration
+  order* then field-by-field (`Red < Green < Blue`, any `Circle` < any `Rect`), a record field-by-field, a
+  tuple lexicographically; nested/recursive types compose. Type side: `require_ord` recurses into a `Con`'s
+  ctor/record field types (params substituted by the actual args) with a visiting-set recursion guard
+  (keyed on `(name, args)`; `MAX_ORD_DEPTH` bounds non-regular recursion); the deferred-var `ord` mechanism
+  flows a late-resolved `comparison 'a` through it. Codegen: each user variant/record class emits
+  `_pf_order_key = (variant_index, fields…)` + `__lt__`/`__le__`/`__gt__`/`__ge__` (tuples need none — Python
+  tuples already order). **Follow-on (scoped out):** built-in `Option`/`Result` (would need their prelude
+  classes extended with ordering) and `Set`/`Map`/`List` (no natural element-wise order) — comparing them
+  is still a type error. Covered by typecheck/compile tests + `examples/hello.pyfun`.
 - **Unit-aware `sqrt : float<'u^2> -> float<'u>`** (M) — √area = length, the one genuinely useful
   unit-carrying power op (F# special-cases exactly this signature). Today `sqrt` is a dimensionless
   `extern` (`float -> float`), so `sqrt area` loses the unit. Needs either **rational unit exponents**
@@ -271,8 +280,9 @@ variants); records give ergonomic *product* types with named instead of position
 - **Cross-module (done 2026-07-03):** records export like sum-type ADTs — construct/pattern/update/access
   an imported record via a qualified tag (`Geometry.Point { … }`). See the cross-module entry in the
   backlog section for the full design.
-- **Still to do:** derived ordering. Record *patterns* in `match` **landed**; cross-module records
-  **landed**; the unique-field-name restriction is **lifted** (above).
+- **Still to do:** (nothing major). Record *patterns* in `match` **landed**; cross-module records
+  **landed**; the unique-field-name restriction is **lifted** (above); **derived ordering landed** (record
+  values compare structurally — see the backlog entry).
 
 ### 3. Mutability checking (`let mut`) — ✅ done (with blocks + general offside)
 Immutable-by-default with a checked `mut` opt-in: `let mut x = …` and `x <- v` reassignment, where
@@ -339,8 +349,9 @@ adjacency (`5<m>` unit vs `5 < m` comparison — the F# rule). Covered across le
 compile/roundtrip tests.
 - **Chained comparisons — ✅ done:** `a < b < c` is Python-style (a single `ExprKind::Compare` lowering
   to Python's native chained comparison — evaluate-once, short-circuit — not the left-assoc `(a < b) < c`).
-- **Remaining:** `<=`/`>=` on ADTs would need a derived ordering (only `comparison`-constrained
-  primitives compare for now).
+- **Derived ordering — ✅ done 2026-07-03:** `< > <= >=` (and `List.sort`) now work on user sum types,
+  records, and tuples, compared structurally (variant declaration order then fields; lexicographic tuples).
+  Built-in `Option`/`Result`/`Set`/`Map` ordering remains a scoped-out follow-on. See the backlog entry.
 
 ### 4c. Logical operators — ✅ done
 `and` / `or` / `not` — all keywords, lowering to the same Python keywords. Spelled the Python way

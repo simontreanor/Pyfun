@@ -735,10 +735,25 @@ constraint with polymorphic literals (step b).
    `+`-means-anything is exactly the dynamic mushiness Pyfun exists to replace.
 
 6. **Comparison & equality. ✅ implemented.** `< > <= >=` carry a closed built-in **`comparison`**
-   constraint (satisfied by `int`/`float`/`string`), implemented like `num` (an `ord` constraint set
-   on type variables, propagated through unification and generalized), so `let lt a b = a < b`
-   infers `comparison 'a => 'a -> 'a -> bool` and works at int/float/string but rejects bools and
-   functions. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
+   constraint, implemented like `num` (an `ord` constraint set on type variables, propagated through
+   unification and generalized), so `let lt a b = a < b` infers `comparison 'a => 'a -> 'a -> bool`.
+   The constraint is satisfied by `int`/`float`/`string` **and — since derived ordering landed — by
+   user sum types, records, and tuples, compared structurally** (bools and functions are still rejected).
+   A **sum type** orders by variant *declaration order* first, then field-by-field (`Red < Green < Blue`;
+   any `Circle` < any `Rect`; `Circle a < Circle b` iff `a < b`); a **record** orders field-by-field in
+   declaration order; a **tuple** is lexicographic. Nested/recursive types compose (`type Tree = Leaf int
+   | Node Tree Tree` orders structurally). `require_ord` recurses into a `Con`'s constructor/record field
+   types (its type params substituted by the actual arguments) with a **visiting-set recursion guard**
+   (keyed on the full `(name, args)`, so a recursive occurrence terminates while `List a` vs `List (List
+   a)` stay distinct) — and the deferred-var mechanism still flows a late-resolved `comparison 'a` through
+   this path via the `unify` hook. Codegen: each user variant/record class gets `__lt__`/`__le__`/`__gt__`/
+   `__ge__` comparing an ordering key `(variant_index, field0, …)` (the variant index — declaration order —
+   is the tuple's first element, so a cross-variant comparison short-circuits before the differently-shaped
+   field tails; tuples need *no* codegen since Python tuples already compare lexicographically). The type
+   checker gates comparison to one orderable type, so no `isinstance`/`NotImplemented` guard is emitted.
+   **Scoped out (a follow-on):** the built-in `Option`/`Result` (their bespoke prelude classes have no
+   ordering methods) and `Set`/`Map`/`List` (no natural element-wise order here) — comparing them is a
+   type error. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
    equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
    `bool` and are looser than arithmetic, tighter than `|>`. Surface wrinkle: `<` opens a unit
    annotation only when *adjacent* to a literal (`5<m>`); spaced (`5 < m`) it is less-than — the F#

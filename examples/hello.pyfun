@@ -292,6 +292,11 @@ let missing = Option.withDefault 0 (List.get 9 ns) # 0 (out of bounds -> None)
 let hasThree = List.contains 3 ns            # true
 let joined = List.concat ns [6, 7]           # [1, 2, 3, 4, 5, 6, 7]
 let ordered = List.sort [3, 1, 2]            # [1, 2, 3]
+# Derived ordering: user sum types / records / tuples compare structurally, so
+# `<` (and `List.sort`) work on them. A sum orders by variant declaration order
+# then field-by-field (Red < Green < Blue).
+let sortedColors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
+let redFirst = Red < Green                       # true
 let firstBig = List.find (fun x -> x > 3) ns # Some 4
 
 # Sets and maps lower to Python `set` / `dict`; `Map.tryFind` returns the built-in
@@ -437,6 +442,8 @@ print third                           # 3    (List.get, O(1), total via Option)
 print hasThree                        # True (List.contains, O(n))
 print joined                          # [1, 2, 3, 4, 5, 6, 7]  (List.concat)
 print ordered                         # [1, 2, 3]  (List.sort, O(n log n))
+print sortedColors                    # [Red, Green, Blue]  (derived ADT ordering)
+print redFirst                        # True
 print firstBig                        # Some(4)  (List.find, first match)
 
 # Sets, maps, and options in action.

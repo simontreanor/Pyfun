@@ -971,6 +971,120 @@ fn unit_annotation_and_less_than_are_distinguished() {
     assert!(pyfun::check("let r = 5 < 9").is_ok());
 }
 
+// ---------- derived ordering for ADTs / records / tuples (DESIGN §7.1) ----------
+
+#[test]
+fn accepts_ordering_of_a_sum_type() {
+    // A nullary enum orders by declaration order; a payload-carrying sum orders by
+    // variant then field.
+    assert!(pyfun::check("type Color = Red | Green | Blue\nlet r = Red < Blue").is_ok());
+    assert!(
+        pyfun::check("type Shape = Circle float | Rect float float\nlet r = Circle 1.0 < Rect 0.0 0.0")
+            .is_ok()
+    );
+    // `List.sort` uses the `comparison` constraint — now satisfied by user sum types.
+    assert!(pyfun::check("type Color = Red | Green | Blue\nlet s = List.sort [Blue, Red]").is_ok());
+}
+
+#[test]
+fn accepts_ordering_of_a_record() {
+    assert!(
+        pyfun::check(
+            "type Point = { x: int, y: int }\n\
+             let r = Point { x = 1, y = 2 } < Point { x = 1, y = 3 }"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn accepts_ordering_of_tuples() {
+    // Tuples compare lexicographically (no codegen — Python tuples already do).
+    assert!(pyfun::check("let r = (1, 2) < (1, 3)").is_ok());
+    assert!(pyfun::check("let r = (1, \"a\") < (1, \"b\")").is_ok());
+}
+
+#[test]
+fn accepts_ordering_of_a_recursive_type() {
+    // A recursive type orders structurally; the checker's recursion guard terminates.
+    let src = "type Tree = Leaf int | Node Tree Tree\n\
+               let s = List.sort [Node (Leaf 1) (Leaf 2), Leaf 0]";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn accepts_ordering_of_a_parameterized_type_at_an_orderable_arg() {
+    // `Box a` is orderable when `a` is (its field type instantiates to `a`).
+    assert!(
+        pyfun::check("type Box a = { item: a }\nlet r = Box { item = 1 } < Box { item = 2 }").is_ok()
+    );
+}
+
+#[test]
+fn rejects_ordering_of_a_record_with_an_unorderable_field() {
+    // A function-typed field is not orderable, so the record isn't either.
+    assert_error_contains(
+        "type H = { run: int -> int }\n\
+         let mk = H { run = fun x -> x }\n\
+         let bad = mk < mk",
+        "does not support comparison",
+    );
+}
+
+#[test]
+fn rejects_ordering_of_a_sum_with_an_unorderable_field() {
+    assert_error_contains(
+        "type F = Fn (int -> int)\n\
+         let mk = Fn (fun x -> x)\n\
+         let bad = mk < mk",
+        "does not support comparison",
+    );
+}
+
+#[test]
+fn rejects_ordering_of_a_parameterized_type_at_an_unorderable_arg() {
+    // `Box a` is not orderable when `a` is a function type.
+    assert_error_contains(
+        "type Box a = { item: a }\n\
+         let mk = Box { item = fun x -> x }\n\
+         let bad = mk < mk",
+        "does not support comparison",
+    );
+}
+
+#[test]
+fn rejects_ordering_of_builtin_option_and_result() {
+    // Built-in `Option`/`Result` are scoped out of derived ordering (their prelude
+    // classes have no ordering methods) — a deferred follow-on.
+    assert_error_contains(
+        "let bad a b = a < b\nlet t = bad (Some 1) (Some 2)",
+        "does not support comparison",
+    );
+    assert_error_contains(
+        "let bad a b = a < b\nlet t = bad (Ok 1) (Ok 2)",
+        "does not support comparison",
+    );
+}
+
+#[test]
+fn deferred_ordering_constraint_flows_to_a_concrete_adt() {
+    // `lt` generalizes to `comparison 'a => …`; applying it to a user sum type
+    // resolves the deferred constraint through the recursive ord check (accepted),
+    // while a bad application (function-carrying variant) is rejected.
+    assert!(
+        pyfun::check(
+            "type Color = Red | Green\nlet lt a b = a < b\nlet r = lt Red Green"
+        )
+        .is_ok()
+    );
+    assert_error_contains(
+        "type F = Fn (int -> int)\n\
+         let lt a b = a < b\n\
+         let r = lt (Fn (fun x -> x)) (Fn (fun x -> x))",
+        "does not support comparison",
+    );
+}
+
 // ---------- boolean operators ----------
 
 #[test]

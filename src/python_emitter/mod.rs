@@ -59,7 +59,16 @@ pub enum PyStmt {
         handler: Vec<PyStmt>,
     },
     /// A data-constructor class with positional fields and `__match_args__`.
-    ClassDef { name: String, fields: Vec<String> },
+    /// `order` is `Some(variant_index)` for a **user** sum-type variant / record (so
+    /// it derives structural `<`/`<=`/`>`/`>=` ordering, keyed on
+    /// `(variant_index, field0, …)`); `None` for the built-in prelude classes
+    /// (`Ok`/`Error`/`Some`/`None_`/`_Exception`), which the type checker does not let
+    /// programs compare.
+    ClassDef {
+        name: String,
+        fields: Vec<String>,
+        order: Option<usize>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -341,11 +350,15 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             line(out, depth, &clause);
             emit_block(handler, depth + 1, out);
         }
-        PyStmt::ClassDef { name, fields } => emit_class(name, fields, depth, out),
+        PyStmt::ClassDef {
+            name,
+            fields,
+            order,
+        } => emit_class(name, fields, *order, depth, out),
     }
 }
 
-fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
+fn emit_class(name: &str, fields: &[String], order: Option<usize>, depth: usize, out: &mut String) {
     line(out, depth, &format!("class {name}:"));
     // `__match_args__` is a tuple of the positional field names; a single-element
     // tuple needs a trailing comma.
@@ -412,6 +425,38 @@ fn emit_class(name: &str, fields: &[String], depth: usize, out: &mut String) {
             .collect::<Vec<_>>()
             .join(", ");
         line(out, depth + 2, &format!("return hash(({parts}))"));
+    }
+
+    // Structural ordering (`DESIGN.md` §7.1) for user sum types / records: compare by
+    // an ordering key `(variant_index, field0, field1, …)`. The variant index sorts
+    // by constructor declaration order and — as the tuple's first element — decides
+    // any cross-variant comparison before Python reaches the differently-shaped field
+    // tails; same-variant comparisons fall through to the fields, recursing via
+    // Python's own `<`. The type checker gates comparison to a single orderable type,
+    // so `other` is always a sibling of `self` (same `_pf_order_key`) — no
+    // `isinstance`/`NotImplemented` guard is needed.
+    if let Some(variant_index) = order {
+        let key = std::iter::once(variant_index.to_string())
+            .chain(fields.iter().map(|f| format!("self.{f}")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // A single-element tuple needs a trailing comma (a nullary variant's key).
+        let trailing = if fields.is_empty() { "," } else { "" };
+        line(out, depth + 1, "def _pf_order_key(self):");
+        line(out, depth + 2, &format!("return ({key}{trailing})"));
+        for (method, op) in [
+            ("__lt__", "<"),
+            ("__le__", "<="),
+            ("__gt__", ">"),
+            ("__ge__", ">="),
+        ] {
+            line(out, depth + 1, &format!("def {method}(self, other):"));
+            line(
+                out,
+                depth + 2,
+                &format!("return self._pf_order_key() {op} other._pf_order_key()"),
+            );
+        }
     }
 }
 
