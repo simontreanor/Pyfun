@@ -111,6 +111,18 @@ rather than checked — almost none of this is in the type system). Each was ver
   raising; the `try e : Result a Exception` expression (done) catches at the FFI boundary, and
   `result {}` + the `Result` module compose the rest. A `raise`/`finally` statement form would duplicate
   `Result` and import a class hierarchy Pyfun has no types for.
+- **f-string format specifiers (`{x:.2f}`, `{v!r}`)** — decided 2026-07-03. A format spec is an
+  **unchecked, stringly-typed sublanguage smuggled inside a string literal**: the compiler can't see into
+  it, so `.2f`→`.3f` is a *silent* behaviour change, `.2f`→`.f2` misformats or blows up only at runtime, and
+  nothing enforces consistency (currency formatted `.2f` here, `.3f` there). That's exactly the class of
+  surprise Pyfun refuses everywhere else — it rejects float patterns (unreliable `==`), unchecked field
+  access, and unit mismatches *because* it won't bless stringly-typed footguns; a format mini-language would
+  be a glaring exception to "the compiler is the gatekeeper." The FP answer, and the Pyfun way, is
+  **centralized formatting functions** — `formatCurrency : float<gbp> -> string`, `formatPercent`,
+  `formatDate` — defined once, checked at every call site, changed in one place: consistency + compile-
+  checking + single-source-of-truth, and just functions. A future small `Format` module could ship these
+  over the existing `String` ops. (The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r`
+  mini-language is excluded. Multi-line `f"""` is a *separate*, uncontroversial feature — still deferred.)
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
@@ -166,20 +178,23 @@ rather than checked — almost none of this is in the type system). Each was ver
   `(op)` spelling. `and`/`or` are excluded (keywords whose short-circuiting a strict function would drop).
 - **More effect labels (e.g. `async`) + effect annotations on declared `type`/`extern` arrows** (M) —
   today there is one `io` label and declared function arrows are treated as pure.
-- **f-string extras** (S–M each) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
-  and **`{x=}`** self-documenting holes landed too; still deferred are **format specifiers** (`{x:.2f}`,
-  `{v!r}` — a mini-language) and **multi-line** `f"""..."""` (Pyfun has no triple-quoted strings).
+- **f-string extras** (S–M) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
+  and **`{x=}`** self-documenting holes landed too; still deferred is **multi-line** `f"""..."""` (Pyfun
+  has no triple-quoted strings). **Format specifiers** (`{x:.2f}`, `{v!r}`) are now a **non-goal** — see
+  the Non-goals section for the reasoning (an unchecked stringly-typed sublanguage; centralized formatting
+  functions are the Pyfun way).
 - **Type annotations** (L) — **parked (deprioritized 2026-07-02).** `let x : T = …`, params `(x: T)`,
   return types. *Not necessary*: HM inference is complete, so the compiler needs none; the identity is
   "F#-level safety without ceremony," and types are already surfaced by LSP hover / `pyfun check` / REPL
-  `:type`. They'd buy API-doc signatures, error *localization*, `num` pinning, and (the one real unlock)
-  enabling the unique-field-name lift below — but they cost the most for the least new capability and
-  fight a load-bearing syntax decision: a depth-0 `:` is the `match`/`case` block opener and §8.3 leans
-  on `:` being unused elsewhere, so `let x : int` needs a disambiguating rule (hence L). **Revisit only
-  on a concrete driver:** (a) error messages become a real pain — in which case improve HM *diagnostics*
-  directly, cheaper and helps all code; (b) lifting the field-name restriction; (c) a deliberate F#-parity
-  call. **Cheap partial slice if wanted:** param annotations `(x: T)` are feasible on their own (inside
-  brackets `:` is free — record fields already use it), covering most of the doc/localization value.
+  `:type`. **The strongest concrete driver has evaporated:** the field-name-uniqueness lift — once the one
+  real unlock annotations offered — shipped 2026-07-03 via the use-site multimap, *without* any annotation.
+  What remains is doc signatures, error *localization*, and `num` pinning — the least new capability for the
+  most cost, and they fight a load-bearing syntax decision: a depth-0 `:` is the `match`/`case` block opener
+  and §8.3 leans on `:` being unused elsewhere, so `let x : int` needs a disambiguating rule (hence L).
+  **Revisit only on a concrete driver:** (a) error messages become a real pain — in which case improve HM
+  *diagnostics* directly, cheaper and helps all code; (b) a deliberate F#-parity call. **Cheap partial slice
+  if wanted:** param annotations `(x: T)` are feasible on their own (inside brackets `:` is free — record
+  fields already use it), covering most of the doc/localization value.
 - **Function composition `>>` / `<<`** — ✅ **done 2026-07-03**. `f >> g` = `fun x -> g (f x)`
   (left-to-right, f then g); `f << g` = `fun x -> f (g x)` (right-to-left / math ∘). Two-char lexer tokens
   (`GtGt`/`LtLt`) lexed before single `<`/`>`; a `parse_compose` precedence level between `|>` and `or`

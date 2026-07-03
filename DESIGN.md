@@ -50,8 +50,10 @@ parse → type-infer/check → exhaustiveness check → immutability check → e
 What the compiler enforces, mirroring (and exceeding) F#:
 
 - **Type safety** — Hindley–Milner inference (no annotations required). *Optional* type annotations
-  (`let x : T`, `(x: T)`) are **not yet implemented** — a deferred feature (see ROADMAP); today
-  everything is inferred.
+  (`let x : T`, `(x: T)`) are **parked** — deprioritized, not merely deferred (see ROADMAP): HM inference
+  is complete so the compiler needs none, and their strongest concrete driver (lifting the field-name
+  uniqueness restriction) already shipped 2026-07-03 via the use-site multimap *without* annotations.
+  Today everything is inferred and surfaced by LSP hover / `pyfun check` / REPL `:type`.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
 - **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
   binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
@@ -344,8 +346,16 @@ the character before it may not be one of `=`/`!`/`<`/`>`, so `{x==y}`/`{x != y}
 stay ordinary holes. Resolved entirely at lex time (`debug_marker` in `lex_hole`): the echo joins the
 preceding literal chunk and the hole's tokens exclude the marker, so parser, checker, lowering, and
 emitter see an ordinary literal + hole (the value is `str()`ed like any hole, not Python's `repr`;
-the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Format specifiers (`:.2f`, `!r`)
-and multi-line `f"""..."""` are deferred. Covered by
+the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` is deferred
+(Pyfun has no triple-quoted strings yet). **Format specifiers (`:.2f`, `!r`) are a non-goal** (decided
+2026-07-03): a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
+compiler can't see into it, so `.2f`→`.3f` silently changes output, `.2f`→`.f2` only fails at runtime,
+and nothing enforces consistency across call sites. That is exactly the stringly-typed footgun Pyfun
+refuses elsewhere (float patterns, unchecked field access, unit mismatches), so blessing a format
+mini-language would contradict "the compiler is the gatekeeper." The FP alternative is **centralized
+formatting functions** — `formatCurrency : float<gbp> -> string`, `formatPercent`, `formatDate` — defined
+once, checked at every call, changed in one place (a future small `Format` module over the `String` ops).
+The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded. Covered by
 lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
 
 **Raw strings — `r"..."` (implemented).** A raw string suppresses escape processing, so backslashes are
