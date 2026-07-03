@@ -171,10 +171,18 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 `round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
 staying *unqualified* Pyfun names), plus a `unit` type whose one value is written `()` (both lower to
-Python `None` — the honest result of an effectful call). Each is a *typed view over a Python builtin*: the single
+Python `None` — the honest result of an effectful call). It also seeds the **standard combinators**
+`id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
+`flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
+`flip` is **effect-polymorphic** because it calls its function argument — flipping an impure function
+is `io`). Unlike the numeric builtins these can't lower name-for-name (Python's `id` returns a memory
+address; the others have no builtin), so each routes to a tiny emitted `_pf_*` helper in `lower_var`
+(the same on-demand mechanism as the `List`/`Set`/`Map` helpers); `_pf_flip(f, x, y)` calls `f(y, x)`
+n-ary, exactly as a hand-written `let flip f x y = f y x` compiles, so it is neither more nor less
+capable than that definition. Each is a *typed view over a Python builtin or `_pf_*` helper*: the single
 source of truth is `types::PRELUDE` (names + arities, read by lowering so a partial application like
 `max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun
-names equal their Python names, so there is no call-site renaming — the simplest honest interop
+names equal their Python names (or a routed helper), so there is no call-site renaming — the simplest honest interop
 mapping. User definitions shadow prelude names. This is deliberately tiny; collections/option/
 result helpers are the obvious next increments.
 

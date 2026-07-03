@@ -26,8 +26,15 @@ let fact n =
   if n == 0 then 1
   else n * fact (n - 1)
 
-# `id` is polymorphic: 'a -> 'a, instantiated afresh at each use.
-let id x = x
+# Standard combinators are built in (`DESIGN.md` §6): `id : 'a -> 'a`,
+# `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, `flip` swaps a function's
+# first two arguments. `flip` is effect-polymorphic; the rest are pure. (A user
+# `let id x = x` would shadow the builtin, like any other prelude name.)
+let same = id 42                       # 42
+let always7 = const 7 "discarded"      # 7
+let subtract a b = a - b
+let backwards = flip subtract 3 10     # subtract 10 3 = 7
+let zeroed = List.map (const 0) [1, 2, 3]   # [0, 0, 0]
 
 # Expression-oriented `if`; the condition must be a bool.
 let pick b = if b then 1 else 0

@@ -2006,6 +2006,29 @@ fn e2e_set_functions() {
 }
 
 #[test]
+fn e2e_combinators() {
+    run_and_check(
+        "let sub a b = a - b\n\
+         let i = id 42\n\
+         let k = const 7 \"ignored\"\n\
+         let f = flip sub 3 10\n\
+         let mapped = List.map (const 0) [1, 2, 3]\n\
+         let identity = List.map id [4, 5, 6]\n\
+         let flipped = List.map (flip sub 100) [1, 2]",
+        &[
+            ("i", "42"),
+            ("k", "7"),
+            // flip sub 3 10 = sub 10 3 = 7
+            ("f", "7"),
+            ("mapped", "[0, 0, 0]"),
+            ("identity", "[4, 5, 6]"),
+            // flip sub 100 x = sub x 100 = x - 100
+            ("flipped", "[-99, -98]"),
+        ],
+    );
+}
+
+#[test]
 fn e2e_map_functions() {
     run_and_check(
         "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\

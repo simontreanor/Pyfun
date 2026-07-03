@@ -306,6 +306,12 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("floor", 1),
     ("ceil", 1),
     ("truncate", 1),
+    // Standard combinators (`DESIGN.md` §6). Fully type-polymorphic, pure —
+    // except `flip`, which is effect-polymorphic (it *calls* its argument).
+    ("id", 1),
+    ("const", 2),
+    ("ignore", 1),
+    ("flip", 3),
 ];
 
 /// The list prelude (`DESIGN.md` §6): functions over the eager `List a` type
@@ -1770,6 +1776,61 @@ fn seed_prelude(env: &mut Env) {
     for name in ["round", "floor", "ceil", "truncate"] {
         env.insert(name.to_string(), f_to_i.clone());
     }
+
+    // Standard combinators (`DESIGN.md` §6). Plain type-var polymorphism, no
+    // num/unit/comparison constraints. `id`/`const`/`ignore` never call anything,
+    // so they're pure; `flip` calls its function argument, so it's effect-poly.
+    let poly = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    // id : 'a -> 'a
+    env.insert(
+        "id".to_string(),
+        poly(vec![0], pure_fn(Ty::Var(0), Ty::Var(0))),
+    );
+    // const : 'a -> 'b -> 'a   (return the first, ignore the second)
+    env.insert(
+        "const".to_string(),
+        poly(
+            vec![0, 1],
+            pure_fn(Ty::Var(0), pure_fn(Ty::Var(1), Ty::Var(0))),
+        ),
+    );
+    // ignore : 'a -> unit
+    env.insert(
+        "ignore".to_string(),
+        poly(vec![0], pure_fn(Ty::Var(0), Ty::Unit)),
+    );
+    // flip : (a -> b ->{e} c) -> b -> a ->{e} c   (swap the first two arguments).
+    // Effect-polymorphic: `flip f x y = f y x` performs f's latent effect, which
+    // rides `e` on f's inner arrow and the innermost result arrow (other arrows
+    // are pure — partial application performs nothing).
+    let e = 0u32;
+    let arrow_e = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::var(e));
+    env.insert(
+        "flip".to_string(),
+        Scheme {
+            vars: vec![0, 1, 2],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![e],
+            mutable: false,
+            ty: pure_fn(
+                // f : a -> b ->{e} c
+                pure_fn(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(2))),
+                // result : b -> a ->{e} c
+                pure_fn(Ty::Var(1), arrow_e(Ty::Var(0), Ty::Var(2))),
+            ),
+        },
+    );
 }
 
 /// Seed the list prelude ([`LIST_PRELUDE`]) — functions over the eager `List a`.

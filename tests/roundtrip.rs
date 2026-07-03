@@ -24,6 +24,9 @@ const PROGRAMS: &[&str] = &[
     "let noop x = ()",
     "let force f = f ()",
     "let add a b = a + b",
+    // Standard combinators — ordinary identifiers, no new syntax.
+    "let r = flip add 3 10",
+    "let z = List.map (const 0) xs",
     "let r = 1 + 2 * 3 - 4 / 2",
     "let r = 7 // 2",
     "let r = 10 % 3",

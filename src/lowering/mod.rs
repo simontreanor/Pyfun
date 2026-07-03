@@ -156,6 +156,9 @@ struct Lowerer {
     /// Set/Map-prelude helpers actually referenced (e.g. `_pf_set_add`), emitted on
     /// demand by [`collection_prelude`].
     needed_collection_helpers: BTreeSet<&'static str>,
+    /// Standard combinators (`id`/`const`/`ignore`/`flip`) actually referenced,
+    /// emitted on demand by [`combinator_prelude`] as `_pf_*` helpers.
+    needed_combinators: BTreeSet<&'static str>,
     /// While lowering an in-file `module`, its name + member names, so a bare
     /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
     cur_module: Option<(String, HashSet<String>)>,
@@ -309,6 +312,7 @@ impl Lowerer {
             user_defs,
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
+            needed_combinators: BTreeSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
             imported_nullary_ctors: HashSet::new(),
@@ -451,6 +455,8 @@ impl Lowerer {
         body.extend(list_prelude(&self.needed_list_helpers));
         // Set/Map-prelude helpers referenced by the program.
         body.extend(collection_prelude(&self.needed_collection_helpers));
+        // Standard-combinator helpers referenced by the program.
+        body.extend(combinator_prelude(&self.needed_combinators));
         body.extend(classes);
         body.extend(code);
         Ok(PyModule { body })
@@ -1095,6 +1101,21 @@ impl Lowerer {
                     value: Box::new(PyExpr::Name("math".to_string())),
                     attr: py.to_string(),
                 };
+            }
+            // Standard combinators route to emitted `_pf_*` helpers — Python's
+            // `id` is taken (returns a memory address) and the rest have no
+            // builtin, so none can lower name-for-name. Their PRELUDE arities
+            // feed the same partial-application path as the other builtins.
+            let combinator = match name {
+                "id" => Some("_pf_id"),
+                "const" => Some("_pf_const"),
+                "ignore" => Some("_pf_ignore"),
+                "flip" => Some("_pf_flip"),
+                _ => None,
+            };
+            if let Some(helper) = combinator {
+                self.needed_combinators.insert(helper);
+                return PyExpr::Name(helper.to_string());
             }
         }
         match self.ctor_arity.get(name) {
@@ -1873,6 +1894,42 @@ fn option_prelude() -> Vec<PyStmt> {
 /// force results into a `list`. `_pf_fold` reuses `functools.reduce` with an
 /// initial accumulator (a *total* left fold). Built from the IR (no string
 /// splicing); emitted in the helper-name's sorted order for deterministic output.
+/// The standard-combinator helper definitions actually referenced
+/// (`id`/`const`/`ignore`/`flip`, `DESIGN.md` §6). Each lowers to a tiny `_pf_*`
+/// wrapper because none can lower to a bare Python name — `id` is taken (it
+/// returns a memory address) and the rest have no builtin. `flip` calls its
+/// function argument n-ary (`f(y, x)`), exactly as a hand-written `let flip f x y
+/// = f y x` compiles, so it is neither more nor less capable than that definition.
+fn combinator_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+    let name = |n: &str| PyExpr::Name(n.to_string());
+    let def = |fn_name: &str, params: &[&str], ret: PyExpr| PyStmt::FuncDef {
+        name: fn_name.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body: vec![PyStmt::Return(ret)],
+        is_async: false,
+    };
+    used.iter()
+        .map(|&helper| match helper {
+            // _pf_id(x) -> x
+            "_pf_id" => def("_pf_id", &["x"], name("x")),
+            // _pf_const(x, y) -> x
+            "_pf_const" => def("_pf_const", &["x", "y"], name("x")),
+            // _pf_ignore(x) -> None
+            "_pf_ignore" => def("_pf_ignore", &["x"], PyExpr::NoneLit),
+            // _pf_flip(f, x, y) -> f(y, x)
+            "_pf_flip" => def(
+                "_pf_flip",
+                &["f", "x", "y"],
+                PyExpr::Call {
+                    func: Box::new(name("f")),
+                    args: vec![name("y"), name("x")],
+                },
+            ),
+            other => unreachable!("unknown combinator helper {other}"),
+        })
+        .collect()
+}
+
 fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
     // `func(args...)` where `func` is a bare name.
     let call = |func: &str, args: Vec<PyExpr>| PyExpr::Call {

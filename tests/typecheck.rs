@@ -2041,6 +2041,52 @@ fn rejects_extern_redefining_an_existing_name() {
     );
 }
 
+// ---------- standard combinators (id / const / ignore / flip) ----------
+
+#[test]
+fn combinators_are_fully_type_polymorphic() {
+    // id works at any type; const returns its first argument's type; ignore is
+    // unit; flip swaps the first two arguments of a binary function.
+    assert!(
+        pyfun::check(
+            "let a = id 1\nlet b = id true\nlet c = const 1 \"x\"\n\
+             let d = ignore [1, 2]\nlet sub x y = x - y\nlet e = flip sub 3 10",
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn const_returns_the_first_argument_type() {
+    // `const true 5 : bool`, so adding it to an int is a type error.
+    assert_error_contains("let bad = (const true 5) + 1", "bool");
+}
+
+#[test]
+fn ignore_yields_unit() {
+    // `ignore x : unit`, not numeric.
+    assert_error_contains("let bad = ignore 3 + 1", "unit");
+}
+
+#[test]
+fn flip_is_effect_polymorphic() {
+    // flip calls its function argument, so flipping an impure one is `io` — a
+    // `pure` binding that fully applies it is rejected...
+    assert_error_contains(
+        "let logAdd a b =\n  print a\n  a + b\nlet pure bad = flip logAdd 1 2",
+        "performs `io`",
+    );
+    // ...while flipping a pure function stays pure.
+    assert!(pyfun::check("let sub a b = a - b\nlet pure ok = flip sub 1 2").is_ok());
+}
+
+#[test]
+fn a_user_definition_shadows_the_prelude_combinators() {
+    // A local `id` shadows the builtin (user definitions win, like other
+    // prelude names).
+    assert!(pyfun::check("let id x = x + 1\nlet r = id 10").is_ok());
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

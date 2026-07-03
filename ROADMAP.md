@@ -444,13 +444,24 @@ section's now-done entry); the lazy counterpart is the `seq {}` CE. Covered by
   members see siblings unqualified inside and are `Name.member` outside, lowering to mangled top-level
   names (`Geometry_area`). Reuses the same `Module.member` access mechanism as the built-ins (no parser
   change for access). MVP: `let`-only bodies, no nested modules.
+  **The standard combinators have landed** (unqualified prelude): `id : 'a -> 'a`,
+  `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, `flip : (a -> b -> c) -> b -> a -> c` — the natural
+  companions to the composition/pipe operators. Fully type-polymorphic; `id`/`const`/`ignore` are pure,
+  `flip` is **effect-polymorphic** (it calls its function argument, so flipping an impure function is
+  `io` — soundly rejected inside a `let pure`). None can lower name-for-name (Python's `id` returns a
+  memory address; the rest have no builtin), so each routes in `lower_var` to an emitted
+  `_pf_id`/`_pf_const`/`_pf_ignore`/`_pf_flip` helper (`combinator_prelude`, the on-demand mechanism the
+  collection helpers use); `_pf_flip(f, x, y)` = `f(y, x)` n-ary, exactly what a hand-written
+  `let flip f x y = f y x` compiles to (so no more/less capable than that). Covered by
+  `tests/{typecheck,compile,roundtrip}.rs` + `examples/hello.pyfun`.
 - **Still to do (a larger prelude):** `Array` is **deferred** as redundant (`List` already *is* a
   Python dynamic array); and the full *file-based* module system (one module per file, `import`, a
   resolver + dependency graph, visibility, multi-file LSP) — a separate, larger initiative. (Generated
   `__hash__` on ADT/record classes and **in-file modules** are **done**.)
 - **Effort/risk:** Medium. **Status:** MVP prelude + FFI + lists + sets/maps + options + results + lazy
   seq + **the `String` module** (text ops; `String.toInt` via the new `PyStmt::Try` node) + built-in &
-  in-file modules + ADT `__hash__` done; file-based modules done.
+  in-file modules + ADT `__hash__` + **standard combinators** (`id`/`const`/`ignore`/`flip`) done;
+  file-based modules done.
 
 ### 9b. Lightweight offside rule — ✅ done, then generalized by #3
 Originally a top-level-only rule (a line break back to the first item's column emitted `Tok::Sep`).
