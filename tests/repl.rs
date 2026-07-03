@@ -78,7 +78,10 @@ fn repl_multiline_block_enables_mutual_recursion() {
          isEven 10\n\
          :quit\n",
     );
-    assert!(out.contains("isEven : int -> bool"), "grouped types:\n{out}");
+    assert!(
+        out.contains("isEven : int -> bool"),
+        "grouped types:\n{out}"
+    );
     assert!(out.contains("True"), "isEven 10:\n{out}");
 }
 

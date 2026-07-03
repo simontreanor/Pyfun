@@ -206,6 +206,13 @@ const PROGRAMS: &[&str] = &[
     "extern show: a -> string = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
+    // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
+    // as written, so single, multi, and argument-position annotations roundtrip.
+    "extern fetch: string ->{async} string = httpx.get",
+    "extern send: string -> string ->{io, async} unit = hub.send",
+    "extern register: (string ->{io} unit) -> unit = hub.register",
+    "type Handler = H (string ->{io} unit)",
+    "type Callbacks = { onData: string ->{io, async} unit }",
     // Interpolated strings `f"..."`: literal chunks, holes with full expressions,
     // `{{`/`}}` escapes. Printing re-escapes and reparses to the same AST.
     "let g = f\"hello {name}\"",

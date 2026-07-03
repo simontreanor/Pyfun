@@ -193,7 +193,11 @@ pub fn compose(lhs: Expr, rhs: Expr, right_to_left: bool, span: Span) -> Expr {
     let param = fresh_name("_pf_x", &free);
 
     // `>>` applies `lhs` first, then `rhs`; `<<` (math ∘) applies `rhs` first.
-    let (first, second) = if right_to_left { (rhs, lhs) } else { (lhs, rhs) };
+    let (first, second) = if right_to_left {
+        (rhs, lhs)
+    } else {
+        (lhs, rhs)
+    };
     let body = app(second, app(first, var(&param, span), span), span);
     mk(
         ExprKind::Fn {
@@ -212,7 +216,10 @@ fn fresh_name(base: &str, taken: &std::collections::HashSet<String>) -> String {
     if !taken.contains(base) {
         return base.to_string();
     }
-    (0..).map(|i| format!("{base}{i}")).find(|n| !taken.contains(n)).unwrap()
+    (0..)
+        .map(|i| format!("{base}{i}"))
+        .find(|n| !taken.contains(n))
+        .unwrap()
 }
 
 fn var(name: &str, span: Span) -> Expr {

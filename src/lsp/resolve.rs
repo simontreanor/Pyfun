@@ -440,7 +440,7 @@ impl Resolver {
                     self.walk_type(a);
                 }
             }
-            TypeExpr::Fun(a, b) => {
+            TypeExpr::Fun(a, b, _) => {
                 self.walk_type(a);
                 self.walk_type(b);
             }

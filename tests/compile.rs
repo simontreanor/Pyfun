@@ -322,10 +322,8 @@ fn e2e_mutual_recursion() {
 
 #[test]
 fn as_pattern_lowers_to_python_as() {
-    let py = pyfun::compile(
-        "let f o =\n  match o:\n    case Some v as w: w\n    case None: None",
-    )
-    .unwrap();
+    let py = pyfun::compile("let f o =\n  match o:\n    case Some v as w: w\n    case None: None")
+        .unwrap();
     assert!(py.contains("case Some(v) as w:"), "{py}");
 }
 
@@ -385,9 +383,9 @@ fn e2e_string_slice_and_index_of() {
         ",
         &[
             ("a", "hello"),
-            ("b", "world"),   // out-of-range end clamps (total)
+            ("b", "world"), // out-of-range end clamps (total)
             ("c", "6"),
-            ("d", "-1"),      // not found -> None -> default
+            ("d", "-1"), // not found -> None -> default
         ],
     );
 }
@@ -448,10 +446,16 @@ fn numeric_conversions_lower_correctly() {
     )
     .unwrap();
     assert!(py.contains("import math"), "{py}");
-    assert!(py.contains("a = round(3.7)"), "round is a bare builtin: {py}");
+    assert!(
+        py.contains("a = round(3.7)"),
+        "round is a bare builtin: {py}"
+    );
     assert!(py.contains("b = math.floor(3.2)"), "{py}");
     assert!(py.contains("c = math.ceil(3.2)"), "{py}");
-    assert!(py.contains("d = math.trunc(3.9)"), "truncate -> math.trunc: {py}");
+    assert!(
+        py.contains("d = math.trunc(3.9)"),
+        "truncate -> math.trunc: {py}"
+    );
 }
 
 #[test]
@@ -544,7 +548,10 @@ fn list_completeness_ops_lower_to_helpers() {
     )
     .unwrap();
     // get is total (bounds-checked, no raw IndexError) and yields Some/None.
-    assert!(py.contains("Some(xs[i]) if 0 <= i < len(xs) else None_()"), "{py}");
+    assert!(
+        py.contains("Some(xs[i]) if 0 <= i < len(xs) else None_()"),
+        "{py}"
+    );
     assert!(py.contains("len(xs) == 0"), "{py}"); // isEmpty
     assert!(py.contains("return x in xs"), "{py}"); // contains
     assert!(py.contains("return xs + ys"), "{py}"); // concat
@@ -675,7 +682,13 @@ fn e2e_unary_minus() {
                 case -1: \"neg\"
                 case _: \"other\"
         ",
-        &[("a", "-5"), ("b", "5"), ("c", "-6"), ("d", "-5"), ("sign", "neg")],
+        &[
+            ("a", "-5"),
+            ("b", "5"),
+            ("c", "-6"),
+            ("d", "-5"),
+            ("sign", "neg"),
+        ],
     );
 }
 
@@ -1023,8 +1036,8 @@ fn adt_classes_get_derived_ordering() {
 
 #[test]
 fn payload_variant_order_key_includes_fields() {
-    let py = pyfun::compile("type Shape = Circle float | Rect float float\nlet x = Circle 1.0")
-        .unwrap();
+    let py =
+        pyfun::compile("type Shape = Circle float | Rect float float\nlet x = Circle 1.0").unwrap();
     assert!(py.contains("return (0, self._0)"), "Circle: {py}");
     assert!(py.contains("return (1, self._0, self._1)"), "Rect: {py}");
 }
@@ -1054,7 +1067,11 @@ fn e2e_sort_a_sum_type_by_variant_order() {
         let a = Red < Green
         let b = Green < Blue
         ",
-        &[("sorted", "[Red, Green, Blue]"), ("a", "True"), ("b", "True")],
+        &[
+            ("sorted", "[Red, Green, Blue]"),
+            ("a", "True"),
+            ("b", "True"),
+        ],
     );
 }
 
@@ -1081,10 +1098,7 @@ fn e2e_sort_records_and_tuples() {
         ",
         // Records sort field-by-field; tuples lexicographically.
         &[
-            (
-                "pts",
-                "[Point(1, 3), Point(1, 9), Point(2, 0)]",
-            ),
+            ("pts", "[Point(1, 3), Point(1, 9), Point(2, 0)]"),
             ("tups", "[(0, 9), (1, 2), (1, 3)]"),
         ],
     );
@@ -1192,10 +1206,8 @@ fn e2e_nested_tuple_pattern() {
 fn list_pattern_lowers_to_a_bracket_sequence_pattern() {
     // List patterns emit bracket sequence patterns (`case [..]`), distinct from a
     // tuple's paren `case (..)`; the star becomes a Python `*rest` capture.
-    let py = pyfun::compile(
-        "let f xs =\n  match xs:\n    case []: 0\n    case [x, *rest]: x",
-    )
-    .unwrap();
+    let py =
+        pyfun::compile("let f xs =\n  match xs:\n    case []: 0\n    case [x, *rest]: x").unwrap();
     assert!(py.contains("case []:"), "{py}");
     assert!(py.contains("case [x, *rest]:"), "{py}");
 }
@@ -1524,7 +1536,8 @@ fn e2e_pipe_and_composition() {
 #[test]
 fn backward_pipe_lowers_to_application() {
     // `f <| x` is `f(x)`; `f <| g <| x` is right-associative `f(g(x))`.
-    let py = pyfun::compile("let inc n = n + 1\nlet a = inc <| 5\nlet b = inc <| inc <| 5").unwrap();
+    let py =
+        pyfun::compile("let inc n = n + 1\nlet a = inc <| 5\nlet b = inc <| inc <| 5").unwrap();
     assert!(py.contains("a = inc(5)"), "{py}");
     assert!(py.contains("b = inc(inc(5))"), "{py}");
 }

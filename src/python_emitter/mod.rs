@@ -108,7 +108,10 @@ pub enum PyPattern {
     /// `case a | b | c` — an or-pattern.
     Or(Vec<PyPattern>),
     /// `case p as name` — an as-pattern (bind the whole matched value).
-    As { pattern: Box<PyPattern>, name: String },
+    As {
+        pattern: Box<PyPattern>,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -561,7 +564,12 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             } else {
                 (p, p + 1)
             };
-            format!("{} {} {}", emit_expr(left, lp), op.symbol(), emit_expr(right, rp))
+            format!(
+                "{} {} {}",
+                emit_expr(left, lp),
+                op.symbol(),
+                emit_expr(right, rp)
+            )
         }
         PyExpr::Compare {
             left,

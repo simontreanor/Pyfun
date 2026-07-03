@@ -155,8 +155,12 @@ pub enum TypeExpr {
     /// `NodeSpan` is the span of the type *name* (for editor find-references /
     /// rename of a user type); it compares equal — invisible to roundtrip.
     Con(String, NodeSpan, Vec<TypeExpr>),
-    /// A function type `arg -> result`.
-    Fun(Box<TypeExpr>, Box<TypeExpr>),
+    /// A function type `arg -> result`, optionally carrying declared effect
+    /// labels on the arrow (`arg ->{io} result`, `arg ->{io, async} result` —
+    /// `DESIGN.md` §4). The labels are stored as written (validated against the
+    /// known label set when the type is resolved); an unannotated arrow has an
+    /// empty list and stays pure.
+    Fun(Box<TypeExpr>, Box<TypeExpr>, Vec<String>),
     /// A tuple type `(a, b)` — a structural product of two or more types.
     Tuple(Vec<TypeExpr>),
 }

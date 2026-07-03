@@ -76,19 +76,33 @@ and effects as part of the type system from the MVP.** This is a defining featur
 later add-on, and it shapes inference and lowering — so it must be designed in from the start.
 
 **Implemented (inference-first, zero pollution).** Function arrows (`Ty::Fun`) carry a latent
-[`Effect`] — one concrete label `io` (printing, mutation via `<-`) plus effect *variables* for
-polymorphism. Effects are **inferred and never written in ordinary code**: a pure function reads
-exactly as before (`let add a b = a + b`); `print : 'a ->{io} unit` and impurity **propagate
-automatically** (calling an impure function makes you impure). Defining a function is pure — its
-body's effect is the *latent* effect on its innermost arrow. Effect variables generalize/instantiate
-alongside type/unit/num variables, so higher-order functions stay effect-polymorphic (`let pure
-apply f x = f x` is pure *up to its argument*: `apply print` is impure at the call site, `apply`
-itself is not). The one **opt-in, definition-level** assertion is `let pure f … = …`, which is a
-compile error if the binding introduces `io`. Effects are **fully erased at lowering** (zero runtime
+[`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, mutation via `<-` —, and
+`async`) plus effect *variables* for polymorphism. Effects are **inferred and never written in
+ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : 'a ->{io}
+unit` and impurity **propagate automatically** (calling an impure function makes you impure), and
+labels from different calls **union** (a body that prints and fetches is `->{io, async}`). Defining a
+function is pure — its body's effect is the *latent* effect on its innermost arrow. Effect variables
+generalize/instantiate alongside type/unit/num variables, so higher-order functions stay
+effect-polymorphic (`let pure apply f x = f x` is pure *up to its argument*: `apply print` is impure
+at the call site, `apply` itself is not). The one **opt-in, definition-level** assertion is `let pure
+f … = …`, which is a compile error if the binding introduces *any* concrete label (the violation
+names the set: "performs `io, async`"). Effects are **fully erased at lowering** (zero runtime
 residue, like units); `pure` produces no Python. The sources beyond `print` are `<-` (§3) and the
-Python FFI boundary — a plain `extern` is effectful-by-default (§6), the third `io` source. Surfacing
-inferred effects in `pyfun check`/hover output (beyond violation messages) and adding more labels
-(e.g. `async`) are later refinements; declared function types (`a -> b` in a `type`) are still pure.
+Python FFI boundary — a plain `extern` is effectful-by-default (§6), the third `io` source. Display
+is **canonical and deterministic**: labels render in a fixed order, `io` first (`->{io}`, `->{async}`,
+`->{io, async}`); a pure or purely-polymorphic arrow stays the familiar `->`.
+
+**Effect annotations on declared arrows (implemented).** Function arrows in *declared* types — `type`
+declarations (ADT ctor / record field types) and `extern` signatures — may carry an explicit
+annotation `->{label, …}` (e.g. `type Handler = H (string ->{io} unit)`, `extern fetch : string
+->{async} string = httpx.get`). A bare `->` stays pure; an unknown label is a compile error. This is
+the *declaration-side* exception to "never written": ordinary code remains annotation-free. For an
+`extern`, an annotation on the **innermost** arrow is trusted as written and replaces the
+`io`-by-default boundary rule (that's how an async client binds as `->{async}` rather than `->{io}`);
+an annotation elsewhere (say on a higher-order *argument* arrow) does not suppress the default — the
+extern still calls Python. Note declared effects are **exact** (no sub-effecting): a *pure* function
+does not satisfy a declared `->{io}` parameter, because two closed effect sets unify only when equal.
+Effect subsumption (pure ≤ io) is a possible later refinement.
 
 Original design intent (now realized):
 
@@ -113,10 +127,13 @@ effects-as-keywords (Rust/Python `async` *coloring*, the very pain we avoid). Th
 mindset: tooling reports the property, the source stays clean. This is why the only surface syntax is
 the opt-in, definition-level `let pure` assertion — never expression-body pollution.
 
-Still open: the exact discharge story (is `io` terminal until a runtime boundary?); whether
-`async`/`Async` joins the effect lattice or stays typed via its value form; and effect annotations in
-declared function types. Surfacing inferred effects in hover output is now **done** — the LSP (§9)
-shows `->{io}` on arrows when you hover an expression or binding name.
+Still open: the exact discharge story (is `io` terminal until a runtime boundary?); whether the
+`async {}` CE should *produce* the `async` label (the label is representable, annotatable, and
+inferrable today — via `->{async}` externs and propagation — but the CE still types purely via its
+`Async a` value form); and effect subsumption (declared effects are exact — see above). Effect
+annotations in declared function types are now **done** (`->{label, …}`), as is surfacing inferred
+effects in hover output — the LSP (§9) shows `->{io}` / `->{io, async}` on arrows when you hover an
+expression or binding name.
 
 **Relationship to computation expressions (§8).** Effects and CEs are distinct but related:
 effects track side effects *in types*; CEs provide *monadic sugar*. They coexist (F# has CEs and
@@ -210,7 +227,9 @@ trusts the annotation, which is where the §4 "effectful/unsafe at the boundary"
 This makes the boundary's effectful-by-default rule (§4) concrete: a plain `extern`'s innermost
 arrow carries `io` (the Python call is the effect, performed on full application), so an impure
 `extern` cannot be called from a `let pure` binding. `extern pure` asserts the call is effect-free
-("pure up to its arguments", like `let pure`) — used for the likes of `math.sqrt`. Externs are
+("pure up to its arguments", like `let pure`) — used for the likes of `math.sqrt`. A third option is
+an explicit effect annotation on the innermost arrow (`extern fetch : string ->{async} string =
+httpx.get`), which is trusted as written instead of the `io` default (§4). Externs are
 erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
 `extern` type syntax can't yet express.
