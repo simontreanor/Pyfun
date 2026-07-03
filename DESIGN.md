@@ -996,8 +996,43 @@ Decisions:
 2. **Field names are globally unique — retained.** Resolution of a bare `p.x` access is *still* by field
    name: an access carries no tag and no type annotation (Pyfun has none on `let`/params), so `x` must
    identify its record. Tagging construction and patterns does **not** by itself lift this — access
-   remains the blocker. Reusing a field name across two records stays a compile error. Lifting it needs
-   annotations or row polymorphism (§11) and remains deferred; this revision is orthogonal to it.
+   remains the blocker. Reusing a field name across two records stays a compile error.
+
+   **Why this is a real bind, not a lazy TODO — and why row polymorphism is a non-goal.** Lifting field
+   uniqueness has exactly three routes, all flawed for Pyfun:
+   - **Type-directed access** (resolve `p.x` from `p`'s inferred type, since construction/patterns are
+     already tagged) — the "right" answer, but it *regresses* the accessor lambda `fun p -> p.x`: when
+     `p` is a bare parameter its type is still a variable at the access point, so which record `x` belongs
+     to is unknowable there. That case needs row polymorphism.
+   - **Project-wide uniqueness** (export field registries, error on cross-module clashes) — makes
+     cross-module records mechanical, but defeats module isolation: two unrelated modules couldn't both
+     have a `name`/`id`/`x` field, and collisions become inevitable at scale. A PITA, rejected.
+   - **Row polymorphism** — the mechanism that solves all of it cleanly (see below), but it's a whole new
+     axis in the type system that Pyfun deliberately does not want.
+
+   **Row polymorphism** is polymorphism over *the rest of a record's fields*: `fun p -> p.x` would type as
+   `{ x : 'a | 'r } -> 'a`, where `'r` is a **row variable** standing for "whatever other fields are
+   present," so the function works on *any* record carrying an `x`. It's what PureScript and Elm's
+   extensible records are built on. Implementing it entails: a new kind of type variable (rows) alongside
+   type/unit/num/effect vars; **open** record types `{ x: int | r }`; **row unification** (match common
+   labels and unify tails, rewriting rows so labels line up regardless of order — ordinary syntactic
+   unification isn't enough); **presence/absence ("lacks") constraints** so `{ p with x = … }` can't
+   duplicate a field; reworked inference for every record operation; and noticeably noisier type errors
+   (`{ x: int | r0 }` vs `Point`). Lowering is unaffected (rows erase — still a plain Python object). That
+   is disproportionate machinery for **structural/extensible records the language deliberately doesn't
+   have**: Pyfun records are *nominal* (mirroring Python's `dataclass`/named classes, the readable-Python
+   target), and unique fields keep access dead simple while letting `fun p -> p.x` work with none of this
+   apparatus. So row polymorphism is a **non-goal**, and lifting field-uniqueness remains parked behind it.
+
+   **Cross-module records, precisely (current behavior).** Because a record's field registry is
+   module-local (only *sum-type* ADTs are exported cross-module — construction, qualified patterns, and
+   exhaustiveness for `Geometry.Circle`), a record **crosses a module boundary only as an opaque value**:
+   the consumer can *receive, hold, and pass* a `Geometry.origin : Point` (it's an instance of a class
+   emitted in `Geometry`, and an imported function like `Geometry.sumXY` can operate on it), but **cannot
+   access a field (`p.x`), construct (`Geometry.Point { … }`), pattern-match, or update it** — those all
+   need the record's fields in the consumer's registry, which hits the bind above. This is effectively
+   ADT-style encapsulation across modules, and doing better waits on row polymorphism (the non-goal), so
+   cross-module records are parked rather than deferred.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
    always names its type: `Point { x = 1, y = 2 }`. There is **no bare `{ f = v }` literal** — that form
    is removed, which is what eliminates the dict false friend outright. The type-declaration body keeps

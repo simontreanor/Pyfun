@@ -84,7 +84,11 @@ rather than checked — almost none of this is in the type system). Each was ver
 - **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
 - **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
   Python dispatches operators at runtime.
-- **Row polymorphism** — out of scope; the global-unique-field-name rule stands unless that rule is lifted.
+- **Row polymorphism** — out of scope. It's the clean way to lift field-uniqueness / enable cross-module
+  records (`fun p -> p.x : { x: 'a | 'r } -> 'a`), but it's a whole new type-system axis (row variables,
+  open records, row unification, presence/absence constraints, noisier errors) for *structural* records
+  Pyfun deliberately doesn't have — its records are nominal (Python `dataclass`-style). Full primer +
+  why the alternatives (project-wide uniqueness, type-directed access) don't work: `DESIGN.md` §8.3.
 - **A singly-linked `list` + `cons`/`head`/`tail` patterns** (F#'s `list`) — Pyfun's `List` *is* F#'s
   *array* (a Python `list`: O(1) index/len). A cons-cell type would lower to un-Pythonic linked-node
   classes (fighting the readable-Python ethos), and its signature idiom — recursive `x :: xs`
@@ -157,8 +161,16 @@ rather than checked — almost none of this is in the type system). Each was ver
   processing; handy for Windows paths and regex-via-`extern`. String escapes otherwise cover `\"`/`\\`/
   `\n`/`\t`/`\r`/`\u{…}`.
 *Cross-module (file-modules follow-ons)*
-- **Cross-module records / measures / externs** (M each) — sum-type ADTs already cross modules; records
-  are blocked by the global field-uniqueness invariant (the hard part).
+- **Cross-module measures / externs** (M each) — sum-type ADTs already cross modules; these two are
+  mechanical follow-ons (export + merge, like ADTs).
+- **Cross-module records** — **parked behind a non-goal** (not a quick M). Today a record crosses a
+  boundary only as an *opaque value* — the consumer can receive/hold/pass `Geometry.origin : Point` and
+  let an imported function operate on it, but **cannot access a field (`p.x`), construct, pattern-match,
+  or update it** (the field registry is module-local; only *sum-type* ADTs export). Doing better needs
+  the consumer to resolve `p.x`, which runs into field-name resolution: project-wide field uniqueness is
+  a PITA (kills module isolation), type-directed access regresses `fun p -> p.x`, and the clean fix is
+  **row polymorphism — a declared non-goal** (full rationale + the row-poly primer now in `DESIGN.md`
+  §8.3 decision 2). So this is deprioritized, not low-hanging fruit. (Decided 2026-07-03.)
 *Tooling*
 - **REPL** — ✅ **done 2026-07-02**: `pyfun repl` (`src/repl.rs`). Keeps session **definitions** as
   accumulated Pyfun source; each entry is type-checked (via `analyze`) against them — a definition is
