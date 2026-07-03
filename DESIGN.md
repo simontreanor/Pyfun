@@ -479,18 +479,23 @@ under their qualified keys (`env.insert("Geometry.area", scheme)`) — reusing t
 checker already uses for built-in/in-file modules, so the existing `Field`-node access path resolves a
 cross-module reference with no new lookup logic. A module's interface is its top-level **`let`
 values** plus its **sum types** (since the cross-module-ADT follow-on; `ModuleExports` carries each public
-sum type's name, arity, and constructors). A consumer can construct (`Geometry.Circle 2.0`) and
-pattern-match (`| Geometry.Circle r ->`, a qualified constructor pattern) the imported type's values, with
-**exhaustiveness checked across the boundary** (a missing arm reports the qualified witness `Geometry.Rect
-_ _`). **Cross-module records / measures / externs are still deferred** (cross-module record field access
-runs into the global field-uniqueness invariant; these are their own follow-on). Using a name a module does
-not export is the ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
+sum type's name, arity, and constructors) **and its records** (since the cross-module-record follow-on;
+`ModuleExports` also carries each public record's name + fields). A consumer can construct (`Geometry.Circle
+2.0`) and pattern-match (`| Geometry.Circle r ->`, a qualified constructor pattern) the imported type's
+values, with **exhaustiveness checked across the boundary** (a missing arm reports the qualified witness
+`Geometry.Rect _ _`). **Records cross too** (`DESIGN.md` §8.3): construct `Geometry.Point { x = 1, y = 2 }`,
+pattern `case Geometry.Point { x, y }:`, update `{ p with x = 3 }`, and bare-access `p.x` on an imported
+value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **Cross-module
+measures / externs remain deferred** (mechanical follow-ons). Using a name a module does not export is the
+ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
 *Implementation:* the single-file `run` was generalized to take the imports map and return the module's
-exported value schemes **and** its exported sum types; `check_module(module, imports)` seeds imported
-values under qualified keys and imported sum types into the decls under **qualified constructor keys**
-(`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] = ["Geometry.Circle", …]`),
-so construction (the `Field` arm), qualified ctor patterns (`bind_pattern`), and exhaustiveness
-(`ctor_signature`) all resolve with no special cases. Transplanting a scheme across modules is sound
+exported value schemes, its exported sum types, **and its exported records**; `check_module(module,
+imports)` seeds imported values under qualified keys and imported sum types into the decls under **qualified
+constructor keys** (`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] =
+["Geometry.Circle", …]`), plus imported records under their **bare identity name** with a qualified surface
+alias (`decls.record_aliases["Geometry.Point"] = "Point"`) and their fields appended to the field multimap,
+so construction (the `Record`/`Field` arms), qualified ctor/record patterns (`bind_pattern`), and
+exhaustiveness (`ctor_signature`) all resolve with no special cases. Transplanting a scheme across modules is sound
 because a top-level binding (and a constructor) generalizes against an env of closed schemes, so its own
 scheme is closed and `instantiate` refreshes the quantified vars in the dependent module's id space.
 `project::check` threads the `ModuleExports` map through the topological order, seeding each module from
@@ -572,9 +577,9 @@ values and constructors, and in-file find-references / rename of type names). **
 all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
-X import y` / `open`; cross-module *records*/measures/externs (records hit the global field-uniqueness
-invariant); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime; a project-wide
-LSP cache.
+X import y` / `open`; cross-module **measures/externs** (mechanical follow-ons — cross-module *records*
+**landed 2026-07-03**, §8.3); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*`
+runtime; a project-wide LSP cache.
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
@@ -993,51 +998,68 @@ Decisions:
 1. **Nominal, not structural / row-polymorphic.** (Unchanged.) A record literal/access resolves to a
    *declared* record type. Records reuse the existing `Ty::Con` machinery (a record is a type constructor
    with a field registry), so no new `Ty` variant, and they unify and generalize exactly like ADTs.
-2. **Field names are globally unique — retained.** Resolution of a bare `p.x` access is *still* by field
-   name: an access carries no tag and no type annotation (Pyfun has none on `let`/params), so `x` must
-   identify its record. Tagging construction and patterns does **not** by itself lift this — access
-   remains the blocker. Reusing a field name across two records stays a compile error.
+2. **Field names are not globally unique — lazy, use-site ambiguity.** *(Revised 2026-07-03.)*
+   Resolution of a bare `p.x` access is still by field name — an access carries no tag and no type
+   annotation (Pyfun has none on `let`/params) — but the field name no longer has to be *globally*
+   unique. Field names live in a **multimap** (`field_owner : field → [records]`), and a bare `p.x`
+   resolves iff **exactly one** *visible* record declares `x`; **0** is an unknown field, **2+** is an
+   ambiguity error **at that access site** (`` field `x` is ambiguous here: it is declared by records `A`
+   and `B`; pattern-match … to disambiguate``). The error fires at the *use*, never at declaration or
+   import — two records (in one module or across modules) may freely share `x`/`name`/`id`; you only hear
+   about it if you write a bare access that can't be resolved, and the fix is to pattern-match or tag the
+   construction/update (both of which name their record type). This is OCaml's record-label model with the
+   type-directed tiebreak replaced by an error (Pyfun has no annotations to recover with).
 
-   **Why this is a real bind, not a lazy TODO — and why row polymorphism is a non-goal.** Lifting field
-   uniqueness has exactly three routes, all flawed for Pyfun:
-   - **Type-directed access** (resolve `p.x` from `p`'s inferred type, since construction/patterns are
-     already tagged) — the "right" answer, but it *regresses* the accessor lambda `fun p -> p.x`: when
-     `p` is a bare parameter its type is still a variable at the access point, so which record `x` belongs
-     to is unknowable there. That case needs row polymorphism.
-   - **Project-wide uniqueness** (export field registries, error on cross-module clashes) — makes
-     cross-module records mechanical, but defeats module isolation: two unrelated modules couldn't both
-     have a `name`/`id`/`x` field, and collisions become inevitable at scale. A PITA, rejected.
-   - **Row polymorphism** — the mechanism that solves all of it cleanly (see below), but it's a whole new
-     axis in the type system that Pyfun deliberately does not want.
+   The accessor lambda `fun p -> p.x` is **unaffected in the common case**: it still types by field name
+   whenever `x` has a single visible owner (now including an *imported* record's field). It degrades only
+   to an error when two visible records share `x` — a case that under the old global-uniqueness rule was
+   *impossible to even write* (the second declaration was rejected outright). So the change is strictly
+   monotone: every program that checked before still checks, with identical types.
 
-   **Row polymorphism** is polymorphism over *the rest of a record's fields*: `fun p -> p.x` would type as
-   `{ x : 'a | 'r } -> 'a`, where `'r` is a **row variable** standing for "whatever other fields are
-   present," so the function works on *any* record carrying an `x`. It's what PureScript and Elm's
-   extensible records are built on. Implementing it entails: a new kind of type variable (rows) alongside
-   type/unit/num/effect vars; **open** record types `{ x: int | r }`; **row unification** (match common
-   labels and unify tails, rewriting rows so labels line up regardless of order — ordinary syntactic
-   unification isn't enough); **presence/absence ("lacks") constraints** so `{ p with x = … }` can't
-   duplicate a field; reworked inference for every record operation; and noticeably noisier type errors
-   (`{ x: int | r0 }` vs `Point`). Lowering is unaffected (rows erase — still a plain Python object). That
-   is disproportionate machinery for **structural/extensible records the language deliberately doesn't
-   have**: Pyfun records are *nominal* (mirroring Python's `dataclass`/named classes, the readable-Python
-   target), and unique fields keep access dead simple while letting `fun p -> p.x` work with none of this
-   apparatus. So row polymorphism is a **non-goal**, and lifting field-uniqueness remains parked behind it.
+   **Why not the three alternatives.** Lifting global field-uniqueness had three "obvious" routes, all
+   rejected — the multimap above is a fourth:
+   - **Type-directed access** (resolve `p.x` from `p`'s inferred type) — regresses `fun p -> p.x`: when
+     `p` is a bare parameter its type is a unification variable at the access point, so which record `x`
+     belongs to is unknowable there without row polymorphism.
+   - **Project-wide uniqueness** (export field registries, error on cross-module clashes) — defeats module
+     isolation: two unrelated modules couldn't both have a `name`/`id`/`x` field, collisions inevitable at
+     scale. The multimap is *not* this: nothing clashes at declaration or import; only an ambiguous *use*
+     in the module that can see both records errors.
+   - **Row polymorphism** — the clean general mechanism, but a whole new type-system axis (row variables,
+     open records, row unification, presence/absence constraints, noisier errors) for *structural*
+     records Pyfun deliberately doesn't have. Its records are **nominal** (mirroring Python's
+     `dataclass`/named classes, the readable-Python target). A **non-goal** — and the multimap made it
+     unnecessary for the problems it was held in reserve for.
 
-   **Cross-module records, precisely (current behavior).** Because a record's field registry is
-   module-local (only *sum-type* ADTs are exported cross-module — construction, qualified patterns, and
-   exhaustiveness for `Geometry.Circle`), a record **crosses a module boundary only as an opaque value**:
-   the consumer can *receive, hold, and pass* a `Geometry.origin : Point` (it's an instance of a class
-   emitted in `Geometry`, and an imported function like `Geometry.sumXY` can operate on it), but **cannot
-   access a field (`p.x`), construct (`Geometry.Point { … }`), pattern-match, or update it** — those all
-   need the record's fields in the consumer's registry, which hits the bind above. This is effectively
-   ADT-style encapsulation across modules, and doing better waits on row polymorphism (the non-goal), so
-   cross-module records are parked rather than deferred.
+   *(Row polymorphism, for the record: `fun p -> p.x` would type as `{ x : 'a | 'r } -> 'a`, `'r` a row
+   variable standing for "whatever other fields are present," so the function works on any record with an
+   `x`. PureScript/Elm build extensible records on it. It stays out of scope.)*
+
+   **Cross-module records, precisely (current behavior — done 2026-07-03).** Records now cross a module
+   boundary on the **same rails as sum-type ADTs**. The exporting module publishes its records
+   (`ModuleExports.records`); the importer merges each under its **bare identity name** (`Point`, like a
+   sum type — with a qualified surface alias `Geometry.Point → Point`, and the record's fields appended to
+   the multimap). The consumer can then:
+   - **construct** — `Geometry.Point { x = 1, y = 2 }` (a qualified tag, like `Geometry.Circle`);
+   - **pattern-match** — `case Geometry.Point { x = 0, y }:` (qualified tag, subset fields);
+   - **update** — `{ p with x = 3 }` (base fixes the type, no tag needed);
+   - **field-access** — `p.x` on any imported-typed value, resolved by the multimap.
+
+   An imported record **must be tagged qualified** to construct/pattern (a bare `Point { … }` is rejected,
+   exactly as a bare `Circle` is), so lowering can route it to the exporting class. It lowers to
+   `geometry.Point(...)` / `case geometry.Point(...):` with `import geometry` hoisted — the record class is
+   defined in **exactly one** emitted module, so a value constructed on either side is the same class
+   (`isinstance`/`match`-compatible), and the consumer never redefines it. Record *identity* is the bare
+   name, so — as with imported sum types — an imported record whose name clashes with an existing type is
+   rejected. Parameterized records cross soundly (the closed-scheme transplant instantiates the record's
+   parameters afresh, like an imported ctor scheme). Cross-module **measures/externs** remain deferred
+   (mechanical follow-ons); records are **done**.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
-   always names its type: `Point { x = 1, y = 2 }`. There is **no bare `{ f = v }` literal** — that form
-   is removed, which is what eliminates the dict false friend outright. The type-declaration body keeps
-   bare braces (`type Point = { x: int, y: int }` — a *type* body, not an expression), and access `p.x`
-   is unchanged.
+   always names its type: `Point { x = 1, y = 2 }`, or — for an imported record — the **qualified** tag
+   `Geometry.Point { x = 1, y = 2 }` (a bare tag resolves only to a *local* record, exactly as a bare
+   constructor does; decision 2). There is **no bare `{ f = v }` literal** — that form is removed, which is
+   what eliminates the dict false friend outright. The type-declaration body keeps bare braces (`type Point
+   = { x: int, y: int }` — a *type* body, not an expression), and access `p.x` is unchanged.
 4. **Update stays bare: `{ e with f = v }`.** The base expression `e` already fixes the record type, and
    the `with` keyword makes the form unambiguously an update (Python has no `{ … with … }`), so it is not
    a false friend and needs no tag. (Lowering unchanged: bind base to a temp, then a positional
@@ -1055,6 +1077,10 @@ Decisions:
      `Record { ty: Name, fields }`; the checker verifies `Name` is a declared record type (error
      otherwise). This resolves the `Maybe { let! … }` vs `Point { x = 1 }` ambiguity by brace content, as
      today — only the record arm changes from "apply `Name` to a bare literal" to "construct `Name`".
+   - `Module.Name { … }` (an uppercase name, `.`, an uppercase name, then `{`) in expression position is a
+     **qualified record literal** for an imported record — distinguished from a qualified constructor
+     application (`Geometry.Circle 2.0`) and a qualified member (`Geometry.area x`) by the immediately
+     following brace (parser `peek4`). The tag `Geometry.Point` resolves via the imported-record alias.
    - A bare `{` in expression position must be a **functional update** (`{ e with … }`); anything else is
      a parse error (the old bare-literal path is removed). A data constructor applied to a record is now
      written with the tag explicit, `Some (Point { x = 1 })`, not `Some { x = 1 }`.

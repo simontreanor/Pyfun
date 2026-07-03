@@ -64,6 +64,14 @@ pub struct ImportContext {
     /// Qualified names of imported **nullary** constructors (`Palette.Red`), which
     /// must lower to a call (`palette.Red()`) when referenced as a value.
     pub nullary_ctors: HashSet<String>,
+    /// Imported records' declared field order, keyed by **qualified** surface tag
+    /// (`Geometry.Point` → `["x", "y"]`), so a cross-module literal/update emits a
+    /// positional constructor call in the exporting class's `__init__` order.
+    pub record_fields: HashMap<String, Vec<String>>,
+    /// Field name → the qualified tag of the imported record declaring it
+    /// (`x` → `Geometry.Point`), so a cross-module update `{ p with x = 3 }`
+    /// (which carries no tag) routes to the imported class.
+    pub record_field_owners: HashMap<String, String>,
 }
 
 /// A module lowered as part of a multi-file project.
@@ -88,6 +96,20 @@ pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredM
     lowerer.use_runtime = true;
     for (name, arity) in &ctx.member_arities {
         lowerer.arities.entry(name.clone()).or_insert(*arity);
+    }
+    // Imported records' field order + field→tag map, keyed by qualified surface tag,
+    // so cross-module construction/update route to the exporting class.
+    for (tag, fields) in &ctx.record_fields {
+        lowerer
+            .record_fields
+            .entry(tag.clone())
+            .or_insert_with(|| fields.clone());
+    }
+    for (field, tag) in &ctx.record_field_owners {
+        lowerer
+            .field_to_record
+            .entry(field.clone())
+            .or_insert_with(|| tag.clone());
     }
     let py = lowerer.lower_module(module)?;
     let uses_runtime = lowerer.needs_result || lowerer.needs_option || lowerer.needs_exception;
@@ -798,7 +820,7 @@ impl Lowerer {
                 Ok((vec![try_stmt], PyExpr::Name(result_tmp)))
             }
 
-            ExprKind::Record { fields, .. } => self.lower_record(fields, locals),
+            ExprKind::Record { ty, fields, .. } => self.lower_record(ty, fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
                 self.lower_record_update(base, fields, locals)
             }
@@ -859,12 +881,13 @@ impl Lowerer {
         Ok((out, value))
     }
 
-    /// `{ x = a, y = b }` → `Record(a, b)` — a positional constructor call in the
+    /// `Point { x = a, y = b }` → `Point(a, b)` — a positional constructor call in the
     /// class's declared field order (the type checker guarantees the literal names
-    /// exactly the record's fields).
-    fn lower_record(&mut self, fields: &[FieldInit], locals: &HashSet<String>) -> Lowered {
-        let record = self.field_to_record[&fields[0].name].clone();
-        let order = self.record_fields[&record].clone();
+    /// exactly the record's fields). The record is the literal's **tag** (which may be
+    /// qualified for an imported record, `Geometry.Point` → `geometry.Point(...)`).
+    fn lower_record(&mut self, ty: &str, fields: &[FieldInit], locals: &HashSet<String>) -> Lowered {
+        let order = self.record_fields[ty].clone();
+        let class = self.record_class_name(ty);
         let (stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
         let mut args = Vec::with_capacity(order.len());
         for name in &order {
@@ -877,7 +900,7 @@ impl Lowerer {
         Ok((
             stmts,
             PyExpr::Call {
-                func: Box::new(PyExpr::Name(py_record_class(&record))),
+                func: Box::new(PyExpr::Name(class)),
                 args,
             },
         ))
@@ -892,8 +915,12 @@ impl Lowerer {
         fields: &[FieldInit],
         locals: &HashSet<String>,
     ) -> Lowered {
-        let record = self.field_to_record[&fields[0].name].clone();
-        let order = self.record_fields[&record].clone();
+        // An update carries no tag; the record is resolved from the first field's
+        // owner (the type checker has verified it is unambiguous). The owner tag may
+        // be qualified for an imported record.
+        let tag = self.field_to_record[&fields[0].name].clone();
+        let order = self.record_fields[&tag].clone();
+        let class = self.record_class_name(&tag);
         let (mut stmts, base_val) = self.lower_value(base, locals)?;
         let tmp = self.fresh_tmp();
         stmts.push(PyStmt::Assign {
@@ -915,7 +942,7 @@ impl Lowerer {
         Ok((
             stmts,
             PyExpr::Call {
-                func: Box::new(PyExpr::Name(py_record_class(&record))),
+                func: Box::new(PyExpr::Name(class)),
                 args,
             },
         ))
@@ -1273,6 +1300,23 @@ impl Lowerer {
         }
     }
 
+    /// The Python class name for a record **tag**. A qualified tag from an imported
+    /// file module (`Geometry.Point`) becomes dotted attribute access on that module
+    /// (`geometry.Point`, with `import geometry` hoisted) so it references the *same*
+    /// class the module defines (the consumer never redefines it); a bare tag is the
+    /// record class name (mangled for the reserved `Exception`).
+    fn record_class_name(&mut self, tag: &str) -> String {
+        if let Some((base, rec)) = tag.split_once('.')
+            && self.imported_modules.contains(base)
+        {
+            let module = base.to_lowercase();
+            self.needed_imports.insert(module.clone());
+            format!("{module}.{}", py_record_class(rec))
+        } else {
+            py_record_class(tag)
+        }
+    }
+
     fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
         match pattern {
             Pattern::Wildcard => PyPattern::Wildcard,
@@ -1301,7 +1345,7 @@ impl Lowerer {
                     .map(|f| (f.name.clone(), self.lower_pattern(&f.pattern)))
                     .collect();
                 PyPattern::ClassKw {
-                    name: py_record_class(ty),
+                    name: self.record_class_name(ty),
                     fields: lowered,
                 }
             }

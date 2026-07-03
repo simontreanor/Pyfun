@@ -338,6 +338,165 @@ fn e2e_cross_module_adt_round_trips() {
     }
 }
 
+// ---------- cross-module records (construct + access + pattern + update) ----------
+
+#[test]
+fn a_cross_module_record_constructs_and_routes_to_the_exporting_class() {
+    let files = compile(
+        "Main",
+        &[
+            ("Geometry", "type Point = { x: int, y: int }"),
+            (
+                "Main",
+                "import Geometry\n\
+                 let p = Geometry.Point { x = 1, y = 2 }\n\
+                 let sx = p.x\n\
+                 let shifted = { p with x = 10 }\n\
+                 let describe q =\n  match q:\n    case Geometry.Point { x = 0, y }: y\n    case Geometry.Point { x, y }: x + y\n\
+                 let d = describe p",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    // Construction, update, and the class pattern all reference the *imported*
+    // class (`geometry.Point`) — the consumer never redefines it.
+    assert!(main.contains("import geometry"), "{main}");
+    assert!(main.contains("p = geometry.Point(1, 2)"), "{main}");
+    assert!(main.contains("geometry.Point(10,"), "update: {main}");
+    assert!(main.contains("case geometry.Point(x=0, y=y):"), "{main}");
+    assert!(
+        !main.contains("class Point"),
+        "consumer must not redefine the record class: {main}"
+    );
+    assert!(
+        file(&files, "geometry.py").contains("class Point"),
+        "the class lives in its defining module"
+    );
+}
+
+#[test]
+fn e2e_cross_module_record_round_trips() {
+    // Construct, bare-access, update, and pattern-match an imported record — and
+    // pass a locally-constructed one back into an imported function that accesses
+    // its fields (so both sides agree on the class identity).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Geometry",
+                "type Point = { x: int, y: int }\n\
+                 let origin = Point { x = 0, y = 0 }\n\
+                 let mag p = p.x + p.y",
+            ),
+            (
+                "Main",
+                "import Geometry\n\
+                 let p = Geometry.Point { x = 3, y = 4 }\n\
+                 let shifted = { p with x = 10 }\n\
+                 let sum q =\n  match q:\n    case Geometry.Point { x, y }: x + y\n\
+                 print (sum p)\n\
+                 print shifted.x\n\
+                 print (Geometry.mag p)\n\
+                 print (Geometry.mag Geometry.origin)",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_record");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        // sum p = 7 ; shifted.x = 10 ; mag p = 7 ; mag origin = 0
+        assert_eq!(out.replace("\r\n", "\n").trim(), "7\n10\n7\n0");
+    }
+}
+
+#[test]
+fn e2e_a_parameterized_cross_module_record_round_trips() {
+    // A polymorphic record `Box a` crosses the boundary: the closed-scheme transplant
+    // instantiates its parameter afresh in the consumer.
+    let files = compile(
+        "Main",
+        &[
+            ("Store", "type Box a = { item: a, label: string }"),
+            (
+                "Main",
+                "import Store\n\
+                 let b = Store.Box { item = 42, label = \"answer\" }\n\
+                 print b.item\n\
+                 print b.label",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_box");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "42\nanswer");
+    }
+}
+
+#[test]
+fn a_bare_tag_does_not_construct_an_imported_record() {
+    // An imported record must be tagged qualified (like an imported sum ctor); a
+    // bare `Point { … }` is rejected rather than miscompiling to a NameError.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Geometry", "type Point = { x: int, y: int }"),
+            ("Main", "import Geometry\nlet p = Point { x = 1, y = 2 }"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0].message.contains("not a record type"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn a_cross_module_shared_field_is_ambiguous_at_the_access_site() {
+    // A local record and an imported one both declare `x`; a bare `p.x` cannot
+    // resolve by name — the ambiguity is reported at that access, not at import.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Geometry", "type Point = { x: int, y: int }"),
+            (
+                "Main",
+                "import Geometry\ntype Vec = { x: int, z: int }\nlet get p = p.x",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].name, "Main");
+    assert!(
+        errors[0].errors[0].message.contains("ambiguous"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn an_unexported_record_member_is_not_a_member() {
+    // Geometry has no record `Widget`; the qualified tag reports the ordinary
+    // not-a-member error.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Geometry", "type Point = { x: int, y: int }"),
+            ("Main", "import Geometry\nlet w = Geometry.Widget { x = 1 }"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("not a member of `Geometry`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
 // ---------- slice 6: import-aware editor analysis ----------
 
 #[test]

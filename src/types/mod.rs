@@ -573,12 +573,26 @@ struct Decls {
     /// Derived measures (`measure N = kg m / s^2`) → their expansion over base
     /// measures. A name in `measures` but not here is a base measure.
     measure_aliases: HashMap<String, Unit>,
-    /// Record types by name.
+    /// Record types by **bare** type name (the type identity, like sum types);
+    /// includes both this module's records and imported ones (merged under their
+    /// bare names, so a cross-module record value unifies by identity).
     records: HashMap<String, RecordInfo>,
-    /// Field name → owning record type. Field names are globally unique (the
-    /// nominal-record MVP), so a bare `e.x`/`{ x = … }` resolves its record type
-    /// from the field name alone, without type annotations (which Pyfun lacks).
-    field_owner: HashMap<String, String>,
+    /// Field name → the **records that declare it** (bare names), in a stable order
+    /// (this module's records first, then imported ones by module name). Field names
+    /// are no longer globally unique: a bare `e.x`/`{ e with x = … }` resolves *iff*
+    /// exactly one visible record declares `x`; two or more is an ambiguity error at
+    /// the *access* site, not at declaration/import (module isolation is preserved —
+    /// see `DESIGN.md` §8.3).
+    field_owner: HashMap<String, Vec<String>>,
+    /// Records declared *in this module* (plus the reserved `Exception`). A bare
+    /// construction/pattern tag (`Point { … }`) resolves only to a local record; an
+    /// imported record must be tagged qualified (`Geometry.Point { … }`), exactly as
+    /// an imported sum-type constructor must be (`Geometry.Circle`).
+    local_records: HashSet<String>,
+    /// Qualified surface tag (`Geometry.Point`) → the imported record's bare identity
+    /// name (`Point`), so a qualified construction/pattern resolves to the same
+    /// `RecordInfo` (and `Ty::Con`) the exporting module uses.
+    record_aliases: HashMap<String, String>,
     /// User-declared in-file module names (`module Foo = …`), for the "X is a
     /// module" diagnostic on a bare reference.
     modules: HashSet<String>,
@@ -586,7 +600,7 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _schemes, _exports) = run(module, false, &HashMap::new());
+    let (errors, _types, _schemes, _exports, _records) = run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -613,6 +627,10 @@ struct ExportedType {
 pub struct ModuleExports {
     schemes: Env,
     types: Vec<ExportedType>,
+    /// Public **record** types (`DESIGN.md` §8.3): each bare name + its
+    /// [`RecordInfo`] (params + fields), so an importing module can construct,
+    /// pattern-match, update, and field-access the record via qualified tags.
+    records: Vec<(String, RecordInfo)>,
 }
 
 /// Type-check `module` as one node of a multi-file project (`DESIGN.md` §6.1).
@@ -629,8 +647,15 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes, types) = run(module, false, imports);
-    (errors, ModuleExports { schemes, types })
+    let (errors, _types, schemes, types, records) = run(module, false, imports);
+    (
+        errors,
+        ModuleExports {
+            schemes,
+            types,
+            records,
+        },
+    )
 }
 
 /// Like [`check_collecting`] but with imported modules' exports seeded
@@ -640,7 +665,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports) = run(module, true, imports);
+    let (errors, types, _schemes, _exports, _records) = run(module, true, imports);
     (errors, types)
 }
 
@@ -650,7 +675,7 @@ pub fn check_collecting_with_imports(
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
 pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports) = run(module, true, &HashMap::new());
+    let (errors, types, _schemes, _exports, _records) = run(module, true, &HashMap::new());
     (errors, types)
 }
 
@@ -661,16 +686,22 @@ pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
 /// qualified constructor keys, for the multi-file driver); it is empty for a
 /// single-file check. Returns the errors, the hover table, the module's exported
 /// value schemes (top-level `let` bindings under their bare names), and its
-/// exported sum types.
-fn run(
-    module: &Module,
-    record: bool,
-    imports: &HashMap<String, ModuleExports>,
-) -> (Vec<TypeError>, Vec<TypeSpan>, Env, Vec<ExportedType>) {
+/// exported sum types, and its exported records.
+type RunResult = (
+    Vec<TypeError>,
+    Vec<TypeSpan>,
+    Env,
+    Vec<ExportedType>,
+    Vec<(String, RecordInfo)>,
+);
+
+fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
     let mut errors = Vec::new();
     let (mut decls, ctor_env) = build_decls(module, &mut errors);
-    // This module's own public sum types, captured before imports are merged in.
+    // This module's own public sum types + records, captured before imports are
+    // merged in (so we export only what this module itself declares).
     let exported_types = collect_exported_types(module, &decls);
+    let exported_records = collect_exported_records(module, &decls);
     // Merge imported modules' sum types into the decls (qualified constructor keys),
     // so `Geometry.Circle` construction, qualified ctor patterns, and exhaustiveness
     // all resolve against the imported type.
@@ -878,7 +909,7 @@ fn run(
         })
         .collect();
 
-    (errors, types, exports, exported_types)
+    (errors, types, exports, exported_types, exported_records)
 }
 
 /// Capture a module's own public **sum** types from the freshly-built decls, for
@@ -910,20 +941,43 @@ fn collect_exported_types(module: &Module, decls: &Decls) -> Vec<ExportedType> {
     out
 }
 
-/// Merge imported modules' sum types into `decls` under qualified constructor keys
+/// Capture a module's own public **record** types from the freshly-built decls
+/// (`DESIGN.md` §8.3), for its export interface: each bare name + its [`RecordInfo`]
+/// (params + fields). The reserved `Exception` record is seeded, not user-declared,
+/// so it is never exported.
+fn collect_exported_records(module: &Module, decls: &Decls) -> Vec<(String, RecordInfo)> {
+    let mut out = Vec::new();
+    for item in &module.items {
+        let Item::Type(decl) = item else { continue };
+        if !matches!(decl.kind, TypeDeclKind::Record(_)) {
+            continue;
+        }
+        if let Some(info) = decls.records.get(&decl.name) {
+            out.push((decl.name.clone(), info.clone()));
+        }
+    }
+    out
+}
+
+/// Merge imported modules' sum types **and records** into `decls` (`DESIGN.md`
+/// §6.1 + §8.3). Sum types register under qualified constructor keys
 /// (`Geometry.Circle`): the type's arity and constructor set (for exhaustiveness),
-/// plus each constructor's [`CtorInfo`] (for construction and pattern binding). A
-/// type name clashing with one already present is reported.
+/// plus each constructor's [`CtorInfo`] (for construction and pattern binding).
+/// Records register under their **bare identity name** (`Point`, like a sum type),
+/// with a qualified surface alias (`Geometry.Point` → `Point`) for tagged
+/// construction/patterns and their fields appended to the (multimap) field registry.
+/// A type/record name clashing with one already present is reported — the same
+/// bare-name uniqueness sum types rely on.
 fn merge_imported_types(
     decls: &mut Decls,
     imports: &HashMap<String, ModuleExports>,
     errors: &mut Vec<TypeError>,
 ) {
-    // Deterministic order so a clash is reported the same way every run.
+    // Deterministic order so a clash / field-order is the same every run.
     let mut module_names: Vec<&String> = imports.keys().collect();
     module_names.sort();
-    for module_name in module_names {
-        for ty in &imports[module_name].types {
+    for module_name in &module_names {
+        for ty in &imports[*module_name].types {
             if decls.type_arity.contains_key(&ty.name) {
                 errors.push(TypeError {
                     message: format!(
@@ -942,6 +996,34 @@ fn merge_imported_types(
                 ctor_names.push(qualified);
             }
             decls.type_ctors.insert(ty.name.clone(), ctor_names);
+        }
+    }
+    // Records after types (both share the `type_arity` namespace and clash check).
+    for module_name in &module_names {
+        for (name, info) in &imports[*module_name].records {
+            if decls.type_arity.contains_key(name) {
+                errors.push(TypeError {
+                    message: format!(
+                        "imported record `{name}` (from `{module_name}`) clashes with an existing type"
+                    ),
+                    span: Span::new(0, 0),
+                });
+                continue;
+            }
+            decls.type_arity.insert(name.clone(), info.params_count);
+            decls.records.insert(name.clone(), info.clone());
+            decls
+                .record_aliases
+                .insert(format!("{module_name}.{name}"), name.clone());
+            // Fields join the multimap under the record's bare identity name. Local
+            // records were registered first (in `build_decls`), so they lead.
+            for (field, _) in &info.fields {
+                decls
+                    .field_owner
+                    .entry(field.clone())
+                    .or_default()
+                    .push(name.clone());
+            }
         }
     }
 }
@@ -1140,17 +1222,10 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                         ok = false;
                         continue;
                     }
-                    if let Some(other) = decls.field_owner.get(&field.name) {
-                        errors.push(TypeError {
-                            message: format!(
-                                "field `{}` is already defined in record `{other}`",
-                                field.name
-                            ),
-                            span,
-                        });
-                        ok = false;
-                        continue;
-                    }
+                    // Field names are no longer globally unique across records
+                    // (`DESIGN.md` §8.3): two records may share a field; the clash is
+                    // only reported at an *ambiguous access* site, never here. (A field
+                    // repeated within *one* record is still an error — the `local` set.)
                     match resolve(&field.ty, &param_map, &decls.type_arity, span) {
                         Ok(t) => resolved.push((field.name.clone(), t)),
                         Err(e) => {
@@ -1163,8 +1238,13 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 // points at a record without a `RecordInfo`.
                 if ok {
                     for (name, _) in &resolved {
-                        decls.field_owner.insert(name.clone(), decl.name.clone());
+                        decls
+                            .field_owner
+                            .entry(name.clone())
+                            .or_default()
+                            .push(decl.name.clone());
                     }
+                    decls.local_records.insert(decl.name.clone());
                     decls.records.insert(
                         decl.name.clone(),
                         RecordInfo {
@@ -2227,10 +2307,15 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     );
     decls
         .field_owner
-        .insert("errorKind".to_string(), "Exception".to_string());
+        .entry("errorKind".to_string())
+        .or_default()
+        .push("Exception".to_string());
     decls
         .field_owner
-        .insert("errorMessage".to_string(), "Exception".to_string());
+        .entry("errorMessage".to_string())
+        .or_default()
+        .push("Exception".to_string());
+    decls.local_records.insert("Exception".to_string());
 }
 
 /// Resolve a surface type expression into a [`Ty`].
@@ -3094,20 +3179,80 @@ impl Infer {
         Ok(Ty::Unit)
     }
 
-    /// The record type owning `field`, or an error if no record declares it.
+    /// The bare identity name of the record type owning `field` (`DESIGN.md` §8.3).
+    /// Resolution is by field name, but no longer global: **0** owners is an unknown
+    /// field, **1** owner resolves, **2+** is an ambiguity error *at this access site*
+    /// (the field is declared by two visible records — pattern-match, or tag the
+    /// construction/update, to disambiguate). Ambiguity is never an error at
+    /// declaration or import; module isolation is preserved.
     fn record_of_field(&self, field: &str, span: Span) -> Result<String, TypeError> {
-        self.decls.field_owner.get(field).cloned().ok_or_else(|| {
-            // `decls.records` empty means records aren't in use at all.
-            let hint = if self.decls.records.is_empty() {
-                " (no record types are declared)"
-            } else {
-                ""
-            };
-            TypeError {
-                message: format!("unknown record field `{field}`{hint}"),
-                span,
+        match self.decls.field_owner.get(field).map(Vec::as_slice) {
+            Some([only]) => Ok(only.clone()),
+            Some(owners) if owners.len() >= 2 => {
+                let names = owners
+                    .iter()
+                    .map(|r| format!("`{r}`"))
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                Err(TypeError {
+                    message: format!(
+                        "field `{field}` is ambiguous here: it is declared by records {names}; \
+                         pattern-match the value (`case {} {{ {field} }}:`) to disambiguate",
+                        owners[0]
+                    ),
+                    span,
+                })
             }
-        })
+            _ => {
+                // Empty `decls.records` means records aren't in use at all.
+                let hint = if self.decls.records.is_empty() {
+                    " (no record types are declared)"
+                } else {
+                    ""
+                };
+                Err(TypeError {
+                    message: format!("unknown record field `{field}`{hint}"),
+                    span,
+                })
+            }
+        }
+    }
+
+    /// Resolve a surface record tag (`Point` or `Geometry.Point`) at a construction
+    /// or pattern site to its **bare identity name** (`DESIGN.md` §8.3). A qualified
+    /// tag resolves via the imported-record alias table; a bare tag resolves only to
+    /// a **local** record (an imported record must be tagged qualified, exactly as an
+    /// imported sum-type constructor must be). Anything else is "not a record type"
+    /// (or "not a member of `M`" for an unknown qualified tag).
+    fn resolve_record_tag(&self, tag: &str, span: Span) -> Result<String, TypeError> {
+        if let Some((module, rec)) = tag.split_once('.') {
+            if let Some(bare) = self.decls.record_aliases.get(tag) {
+                return Ok(bare.clone());
+            }
+            return Err(TypeError {
+                message: format!("`{rec}` is not a member of `{module}`"),
+                span,
+            });
+        }
+        if self.decls.local_records.contains(tag) {
+            Ok(tag.to_string())
+        } else {
+            Err(TypeError {
+                message: format!("`{tag}` is not a record type"),
+                span,
+            })
+        }
+    }
+
+    /// The bare identity name for a record tag as stored on a pattern/literal AST
+    /// node — mapping a qualified `Geometry.Point` to `Point` (and a bare name to
+    /// itself), so exhaustiveness `Tag::Record`s and `decls.records` keys agree.
+    fn canonical_record(&self, tag: &str) -> String {
+        self.decls
+            .record_aliases
+            .get(tag)
+            .cloned()
+            .unwrap_or_else(|| tag.to_string())
     }
 
     /// Instantiate a record type's parameters with fresh variables, returning the
@@ -3146,13 +3291,7 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        if !self.decls.records.contains_key(ty) {
-            return Err(TypeError {
-                message: format!("`{ty}` is not a record type"),
-                span: ty_span,
-            });
-        }
-        let owner = ty.to_string();
+        let owner = self.resolve_record_tag(ty, ty_span)?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
 
         let mut seen: HashSet<String> = HashSet::new();
@@ -3499,13 +3638,7 @@ impl Infer {
                 ty_span,
                 fields,
             } => {
-                if !self.decls.records.contains_key(ty) {
-                    return Err(TypeError {
-                        message: format!("`{ty}` is not a record type"),
-                        span: ty_span.span(),
-                    });
-                }
-                let owner = ty.to_string();
+                let owner = self.resolve_record_tag(ty, ty_span.span())?;
                 let (record_ty, field_tys) = self.instantiate_record(&owner);
                 self.unify(&record_ty, scrut_ty, span)?;
                 let mut seen: HashSet<String> = HashSet::new();
@@ -3699,7 +3832,7 @@ impl Infer {
             Pattern::Int(n) => Some(Tag::Int(*n)),
             Pattern::Str(s) => Some(Tag::Str(s.clone())),
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
-            Pattern::Record { ty, .. } => Some(Tag::Record(ty.clone())),
+            Pattern::Record { ty, .. } => Some(Tag::Record(self.canonical_record(ty))),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
             // An as-pattern is transparent — its tag is the inner pattern's.
             Pattern::As { pattern, .. } => self.pattern_tag(pattern),

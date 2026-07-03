@@ -84,11 +84,13 @@ rather than checked — almost none of this is in the type system). Each was ver
 - **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
 - **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
   Python dispatches operators at runtime.
-- **Row polymorphism** — out of scope. It's the clean way to lift field-uniqueness / enable cross-module
-  records (`fun p -> p.x : { x: 'a | 'r } -> 'a`), but it's a whole new type-system axis (row variables,
-  open records, row unification, presence/absence constraints, noisier errors) for *structural* records
-  Pyfun deliberately doesn't have — its records are nominal (Python `dataclass`-style). Full primer +
-  why the alternatives (project-wide uniqueness, type-directed access) don't work: `DESIGN.md` §8.3.
+- **Row polymorphism** — out of scope, and **no longer needed** for the problems it was held in reserve
+  for. It's the textbook way to type `fun p -> p.x : { x: 'a | 'r } -> 'a`, but it's a whole new
+  type-system axis (row variables, open records, row unification, presence/absence constraints, noisier
+  errors) for *structural* records Pyfun deliberately doesn't have — its records are nominal (Python
+  `dataclass`-style). Field-name ambiguity (incl. **cross-module records**, done 2026-07-03) was instead
+  solved with a **lazy, use-site multimap**: field names are non-unique, and a bare `p.x` errors only when
+  two visible records genuinely share `x` (never at declaration/import). Full rationale: `DESIGN.md` §8.3.
 - **A singly-linked `list` + `cons`/`head`/`tail` patterns** (F#'s `list`) — Pyfun's `List` *is* F#'s
   *array* (a Python `list`: O(1) index/len). A cons-cell type would lower to un-Pythonic linked-node
   classes (fighting the readable-Python ethos), and its signature idiom — recursive `x :: xs`
@@ -163,14 +165,22 @@ rather than checked — almost none of this is in the type system). Each was ver
 *Cross-module (file-modules follow-ons)*
 - **Cross-module measures / externs** (M each) — sum-type ADTs already cross modules; these two are
   mechanical follow-ons (export + merge, like ADTs).
-- **Cross-module records** — **parked behind a non-goal** (not a quick M). Today a record crosses a
-  boundary only as an *opaque value* — the consumer can receive/hold/pass `Geometry.origin : Point` and
-  let an imported function operate on it, but **cannot access a field (`p.x`), construct, pattern-match,
-  or update it** (the field registry is module-local; only *sum-type* ADTs export). Doing better needs
-  the consumer to resolve `p.x`, which runs into field-name resolution: project-wide field uniqueness is
-  a PITA (kills module isolation), type-directed access regresses `fun p -> p.x`, and the clean fix is
-  **row polymorphism — a declared non-goal** (full rationale + the row-poly primer now in `DESIGN.md`
-  §8.3 decision 2). So this is deprioritized, not low-hanging fruit. (Decided 2026-07-03.)
+- **Cross-module records** — ✅ **done 2026-07-03**. Records now cross a module boundary on the *same
+  rails as sum-type ADTs*: a consumer can **construct** (`Geometry.Point { x = 1, y = 2 }`),
+  **pattern-match** (`case Geometry.Point { x, y }:`), **update** (`{ p with x = 3 }`), and **bare-access**
+  a field (`p.x`) of an imported record. Export/merge mirrors ADTs (`ModuleExports.records`,
+  `collect_exported_records`, `merge_imported_types` registering the record under its **bare identity
+  name** with a qualified surface alias `Geometry.Point → Point`); lowering reuses the qualified-ctor
+  dotted-class path (`geometry.Point(...)`, `import geometry` hoisted, the class defined in exactly one
+  module). Field-name resolution was solved *without* row polymorphism (still a non-goal) or project-wide
+  uniqueness: **field names are no longer globally unique** — `field_owner` is a multimap and a bare `p.x`
+  resolves iff **exactly one** visible record declares `x`; **2+** is an ambiguity error *at that access
+  site* only (never at declaration or import, so module isolation holds — two unrelated modules may both
+  have an `x`/`name`/`id`). This also **relaxes the in-file field-reuse restriction**: two local records
+  may share a field name and compile; only an ambiguous bare access errors (tagged construction/patterns
+  disambiguate). The escape hatch (a qualified accessor / type-directed tiebreak) was deliberately *not*
+  built — the error + hint is the whole feature. Full rationale in `DESIGN.md` §8.3. Covered by
+  `tests/project.rs` (cross-module e2e) + `tests/typecheck.rs` (ambiguity + shared-field cases).
 *Tooling*
 - **REPL** — ✅ **done 2026-07-02**: `pyfun repl` (`src/repl.rs`). Keeps session **definitions** as
   accumulated Pyfun source; each entry is type-checked (via `analyze`) against them — a definition is
@@ -228,11 +238,16 @@ variants); records give ergonomic *product* types with named instead of position
   constructor calls in declared field order, an update binding its base to a temp first. Parameterized
   records (`type Box a = { item: a }`) are polymorphic; fields generalize/instantiate like ADT
   constructors. Covered across lexer/parser/typecheck/compile/roundtrip tests.
-- **MVP limitation:** field names are **globally unique**, so `e.x` / `{ x = … }` resolves its record
-  type from the field name alone — Pyfun has no type annotations to disambiguate, and row polymorphism
-  is out of scope. Reusing a field name across records is a compile error.
-- **Still to do:** record *patterns* in `match`, derived ordering, and lifting the unique-field-name
-  restriction (needs annotations or row polymorphism / type-directed field resolution).
+- **Field resolution (updated 2026-07-03):** field names are **no longer globally unique**. A bare
+  `e.x` / `{ e with x = … }` resolves iff **exactly one** visible record declares `x`; two or more is an
+  ambiguity error *at that access site* (never at declaration/import). Tagged construction and patterns
+  carry their record type, so they are never ambiguous. This dropped the old "reusing a field name is a
+  compile error" rule *without* annotations or row polymorphism — see §Records / cross-module below.
+- **Cross-module (done 2026-07-03):** records export like sum-type ADTs — construct/pattern/update/access
+  an imported record via a qualified tag (`Geometry.Point { … }`). See the cross-module entry in the
+  backlog section for the full design.
+- **Still to do:** derived ordering. Record *patterns* in `match` **landed**; cross-module records
+  **landed**; the unique-field-name restriction is **lifted** (above).
 
 ### 3. Mutability checking (`let mut`) — ✅ done (with blocks + general offside)
 Immutable-by-default with a checked `mut` opt-in: `let mut x = …` and `x <- v` reassignment, where
@@ -491,7 +506,9 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    constructor occurrences incl. patterns via `Pattern::Ctor`/variant `name_span` + `resolve::walk_pattern`;
    sound — kind-matched, strict scan refuses on parse failure), and **in-file find-references / rename of
    type names** (`TypeExpr::Con`/`TypeDecl` `name_span` + `resolve::walk_type` + `type_at`; types have no
-   cross-file dimension). Still deferred: cross-module records/measures/externs, a project-wide LSP cache.
+   cross-file dimension). **Cross-module records landed 2026-07-03** (construct/pattern/update/access an
+   imported record; use-site field-ambiguity multimap). Still deferred: cross-module measures/externs, a
+   project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

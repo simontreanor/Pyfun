@@ -215,6 +215,13 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
         .iter()
         .map(|m| (m.name.clone(), export_nullary_ctors(&m.ast)))
         .collect();
+    // Each module's public records (name → declared field order), so a cross-module
+    // literal/update lowers to the exporting class in `__init__` order.
+    let records: HashMap<String, HashMap<String, Vec<String>>> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), export_records(&m.ast)))
+        .collect();
 
     let mut files = Vec::new();
     let mut needs_runtime = false;
@@ -231,6 +238,15 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
             if let Some(ctors) = nullary.get(import) {
                 for ctor in ctors {
                     ctx.nullary_ctors.insert(format!("{import}.{ctor}"));
+                }
+            }
+            if let Some(recs) = records.get(import) {
+                for (rec, fields) in recs {
+                    let tag = format!("{import}.{rec}");
+                    for field in fields {
+                        ctx.record_field_owners.insert(field.clone(), tag.clone());
+                    }
+                    ctx.record_fields.insert(tag, fields.clone());
                 }
             }
         }
@@ -355,6 +371,25 @@ fn export_nullary_ctors(module: &Module) -> HashSet<String> {
                     out.insert(v.name.clone());
                 }
             }
+        }
+    }
+    out
+}
+
+/// A module's public **record** types (name → declared field order), so an
+/// importing module lowers `Geometry.Point { … }` / `{ p with x = … }` to the
+/// exporting class in `__init__` order (`DESIGN.md` §8.3).
+fn export_records(module: &Module) -> HashMap<String, Vec<String>> {
+    use crate::parser::ast::TypeDeclKind;
+    let mut out = HashMap::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && let TypeDeclKind::Record(fields) = &decl.kind
+        {
+            out.insert(
+                decl.name.clone(),
+                fields.iter().map(|f| f.name.clone()).collect(),
+            );
         }
     }
     out

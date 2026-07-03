@@ -91,6 +91,10 @@ impl Parser {
         &self.tokens[(self.pos + 2).min(self.tokens.len() - 1)].tok
     }
 
+    fn peek4(&self) -> &Tok {
+        &self.tokens[(self.pos + 3).min(self.tokens.len() - 1)].tok
+    }
+
     fn span(&self) -> Span {
         self.tokens[self.pos].span
     }
@@ -965,6 +969,25 @@ impl Parser {
                     self.bump(); // builder name
                     return self.parse_ce(builder, start);
                 }
+                // `Geometry.Point { x = 1, … }` — a qualified (cross-module) record
+                // literal (`DESIGN.md` §8.3). An uppercase module name, `.`, an
+                // uppercase record name, then a `{` — distinguished from a qualified
+                // constructor application (`Geometry.Circle 2.0`) and a qualified
+                // member (`Geometry.area x`) by the immediately-following brace.
+                if is_upper(&name)
+                    && *self.peek2() == Tok::Dot
+                    && matches!(self.peek3(), Tok::Ident(n) if is_upper(n))
+                    && *self.peek4() == Tok::LBrace
+                {
+                    self.bump(); // module name
+                    self.bump(); // `.`
+                    let Tok::Ident(rec) = self.bump() else {
+                        unreachable!("peek3 guaranteed an identifier")
+                    };
+                    let ty = format!("{name}.{rec}");
+                    let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                    return self.parse_record_literal(ty, ty_span, start);
+                }
                 // A user builder: an uppercase (module) name immediately before a
                 // `{` whose first token starts a CE item. The CE-keyword lookahead
                 // distinguishes `Maybe { let! … }` (a CE) from `Some { x = 1 }`
@@ -1298,13 +1321,16 @@ impl Parser {
         {
             let start = self.cur_start();
             self.bump();
-            // `Point { … }` — a constructor-tagged record pattern (`DESIGN.md` §8.3).
-            if matches!(self.peek(), Tok::LBrace) {
-                let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
-                return self.parse_record_pattern_body(name, ty_span);
-            }
+            // Consume a `.Ctor`/`.Record` suffix first, so a qualified record pattern
+            // (`Geometry.Point { … }`) and a qualified constructor (`Geometry.Circle r`)
+            // are both recognized (`DESIGN.md` §8.3, §6.1).
             let name = self.maybe_qualify_ctor(name)?;
             let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+            // `Point { … }` / `Geometry.Point { … }` — a constructor-tagged record
+            // pattern (the tag may be qualified for an imported record).
+            if matches!(self.peek(), Tok::LBrace) {
+                return self.parse_record_pattern_body(name, name_span);
+            }
             let mut args = Vec::new();
             while starts_atom_pattern(self.peek()) {
                 args.push(self.parse_atom_pattern()?);
@@ -1340,17 +1366,18 @@ impl Parser {
                 let start = self.cur_start();
                 self.bump();
                 if is_upper(&name) {
-                    // `Point { … }` — a constructor-tagged record pattern as an atom
-                    // (e.g. a constructor argument), else a nullary constructor,
-                    // possibly qualified (`Geometry.Nothing`).
-                    if matches!(self.peek(), Tok::LBrace) {
-                        let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
-                        return self.parse_record_pattern_body(name, ty_span);
-                    }
+                    // A `.Ctor`/`.Record` suffix is consumed first (qualified imports).
                     let name = self.maybe_qualify_ctor(name)?;
+                    let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                    // `Point { … }` / `Geometry.Point { … }` — a constructor-tagged
+                    // record pattern as an atom (e.g. a constructor argument), else a
+                    // nullary constructor, possibly qualified (`Geometry.Nothing`).
+                    if matches!(self.peek(), Tok::LBrace) {
+                        return self.parse_record_pattern_body(name, name_span);
+                    }
                     Ok(Pattern::Ctor {
                         name,
-                        name_span: NodeSpan::new(Span::new(start, self.prev_end())),
+                        name_span,
                         args: Vec::new(),
                     })
                 } else {

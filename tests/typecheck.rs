@@ -947,10 +947,36 @@ fn rejects_wrong_record_field_type() {
 }
 
 #[test]
-fn rejects_field_name_reused_across_records() {
+fn two_records_may_share_a_field_name() {
+    // Field names are no longer globally unique (`DESIGN.md` §8.3): the shared
+    // field is fine at declaration; tagged construction disambiguates.
+    assert!(
+        pyfun::check(
+            "type A = { x: int }\ntype B = { x: int }\n\
+             let a = A { x = 1 }\nlet b = B { x = 2 }"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_bare_access_of_a_shared_field_is_ambiguous() {
+    // With two records declaring `x`, the accessor `fun p -> p.x` cannot resolve
+    // by name — the ambiguity is reported *at the access site*.
     assert_error_contains(
-        "type A = { x: int }\ntype B = { x: int }",
-        "field `x` is already defined in record `A`",
+        "type A = { x: int }\ntype B = { x: int }\nlet get p = p.x",
+        "field `x` is ambiguous",
+    );
+}
+
+#[test]
+fn a_distinct_field_still_resolves_when_another_is_shared() {
+    // `y` is unique to A even though `x` is shared, so `p.y` resolves fine.
+    assert!(
+        pyfun::check(
+            "type A = { x: int, y: int }\ntype B = { x: int }\nlet gy p = p.y"
+        )
+        .is_ok()
     );
 }
 

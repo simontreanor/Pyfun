@@ -98,6 +98,8 @@ const PROGRAMS: &[&str] = &[
     "let f p =\n  match p:\n    case Point { x = a, y = b }: a",
     "let f p =\n  match p:\n    case Point { x = 0, y }: y\n    case Point { x }: x",
     "let f b =\n  match b:\n    case Box { item = Some n }: n\n    case _: 0",
+    // A qualified (cross-module) record pattern.
+    "let f q =\n  match q:\n    case Geometry.Point { x, y }: x",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.
@@ -125,6 +127,8 @@ const PROGRAMS: &[&str] = &[
     "type Point = { x: int, y: int }",
     "type Box a = { item: a, tag: string }",
     "let p = Point { x = 3, y = 4 }",
+    // A qualified (cross-module) record literal for an imported record.
+    "let p = Geometry.Point { x = 3, y = 4 }",
     "let q = { p with y = 9 }",
     "let s = p.x",
     "let d = obj.inner.value",
