@@ -24,6 +24,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use crate::lexer::Span;
+
 use crate::parser::ast::{
     BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, InterpPart, Item, LetBinding,
     Module, Param, Pattern, TypeDeclKind, TypeExpr,
@@ -44,8 +46,9 @@ impl std::fmt::Display for LowerError {
 
 /// Lower a whole (single-file) module to a Python module — the `Option`/`Result`
 /// classes are inlined, the original behavior.
-pub fn lower(module: &Module) -> Result<PyModule, LowerError> {
+pub fn lower(module: &Module, float_literals: &HashSet<Span>) -> Result<PyModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
+    lowerer.float_literals = float_literals.clone();
     lowerer.lower_module(module)
 }
 
@@ -89,8 +92,13 @@ pub struct LoweredModule {
 /// ([`runtime_module`]) so that an `Option`/`Result` value crossing a module
 /// boundary stays `isinstance`-compatible. Cross-module references route through
 /// `ctx`.
-pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredModule, LowerError> {
+pub fn lower_in_project(
+    module: &Module,
+    ctx: &ImportContext,
+    float_literals: &HashSet<Span>,
+) -> Result<LoweredModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
+    lowerer.float_literals = float_literals.clone();
     lowerer.imported_modules = ctx.modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
     lowerer.use_runtime = true;
@@ -159,6 +167,12 @@ struct Lowerer {
     /// Standard combinators (`id`/`const`/`ignore`/`flip`) actually referenced,
     /// emitted on demand by [`combinator_prelude`] as `_pf_*` helpers.
     needed_combinators: BTreeSet<&'static str>,
+    /// Spans of value-position integer *literals* that inference resolved to
+    /// `float` (e.g. the `7` in `let x = 7` used later as `x + 1.5`). Such a
+    /// literal is emitted as a Python float (`7.0`) so the runtime value matches
+    /// its inferred type — otherwise a bare `print x` would show `7`, not `7.0`.
+    /// Supplied by the caller (from the type checker); empty means "no coercions".
+    float_literals: HashSet<Span>,
     /// While lowering an in-file `module`, its name + member names, so a bare
     /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
     cur_module: Option<(String, HashSet<String>)>,
@@ -313,6 +327,7 @@ impl Lowerer {
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             needed_combinators: BTreeSet::new(),
+            float_literals: HashSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
             imported_nullary_ctors: HashSet::new(),
@@ -626,7 +641,15 @@ impl Lowerer {
     /// Python expression denoting the value.
     fn lower_value(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         match &expr.kind {
-            ExprKind::Int(n) => Ok((vec![], PyExpr::Int(*n))),
+            ExprKind::Int(n) => {
+                // An integer literal that inference resolved to `float` is emitted
+                // as a Python float, so the runtime value matches its type.
+                if self.float_literals.contains(&expr.span()) {
+                    Ok((vec![], PyExpr::Float(*n as f64)))
+                } else {
+                    Ok((vec![], PyExpr::Int(*n)))
+                }
+            }
             ExprKind::Float(f) => Ok((vec![], PyExpr::Float(*f))),
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),

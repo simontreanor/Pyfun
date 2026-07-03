@@ -2006,6 +2006,34 @@ fn e2e_set_functions() {
 }
 
 #[test]
+fn int_literal_unified_to_float_lowers_to_a_float_literal() {
+    // The `2` in a float list and the `1` in a float-typed `if` branch are
+    // inferred `float`, so they must emit as Python floats (`2.0`, `1.0`) — a bare
+    // `print` of them should show `2.0`, not `2`.
+    let py = pyfun::compile(
+        "let xs = [1.0, 2, 3.0]\n\
+         let pick b = if b then 1 else 1.5",
+    )
+    .unwrap();
+    assert!(py.contains("xs = [1.0, 2.0, 3.0]"), "{py}");
+    assert!(py.contains("return 1.0"), "{py}");
+    // A genuinely-int literal is untouched.
+    let py2 = pyfun::compile("let n = 7\nlet m = n + 1").unwrap();
+    assert!(py2.contains("n = 7\n") || py2.contains("n = 7"), "{py2}");
+    assert!(!py2.contains("n = 7.0"), "{py2}");
+}
+
+#[test]
+fn e2e_int_literal_unified_to_float_prints_as_float() {
+    run_and_check(
+        "let xs = [1.0, 2, 3.0]\n\
+         let pick b = if b then 1 else 1.5\n\
+         let r = pick true",
+        &[("xs", "[1.0, 2.0, 3.0]"), ("r", "1.0")],
+    );
+}
+
+#[test]
 fn e2e_combinators() {
     run_and_check(
         "let sub a b = a - b\n\

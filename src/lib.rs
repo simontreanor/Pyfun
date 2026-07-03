@@ -121,11 +121,29 @@ pub fn analyze_in_dir(source: &str, dir: Option<&std::path::Path>) -> Analysis {
 /// program type-checks, so emitted Python is always well-typed Pyfun.
 pub fn compile(source: &str) -> Result<String, CompileError> {
     let module = parse(source)?;
-    if let Err(mut errors) = types::check(&module) {
+    // One inference pass gives both the gate (errors) and the resolved types, from
+    // which we mark the integer literals that resolved to `float` so lowering emits
+    // them as `7.0` (matching their inferred type — see `float_literal_spans`).
+    let (mut errors, types) = types::check_collecting(&module);
+    if !errors.is_empty() {
         return Err(CompileError::Type(errors.remove(0)));
     }
-    let py = lowering::lower(&module).map_err(CompileError::Lower)?;
+    let floats = float_literal_spans(&types);
+    let py = lowering::lower(&module, &floats).map_err(CompileError::Lower)?;
     Ok(python_emitter::emit(&py))
+}
+
+/// The spans of expressions whose inferred type is `float` (dimensionless or
+/// unit-carrying), collected from a [`types::check_collecting`] type table.
+/// Lowering consults this only for value-position integer literals, so a `float`
+/// entry for a non-literal node is harmless (spans of distinct nodes never
+/// collide). See [`compile`] and `lowering`'s `float_literals`.
+pub(crate) fn float_literal_spans(types: &[types::TypeSpan]) -> std::collections::HashSet<lexer::Span> {
+    types
+        .iter()
+        .filter(|t| t.ty == "float" || t.ty.starts_with("float<"))
+        .map(|t| t.span)
+        .collect()
 }
 
 /// Turn a lex/parse `CompileError` into a `TypeError` so `check` can report a

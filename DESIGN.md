@@ -729,9 +729,13 @@ constraint with polymorphic literals (step b).
    `.`, and `e` is only consumed when a real exponent follows (so `2exp`/`1e` stay integer-then-identifier).
    An unresolved numeric defaults
    to `int` — operationally automatic rather than a separate pass: it *displays* as `int`, and since
-   it lowers to an int literal that Python coerces in arithmetic, results stay correct. (Minor wart:
-   a literal whose type unifies to `float` still emits as an int literal, so a *bare* such literal
-   prints `7` not `7.0`; in any arithmetic Python coerces, so values are unaffected.)
+   it lowers to an int literal that Python coerces in arithmetic, results stay correct. An integer
+   literal that inference *monomorphically* resolves to `float` (the `2` in `[1.0, 2, 3.0]`, the `1` in
+   `if b then 1 else 1.5`, a literal passed to a `float` parameter) **lowers to a Python float literal**
+   (`2.0`/`1.0`), so its printed value matches its type — `compile` runs one `check_collecting` pass,
+   `float_literal_spans` collects the `float`-typed spans, and lowering emits `PyExpr::Float` for a
+   value-position integer literal whose span is in that set. A *generalized* `let x = 7` stays `7`: `x` is
+   polymorphic `num`, not `float`, so no coercion is due. (This was a former wart — fixed 2026-07-03.)
 4. **No implicit int→float coercion between *variables*.** Mixing two values of genuinely different
    concrete numeric type (an `int`-typed variable plus a `float`-typed one) is a (gentle) error
    rather than a silent widening. Full coercion would require subtyping (`int <: float`), which

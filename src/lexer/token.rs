@@ -3,7 +3,7 @@
 /// A byte range into the original source, retained for future diagnostics
 /// (Phase 3). The AST itself is span-free in Phase 1 so structural equality
 /// drives the roundtrip tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Span {
     pub start: usize,
     pub end: usize,

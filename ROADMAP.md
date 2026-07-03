@@ -232,14 +232,23 @@ rather than checked — almost none of this is in the type system). Each was ver
 - **Doc-comment syntax + richer hover** (M) — needs a doc-comment *language* feature first.
 
 ### Warts (small, low priority)
-- **No guiding error for `+` on strings** (S) — the type error is generic rather than a hint to point at
-  `String.concat` (the concatenation path). `+` stays numeric; overloading it for strings is deferred.
-- **A bare literal unified to `float` prints `7` not `7.0`** (S) — arithmetic coerces, so computed
-  values are unaffected; only a bare displayed literal looks like an int.
-- **Float literal patterns give a parse error, not a guiding one** (S) — `case 1.5:` fails with "expected
-  a pattern, found float". Matching on floats is intentionally unsupported (int/string literal patterns are
-  the leaves), but the error should *say* so rather than read as a generic parse failure. (Decided
-  2026-07-02: reject with a hint, don't implement float patterns.)
+All three original warts were **fixed 2026-07-03** (one sitting):
+- ~~**No guiding error for `+` on strings**~~ — ✅ the numeric mismatch from `expect_num` now becomes
+  `` `+` is numeric and does not concatenate strings — use `String.concat a b` `` when either operand is a
+  `string` (`Infer::string_concat_hint`, `Add`-on-`string` only; every other numeric mismatch keeps its
+  message). `+` stays numeric; overloading it for strings is still deferred.
+- ~~**A bare literal unified to `float` prints `7` not `7.0`**~~ — ✅ an integer literal that inference
+  *monomorphically* resolved to `float` (e.g. the `2` in `[1.0, 2, 3.0]`, or the `1` in `if b then 1 else
+  1.5`) now lowers to a Python float (`2.0`/`1.0`), so `print` shows it as a float. `compile` runs one
+  `check_collecting` pass, `lib::float_literal_spans` collects the `float`-typed spans, and lowering emits
+  `PyExpr::Float` for a value-position `ExprKind::Int` whose span is in that set (`Span` gained `Hash`; the
+  project path threads per-module spans via `types::check_module_collecting` in topo order). NB a
+  *generalized* `let x = 7` stays `7` — `x` is polymorphic `num`, not float, so that was never the bug.
+- ~~**Float literal patterns give a parse error, not a guiding one**~~ — ✅ `case 1.5:` / `case -1.5:` now
+  report `` float literals can't be matched — float equality is unreliable; bind a variable and use a guard
+  instead, e.g. `case x if x == 1.5:` `` (`parse_atom_pattern` → `float_pattern_error`). Matching floats
+  stays intentionally unsupported (int/string literal patterns are the leaves); the error now *teaches* the
+  guard alternative. Covered by `tests/{typecheck,compile}.rs`.
 
 ---
 

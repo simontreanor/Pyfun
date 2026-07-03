@@ -223,6 +223,28 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
         .map(|m| (m.name.clone(), export_records(&m.ast)))
         .collect();
 
+    // Per-module spans of integer literals that inference resolved to `float`, so
+    // lowering emits them as `7.0`. Computed in topological order (like `check`) so
+    // each module's imports are seeded before it — a literal's float-ness can depend
+    // on a cross-module call. Exports are threaded forward in the same pass.
+    let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
+        let mut exports: HashMap<String, crate::types::ModuleExports> = HashMap::new();
+        let mut spans = HashMap::new();
+        for module in &project.modules {
+            let imports: HashMap<String, crate::types::ModuleExports> = module
+                .imports
+                .iter()
+                .filter_map(|n| exports.get(n).map(|e| (n.clone(), e.clone())))
+                .collect();
+            let (_errors, types, module_exports) =
+                crate::types::check_module_collecting(&module.ast, &imports);
+            spans.insert(module.name.clone(), crate::float_literal_spans(&types));
+            exports.insert(module.name.clone(), module_exports);
+        }
+        spans
+    };
+    let no_floats = std::collections::HashSet::new();
+
     let mut files = Vec::new();
     let mut needs_runtime = false;
     for module in &project.modules {
@@ -250,7 +272,8 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
                 }
             }
         }
-        let lowered = lowering::lower_in_project(&module.ast, &ctx)?;
+        let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
+        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats)?;
         needs_runtime |= lowered.uses_runtime;
         files.push((
             module_py_name(&module.name),

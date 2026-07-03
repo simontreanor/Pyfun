@@ -2087,6 +2087,42 @@ fn a_user_definition_shadows_the_prelude_combinators() {
     assert!(pyfun::check("let id x = x + 1\nlet r = id 10").is_ok());
 }
 
+// ---------- error-quality: guiding messages ----------
+
+#[test]
+fn plus_on_strings_hints_at_string_concat() {
+    // `+` is numeric; the error should point at the concatenation path.
+    assert_error_contains("let s = \"a\" + \"b\"", "String.concat");
+    // A hint fires when either operand is a string.
+    assert_error_contains("let s = 1 + \"b\"", "String.concat");
+    assert_error_contains("let s = \"a\" + 1", "String.concat");
+}
+
+#[test]
+fn a_plain_numeric_mismatch_keeps_its_message() {
+    // A non-string numeric mismatch must NOT gain a spurious concat hint.
+    let msgs = errors("let bad = 1 + true");
+    assert!(
+        msgs.iter().all(|m| !m.contains("String.concat")),
+        "unexpected concat hint: {msgs:?}"
+    );
+}
+
+#[test]
+fn float_patterns_are_rejected_with_a_guiding_message() {
+    // Float literals aren't matchable (equality is unreliable) — the error
+    // should teach the guard alternative, not read as a generic parse failure.
+    assert_error_contains(
+        "let f x =\n  match x:\n    case 1.5: 0\n    case _: 1",
+        "float literals can't be matched",
+    );
+    // A negative float literal pattern gets the same guidance.
+    assert_error_contains(
+        "let f x =\n  match x:\n    case -1.5: 0\n    case _: 1",
+        "guard",
+    );
+}
+
 // ---------- the compiler is the gatekeeper ----------
 
 #[test]

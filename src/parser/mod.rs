@@ -1474,7 +1474,26 @@ impl Parser {
                 Ok(first)
             }
             Tok::LBracket => self.parse_list_pattern(),
+            // Float literals are deliberately not matchable: a literal pattern
+            // compiles to `==`, and float equality is unreliable (`0.1 + 0.2 ≠
+            // 0.3`, `NaN ≠ NaN`). Point at the guard alternative rather than the
+            // generic "expected a pattern". Covers `case 1.5:` and `case -1.5:`.
+            Tok::Float(_) => Err(self.float_pattern_error()),
+            Tok::Minus if matches!(self.peek2(), Tok::Float(_)) => {
+                Err(self.float_pattern_error())
+            }
             _ => Err(self.error("expected a pattern")),
+        }
+    }
+
+    /// The guiding error for a float used as a pattern (see `parse_atom_pattern`).
+    fn float_pattern_error(&self) -> ParseError {
+        ParseError {
+            message: "float literals can't be matched — float equality is \
+                      unreliable; bind a variable and use a guard instead, \
+                      e.g. `case x if x == 1.5:`"
+                .to_string(),
+            span: self.span(),
         }
     }
 
