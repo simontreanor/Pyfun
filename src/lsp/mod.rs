@@ -1434,6 +1434,46 @@ mod tests {
     }
 
     #[test]
+    fn goto_definition_on_a_qualified_record_tag_jumps_across_files() {
+        // A qualified record literal `Geometry.Point { … }` records a cross-file
+        // module ref on its tag, so go-to-def jumps to the `type Point = { … }` decl.
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_rectag_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("geometry.pyfun"),
+            "type Point = { x: int, y: int }",
+        )
+        .unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let geom_uri = file_uri(&dir.join("geometry.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(
+            &json::parse(&open_msg(
+                &main_uri,
+                "import Geometry\nlet p = Geometry.Point { x = 1, y = 2 }",
+            ))
+            .unwrap(),
+        );
+        // Cursor on `Geometry.Point` (line 1, within the tag, before the `{`).
+        let req = pos_msg("textDocument/definition", &main_uri, 1, 18);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let result = out[0].get("result").unwrap();
+        assert_eq!(result.get("uri").unwrap().as_str(), Some(geom_uri.as_str()));
+        let line = result
+            .get("range")
+            .unwrap()
+            .get("start")
+            .unwrap()
+            .get("line")
+            .unwrap()
+            .as_i64();
+        assert_eq!(line, Some(0), "jumps to the `type Point` decl on line 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn workspace_symbols_span_the_project_files() {
         let dir = std::env::temp_dir().join(format!("pyfun_lsp_wsym_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

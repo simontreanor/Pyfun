@@ -360,11 +360,20 @@ impl Resolver {
                 ty_span,
                 fields,
             } => {
-                // The tag is a type-name occurrence (navigable/renamable in-file).
-                self.type_refs.push(TypeRef {
-                    name: ty.clone(),
-                    span: ty_span.span(),
-                });
+                // A qualified tag (`Geometry.Point`) is a cross-file reference to an
+                // imported record's definition; a bare tag is an in-file type-name
+                // occurrence (navigable/renamable in-file).
+                match ty.split_once('.') {
+                    Some((module, member)) => self.quals.push(QualRef {
+                        module: module.to_string(),
+                        member: member.to_string(),
+                        span: ty_span.span(),
+                    }),
+                    None => self.type_refs.push(TypeRef {
+                        name: ty.clone(),
+                        span: ty_span.span(),
+                    }),
+                }
                 for f in fields {
                     self.walk_pattern(&f.pattern);
                 }
@@ -558,11 +567,20 @@ impl Resolver {
                 ty_span,
                 fields,
             } => {
-                // The constructor tag is a type-name occurrence (in-file nav/rename).
-                self.type_refs.push(TypeRef {
-                    name: ty.clone(),
-                    span: ty_span.span(),
-                });
+                // A qualified tag (`Geometry.Point`) is a cross-file reference to an
+                // imported record's definition; a bare tag is an in-file type-name
+                // occurrence (nav/rename).
+                match ty.split_once('.') {
+                    Some((module, member)) => self.quals.push(QualRef {
+                        module: module.to_string(),
+                        member: member.to_string(),
+                        span: ty_span.span(),
+                    }),
+                    None => self.type_refs.push(TypeRef {
+                        name: ty.clone(),
+                        span: ty_span.span(),
+                    }),
+                }
                 for f in fields {
                     self.walk_expr(&f.value);
                 }

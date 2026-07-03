@@ -485,17 +485,27 @@ sum type's name, arity, and constructors) **and its records** (since the cross-m
 values, with **exhaustiveness checked across the boundary** (a missing arm reports the qualified witness
 `Geometry.Rect _ _`). **Records cross too** (`DESIGN.md` §8.3): construct `Geometry.Point { x = 1, y = 2 }`,
 pattern `case Geometry.Point { x, y }:`, update `{ p with x = 3 }`, and bare-access `p.x` on an imported
-value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **Cross-module
-measures / externs remain deferred** (mechanical follow-ons). Using a name a module does not export is the
+value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **Externs and
+measures cross too:** an imported `extern` (`Mathx.sqrt`) is exported like a value (its scheme joins the
+interface) and — in the project lowering path — also **bound at top level in its own module** (`sqrt =
+math.sqrt`, `import math` hoisted) so a dependent module references it as `mathx.sqrt`; single-file lowering
+still erases externs (references inline to their dotted target). **Measures** merge *unqualified* — there is
+no qualified unit syntax (`<m>` is bare) — so a shared `Units` module's `measure m`/`measure s` and its
+derived aliases become available wherever it is imported; a base measure re-imported under the same name is
+idempotent (the shared-`Units` pattern), while the *same alias name mapped to a different expansion* across
+two imports is a genuine conflict and errors. (Measures erase at lowering, so a `<m>`-annotated cross-module
+value round-trips to plain numerics with no lowering change.) Using a name a module does not export is the
 ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
 *Implementation:* the single-file `run` was generalized to take the imports map and return the module's
-exported value schemes, its exported sum types, **and its exported records**; `check_module(module,
+exported value schemes (which now include `extern` names), its exported sum types, **its exported records**,
+**and its measures + measure-aliases**; `check_module(module,
 imports)` seeds imported values under qualified keys and imported sum types into the decls under **qualified
 constructor keys** (`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] =
 ["Geometry.Circle", …]`), plus imported records under their **bare identity name** with a qualified surface
 alias (`decls.record_aliases["Geometry.Point"] = "Point"`) and their fields appended to the field multimap,
-so construction (the `Record`/`Field` arms), qualified ctor/record patterns (`bind_pattern`), and
-exhaustiveness (`ctor_signature`) all resolve with no special cases. Transplanting a scheme across modules is sound
+plus imported measures merged unqualified into `decls.measures`/`measure_aliases` (with the alias-conflict
+check), so construction (the `Record`/`Field` arms), qualified ctor/record patterns (`bind_pattern`),
+exhaustiveness (`ctor_signature`), and `<…>` unit resolution all resolve with no special cases. Transplanting a scheme across modules is sound
 because a top-level binding (and a constructor) generalizes against an env of closed schemes, so its own
 scheme is closed and `instantiate` refreshes the quantified vars in the dependent module's id space.
 `project::check` threads the `ModuleExports` map through the topological order, seeding each module from
@@ -570,16 +580,19 @@ resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name
 renames to an uppercase type name; builtins are refused). **Still deferred:** a project-wide LSP cache.
 
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
-(construct + qualified-pattern-match + cross-boundary exhaustiveness) and **cross-file LSP navigation**
-(go-to-definition across files, workspace symbols, project-wide find-references + rename of top-level
-values and constructors, and in-file find-references / rename of type names). **Explicit non-goals
+(construct + qualified-pattern-match + cross-boundary exhaustiveness), **cross-module records** (§8.3),
+**cross-module externs and measures** (an imported `extern` bound in its own module + referenced as
+`mathx.sqrt`; measures merged unqualified with an alias-conflict check), and **cross-file LSP navigation**
+(go-to-definition across files — including on a **qualified record tag** `Geometry.Point` — workspace
+symbols, project-wide find-references + rename of top-level values and constructors, and in-file
+find-references / rename of type names). **Explicit non-goals
 (decided not to build):** visibility (`pub`) — Pyfun is
 all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
 CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
 hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
-X import y` / `open`; cross-module **measures/externs** (mechanical follow-ons — cross-module *records*
-**landed 2026-07-03**, §8.3); nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*`
-runtime; a project-wide LSP cache.
+X import y` / `open`; nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*`
+runtime; a project-wide LSP cache. (Cross-module **records, externs, and measures** all **landed
+2026-07-03**, §6.1/§8.3.)
 **Implementation slices (ordered):** (0) implicit
 recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
 driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
@@ -1052,8 +1065,8 @@ Decisions:
    (`isinstance`/`match`-compatible), and the consumer never redefines it. Record *identity* is the bare
    name, so — as with imported sum types — an imported record whose name clashes with an existing type is
    rejected. Parameterized records cross soundly (the closed-scheme transplant instantiates the record's
-   parameters afresh, like an imported ctor scheme). Cross-module **measures/externs** remain deferred
-   (mechanical follow-ons); records are **done**.
+   parameters afresh, like an imported ctor scheme). Cross-module records, **externs, and measures** are all
+   **done** (§6.1); only the field-registry (the multimap, decision 2) was the interesting case.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
    always names its type: `Point { x = 1, y = 2 }`, or — for an imported record — the **qualified** tag
    `Geometry.Point { x = 1, y = 2 }` (a bare tag resolves only to a *local* record, exactly as a bare

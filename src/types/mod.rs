@@ -600,7 +600,8 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _schemes, _exports, _records) = run(module, false, &HashMap::new());
+    let (errors, _types, _schemes, _exports, _records, _measures) =
+        run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -631,6 +632,13 @@ pub struct ModuleExports {
     /// [`RecordInfo`] (params + fields), so an importing module can construct,
     /// pattern-match, update, and field-access the record via qualified tags.
     records: Vec<(String, RecordInfo)>,
+    /// Public **base measure** names (`measure m`). Merged **unqualified** into a
+    /// consumer's decls — there is no qualified unit syntax (`<m>` is bare), so
+    /// measures cross by name and erase at lowering (`DESIGN.md` §6.1).
+    measures: HashSet<String>,
+    /// Public **derived-measure aliases** (`measure N = kg m / s^2`) → their
+    /// expansion over base measures, so `<N>` unifies the same way in the consumer.
+    measure_aliases: HashMap<String, Unit>,
 }
 
 /// Type-check `module` as one node of a multi-file project (`DESIGN.md` §6.1).
@@ -647,13 +655,16 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes, types, records) = run(module, false, imports);
+    let (errors, _types, schemes, types, records, (measures, measure_aliases)) =
+        run(module, false, imports);
     (
         errors,
         ModuleExports {
             schemes,
             types,
             records,
+            measures,
+            measure_aliases,
         },
     )
 }
@@ -665,7 +676,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports, _records) = run(module, true, imports);
+    let (errors, types, _schemes, _exports, _records, _measures) = run(module, true, imports);
     (errors, types)
 }
 
@@ -675,7 +686,8 @@ pub fn check_collecting_with_imports(
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
 pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports, _records) = run(module, true, &HashMap::new());
+    let (errors, types, _schemes, _exports, _records, _measures) =
+        run(module, true, &HashMap::new());
     (errors, types)
 }
 
@@ -693,7 +705,12 @@ type RunResult = (
     Env,
     Vec<ExportedType>,
     Vec<(String, RecordInfo)>,
+    ExportedMeasures,
 );
+
+/// This module's own measures, for its export interface: base names and derived
+/// aliases (`DESIGN.md` §6.1).
+type ExportedMeasures = (HashSet<String>, HashMap<String, Unit>);
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
     let mut errors = Vec::new();
@@ -702,6 +719,11 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     // merged in (so we export only what this module itself declares).
     let exported_types = collect_exported_types(module, &decls);
     let exported_records = collect_exported_records(module, &decls);
+    // Captured before imports are merged, so we export only this module's own
+    // measures. `decls.measures` holds base + alias names; `decls.measure_aliases`
+    // holds the aliases' expansions.
+    let exported_measures: ExportedMeasures =
+        (decls.measures.clone(), decls.measure_aliases.clone());
     // Merge imported modules' sum types into the decls (qualified constructor keys),
     // so `Geometry.Circle` construction, qualified ctor patterns, and exhaustiveness
     // all resolve against the imported type.
@@ -804,8 +826,12 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
 
     for (idx, item) in module.items.iter().enumerate() {
         match item {
-            // Measures, types, and externs are all handled by the pre-pass.
-            Item::Measure { .. } | Item::Type(_) | Item::Extern(_) => {}
+            // Measures and types are handled by the pre-pass and bind no value.
+            Item::Measure { .. } | Item::Type(_) => {}
+            // An `extern` is resolved by the pre-pass (its scheme is already in
+            // `env`); export its name so a dependent module can reference it
+            // qualified (`Mathx.sqrt`), exactly like a `let` value (`DESIGN.md` §6.1).
+            Item::Extern(decl) => exported.push(decl.name.clone()),
             // `import` is resolved by the multi-file driver, which feeds the
             // imported schemes in via `seed`; the item itself binds nothing here.
             Item::Import { .. } => {}
@@ -909,7 +935,14 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         })
         .collect();
 
-    (errors, types, exports, exported_types, exported_records)
+    (
+        errors,
+        types,
+        exports,
+        exported_types,
+        exported_records,
+        exported_measures,
+    )
 }
 
 /// Capture a module's own public **sum** types from the freshly-built decls, for
@@ -1024,6 +1057,35 @@ fn merge_imported_types(
                     .or_default()
                     .push(name.clone());
             }
+        }
+    }
+    // Measures merge **unqualified** (there is no qualified unit syntax, `DESIGN.md`
+    // §6.1). A base measure re-imported under the same name is fine (measures are
+    // nominal-by-name and erase — the shared-`Units`-module pattern), so base names
+    // insert idempotently. An alias also inserts, but re-importing the *same* alias
+    // name mapped to a *different* expansion is a genuine conflict and errors.
+    for module_name in &module_names {
+        let exports = &imports[*module_name];
+        for name in &exports.measures {
+            if let Some(unit) = exports.measure_aliases.get(name) {
+                match decls.measure_aliases.get(name) {
+                    Some(existing) if existing != unit => {
+                        errors.push(TypeError {
+                            message: format!(
+                                "imported measure alias `{name}` (from `{module_name}`) conflicts \
+                                 with a different definition already in scope"
+                            ),
+                            span: Span::new(0, 0),
+                        });
+                        continue;
+                    }
+                    _ => {
+                        decls.measure_aliases.insert(name.clone(), unit.clone());
+                    }
+                }
+            }
+            // Base names (and alias names) join the known measure set idempotently.
+            decls.measures.insert(name.clone());
         }
     }
 }

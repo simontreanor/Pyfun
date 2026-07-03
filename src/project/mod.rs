@@ -351,6 +351,14 @@ fn export_arities(module: &Module) -> HashMap<String, usize> {
                     }
                 }
             }
+            // An imported `extern`'s arity (its leading arrows) so a *partial*
+            // application across modules (`List.map Mathx.sqrt xs`) still curries.
+            Item::Extern(decl) => {
+                let arity = crate::lowering::arrow_arity(&decl.ty);
+                if arity > 0 {
+                    out.insert(decl.name.clone(), arity);
+                }
+            }
             _ => {}
         }
     }

@@ -163,8 +163,17 @@ rather than checked — almost none of this is in the type system). Each was ver
   processing; handy for Windows paths and regex-via-`extern`. String escapes otherwise cover `\"`/`\\`/
   `\n`/`\t`/`\r`/`\u{…}`.
 *Cross-module (file-modules follow-ons)*
-- **Cross-module measures / externs** (M each) — sum-type ADTs already cross modules; these two are
-  mechanical follow-ons (export + merge, like ADTs).
+- **Cross-module externs / measures** — ✅ **done 2026-07-03**. An imported `extern` (`Mathx.sqrt`) now
+  exports like a value (its name joins `run()`'s `exported`, so its scheme — `io` on the innermost arrow
+  for a non-`pure` extern — joins `ModuleExports.schemes`) and, in the **project lowering path**, is also
+  bound at top level in its own module (`sqrt = math.sqrt`, `import math` hoisted, via `Lowerer::project_mode`
+  — single-file still erases externs); the consumer routes `Mathx.sqrt` → `mathx.sqrt` and `export_arities`
+  includes externs so partial application (`List.map Mathx.sqrt xs`) curries. **Measures** merge *unqualified*
+  (there is no qualified unit syntax — `<m>` is bare): `ModuleExports` carries `measures`/`measure_aliases`,
+  `merge_imported_types` inserts base names idempotently (a shared `Units` module imported everywhere is the
+  common case) and aliases with a **different-expansion conflict error** (two imports mapping `N` to
+  different units errors; a shared base measure does not). Measures erase at lowering, so no lowering change.
+  Covered by `tests/project.rs` (extern + measure e2e, effect transplant, alias conflict).
 - **Cross-module records** — ✅ **done 2026-07-03**. Records now cross a module boundary on the *same
   rails as sum-type ADTs*: a consumer can **construct** (`Geometry.Point { x = 1, y = 2 }`),
   **pattern-match** (`case Geometry.Point { x, y }:`), **update** (`{ p with x = 3 }`), and **bare-access**
@@ -506,9 +515,11 @@ resilient, cached analysis + a VS Code client) are now done. Remaining, in rough
    constructor occurrences incl. patterns via `Pattern::Ctor`/variant `name_span` + `resolve::walk_pattern`;
    sound — kind-matched, strict scan refuses on parse failure), and **in-file find-references / rename of
    type names** (`TypeExpr::Con`/`TypeDecl` `name_span` + `resolve::walk_type` + `type_at`; types have no
-   cross-file dimension). **Cross-module records landed 2026-07-03** (construct/pattern/update/access an
-   imported record; use-site field-ambiguity multimap). Still deferred: cross-module measures/externs, a
-   project-wide LSP cache.
+   cross-file dimension), **plus cross-file go-to-def on a qualified record tag** (`Geometry.Point` — the
+   `Record`/`Pattern::Record` arms of the resolver now push a `QualRef` for a dotted tag). **Cross-module
+   records, externs, and measures all landed 2026-07-03** (construct/pattern/update/access an imported
+   record with a use-site field-ambiguity multimap; imported externs bound + routed; measures merged
+   unqualified with an alias-conflict check). Still deferred: a project-wide LSP cache.
 2. **#5–#7 — all landed**: deep exhaustiveness (full Maranget usefulness with witnesses),
    user-defined CE builders (module-based, desugared), derived-measure aliases. Plus the #2/#3
    follow-ups: record patterns **landed**, blocks in `match`/`if`/lambda positions **landed**.

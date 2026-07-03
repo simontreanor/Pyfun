@@ -497,6 +497,229 @@ fn an_unexported_record_member_is_not_a_member() {
     );
 }
 
+// ---------- cross-module externs ----------
+
+#[test]
+fn a_cross_module_extern_binds_in_its_module_and_routes_from_the_consumer() {
+    let files = compile(
+        "Main",
+        &[
+            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
+            (
+                "Main",
+                "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r",
+            ),
+        ],
+    );
+    // The defining module binds the extern at top level (so it is referenceable as
+    // an attribute), with the Python module imported.
+    let mathx = file(&files, "mathx.py");
+    assert!(mathx.contains("import math"), "{mathx}");
+    assert!(mathx.contains("sqrt = math.sqrt"), "{mathx}");
+    // The consumer routes the qualified reference to the module attribute.
+    let main = file(&files, "main.py");
+    assert!(main.contains("import mathx"), "{main}");
+    assert!(main.contains("r = mathx.sqrt(16.0)"), "{main}");
+}
+
+#[test]
+fn e2e_a_cross_module_extern_runs() {
+    let files = compile(
+        "Main",
+        &[
+            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
+            (
+                "Main",
+                "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_extern");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "4.0");
+    }
+}
+
+#[test]
+fn e2e_a_cross_module_extern_partial_application_curries() {
+    // `List.map Mathx.sqrt xs` partially applies the imported extern — its arity is
+    // threaded so the map still curries and runs.
+    let files = compile(
+        "Main",
+        &[
+            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
+            (
+                "Main",
+                "import Mathx\nlet xs = List.map Mathx.sqrt [4.0, 9.0, 16.0]\nprint xs",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_extern_partial");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace(' ', "").trim(), "[2.0,3.0,4.0]");
+    }
+}
+
+#[test]
+fn an_unexported_extern_is_not_a_member() {
+    let project = build_mem(
+        "Main",
+        &[
+            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
+            ("Main", "import Mathx\nlet r = Mathx.cbrt 8.0"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0].message.contains("not a member of `Mathx`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn an_imported_impure_extern_keeps_its_effect_across_the_boundary() {
+    // An `extern` is effectful-by-default; its scheme carries `io` on the innermost
+    // arrow, which must survive the transplant — so calling it from a `let pure` in
+    // the consumer is rejected. A `pure` extern is fine.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Logx",
+                "extern log : string -> unit = builtins.print\n\
+                 extern pure ident : int -> int = builtins.abs",
+            ),
+            (
+                "Main",
+                "import Logx\nlet pure bad s = Logx.log s",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0].message.contains("pure")
+            && errors[0].errors[0].message.contains("io"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+
+    // The `pure` extern imposes no effect, so it is callable from a `let pure`.
+    let ok = build_mem(
+        "Main",
+        &[
+            (
+                "Logx",
+                "extern log : string -> unit = builtins.print\n\
+                 extern pure ident : int -> int = builtins.abs",
+            ),
+            ("Main", "import Logx\nlet pure ok n = Logx.ident n"),
+        ],
+    );
+    assert!(project::check(&ok).is_empty());
+}
+
+// ---------- cross-module measures ----------
+
+#[test]
+fn a_shared_measure_module_is_used_across_files() {
+    // `Units` defines base measures + a derived alias; two modules import it and use
+    // `<m>` / `<N>`. The shared re-import of the same base measures must not conflict.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Units", "measure m\nmeasure s\nmeasure N = m / s"),
+            ("Dist", "import Units\nlet far d = d + 1<m>"),
+            (
+                "Main",
+                "import Units\nimport Dist\nlet here = 100<m>\nlet f = 10<N>\nlet g = Dist.far 5<m>",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn e2e_a_cross_module_measure_annotated_value_runs() {
+    // Measures erase at lowering, so a `<m>`-annotated value round-trips to plain
+    // Python numerics.
+    let files = compile(
+        "Main",
+        &[
+            ("Units", "measure m"),
+            (
+                "Main",
+                "import Units\nlet d = 100<m>\nlet e = d + 50<m>\nprint e",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_measure");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "150");
+    }
+}
+
+#[test]
+fn using_a_measure_without_importing_its_module_is_an_error() {
+    let project = build_mem(
+        "Main",
+        &[
+            ("Units", "measure m"),
+            ("Main", "let d = 100<m>"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0].message.contains("unknown measure `m`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn a_cross_module_measure_alias_conflict_is_reported() {
+    // Two modules define a *different* expansion for the same alias name `N`; a
+    // consumer importing both hits a genuine conflict (a shared base measure would
+    // NOT — that is the common case and is idempotent).
+    let project = build_mem(
+        "Main",
+        &[
+            ("Ua", "measure m\nmeasure s\nmeasure N = m / s"),
+            ("Ub", "measure m\nmeasure s\nmeasure N = m s"),
+            ("Main", "import Ua\nimport Ub\nlet x = 1"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].name, "Main");
+    assert!(
+        errors[0].errors[0].message.contains("alias `N`")
+            && errors[0].errors[0].message.contains("conflicts"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn a_shared_base_measure_across_two_imports_does_not_conflict() {
+    // Two imported modules both declare `measure m`; importing both is fine (base
+    // measures are nominal-by-name and erase — the shared-`Units` pattern).
+    let project = build_mem(
+        "Main",
+        &[
+            ("Ua", "measure m\nlet a = 1<m>"),
+            ("Ub", "measure m\nlet b = 2<m>"),
+            ("Main", "import Ua\nimport Ub\nlet x = 1"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
 // ---------- slice 6: import-aware editor analysis ----------
 
 #[test]

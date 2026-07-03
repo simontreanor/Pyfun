@@ -94,6 +94,7 @@ pub fn lower_in_project(module: &Module, ctx: &ImportContext) -> Result<LoweredM
     lowerer.imported_modules = ctx.modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
     lowerer.use_runtime = true;
+    lowerer.project_mode = true;
     for (name, arity) in &ctx.member_arities {
         lowerer.arities.entry(name.clone()).or_insert(*arity);
     }
@@ -168,6 +169,11 @@ struct Lowerer {
     /// Whether to import the nominal `Option`/`Result` classes from the shared
     /// `_pyfun_rt.py` (multi-file projects) instead of inlining them (single file).
     use_runtime: bool,
+    /// Whether this is a multi-file project module. In a project an `extern` is also
+    /// emitted as a real top-level binding (`sqrt = math.sqrt`) so a *dependent*
+    /// module can reference it as `mathx.sqrt` (`DESIGN.md` §6.1); single-file
+    /// lowering keeps externs fully erased (references inline to their dotted target).
+    project_mode: bool,
     /// Stack of enclosing *function* scopes (one frame of bound names per nested
     /// function; empty at module level). Used to classify a captured-and-reassigned
     /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
@@ -307,6 +313,7 @@ impl Lowerer {
             imported_modules: HashSet::new(),
             imported_nullary_ctors: HashSet::new(),
             use_runtime: false,
+            project_mode: false,
             fn_local_stack: Vec::new(),
             tmp_counter: 0,
             fn_counter: 0,
@@ -348,10 +355,23 @@ impl Lowerer {
         let mut code = Vec::new();
         for item in &module.items {
             match item {
-                // Measures, type declarations, and externs have no runtime code
-                // (an extern's effect is purely at its reference sites). `import`
-                // emits no code in single-file lowering (slice 1).
-                Item::Measure { .. } | Item::Type(_) | Item::Extern(_) | Item::Import { .. } => {}
+                // Measures, type declarations, and `import` emit no runtime code.
+                Item::Measure { .. } | Item::Type(_) | Item::Import { .. } => {}
+                // An `extern` erases in single-file lowering (references inline to
+                // their dotted target). In a *project* it is also bound at top level
+                // (`sqrt = math.sqrt`, `import math` hoisted) so a dependent module can
+                // reference it as `mathx.sqrt` (`DESIGN.md` §6.1).
+                Item::Extern(decl) => {
+                    if self.project_mode {
+                        if decl.target.len() > 1 {
+                            self.needed_imports.insert(decl.target[0].clone());
+                        }
+                        code.push(PyStmt::Assign {
+                            target: decl.name.clone(),
+                            value: dotted_path(&decl.target),
+                        });
+                    }
+                }
                 Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
                 // A module's members lower to flat top-level defs/assignments with
                 // mangled names (`Geometry.area` → `Geometry_area`); bare sibling
@@ -1703,8 +1723,9 @@ fn lower_binop(op: BinOp) -> PyBinOp {
 }
 
 /// The number of leading arrows in a declared type — an `extern`'s callable arity,
-/// used (as for the prelude) to decide full vs partial application.
-fn arrow_arity(ty: &TypeExpr) -> usize {
+/// used (as for the prelude) to decide full vs partial application. Public so the
+/// project driver can export an imported extern's arity for cross-module currying.
+pub fn arrow_arity(ty: &TypeExpr) -> usize {
     match ty {
         TypeExpr::Fun(_, ret) => 1 + arrow_arity(ret),
         TypeExpr::Con(..) | TypeExpr::Tuple(_) => 0,
