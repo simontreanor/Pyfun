@@ -311,6 +311,17 @@ pub enum ExprKind {
         rhs: Box<Expr>,
     },
 
+    /// Function composition: `lhs >> rhs` (left-to-right, `right_to_left = false`:
+    /// `fun x -> rhs (lhs x)`) or `lhs << rhs` (right-to-left / math ∘,
+    /// `right_to_left = true`: `fun x -> lhs (rhs x)`). Desugared to that lambda at
+    /// inference and lowering (`desugar::compose`); the pretty-printer keeps the
+    /// operator spelling.
+    Compose {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+        right_to_left: bool,
+    },
+
     /// A computation expression: `builder { items }` (`DESIGN.md` §8.1).
     Ce {
         builder: CeBuilder,

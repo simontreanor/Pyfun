@@ -74,8 +74,8 @@ rather than checked — almost none of this is in the type system). Each was ver
     `0xFF`/`0o17`/`0b101` alternate bases (incl. hex with separators `0xDEAD_BEEF`; `_` only between
     digits, values normalize to decimal). String escapes: added `\r` and Rust-style **`\u{HEX}`** (1–6
     hex digits; decodes at lex time, and the emitter now re-escapes `\r`); factored a shared `lex_escape`
-    used by both string and f-string lexing. **Raw strings** (`r"C:\path"`) remain deferred (S) — a new
-    string-prefix lexer mode like `f"`, low-demand.
+    used by both string and f-string lexing. **Raw strings** (`r"C:\path"`) **landed 2026-07-03** — a
+    string-prefix lexer mode like `f"` (`lex_raw_string`), lexer-only (yields a plain `Tok::Str`).
 
 ### Non-goals (won't build unless a concrete need appears, with the reason)
 - **Visibility (`pub`)** — Pyfun is all-public, the Python-natural model; enforced privacy fights the ethos.
@@ -161,11 +161,18 @@ rather than checked — almost none of this is in the type system). Each was ver
   directly, cheaper and helps all code; (b) lifting the field-name restriction; (c) a deliberate F#-parity
   call. **Cheap partial slice if wanted:** param annotations `(x: T)` are feasible on their own (inside
   brackets `:` is free — record fields already use it), covering most of the doc/localization value.
-- **Function composition `>>` / `<<`** (S) — F#-style `f >> g` = `fun x -> g (f x)`; low priority now that
-  `|>` + operator sections landed. Would desugar to a lambda like the sections.
-- **Raw strings `r"C:\path"`** (S) — a new string-prefix lexer mode (like `f"`) that skips escape
-  processing; handy for Windows paths and regex-via-`extern`. String escapes otherwise cover `\"`/`\\`/
-  `\n`/`\t`/`\r`/`\u{…}`.
+- **Function composition `>>` / `<<`** — ✅ **done 2026-07-03**. `f >> g` = `fun x -> g (f x)`
+  (left-to-right, f then g); `f << g` = `fun x -> f (g x)` (right-to-left / math ∘). Two-char lexer tokens
+  (`GtGt`/`LtLt`) lexed before single `<`/`>`; a `parse_compose` precedence level between `|>` and `or`
+  (tighter than `|>`, left-associative); `ExprKind::Compose` desugars to a composition lambda
+  (`desugar::compose`) at inference + lowering, like the operator sections. Capture-safe: the lambda param
+  is chosen free of both operands' free vars (`_pf_x`, …). Covered by roundtrip/typecheck/compile +
+  `examples/hello.pyfun`.
+- **Raw strings `r"C:\path"`** — ✅ **done 2026-07-03**. **Lexer-only** (`lex_raw_string`, mirrors the
+  `f"` interception): an adjacent `r"` reads to the closing `"` with no escape processing (backslashes
+  literal), following Python's rule that `\` keeps itself + the next char and `\"` does not terminate. It
+  yields an ordinary `Tok::Str`; the emitter's `string_literal` escaper re-escapes on output, so there is
+  no AST/type/lowering change. `rf"..."` out of scope. Covered by lexer + compile tests + `examples/hello.pyfun`.
 *Cross-module (file-modules follow-ons)*
 - **Cross-module externs / measures** — ✅ **done 2026-07-03**. An imported `extern` (`Mathx.sqrt`) now
   exports like a value (its name joins `run()`'s `exported`, so its scheme — `io` on the innermost arrow

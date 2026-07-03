@@ -682,14 +682,39 @@ impl Parser {
 
     fn parse_pipe(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
-        let mut lhs = self.parse_or()?;
+        let mut lhs = self.parse_compose()?;
         while self.eat(&Tok::PipeOp) {
-            let rhs = self.parse_or()?;
+            let rhs = self.parse_compose()?;
             lhs = self.mk(
                 start,
                 ExprKind::Pipe {
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
+                },
+            );
+        }
+        Ok(lhs)
+    }
+
+    /// Function composition `>>` / `<<` — tighter than `|>`, looser than everything
+    /// else, and **left-associative** (`f >> g >> h` = `(f >> g) >> h`).
+    fn parse_compose(&mut self) -> Result<Expr, ParseError> {
+        let start = self.cur_start();
+        let mut lhs = self.parse_or()?;
+        loop {
+            let right_to_left = match self.peek() {
+                Tok::GtGt => false,
+                Tok::LtLt => true,
+                _ => break,
+            };
+            self.bump();
+            let rhs = self.parse_or()?;
+            lhs = self.mk(
+                start,
+                ExprKind::Compose {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    right_to_left,
                 },
             );
         }
@@ -1669,6 +1694,8 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::BangEq => "!=",
         Tok::Le => "<=",
         Tok::Ge => ">=",
+        Tok::GtGt => ">>",
+        Tok::LtLt => "<<",
         Tok::LArrow => "<-",
         Tok::Plus => "+",
         Tok::Minus => "-",

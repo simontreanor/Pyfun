@@ -78,6 +78,8 @@ pub enum Tok {
     Gt,         // >
     Le,         // <=
     Ge,         // >=
+    GtGt,       // >> (function composition, left-to-right)
+    LtLt,       // << (function composition, right-to-left)
     LArrow,     // <- (reassignment of a `mut` binding)
     LParen,     // (
     RParen,     // )

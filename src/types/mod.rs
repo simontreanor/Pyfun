@@ -1465,7 +1465,7 @@ fn is_wildcard_like(pat: &Pattern) -> bool {
 /// Collect the free variable names of `expr` — references not bound by an
 /// enclosing param / lambda / block-`let` / `match` pattern / CE binding. Used to
 /// build the top-level dependency graph for mutual-recursion grouping.
-fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
+pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
     match &expr.kind {
         ExprKind::Var(n) => {
             if !bound.contains(n) {
@@ -1524,7 +1524,7 @@ fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>)
                 collect_free(e, bound, out);
             }
         }
-        ExprKind::Pipe { lhs, rhs } => {
+        ExprKind::Pipe { lhs, rhs } | ExprKind::Compose { lhs, rhs, .. } => {
             collect_free(lhs, bound, out);
             collect_free(rhs, bound, out);
         }
@@ -3076,6 +3076,21 @@ impl Infer {
             // so the operator's constraints (num/comparison) fall out for free.
             ExprKind::OpFunc(op) => {
                 let lam = crate::desugar::op_func(*op, span);
+                self.infer_expr(&lam, env)
+            }
+
+            // `f >> g` / `f << g` — desugar to a composition lambda, then infer.
+            ExprKind::Compose {
+                lhs,
+                rhs,
+                right_to_left,
+            } => {
+                let lam = crate::desugar::compose(
+                    (**lhs).clone(),
+                    (**rhs).clone(),
+                    *right_to_left,
+                    span,
+                );
                 self.infer_expr(&lam, env)
             }
 

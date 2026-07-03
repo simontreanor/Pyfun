@@ -707,6 +707,61 @@ fn e2e_operator_sections() {
 }
 
 #[test]
+fn composition_lowers_to_a_single_argument_lambda() {
+    // `f >> g` → `fun _pf_x -> g (f _pf_x)`; the reserved param avoids capture.
+    let py = pyfun::compile("let inc x = x + 1\nlet h = inc >> inc").unwrap();
+    assert!(py.contains("h = lambda _pf_x: inc(inc(_pf_x))"), "{py}");
+}
+
+#[test]
+fn e2e_function_composition_both_directions() {
+    run_and_check(
+        "
+        let inc x = x + 1
+        let double x = x * 2
+        let ltr = inc >> double
+        let rtl = inc << double
+        let a = ltr 3
+        let b = rtl 3
+        let piped = 5 |> inc >> double
+        let mapped = List.map (double >> inc) [1, 2, 3]
+        let clean = (String.strip >> String.upper) \"  hi  \"
+        ",
+        &[
+            // `>>` = double(inc 3) = 8; `<<` = inc(double 3) = 7.
+            ("a", "8"),
+            ("b", "7"),
+            // composition binds tighter than `|>`: (inc >> double) 5 = 12.
+            ("piped", "12"),
+            ("mapped", "[3, 5, 7]"),
+            ("clean", "HI"),
+        ],
+    );
+}
+
+// ---------- raw strings (`DESIGN.md` §7.1) ----------
+
+#[test]
+fn raw_string_re_escapes_backslashes_on_emit() {
+    let py = pyfun::compile("let p = r\"C:\\path\"").unwrap();
+    // The raw content `C:\path` re-escapes to a valid Python literal.
+    assert!(py.contains("p = \"C:\\\\path\""), "{py}");
+}
+
+#[test]
+fn e2e_raw_string_backslashes_are_literal() {
+    // Encoding-independent checks via `String.len`: `\n` in a raw string is two chars
+    // (backslash + n), and `\"` is two literal chars that don't end the string.
+    run_and_check(
+        "
+        let path_len = String.len r\"a\\nb\"
+        let quote_len = String.len r\"a\\\"b\"
+        ",
+        &[("path_len", "4"), ("quote_len", "4")],
+    );
+}
+
+#[test]
 fn fstring_is_an_application_argument() {
     // An f-string juxtaposed as a call argument (`print f"..."`, no parens) is a
     // single application, not two statements — `starts_atom` must accept `FStr`.

@@ -148,6 +148,31 @@ fn accepts_operator_sections() {
 }
 
 #[test]
+fn accepts_function_composition() {
+    // `>>` and `<<` compose; the composed function is first-class and curries.
+    assert!(pyfun::check("let inc x = x + 1\nlet f = inc >> inc\nlet r = f 3").is_ok());
+    assert!(pyfun::check("let inc x = x + 1\nlet f = inc << inc\nlet r = f 3").is_ok());
+    // Composition threads types through: `String -> String >> String -> int` etc.
+    assert!(pyfun::check("let f = String.strip >> String.len\nlet n = f \"  hi \"").is_ok());
+    // As an argument to a higher-order function.
+    assert!(
+        pyfun::check("let d x = x * 2\nlet i x = x + 1\nlet r = List.map (d >> i) [1, 2, 3]")
+            .is_ok()
+    );
+}
+
+#[test]
+fn rejects_composition_of_incompatible_functions() {
+    // `>>` requires the output of the first to match the input of the second:
+    // `String.len : string -> int`, then `String.upper : string -> string` — feeding
+    // an `int` to `String.upper` is a type error.
+    assert_error_contains(
+        "let f = String.len >> String.upper\nlet r = f \"x\"",
+        "int",
+    );
+}
+
+#[test]
 fn accepts_as_patterns() {
     // Both the inner var and the `as` name are bound.
     assert!(

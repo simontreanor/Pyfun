@@ -175,6 +175,46 @@ pub fn op_func(op: BinOp, span: Span) -> Expr {
     )
 }
 
+/// Function composition `lhs >> rhs` / `lhs << rhs`, desugared to a single-argument
+/// lambda `fun x -> rhs (lhs x)` (left-to-right `>>`) resp. `fun x -> lhs (rhs x)`
+/// (right-to-left `<<`). Ordinary inference and lowering then handle it (currying,
+/// the operands' own constraints), like [`op_func`]; the pretty-printer keeps the
+/// operator spelling.
+///
+/// **Capture:** unlike `op_func` (whose body uses only its own params), the body
+/// here embeds the operands `lhs`/`rhs`, which may reference outer variables. So the
+/// lambda parameter is chosen to be **free of both operands' free variables**
+/// (`_pf_x`, else `_pf_x0`, `_pf_x1`, …) — no capture is possible.
+pub fn compose(lhs: Expr, rhs: Expr, right_to_left: bool, span: Span) -> Expr {
+    let mut free = std::collections::HashSet::new();
+    let bound = std::collections::HashSet::new();
+    crate::types::collect_free(&lhs, &bound, &mut free);
+    crate::types::collect_free(&rhs, &bound, &mut free);
+    let param = fresh_name("_pf_x", &free);
+
+    // `>>` applies `lhs` first, then `rhs`; `<<` (math ∘) applies `rhs` first.
+    let (first, second) = if right_to_left { (rhs, lhs) } else { (lhs, rhs) };
+    let body = app(second, app(first, var(&param, span), span), span);
+    mk(
+        ExprKind::Fn {
+            params: vec![Param {
+                name: param,
+                span: NodeSpan::new(span),
+            }],
+            body: Box::new(body),
+        },
+        span,
+    )
+}
+
+/// A name based on `base` that is not in `taken`: `base`, else `base0`, `base1`, ….
+fn fresh_name(base: &str, taken: &std::collections::HashSet<String>) -> String {
+    if !taken.contains(base) {
+        return base.to_string();
+    }
+    (0..).map(|i| format!("{base}{i}")).find(|n| !taken.contains(n)).unwrap()
+}
+
 fn var(name: &str, span: Span) -> Expr {
     mk(ExprKind::Var(name.to_string()), span)
 }

@@ -117,6 +117,14 @@ let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
 let seven = inc2 five
 
+# Function composition operators: `>>` is left-to-right (f then g), `<<` is
+# right-to-left (math ∘). Tighter than `|>`, so `x |> f >> g` = `x |> (f >> g)`.
+let twice x = x * 2
+let incThenDouble = inc >> twice
+let doubleThenInc = inc << twice
+let eight = incThenDouble 3            # twice (inc 3) = 8
+let sevenC = doubleThenInc 3           # inc (twice 3) = 7
+
 # In-file modules: a namespace of `let` bindings. Members see each other
 # unqualified inside (`area` calls `square`); outside they are `Geom.member`.
 module Geom =
@@ -322,6 +330,10 @@ let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
 let cafeLen = String.len "café"                # 4 (é is one character)
 # Escapes: \" \\ \n \t \r and Rust-style \u{HEX} (decoded to the character).
 let emojiLen = String.len "hi \u{1F600}"       # 4 ("hi " + 😀)
+# Raw strings `r"..."` — no escape processing, backslashes are literal (handy for
+# Windows paths and regex). `r"a\nb"` is 4 chars (a, \, n, b), not a newline.
+let winPath = r"C:\Users\pyfun"                # C:\Users\pyfun (literal backslashes)
+let rawLen = String.len r"a\nb"                # 4 (backslash and n are literal)
 
 # String interpolation: `f"...{expr}..."` (Python-style). Holes take any full
 # expression and are stringified; `{{`/`}}` are literal braces. Lowers 1:1 to a
@@ -342,6 +354,8 @@ print stillFortyTwo                   # Some(42)  (as-pattern binds the whole va
 print tenEven                          # True  (mutual recursion: isEven/isOdd)
 print (fact 5)                       # 120  (recursive)
 print seven                          # 7
+print eight                          # 8   (inc >> twice)
+print sevenC                         # 7   (inc << twice)
 print (rank Green)                   # 2
 print floor                          # 20
 print speed                          # 10.0  (true division)
@@ -442,6 +456,8 @@ print parsed                          # 41   (total parse of "41")
 print unparsed                        # 0    (String.toInt "x" -> None)
 print cafeLen                         # 4    (UTF-8 "café" is 4 characters)
 print emojiLen                        # 4    (\u{1F600} is one character)
+print winPath                         # C:\Users\pyfun   (raw string)
+print rawLen                          # 4    (r"a\nb" is 4 literal characters)
 print scoreLine                       # Ada scored 41 (ADA)   (f-string)
 print sumLine                         # 41 doubled is 82
 print debugLine                       # parsed=41             (f-string `{x=}`)

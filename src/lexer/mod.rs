@@ -275,6 +275,10 @@ impl<'a> Lexer<'a> {
             // space stays ordinary application, matching Python; only the pathological
             // adjacent `f"x"` changes meaning (it was `f` applied to `"x"`).
             b'f' if self.peek2() == Some(b'"') => self.lex_fstring(start),
+            // An adjacent `r"` (no space) opens a raw string — no escape processing,
+            // backslashes stay literal. `r "x"` with a space is `r` applied to a
+            // string (like `f`). `rf"..."` is out of scope.
+            b'r' if self.peek2() == Some(b'"') => self.lex_raw_string(start),
             c if is_ident_start(c) => {
                 self.lex_ident(start);
                 Ok(())
@@ -537,6 +541,38 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Lex a raw string `r"..."` (cursor at the `r`): no escape processing, so
+    /// backslashes are literal. Follows Python's raw-string rule — a `\` keeps both
+    /// itself and the next character literally *and* that next character does not
+    /// terminate the string, so `r"a\"b"` is the four chars `a \ " b` and a raw
+    /// string cannot end in a lone backslash-before-quote (that just continues).
+    /// Produces an ordinary [`Tok::Str`] with the raw content; the emitter re-escapes
+    /// on output, so the round-trip is faithful.
+    fn lex_raw_string(&mut self, start: usize) -> Result<(), LexError> {
+        self.pos += 2; // skip `r"`
+        let mut value = String::new();
+        loop {
+            match self.peek() {
+                None => return Err(self.err(start, "unterminated raw string literal")),
+                Some(b'"') => {
+                    self.pos += 1;
+                    self.push(Tok::Str(value), start);
+                    return Ok(());
+                }
+                // A backslash is literal, and the following character is taken
+                // literally too (so `\"` does not close the string).
+                Some(b'\\') => {
+                    value.push('\\');
+                    self.pos += 1;
+                    if self.peek().is_some() {
+                        self.push_char(&mut value);
+                    }
+                }
+                Some(_) => self.push_char(&mut value),
+            }
+        }
+    }
+
     /// Decode a string escape, cursor just past the `\`, consuming the whole escape
     /// and returning the character. Shared by `lex_string` and `lex_fstring`.
     /// Supports `\"` `\\` `\n` `\t` `\r` and `\u{HEX}` (Rust-style, 1–6 hex digits).
@@ -631,6 +667,19 @@ impl<'a> Lexer<'a> {
         if c == b'*' && self.peek2() == Some(b'*') {
             self.pos += 2;
             self.push(Tok::StarStar, start);
+            return Ok(());
+        }
+        // Function composition `>>` / `<<` — two tokens, lexed before single `<`/`>`
+        // and the `<=`/`>=`/`<-` pair. `<<` is one token, so it never opens a unit
+        // annotation (which keys off a single `<` adjacent to a literal).
+        if c == b'>' && self.peek2() == Some(b'>') {
+            self.pos += 2;
+            self.push(Tok::GtGt, start);
+            return Ok(());
+        }
+        if c == b'<' && self.peek2() == Some(b'<') {
+            self.pos += 2;
+            self.push(Tok::LtLt, start);
             return Ok(());
         }
         // Two-char comparison / equality operators (checked before `=` `!` `<` `>`).
@@ -937,6 +986,85 @@ mod tests {
                 Tok::Int(5),
                 Tok::Eof
             ]
+        );
+    }
+
+    #[test]
+    fn lexes_composition_operators() {
+        assert_eq!(
+            kinds("f >> g << h"),
+            vec![
+                Tok::Ident("f".to_string()),
+                Tok::GtGt,
+                Tok::Ident("g".to_string()),
+                Tok::LtLt,
+                Tok::Ident("h".to_string()),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn composition_does_not_disturb_comparison_or_units_or_reassignment() {
+        // `<<`/`>>` are single tokens lexed before `<`/`>`, so ordinary comparison,
+        // a `5<m>` unit annotation, and `<-` reassignment all still lex as before.
+        assert_eq!(
+            kinds("a < b"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::Lt,
+                Tok::Ident("b".to_string()),
+                Tok::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("5<m>"),
+            vec![
+                Tok::Int(5),
+                Tok::Lt,
+                Tok::Ident("m".to_string()),
+                Tok::Gt,
+                Tok::Eof
+            ]
+        );
+        assert_eq!(
+            kinds("x <- v"),
+            vec![
+                Tok::Ident("x".to_string()),
+                Tok::LArrow,
+                Tok::Ident("v".to_string()),
+                Tok::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_a_raw_string_with_literal_backslashes() {
+        // `r"C:\path\n"` — backslashes and the following char are literal (no escape
+        // processing), producing an ordinary `Tok::Str` with the raw content.
+        assert_eq!(
+            kinds(r#"r"C:\path\n""#),
+            vec![Tok::Str(r"C:\path\n".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn raw_string_backslash_quote_is_two_literal_chars() {
+        // Python's rule: `\"` inside a raw string is a literal backslash + quote and
+        // does NOT terminate the string.
+        assert_eq!(
+            kinds(r#"r"a\"b""#),
+            vec![Tok::Str(r#"a\"b"#.to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn r_with_a_space_is_an_identifier_then_a_string() {
+        // Only an *adjacent* `r"` opens a raw string; `r "x"` stays `r` applied to a
+        // string (matching the `f"..."` rule).
+        assert_eq!(
+            kinds(r#"r "x""#),
+            vec![Tok::Ident("r".to_string()), Tok::Str("x".to_string()), Tok::Eof]
         );
     }
 

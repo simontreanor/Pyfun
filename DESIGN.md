@@ -340,6 +340,18 @@ the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Format speci
 and multi-line `f"""..."""` are deferred. Covered by
 lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
 
+**Raw strings — `r"..."` (implemented).** A raw string suppresses escape processing, so backslashes are
+literal — handy for Windows paths (`r"C:\Users\pyfun"`) and regex via `extern`. **Lexer-only, no AST /
+type / lowering change:** an *adjacent* `r"` (like `f"`; `r "x"` with a space stays `r` applied to a
+string) opens `lex_raw_string`, which reads to the closing `"` **without** decoding escapes, following
+Python's raw-string rule — a `\` keeps *both* itself and the following character literal, so `\"` is two
+literal characters that do **not** terminate the string (`r"a\"b"` is the four chars `a \ " b`), and a raw
+string cannot end in a lone backslash-before-quote (it just continues). It produces an ordinary
+`Tok::Str` holding the raw content; from there it is an ordinary string literal, and the emitter's
+existing `string_literal` escaper re-escapes on output (`C:\path` → Python `"C:\\path"` → reads back as
+`C:\path`), so the round-trip is faithful with zero downstream changes. Combined `rf"..."` (raw +
+interpolated) is out of scope. Covered by lexer + compile tests + `examples/hello.pyfun`.
+
 **`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns
 `Error`); the only reason to catch is the **Python FFI boundary** — an `extern` call can throw. So rather
 than importing Python's imperative `try/except/finally/raise` (and an exception class hierarchy Pyfun has
@@ -754,6 +766,18 @@ constraint with polymorphic literals (step b).
    function value would silently drop their short-circuit evaluation (F# excludes `&&`/`||` for the
    same reason). This makes point-free style with the `List`/`Seq` combinators natural: `List.fold (+)
    0 xs`, `List.map ((*) 2) xs`.
+9. **Function composition `>>` / `<<`. ✅ implemented.** `f >> g` is left-to-right composition
+   (`fun x -> g (f x)`, f then g); `f << g` is right-to-left / math ∘ (`fun x -> f (g x)`, g then f).
+   Two-char lexer tokens (`GtGt`/`LtLt`), lexed before single `<`/`>` and `<=`/`>=`/`<-` — so `<<` is one
+   token and never opens a `5<m>` unit annotation. A new precedence level `parse_compose` sits between
+   `parse_pipe` and `parse_or`: composition binds **tighter than `|>`** (`x |> f >> g` = `x |> (f >> g)`,
+   the useful reading) and looser than everything else, and is **left-associative**. `ExprKind::Compose`
+   **desugars to a composition lambda** (`desugar::compose`) at inference and lowering, like the operator
+   sections — so currying and the operands' constraints fall out with no bespoke checker/emitter code; the
+   pretty-printer keeps `(f >> g)`/`(f << g)`. Unlike a section (whose body uses only its own params) the
+   body embeds the operands, which may reference outer variables, so the lambda parameter is picked free of
+   both operands' free variables (`_pf_x`, else `_pf_x0`, …) — no capture. Pairs naturally with the
+   combinators: `List.map (double >> inc) xs`.
 
 **Why a *closed* set of built-in constraints, not user type classes.** `num` and `comparison` are
 baked into the compiler; there is **no `class`/`instance` surface syntax**. The set stays closed,

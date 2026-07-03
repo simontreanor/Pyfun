@@ -522,7 +522,7 @@ impl Resolver {
             }
             // `(op)` is a leaf — it contains no identifiers to resolve.
             ExprKind::OpFunc(_) => {}
-            ExprKind::Pipe { lhs, rhs } => {
+            ExprKind::Pipe { lhs, rhs } | ExprKind::Compose { lhs, rhs, .. } => {
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);
             }

@@ -667,6 +667,21 @@ impl Lowerer {
                 self.lower_value(&lam, locals)
             }
 
+            // `f >> g` / `f << g` — desugar to a composition lambda, then lower.
+            ExprKind::Compose {
+                lhs,
+                rhs,
+                right_to_left,
+            } => {
+                let lam = crate::desugar::compose(
+                    (**lhs).clone(),
+                    (**rhs).clone(),
+                    *right_to_left,
+                    expr.span(),
+                );
+                self.lower_value(&lam, locals)
+            }
+
             ExprKind::If { cond, then, else_ } => {
                 let (mut stmts, test) = self.lower_value(cond, locals)?;
                 let (then_stmts, then_val) = self.lower_value(then, locals)?;
@@ -2506,7 +2521,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             scan_scope(func, assigned, bound);
             scan_scope(arg, assigned, bound);
         }
-        ExprKind::Pipe { lhs, rhs } => {
+        ExprKind::Pipe { lhs, rhs } | ExprKind::Compose { lhs, rhs, .. } => {
             scan_scope(lhs, assigned, bound);
             scan_scope(rhs, assigned, bound);
         }

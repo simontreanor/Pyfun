@@ -340,6 +340,14 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Pipe { lhs, rhs } => {
             format!("({} |> {})", print_expr(lhs), print_expr(rhs))
         }
+        ExprKind::Compose {
+            lhs,
+            rhs,
+            right_to_left,
+        } => {
+            let op = if *right_to_left { "<<" } else { ">>" };
+            format!("({} {op} {})", print_expr(lhs), print_expr(rhs))
+        }
         ExprKind::Ce { builder, items } => {
             let items: Vec<String> = items.iter().map(print_ce_item).collect();
             format!("{} {{ {} }}", builder.name(), items.join(" "))

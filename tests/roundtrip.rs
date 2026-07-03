@@ -76,6 +76,12 @@ const PROGRAMS: &[&str] = &[
     "let r = 5 < m",
     "let curried = f a b c",
     "let piped = x |> f |> g a",
+    // Function composition `>>` / `<<`: left-associative, tighter than `|>`.
+    "let h = f >> g",
+    "let h = f << g",
+    "let h = f >> g >> h",
+    "let piped = x |> f >> g",
+    "let mapped = List.map (double >> inc) xs",
     "let choose = if cond then a else b",
     // `let _ = e` discards a result (top-level and in a block).
     "let _ = f 1",
@@ -288,6 +294,46 @@ fn pipe_binds_looser_than_application() {
     assert!(
         matches!(rhs.kind, ExprKind::App { .. }),
         "rhs of pipe should be an application"
+    );
+}
+
+#[test]
+fn composition_binds_tighter_than_pipe() {
+    // `x |> f >> g` must be `Pipe(x, Compose(f, g))`, not `Compose(Pipe(x, f), g)`.
+    let module = parse("let r = x |> f >> g").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Pipe { lhs, rhs } = &binding.value.kind else {
+        panic!("expected a pipe")
+    };
+    assert_eq!(lhs.kind, ExprKind::Var("x".to_string()));
+    assert!(
+        matches!(rhs.kind, ExprKind::Compose { .. }),
+        "rhs of pipe should be a composition"
+    );
+}
+
+#[test]
+fn composition_is_left_associative() {
+    // `f >> g >> h` = `(f >> g) >> h`, and `>>` sets `right_to_left = false`.
+    let module = parse("let r = f >> g >> h").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    let ExprKind::Compose {
+        lhs,
+        rhs,
+        right_to_left,
+    } = &binding.value.kind
+    else {
+        panic!("expected a composition")
+    };
+    assert!(!right_to_left, "`>>` is left-to-right");
+    assert_eq!(rhs.kind, ExprKind::Var("h".to_string()));
+    assert!(
+        matches!(lhs.kind, ExprKind::Compose { .. }),
+        "left-associative: lhs is itself a composition"
     );
 }
 
