@@ -123,6 +123,19 @@ rather than checked — almost none of this is in the type system). Each was ver
   checking + single-source-of-truth, and just functions. A future small `Format` module could ship these
   over the existing `String` ops. (The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r`
   mini-language is excluded. Multi-line `f"""` was a *separate*, uncontroversial feature — done 2026-07-03.)
+- **Unicode / symbol units of measure (`<Ω>`, `<μ>`, `<°>`, superscript `m²`)** — explored + dropped
+  2026-07-04. Measure names are ordinary identifiers (same lexer path as any name), so this can't be
+  scoped to units — it's language-wide Unicode identifiers, which would also leak into Python names and
+  void the "measures erase, so no interop cost" argument. Decisively: detecting Unicode letters is free
+  (std `char::is_alphabetic`), but **normalization is not in std**, and NFC/NFKC is the *only* thing that
+  closes the homoglyph footgun (µ micro U+00B5 vs μ mu U+03BC, Ω ohm U+2126 vs Ω omega U+03A9 render
+  identically) — so it can't be made safe within the **dependency-free** constraint (a non-negotiable).
+  The safe alternative — a **display alias** (`measure ohm = "Ω"`, ASCII source, symbol rendered only in
+  hover/errors) — is doable and zero-dep-clean but mostly-cosmetic machinery, so it too is parked. And
+  **runtime unit *printing* is a separate wall**: units erase to plain numbers, so the value carries no
+  unit; `print f"{speed} m/s"` (explicit) is the answer, not compiler-injected units. The `°`/temperature
+  case has an extra semantic block regardless: angles are dimensionless and `°C`/`°F` are affine, unsound
+  in a multiplicative unit system. Use ASCII measure names (`ohm`, `deg`, `celsius`) with eyes open.
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
