@@ -41,7 +41,7 @@
     "declarations": {
       "patterns": [
         {
-          "comment": "`let mut name` — `mut` is the mutability escape hatch (opt-out of immutable-by-default). Honest scope (it *is* a storage modifier) + a `.mutable` tail the extension pins to an amber 'caution' colour via configurationDefaults.",
+          "comment": "`let mut name` — `mut` is the mutability escape hatch (opt-out of immutable-by-default). Honest scope (it *is* a storage modifier) + a `.mutable` tail the extension pins to keyword pink via configurationDefaults, matching Rust's `mut`.",
           "match": "\\b(let)\\b\\s+(mut)\\b\\s*([a-z_][A-Za-z0-9_']*)?",
           "captures": {
             "1": { "name": "keyword.declaration.pyfun" },
@@ -60,7 +60,7 @@
           }
         },
         {
-          "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; an escape hatch. Honest keyword scope + a `.extern` tail the extension pins to the same amber 'caution' colour.",
+          "comment": "`extern` — the untyped-on-the-Python-side FFI boundary, effectful-by-default; an escape hatch. Honest keyword scope + a `.extern` tail the extension pins to the same keyword pink as `mut`.",
           "match": "\\b(extern)\\b",
           "name": "keyword.other.extern.pyfun"
         },
@@ -117,7 +117,7 @@
           "match": "\\|>"
         },
         {
-          "comment": "`<-` reassignment — the act of mutation. Honest operator scope + a `.mutation` tail pinned to the same amber 'caution' colour as `mut`.",
+          "comment": "`<-` reassignment — the act of mutation. Honest operator scope + a `.mutation` tail pinned to the same keyword pink as `mut`.",
           "name": "keyword.operator.mutation.pyfun",
           "match": "<-"
         },

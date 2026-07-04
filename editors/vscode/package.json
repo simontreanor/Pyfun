@@ -2,7 +2,7 @@
   "name": "pyfun",
   "displayName": "Pyfun",
   "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "publisher": "pyfun",
   "repository": {
     "type": "git",
@@ -54,13 +54,24 @@
       "editor.tokenColorCustomizations": {
         "textMateRules": [
           {
+            "comment": "Declaration keywords `let`/`fun`/`type`/`measure`/`module` — the 'introduces a name' family, pinned to cyan (Monokai's `let` colour) so they read uniformly across themes. Control-flow keywords and the `mut`/`<-`/`extern` escape hatches stay pink.",
+            "scope": [
+              "keyword.declaration.pyfun"
+            ],
+            "settings": {
+              "foreground": "#66D9EF",
+              "fontStyle": ""
+            }
+          },
+          {
+            "comment": "`mut`/`<-`/`extern` — the mutability + FFI escape hatches, pinned to Monokai's keyword pink, matching Rust's `mut` (a `storage.modifier`).",
             "scope": [
               "storage.modifier.mutable.pyfun",
               "keyword.operator.mutation.pyfun",
               "keyword.other.extern.pyfun"
             ],
             "settings": {
-              "foreground": "#CC5E00",
+              "foreground": "#F92672",
               "fontStyle": ""
             }
           }
