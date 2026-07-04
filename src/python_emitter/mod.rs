@@ -97,13 +97,16 @@ pub enum PyPattern {
     },
     /// `case (a, b)` — a sequence pattern, used for tuple patterns.
     Sequence(Vec<PyPattern>),
-    /// `case [a, b, *rest]` — a **list** sequence pattern (brackets), used for list
-    /// patterns. `elems` are the fixed leading sub-patterns; `star` is the trailing
-    /// rest capture name (`rest` for `*rest`, `_` for `*_`), or `None` for a fixed
-    /// length. Brackets (not parens) so it matches a Python `list` structurally.
+    /// `case [a, b, *mid, z]` — a **list** sequence pattern (brackets), used for
+    /// list patterns. `elems` are the fixed sub-patterns before the star; `star` is
+    /// the rest capture name (`mid` for `*mid`, `_` for `*_`), or `None` for a fixed
+    /// length; `suffix` are the fixed sub-patterns after the star (non-empty only
+    /// with a star — Python allows one star anywhere). Brackets (not parens) so it
+    /// matches a Python `list` structurally.
     ListSeq {
         elems: Vec<PyPattern>,
         star: Option<String>,
+        suffix: Vec<PyPattern>,
     },
     /// `case a | b | c` — an or-pattern.
     Or(Vec<PyPattern>),
@@ -483,11 +486,16 @@ fn pattern(pat: &PyPattern) -> String {
             let elems: Vec<String> = elems.iter().map(pattern).collect();
             format!("({})", elems.join(", "))
         }
-        PyPattern::ListSeq { elems, star } => {
+        PyPattern::ListSeq {
+            elems,
+            star,
+            suffix,
+        } => {
             let mut parts: Vec<String> = elems.iter().map(pattern).collect();
             if let Some(name) = star {
                 parts.push(format!("*{name}"));
             }
+            parts.extend(suffix.iter().map(pattern));
             format!("[{}]", parts.join(", "))
         }
         PyPattern::Or(alts) => {

@@ -524,17 +524,21 @@ pub enum Pattern {
     Tuple {
         elems: Vec<Pattern>,
     },
-    /// `[a, b, *rest]` — a sequence pattern over a `List` (`DESIGN.md` §7.2).
-    /// `prefix` are the fixed leading element patterns; `rest` is the trailing
+    /// `[a, b, *mid, z]` — a sequence pattern over a `List` (`DESIGN.md` §7.2).
+    /// `prefix` are the fixed element patterns before the star; `rest` is the
     /// star's sub-pattern (`*rest` → `Var`, `*_` → `Wildcard`), or `None` when there
-    /// is no star. So `[]` → prefix `[]`, rest `None`; `[a, b]` → prefix `[a, b]`,
-    /// rest `None`; `[a, *r]` → prefix `[a]`, rest `Some(r)`; `[*r]` → prefix `[]`,
-    /// rest `Some(r)`. The star (when present) is always last (first-cut scope); it
-    /// binds the remaining tail, itself a `List`. Lowers to a Python list sequence
-    /// pattern `case [a, b, *rest]:` (brackets, unlike a tuple's parens).
+    /// is no star; `suffix` are the fixed element patterns **after** the star. So
+    /// `[]` → all empty; `[a, b]` → prefix `[a, b]`; `[a, *r]` → prefix `[a]`, rest
+    /// `Some(r)`; `[*r, z]` → rest `Some(r)`, suffix `[z]`; `[a, *r, z]` uses all
+    /// three. At most one star (Python's rule); invariant: a non-empty `suffix`
+    /// implies `rest` is `Some` (suffix elements exist only after a star). The star
+    /// binds the unmatched middle slice, itself a `List`. Lowers 1:1 to a Python
+    /// list sequence pattern `case [a, b, *mid, z]:` (brackets, unlike a tuple's
+    /// parens).
     List {
         prefix: Vec<Pattern>,
         rest: Option<Box<Pattern>>,
+        suffix: Vec<Pattern>,
     },
     /// `a | b | c` — an or-pattern (`DESIGN.md` §7.2): matches if any alternative
     /// does. All alternatives must bind the same variables at the same types; lowers

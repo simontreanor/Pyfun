@@ -1577,10 +1577,41 @@ fn default_matrix(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
 fn is_wildcard_like(pat: &Pattern) -> bool {
     match pat {
         Pattern::Wildcard | Pattern::Var { .. } => true,
-        Pattern::List { prefix, rest } if prefix.is_empty() => {
+        Pattern::List {
+            prefix,
+            rest,
+            suffix,
+        } if prefix.is_empty() && suffix.is_empty() => {
             rest.as_deref().is_some_and(is_wildcard_like)
         }
         _ => false,
+    }
+}
+
+/// Whether a pattern contains (at any depth) a list pattern with elements **after**
+/// the star (`[*r, s…]`). Only such patterns reproduce themselves under `Cons`
+/// specialization, so only they need the cycle guard in [`Infer::useful`].
+fn has_suffix_star(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::List {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            !suffix.is_empty()
+                || prefix.iter().any(has_suffix_star)
+                || rest.as_deref().is_some_and(has_suffix_star)
+        }
+        Pattern::Ctor { args, .. } => args.iter().any(has_suffix_star),
+        Pattern::Record { fields, .. } => fields.iter().any(|f| has_suffix_star(&f.pattern)),
+        Pattern::Tuple { elems } => elems.iter().any(has_suffix_star),
+        Pattern::Or(alts) => alts.iter().any(has_suffix_star),
+        Pattern::As { pattern, .. } => has_suffix_star(pattern),
+        Pattern::Wildcard
+        | Pattern::Var { .. }
+        | Pattern::Int(_)
+        | Pattern::Str(_)
+        | Pattern::Bool(_) => false,
     }
 }
 
@@ -1718,11 +1749,16 @@ fn pattern_names(pat: &Pattern, out: &mut HashSet<String>) {
             fields.iter().for_each(|f| pattern_names(&f.pattern, out))
         }
         Pattern::Tuple { elems } => elems.iter().for_each(|e| pattern_names(e, out)),
-        Pattern::List { prefix, rest } => {
+        Pattern::List {
+            prefix,
+            rest,
+            suffix,
+        } => {
             prefix.iter().for_each(|p| pattern_names(p, out));
             if let Some(r) = rest {
                 pattern_names(r, out);
             }
+            suffix.iter().for_each(|p| pattern_names(p, out));
         }
         Pattern::Or(alts) => {
             if let Some(a) = alts.first() {
@@ -2729,6 +2765,15 @@ struct Infer {
     /// Collected `(span, ty)` pairs (unresolved — resolved in [`run`] once the
     /// substitution is final). Empty unless `record_types` is set.
     recorded: Vec<(Span, Ty)>,
+    /// Set per `match` by [`check_exhaustive`](Infer::check_exhaustive) when an arm
+    /// contains a suffix-star list pattern (`[*r, s…]`) — the only patterns that can
+    /// reproduce themselves under specialization — enabling the cycle guard in
+    /// [`useful`](Infer::useful). Off for every other program, so the guard is
+    /// zero-cost in the common case.
+    seq_guard: bool,
+    /// The usefulness sub-problems currently on the recursion stack (keyed on the
+    /// order-normalized matrix + column types), for the suffix-star cycle guard.
+    seq_visiting: HashSet<String>,
 }
 
 impl Infer {
@@ -4120,10 +4165,14 @@ impl Infer {
                 }
                 Ok(())
             }
-            // `[a, b, *rest]` — a sequence pattern over `List a`: each prefix element
-            // binds against `a`, and the star's binder against the tail `List a`
-            // (`DESIGN.md` §7.2).
-            Pattern::List { prefix, rest } => {
+            // `[a, b, *mid, z]` — a sequence pattern over `List a`: each prefix and
+            // suffix element binds against `a`, and the star's binder against the
+            // unmatched middle slice, itself a `List a` (`DESIGN.md` §7.2).
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
                 let elem = self.fresh();
                 let list_ty = Ty::Con("List".to_string(), vec![elem.clone()]);
                 self.unify(&list_ty, scrut_ty, span)?;
@@ -4132,6 +4181,9 @@ impl Infer {
                 }
                 if let Some(r) = rest {
                     self.bind_pattern(r, &list_ty, span, env)?;
+                }
+                for sub in suffix {
+                    self.bind_pattern(sub, &elem, span, env)?;
                 }
                 Ok(())
             }
@@ -4204,6 +4256,11 @@ impl Infer {
             .filter(|a| a.guard.is_none())
             .map(|a| vec![a.pattern.clone()])
             .collect();
+        // A suffix-star list pattern (`[*r, s…]`) reproduces itself under `Cons`
+        // specialization (see `row_heads`), so `useful` needs its cycle guard; every
+        // other pattern shrinks strictly, so the guard stays off (zero cost).
+        self.seq_guard = matrix.iter().flatten().any(has_suffix_star);
+        self.seq_visiting.clear();
         let types = vec![self.apply(scrut_ty)];
         let Some(witness) = self.useful(&matrix, &types) else {
             return Ok(());
@@ -4231,7 +4288,37 @@ impl Infer {
         // §7.2). Deeper or-patterns surface as first-column heads in the recursive
         // calls and are expanded there.
         let matrix = expand_first_column(matrix);
-        let matrix = &matrix[..];
+        // Cycle guard, active only when a suffix-star list pattern is in play: that
+        // pattern reproduces itself under `Cons` specialization (`row_heads`), so
+        // the recursion can re-reach an already-open sub-problem. Re-reaching one
+        // means "useful here iff useful here with a strictly smaller witness" —
+        // every cycle passes through a `Cons` specialization, which peels one list
+        // element off any witness — an infinite descent, so no finite witness
+        // exists via that path: answer "not useful" (the least fixed point). The
+        // key order-normalizes rows (sorted + deduped — the matrix is a union of
+        // rows) so a cycle is caught regardless of row order.
+        let guard_key = self.seq_guard.then(|| {
+            let mut rows: Vec<String> = matrix.iter().map(|r| format!("{r:?}")).collect();
+            rows.sort();
+            rows.dedup();
+            let tys: Vec<Ty> = types.iter().map(|t| self.apply(t)).collect();
+            format!("{rows:?} :: {tys:?}")
+        });
+        if let Some(key) = &guard_key
+            && !self.seq_visiting.insert(key.clone())
+        {
+            return None;
+        }
+        let result = self.useful_at(&matrix, types);
+        if let Some(key) = &guard_key {
+            self.seq_visiting.remove(key);
+        }
+        result
+    }
+
+    /// The body of [`useful`](Infer::useful), after or-expansion and the cycle
+    /// guard: the constructor-signature case analysis over the first column.
+    fn useful_at(&mut self, matrix: &[Vec<Pattern>], types: &[Ty]) -> Option<Vec<Wit>> {
         let col_ty = self.apply(&types[0]);
         let rest = &types[1..];
         let present = self.present_tags(matrix);
@@ -4298,12 +4385,16 @@ impl Infer {
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
             Pattern::Record { ty, .. } => Some(Tag::Record(self.canonical_record(ty))),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
-            // A list pattern's head constructor: a non-empty prefix is Cons; `[]` is
-            // Nil; a lone star `[*r]` is *equivalent to `r`* (the star binds the whole
-            // list), so it delegates — `[*rest]`/`[*_]` → `None` (a catch-all)
-            // (`DESIGN.md` §7.2).
-            Pattern::List { prefix, rest } => {
-                if !prefix.is_empty() {
+            // A list pattern's head constructor: a non-empty prefix *or suffix*
+            // requires at least one element, so it is Cons; `[]` is Nil; a lone star
+            // `[*r]` is *equivalent to `r`* (the star binds the whole list), so it
+            // delegates — `[*rest]`/`[*_]` → `None` (a catch-all) (`DESIGN.md` §7.2).
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                if !prefix.is_empty() || !suffix.is_empty() {
                     Some(Tag::Cons)
                 } else {
                     match rest {
@@ -4395,12 +4486,15 @@ impl Infer {
     /// by `tag` keep their sub-patterns (records expand to all fields positionally,
     /// absent ones as wildcards); wildcard rows expand to `arity` wildcards; rows
     /// headed by another constructor are dropped. The first column is replaced by
-    /// the `arity` new columns.
+    /// the `arity` new columns. A row may expand to **several** rows: a suffix-star
+    /// list pattern `[*r, s…]` splits by length under `Cons` (see [`row_heads`]);
+    /// splitting a row into rows covering the same value set is sound — the matrix
+    /// is a union of rows.
     fn specialize(&self, matrix: &[Vec<Pattern>], tag: &Tag, arity: usize) -> Vec<Vec<Pattern>> {
         let mut out = Vec::new();
         for row in matrix {
             let (head, rest) = row.split_first().expect("non-empty row");
-            if let Some(mut expanded) = self.row_head(head, tag, arity) {
+            for mut expanded in self.row_heads(head, tag, arity) {
                 expanded.extend_from_slice(rest);
                 out.push(expanded);
             }
@@ -4408,19 +4502,24 @@ impl Infer {
         out
     }
 
-    /// The sub-patterns a row's head contributes when specializing by `tag`, or
-    /// `None` if the head is a different constructor (the row drops out).
-    fn row_head(&self, pat: &Pattern, tag: &Tag, arity: usize) -> Option<Vec<Pattern>> {
+    /// The rows a row's head contributes when specializing by `tag` (each a vector
+    /// of `arity` sub-patterns), or empty if the head is a different constructor
+    /// (the row drops out). All heads yield zero or one row except a suffix-star
+    /// list pattern under `Cons`, which yields two (a length case split).
+    fn row_heads(&self, pat: &Pattern, tag: &Tag, arity: usize) -> Vec<Vec<Pattern>> {
+        let single = |row: Option<Vec<Pattern>>| row.into_iter().collect::<Vec<_>>();
         match pat {
-            Pattern::Wildcard | Pattern::Var { .. } => Some(vec![Pattern::Wildcard; arity]),
-            Pattern::Bool(b) => (*tag == Tag::Bool(*b)).then(Vec::new),
-            Pattern::Int(n) => (*tag == Tag::Int(*n)).then(Vec::new),
-            Pattern::Str(s) => (*tag == Tag::Str(s.clone())).then(Vec::new),
+            Pattern::Wildcard | Pattern::Var { .. } => vec![vec![Pattern::Wildcard; arity]],
+            Pattern::Bool(b) => single((*tag == Tag::Bool(*b)).then(Vec::new)),
+            Pattern::Int(n) => single((*tag == Tag::Int(*n)).then(Vec::new)),
+            Pattern::Str(s) => single((*tag == Tag::Str(s.clone())).then(Vec::new)),
             Pattern::Ctor { name, args, .. } => {
-                (*tag == Tag::Sum(name.clone())).then(|| args.clone())
+                single((*tag == Tag::Sum(name.clone())).then(|| args.clone()))
             }
             Pattern::Record { fields, .. } => {
-                let Tag::Record(rname) = tag else { return None };
+                let Tag::Record(rname) = tag else {
+                    return Vec::new();
+                };
                 let order = &self.decls.records[rname].fields;
                 let mut slots = vec![Pattern::Wildcard; order.len()];
                 for fp in fields {
@@ -4428,38 +4527,68 @@ impl Infer {
                         slots[idx] = fp.pattern.clone();
                     }
                 }
-                Some(slots)
+                vec![slots]
             }
-            Pattern::Tuple { elems } => (*tag == Tag::Tuple(elems.len())).then(|| elems.clone()),
+            Pattern::Tuple { elems } => {
+                single((*tag == Tag::Tuple(elems.len())).then(|| elems.clone()))
+            }
             // A list pattern against the `Nil | Cons` model (`DESIGN.md` §7.2).
-            Pattern::List { prefix, rest } => {
-                if prefix.is_empty() {
-                    match rest {
-                        // `[]` matches only Nil (0 sub-patterns).
-                        None => (*tag == Tag::Nil).then(Vec::new),
-                        // A lone star `[*r]` ≡ `r` (binds the whole list): delegate.
-                        Some(r) => self.row_head(r, tag, arity),
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                if let Some((first, remaining)) = prefix.split_first() {
+                    // A non-empty prefix is `Cons first (tail-list-pattern)`: peel
+                    // the first element, the tail keeps the remaining prefix + the
+                    // same star + suffix (`[a,b,*r,z]` → `[a, [b,*r,z]]`). It never
+                    // matches Nil.
+                    if *tag == Tag::Cons {
+                        let tail = Pattern::List {
+                            prefix: remaining.to_vec(),
+                            rest: rest.clone(),
+                            suffix: suffix.clone(),
+                        };
+                        vec![vec![first.clone(), tail]]
+                    } else {
+                        Vec::new()
                     }
+                } else if rest.is_none() {
+                    // `[]` matches only Nil (0 sub-patterns; suffix is empty — a
+                    // suffix implies a star).
+                    single((*tag == Tag::Nil).then(Vec::new))
+                } else if suffix.is_empty() {
+                    // A lone star `[*r]` ≡ `r` (binds the whole list): delegate.
+                    self.row_heads(rest.as_deref().expect("star present"), tag, arity)
                 } else if *tag == Tag::Cons {
-                    // A non-empty `[a, rest…]` is `Cons a (tail-list-pattern)`: head =
-                    // the first element, tail = the list pattern of the remaining
-                    // prefix + the same star (`[a]` → `[a, []]`, `[a,b,*r]` → `[a,
-                    // [b,*r]]`).
-                    let (first, remaining) = prefix.split_first().expect("non-empty prefix");
-                    let tail = Pattern::List {
+                    // `[*r, s1, …, sk]` (star first, k ≥ 1 suffix elements) matches
+                    // lists of length ≥ k whose *last* k elements match `s1…sk`.
+                    // Under `Cons head tail` that splits by length into two rows
+                    // covering exactly the same values:
+                    //   • length == k: head is `s1`, tail is exactly `[s2, …, sk]`;
+                    //   • length  > k: head is anything (the star absorbs it), tail
+                    //     is the same pattern `[*r, s1, …, sk]` again.
+                    // The self-reproducing second row is what the cycle guard in
+                    // [`useful`](Infer::useful) terminates.
+                    let (first, remaining) = suffix.split_first().expect("non-empty suffix");
+                    let exact_tail = Pattern::List {
                         prefix: remaining.to_vec(),
-                        rest: rest.clone(),
+                        rest: None,
+                        suffix: Vec::new(),
                     };
-                    Some(vec![first.clone(), tail])
+                    vec![
+                        vec![first.clone(), exact_tail],
+                        vec![Pattern::Wildcard, pat.clone()],
+                    ]
                 } else {
-                    // A non-empty list never matches Nil.
-                    None
+                    // A suffix requires at least one element: never Nil.
+                    Vec::new()
                 }
             }
             // An as-pattern specializes exactly like its inner pattern.
-            Pattern::As { pattern, .. } => self.row_head(pattern, tag, arity),
+            Pattern::As { pattern, .. } => self.row_heads(pattern, tag, arity),
             // Or-patterns are expanded away in `useful` before specialization.
-            Pattern::Or(_) => None,
+            Pattern::Or(_) => Vec::new(),
         }
     }
 

@@ -473,12 +473,18 @@ pub fn print_pattern(pattern: &Pattern) -> String {
             let elems: Vec<String> = elems.iter().map(print_pattern).collect();
             format!("({})", elems.join(", "))
         }
-        // `[a, b, *rest]` / `[]` — a list sequence pattern (brackets).
-        Pattern::List { prefix, rest } => {
+        // `[a, b, *mid, z]` / `[]` — a list sequence pattern (brackets); the star
+        // may sit anywhere, with `suffix` elements after it.
+        Pattern::List {
+            prefix,
+            rest,
+            suffix,
+        } => {
             let mut parts: Vec<String> = prefix.iter().map(print_pattern).collect();
             if let Some(r) = rest {
                 parts.push(format!("*{}", print_pattern(r)));
             }
+            parts.extend(suffix.iter().map(print_pattern));
             format!("[{}]", parts.join(", "))
         }
         // Always parenthesized so a nested or-pattern (a constructor argument, a

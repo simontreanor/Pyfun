@@ -1298,6 +1298,47 @@ fn wildcard_rest_lowers_to_star_underscore() {
 }
 
 #[test]
+fn suffix_star_lowers_to_a_python_mid_star_sequence_pattern() {
+    // Python allows one star anywhere in a sequence pattern, so `[*init, last]`
+    // and `[a, *mid, z]` lower 1:1.
+    let py = pyfun::compile(
+        "let f xs =\n\
+         \x20 match xs:\n\
+         \x20 \x20 case []: 0\n\
+         \x20 \x20 case [x]: x\n\
+         \x20 \x20 case [a, *mid, z]: a + z",
+    )
+    .unwrap();
+    assert!(py.contains("case [a, *mid, z]:"), "{py}");
+    let py =
+        pyfun::compile("let f xs =\n  match xs:\n    case [*init, last]: last\n    case []: 0")
+            .unwrap();
+    assert!(py.contains("case [*init, last]:"), "{py}");
+}
+
+#[test]
+fn e2e_suffix_and_mid_star_patterns() {
+    run_and_check(
+        "
+        let lastOr fallback xs =
+          match xs:
+            case [*_, last]: last
+            case []: fallback
+        let bounds xs =
+          match xs:
+            case []: 0
+            case [x]: x
+            case [first, *mid, last]: first + last + List.len mid
+        let a = lastOr 0 [5, 6, 7]
+        let b = lastOr 9 []
+        let c = bounds [1, 2, 3, 4]
+        let d = bounds [7]
+        ",
+        &[("a", "7"), ("b", "9"), ("c", "7"), ("d", "7")],
+    );
+}
+
+#[test]
 fn e2e_list_sum_with_sequence_patterns() {
     run_and_check(
         "

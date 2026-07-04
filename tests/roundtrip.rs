@@ -118,6 +118,12 @@ const PROGRAMS: &[&str] = &[
     "let f xs =\n  match xs:\n    case [*all]: all",
     "let f xs =\n  match xs:\n    case [Some x, *rest]: x\n    case _: 0",
     "let f xs =\n  match xs:\n    case [0, y]: y\n    case _: 0",
+    // Non-last (suffix) stars: `[*init, last]` and `[a, *mid, z]`, incl. nested
+    // element patterns on both sides of the star.
+    "let f xs =\n  match xs:\n    case []: 0\n    case [*init, last]: last",
+    "let f xs =\n  match xs:\n    case []: 0\n    case [x]: x\n    case [a, *mid, z]: a + z",
+    "let f xs =\n  match xs:\n    case [Some x, *rest, None]: x\n    case _: 0",
+    "let f xs =\n  match xs:\n    case [*_, z]: z\n    case []: 0",
     // A small multi-item module mixing definitions and a trailing expression.
     "let id x = x\nlet k = id 42\nk |> id",
     // Offside rule: an indented continuation keeps a multi-line item together.
@@ -588,4 +594,16 @@ fn trailing_doc_lines_without_a_declaration_are_dropped() {
     // it is accepted and dropped like an ordinary comment.
     let module = parse("let a = 1\n## dangling note").unwrap();
     assert_eq!(module.items.len(), 1);
+}
+
+#[test]
+fn a_list_pattern_allows_at_most_one_star() {
+    // The star may sit anywhere (`[*init, last]`, `[a, *mid, z]`), but Python's
+    // one-star rule holds: a second `*` is a parse error.
+    let err = parse("let f xs =\n  match xs:\n    case [*a, *b]: 0").unwrap_err();
+    assert!(
+        err.message().contains("at most one `*`"),
+        "unexpected message: {}",
+        err.message()
+    );
 }

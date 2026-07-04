@@ -666,6 +666,101 @@ fn accepts_nested_element_patterns_in_a_list() {
     assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
 }
 
+// ---------- non-last (suffix) stars: `[*init, last]`, `[a, *mid, z]` ----------
+
+#[test]
+fn accepts_empty_and_suffix_star_as_exhaustive_list_match() {
+    // `[*init, last]` covers every non-empty list, so with `[]` the match is
+    // exhaustive — this exercises the `useful` cycle guard: `[*_, _]` reproduces
+    // itself under `Cons` specialization and the guard closes the loop.
+    let src = "let last xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case []: 0\n\
+               \x20 \x20 case [*init, last]: last";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn accepts_lengths_zero_one_and_mid_star_as_exhaustive() {
+    // `[]` (0), `[x]` (1), `[a, *mid, z]` (>= 2) partition every list length.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case []: 0\n\
+               \x20 \x20 case [x]: x\n\
+               \x20 \x20 case [a, *mid, z]: a + z";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn suffix_star_alone_reports_the_nil_witness() {
+    // A suffix star still requires at least `suffix.len` elements, so it is
+    // refutable: `[]` is the uncovered witness.
+    assert_error_contains(
+        "let f xs =\n  match xs:\n    case [*init, last]: last",
+        "`[]` is not matched",
+    );
+}
+
+#[test]
+fn refutable_suffix_element_reports_a_concrete_witness() {
+    // `[*_, None]` only covers non-empty lists *ending* in `None`; a list ending in
+    // `Some` is uncovered, and the witness spells it out.
+    assert_error_contains(
+        "let f xs =\n\
+         \x20 match xs:\n\
+         \x20 \x20 case []: 0\n\
+         \x20 \x20 case [*_, None]: 1",
+        "`[Some _]` is not matched",
+    );
+}
+
+#[test]
+fn accepts_deep_exhaustive_suffix_element_patterns() {
+    // Deep exhaustiveness recurses into the suffix column: `None` and `Some` for
+    // the *last* element plus `[]` is complete without a wildcard.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case []: 0\n\
+               \x20 \x20 case [*_, None]: 1\n\
+               \x20 \x20 case [*_, Some x]: x";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn suffix_star_binders_get_list_and_element_types() {
+    // `init` binds the middle slice (a `List`), `last` an element: both flow into
+    // typed positions.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case [*init, last]: last + List.sum init\n\
+               \x20 \x20 case []: 0";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
+#[test]
+fn suffix_element_type_is_enforced() {
+    // Suffix elements bind at the list's element type, like prefix elements.
+    assert_error_contains(
+        "let f xs =\n\
+         \x20 match xs:\n\
+         \x20 \x20 case [*r, 1]: 1\n\
+         \x20 \x20 case _: 0\n\
+         let bad = f [true, false]",
+        "int",
+    );
+}
+
+#[test]
+fn accepts_nested_patterns_around_a_mid_star() {
+    // Nested element patterns on both sides of the star type-check and the `_` arm
+    // completes the match.
+    let src = "let f xs =\n\
+               \x20 match xs:\n\
+               \x20 \x20 case [Some x, *rest, None]: x\n\
+               \x20 \x20 case _: 0";
+    assert!(pyfun::check(src).is_ok(), "errors: {:?}", pyfun::check(src));
+}
+
 #[test]
 fn reports_record_witness_for_missing_field_combination() {
     assert_error_contains(
