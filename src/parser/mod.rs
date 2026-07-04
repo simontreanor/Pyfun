@@ -1546,18 +1546,23 @@ impl Parser {
         }
     }
 
-    /// Parse a list/sequence pattern `[a, b, *rest]` (`DESIGN.md` §7.2). Elements are
-    /// comma-separated; an element is a normal pattern, or `*pat` — the rest binder,
-    /// which (first-cut scope) must be the **last** element. `[]` is allowed. At most
-    /// one star.
+    /// Parse a list/sequence pattern `[a, b, *mid, z]` (`DESIGN.md` §7.2). Elements
+    /// are comma-separated; an element is a normal pattern, or `*pat` — the rest
+    /// binder, which may sit **anywhere** (Python's rule): elements before it are
+    /// the `prefix`, elements after it the `suffix`. `[]` is allowed. At most one
+    /// star.
     fn parse_list_pattern(&mut self) -> Result<Pattern, ParseError> {
         self.expect(&Tok::LBracket, "`[`")?;
         let mut prefix = Vec::new();
-        let mut rest = None;
+        let mut rest: Option<Box<Pattern>> = None;
+        let mut suffix = Vec::new();
         while !matches!(self.peek(), Tok::RBracket) {
             if self.eat(&Tok::Star) {
-                // The trailing rest binder `*rest` / `*_` — a variable or wildcard
-                // (it binds the remaining tail list). It must be the *last* element.
+                if rest.is_some() {
+                    return Err(self.error("a list pattern can have at most one `*` rest element"));
+                }
+                // The rest binder `*rest` / `*_` — a variable or wildcard (it binds
+                // the unmatched middle slice, itself a list).
                 let start = self.cur_start();
                 let binder = match self.peek().clone() {
                     Tok::Underscore => {
@@ -1576,18 +1581,24 @@ impl Parser {
                     }
                 };
                 rest = Some(Box::new(binder));
-                if !matches!(self.peek(), Tok::RBracket) {
-                    return Err(self.error("the `*` rest element must be last in a list pattern"));
+            } else {
+                let elem = self.parse_pattern()?;
+                if rest.is_some() {
+                    suffix.push(elem);
+                } else {
+                    prefix.push(elem);
                 }
-                break;
             }
-            prefix.push(self.parse_pattern()?);
             if !self.eat(&Tok::Comma) {
                 break;
             }
         }
         self.expect(&Tok::RBracket, "`]`")?;
-        Ok(Pattern::List { prefix, rest })
+        Ok(Pattern::List {
+            prefix,
+            rest,
+            suffix,
+        })
     }
 
     /// Parse the `{ name [= pattern] (, name [= pattern])* }` body of a
