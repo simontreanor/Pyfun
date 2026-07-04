@@ -2456,6 +2456,39 @@ fn a_hole_blocks_compilation() {
     );
 }
 
+/// The valid hole fits reported for the (single) hole in `source`.
+fn fits_of(source: &str) -> Vec<String> {
+    let module = pyfun::parse(source).expect("parse");
+    let (_e, _t, holes) = pyfun::types::check_collecting(&module);
+    assert_eq!(holes.len(), 1, "expected exactly one hole");
+    holes.into_iter().next().unwrap().fits
+}
+
+#[test]
+fn valid_hole_fits_list_in_scope_bindings_of_the_hole_type() {
+    // A `string -> 'a` hole fits the user's own `string`-taking functions, which
+    // rank before qualified module members (`String.*`).
+    let fits = fits_of(
+        "let shout s = String.upper s\n\
+         let quiet s = String.lower s\n\
+         let transform f = f \"hi\"\n\
+         let r = transform ?fn",
+    );
+    assert!(fits.contains(&"shout".to_string()), "fits: {fits:?}");
+    assert!(fits.contains(&"quiet".to_string()), "fits: {fits:?}");
+    // Unqualified user bindings rank ahead of `String.*` module members.
+    let shout_i = fits.iter().position(|f| f == "shout").unwrap();
+    let str_i = fits.iter().position(|f| f.starts_with("String.")).unwrap();
+    assert!(shout_i < str_i, "user fns should rank first: {fits:?}");
+}
+
+#[test]
+fn an_unconstrained_hole_lists_no_fits() {
+    // A bare, fully-polymorphic hole (`'a`) would match everything — unhelpful, so
+    // no fits are listed.
+    assert!(fits_of("let x = ?anything").is_empty());
+}
+
 // ---------- error-quality: guiding messages ----------
 
 #[test]

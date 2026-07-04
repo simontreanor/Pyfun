@@ -1570,8 +1570,17 @@ publishes it at **Information severity** (3) with hover showing the type (free,
 since the hole expression's type is already in the span→type table). But a hole
 **blocks `compile`/`run`** — there's no value to lower — with a clear "cannot
 compile: unfilled hole" error, and `check` exits non-zero so a leftover hole is
-caught. **MVP scope:** the *type* only; listing relevant in-scope bindings / valid
-fits (Haskell's extra) is a deferred follow-on.
+caught. **Valid hole fits.** Each note also lists in-scope bindings that could fill
+the hole — the compiler searches the environment snapshotted at the hole and reports
+every binding whose type unifies with the hole's. The test is a real **trial
+unification** rolled back afterward (`Infer::hole_fits` snapshots the substitution
+maps, instantiates each candidate scheme, unifies against the resolved hole type, and
+restores — so the checker's own state is untouched). Fits are ranked most-specific
+(fewest generalized variables) first, with unqualified names (the user's own
+bindings, prelude) before qualified module members (`String.concat`), capped at 6; a
+fully-unconstrained hole (`'a`) lists none, since everything would fit. This is
+Haskell's "valid hole fits," minus the *refinement* fits (applying a function to
+further holes to reach the type), which stays a possible follow-on.
 
 **Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
 smarts, `editors/vscode/pyfun.tmLanguage.json` gives static, parse-free

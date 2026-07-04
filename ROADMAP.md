@@ -163,9 +163,13 @@ rather than checked — almost none of this is in the type system). Each was ver
   `types::Hole { name, ty, span }`. Reported **informatively, not as a red error**: `pyfun check` prints a
   `note` and exits non-zero; the LSP publishes at **Information severity** with hover showing the type
   (free — the hole's type is already in the span→type table). It **blocks `compile`/`run`** (no value to
-  lower). `?` chosen over Haskell's `_` (already the wildcard + `let _ =` discard). Covered by
-  `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. **Deferred follow-on (MVP was type-only):**
-  listing *relevant in-scope bindings / valid hole fits* (the Haskell extra) — genuinely useful, more work.
+  lower). `?` chosen over Haskell's `_` (already the wildcard + `let _ =` discard). **Valid hole fits**
+  (added 2026-07-04): each note also lists in-scope binding names whose type could fill the hole — found by
+  a *trial unification* of every visible scheme against the hole's type, rolled back so the checker's
+  substitution is untouched (`Infer::hole_fits` + `subst_snapshot`/`restore`). Ranked most-specific (fewest
+  generalized vars) first, unqualified names (the user's own bindings) before qualified module members,
+  capped at 6; a fully-unconstrained hole lists none (everything would fit). Covered by
+  `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. Fully done — no residual.
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing
