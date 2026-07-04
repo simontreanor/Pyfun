@@ -38,7 +38,8 @@ pub mod ast;
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
     ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl,
-    FieldDecl, FieldInit, FieldPattern, InterpPart, Item, LetBinding, MatchArm, Module, NodeSpan,
+    FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding, MatchArm, Module,
+    NodeSpan,
     Param, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
@@ -1293,9 +1294,32 @@ impl Parser {
         }
         let base = Box::new(self.parse_expr()?);
         self.expect(&Tok::With, "`with`")?;
-        let fields = self.parse_field_inits()?;
+        let fields = self.parse_field_updates()?;
         self.expect(&Tok::RBrace, "`}`")?;
         Ok(self.mk(start, ExprKind::RecordUpdate { base, fields }))
+    }
+
+    /// Parse `path = expr (, path = expr)*` record-update assignments up to `}`,
+    /// where a `path` is a dotted field path `ident (. ident)*` — `x` for a plain
+    /// update, `a.b` for the nested-update sugar (`DESIGN.md` §8.3).
+    fn parse_field_updates(&mut self) -> Result<Vec<FieldUpdate>, ParseError> {
+        let mut fields = Vec::new();
+        while !matches!(self.peek(), Tok::RBrace) {
+            let mut path = vec![self.parse_ident("field name")?];
+            while self.eat(&Tok::Dot) {
+                path.push(self.parse_ident("field name")?);
+            }
+            self.expect(&Tok::Eq, "`=`")?;
+            let value = self.parse_expr()?;
+            fields.push(FieldUpdate { path, value });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        if fields.is_empty() {
+            return Err(self.error("a record update needs at least one field"));
+        }
+        Ok(fields)
     }
 
     /// Parse `ident = expr (, ident = expr)*` field initializers up to `}`.

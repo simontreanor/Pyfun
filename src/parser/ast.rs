@@ -422,10 +422,12 @@ pub enum ExprKind {
     },
 
     /// A functional record update: `{ base with x = 3 }` — a copy of `base` with
-    /// the listed fields replaced.
+    /// the listed fields replaced. A field may be a **dotted path** (`{ p with a.b =
+    /// v }`), sugar for the nested reconstruction `{ p with a = { p.a with b = v } }`
+    /// — see [`FieldUpdate`].
     RecordUpdate {
         base: Box<Expr>,
-        fields: Vec<FieldInit>,
+        fields: Vec<FieldUpdate>,
     },
 
     /// Record field access: `base.name`.
@@ -453,6 +455,16 @@ pub enum ExprKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldInit {
     pub name: String,
+    pub value: Expr,
+}
+
+/// One assignment in a record update `{ base with path = value }`. `path` is a
+/// dotted field path (length ≥ 1): `[x]` is the ordinary single-field update
+/// `x = v`; `[a, b]` is the nested-update sugar `a.b = v`. Desugars to nested
+/// reconstruction at type-check + lowering (the base is evaluated once).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldUpdate {
+    pub path: Vec<String>,
     pub value: Expr,
 }
 

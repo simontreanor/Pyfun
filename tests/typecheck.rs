@@ -1310,6 +1310,54 @@ fn accepts_record_decl_literal_update_and_access() {
     assert!(pyfun::check(src).is_ok());
 }
 
+const NESTED: &str = "type Inner = { a: int, b: int }\n\
+                      type Outer = { inner: Inner, tag: string }\n\
+                      let o = Outer { inner = Inner { a = 1, b = 2 }, tag = \"x\" }\n";
+
+#[test]
+fn nested_record_update_type_checks() {
+    // `a.b = v` sugar: walk the path, unify the value with the leaf field's type.
+    assert!(pyfun::check(&format!("{NESTED}let o2 = {{ o with inner.a = 99 }}")).is_ok());
+    // Mixed with a plain top-level update.
+    assert!(
+        pyfun::check(&format!(
+            "{NESTED}let o2 = {{ o with inner.a = 10, tag = \"y\" }}"
+        ))
+        .is_ok()
+    );
+}
+
+#[test]
+fn nested_record_update_checks_the_leaf_field_type() {
+    // `inner.a` is an `int`; assigning a string is a type error.
+    assert_error_contains(
+        &format!("{NESTED}let o2 = {{ o with inner.a = \"nope\" }}"),
+        "int",
+    );
+    // An unknown sub-field is rejected against the intermediate record.
+    assert_error_contains(
+        &format!("{NESTED}let o2 = {{ o with inner.z = 1 }}"),
+        "no field `z`",
+    );
+}
+
+#[test]
+fn a_path_through_a_non_record_field_is_rejected() {
+    // `inner.a` is an `int`, so `inner.a.x` can't descend into it.
+    assert_error_contains(
+        &format!("{NESTED}let o2 = {{ o with inner.a.x = 1 }}"),
+        "not a record",
+    );
+}
+
+#[test]
+fn a_field_set_directly_and_through_a_sub_path_is_rejected() {
+    assert_error_contains(
+        &format!("{NESTED}let o2 = {{ o with inner = o.inner, inner.a = 1 }}"),
+        "both directly and through a sub-field",
+    );
+}
+
 #[test]
 fn record_field_access_drives_function_type() {
     // `r.x + r.y` forces `r : Point` even without an annotation.

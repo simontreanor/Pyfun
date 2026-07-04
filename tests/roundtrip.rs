@@ -159,6 +159,10 @@ const PROGRAMS: &[&str] = &[
     // A qualified (cross-module) record literal for an imported record.
     "let p = Geometry.Point { x = 3, y = 4 }",
     "let q = { p with y = 9 }",
+    // Nested record-update sugar: dotted field paths, mixed with plain updates.
+    "let q = { p with a.b = 1 }",
+    "let q = { p with a.b.c = 1 }",
+    "let q = { p with a.b = 1, x = 2, a.c = 3 }",
     "let s = p.x",
     "let d = obj.inner.value",
     "let n = (mk a).field",
