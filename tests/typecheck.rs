@@ -1806,6 +1806,30 @@ fn interpolation_propagates_hole_effects() {
 }
 
 #[test]
+fn triple_quoted_string_is_a_string() {
+    // A `"""..."""` literal (with embedded newlines) is an ordinary `string`.
+    let src = "let doc = \"\"\"line one\nline two\"\"\"\n\
+               let n = String.len doc";
+    assert!(pyfun::check(src).is_ok());
+    // A multi-line string is not a number.
+    assert!(pyfun::check("let n = 1 + \"\"\"a\nb\"\"\"").is_err());
+}
+
+#[test]
+fn triple_quoted_fstring_types_and_effects_match_the_single_line_form() {
+    // The whole `f"""..."""` is a `string`; holes are full expressions.
+    let src = "let name = \"Ada\"\n\
+               let n = 3\n\
+               let msg = f\"\"\"hi {name}\nsum {n + 1}\"\"\"\n\
+               let len = String.len msg";
+    assert!(pyfun::check(src).is_ok());
+    // A hole must be well typed...
+    assert!(pyfun::check("let m = f\"\"\"value {missing}\n\"\"\"").is_err());
+    // ...and hole effects propagate: an `io` hole rejects a `pure` assertion.
+    assert!(pyfun::check("let pure shout x = f\"\"\"{print x}\n\"\"\"").is_err());
+}
+
+#[test]
 fn accepts_string_functions() {
     let src = "let g = String.concat \"Hello, \" \"World\"\n\
                let n = String.len g\n\

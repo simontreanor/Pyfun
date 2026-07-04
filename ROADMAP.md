@@ -122,7 +122,7 @@ rather than checked — almost none of this is in the type system). Each was ver
   `formatDate` — defined once, checked at every call site, changed in one place: consistency + compile-
   checking + single-source-of-truth, and just functions. A future small `Format` module could ship these
   over the existing `String` ops. (The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r`
-  mini-language is excluded. Multi-line `f"""` is a *separate*, uncontroversial feature — still deferred.)
+  mini-language is excluded. Multi-line `f"""` was a *separate*, uncontroversial feature — done 2026-07-03.)
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
@@ -186,9 +186,15 @@ rather than checked — almost none of this is in the type system). Each was ver
   `async` label (it's representable/annotatable/inferrable now, not yet CE-linked), and effect subsumption
   (declared effects are exact, not lower bounds). Covered by typecheck (multi-label inference, `let pure`
   per label, declared-arrow flow, `io, async` display) + roundtrip (`->{...}` syntax) tests.
-- **f-string extras** (S–M) — the core `f"...{expr}..."` interpolation landed (targets Python 3.12+),
-  and **`{x=}`** self-documenting holes landed too; still deferred is **multi-line** `f"""..."""` (Pyfun
-  has no triple-quoted strings). **Format specifiers** (`{x:.2f}`, `{v!r}`) are now a **non-goal** — see
+- **f-string extras** — ✅ **all landed**: the core `f"...{expr}..."` interpolation (targets Python
+  3.12+), **`{x=}`** self-documenting holes, and (2026-07-03) **multi-line triple-quoted strings** —
+  plain `"""..."""`, interpolated `f"""..."""`, and raw `r"""..."""`. Lexer-only (a `triple` flag on
+  `lex_string`/`lex_raw_string`/`lex_fstring`; exactly three quotes at the open, so `""` stays the empty
+  string): newlines and lone `"` are literal content, escapes/holes/debug-holes work exactly as in the
+  single-line forms, and the whole literal is consumed in one pass so no layout token can leak from
+  inside it. Emits the escaped single-line form (`"a\nb"` — value-identical; the emitter is line-based,
+  so a real Python triple-quoted literal would need unindented continuation lines). `rf"""…"""` out of
+  scope. **Format specifiers** (`{x:.2f}`, `{v!r}`) are a **non-goal** — see
   the Non-goals section for the reasoning (an unchecked stringly-typed sublanguage; centralized formatting
   functions are the Pyfun way).
 - **Type annotations** (L) — **parked (deprioritized 2026-07-02).** `let x : T = …`, params `(x: T)`,

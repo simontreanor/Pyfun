@@ -365,8 +365,8 @@ the character before it may not be one of `=`/`!`/`<`/`>`, so `{x==y}`/`{x != y}
 stay ordinary holes. Resolved entirely at lex time (`debug_marker` in `lex_hole`): the echo joins the
 preceding literal chunk and the hole's tokens exclude the marker, so parser, checker, lowering, and
 emitter see an ordinary literal + hole (the value is `str()`ed like any hole, not Python's `repr`;
-the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` is deferred
-(Pyfun has no triple-quoted strings yet). **Format specifiers (`:.2f`, `!r`) are a non-goal** (decided
+the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` is
+**implemented** — see the triple-quoted-strings paragraph below. **Format specifiers (`:.2f`, `!r`) are a non-goal** (decided
 2026-07-03): a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
 compiler can't see into it, so `.2f`→`.3f` silently changes output, `.2f`→`.f2` only fails at runtime,
 and nothing enforces consistency across call sites. That is exactly the stringly-typed footgun Pyfun
@@ -388,6 +388,29 @@ string cannot end in a lone backslash-before-quote (it just continues). It produ
 existing `string_literal` escaper re-escapes on output (`C:\path` → Python `"C:\\path"` → reads back as
 `C:\path`), so the round-trip is faithful with zero downstream changes. Combined `rf"..."` (raw +
 interpolated) is out of scope. Covered by lexer + compile tests + `examples/hello.pyfun`.
+
+**Triple-quoted (multi-line) strings — `"""..."""`, `f"""..."""`, `r"""..."""` (implemented).**
+Python's multi-line string forms: embedded newlines (and lone `"`/`""`) are literal content, and only
+`"""` terminates. **Lexer-only for the plain and raw forms** (the raw-string model): the string-opening
+dispatch checks for **exactly three quotes at the open** — `""` stays the empty string (a following `"`
+opens a new literal, Python's disambiguation rule), `""""""` is the empty triple string, and `"""`/`""""`
+with no close are unterminated. `lex_string`/`lex_raw_string`/`lex_fstring` each take a `triple` flag
+(shared `quotes_at`/`at_triple_quote` helpers): plain `"""..."""` processes escapes exactly like `"..."`
+(Python's non-raw triple-quote rule, via the shared `lex_escape`), `r"""..."""` keeps backslashes
+literal, and adjacency still gates the prefixes (`f """…"""` is application). `f"""..."""` reuses the
+whole hole-splitting machinery unchanged — `{expr}` holes, `{{`/`}}`, `{x=}` debug holes, PEP 701
+nested quotes (and `skip_string_in_hole` now skips a *nested triple* string so its braces can't
+unbalance a hole). All three produce the ordinary tokens (`Tok::Str` / `Tok::FStr`), so there is **no
+AST / type / lowering change**. **Offside:** the whole literal is consumed in one `lex_one` call, so
+its internal newlines never reach the layout rule — no `Sep`/`Indent`/`Dedent` can leak from inside a
+string, and a `"""` literal inside a `let` block leaves the block structure intact. **Emission is the
+escaped single-line form** (`"a\nb"`, via the existing `string_literal`/`fstring_literal` escapers),
+*not* a Python triple-quoted literal: the emitter is line-based (every statement line is indented to
+its block depth), and a real multi-line literal would force unindented continuation lines through that
+model — while `"a\nb"` is value-identical, self-contained, and keeps one escaping path. The Pyfun
+pretty-printer likewise prints the escaped `"a\nb"` form, so the parse→print→parse roundtrip holds on
+value equality. `rf"""…"""` is out of scope (as is `rf"…"`). Covered by lexer(inline)/roundtrip/
+typecheck/compile tests + `examples/hello.pyfun`.
 
 **`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns
 `Error`); the only reason to catch is the **Python FFI boundary** — an `extern` call can throw. So rather

@@ -220,6 +220,13 @@ const PROGRAMS: &[&str] = &[
     "let g = f\"upper {String.upper name}\"",
     "let g = f\"a literal brace {{ and {x}\"",
     "let g = f\"no holes at all\"",
+    // Triple-quoted strings: embedded newlines are literal content. The canonical
+    // print escapes them (`"a\nb"`), which reparses to the same string value —
+    // roundtrip holds on value equality.
+    "let doc = \"\"\"line one\nline two\"\"\"",
+    "let quo = \"\"\"a \"quoted\" word\"\"\"",
+    "let g = f\"\"\"hi {name}\nsum {a + b}\"\"\"",
+    "let p = r\"\"\"C:\\path\nnext\"\"\"",
     // Self-documenting debug holes `{x=}` resolve at lex time into an echoed
     // literal chunk + an ordinary hole, so `f"{x=}"` prints as `f"x={x}"` and
     // reparses to the same AST (whitespace around the `=` is preserved).

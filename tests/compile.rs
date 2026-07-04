@@ -774,6 +774,54 @@ fn e2e_raw_string_backslashes_are_literal() {
     );
 }
 
+// ---------- triple-quoted strings (`DESIGN.md` §6) ----------
+
+#[test]
+fn triple_quoted_string_emits_an_escaped_single_line_literal() {
+    // A multi-line `"""..."""` lowers to an ordinary Python string with the
+    // newlines escaped (`"a\nb"`) — value-identical, and it keeps the emitter's
+    // one-statement-per-line model (a Python triple-quoted literal would need
+    // unindented continuation lines).
+    let py = pyfun::compile("let doc = \"\"\"a\nb\"\"\"").unwrap();
+    assert!(py.contains("doc = \"a\\nb\""), "{py}");
+    // Same for the interpolated `f"""..."""`: a real Python f-string, newline escaped.
+    let py = pyfun::compile("let x = 1\nlet m = f\"\"\"a {x}\nb\"\"\"").unwrap();
+    assert!(py.contains("m = f\"a {x}\\nb\""), "{py}");
+    // And a raw triple keeps its backslashes (re-escaped) plus the real newline.
+    let py = pyfun::compile("let p = r\"\"\"C:\\path\nnext\"\"\"").unwrap();
+    assert!(py.contains("p = \"C:\\\\path\\nnext\""), "{py}");
+}
+
+#[test]
+fn e2e_triple_quoted_strings() {
+    // A multi-line string prints on two lines; an `f"""` interpolates across
+    // lines; a raw triple counts its literal backslash + real newline.
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let src = "let x = 7\n\
+               let doc = \"\"\"first line\nsecond \"quoted\" line\"\"\"\n\
+               let msg = f\"\"\"x is {x}\nx + 1 is {x + 1}\"\"\"\n\
+               let a = print doc\n\
+               let b = print msg\n\
+               let n = print (String.len r\"\"\"a\\nb\nc\"\"\")";
+    let program = pyfun::compile(src).unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let stdout = run_python(&python, &program);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines,
+        vec![
+            "first line",
+            "second \"quoted\" line",
+            "x is 7",
+            "x + 1 is 8",
+            "6", // r"""a\nb<newline>c""" = a, \, n, b, \n, c
+        ],
+        "program:\n{program}"
+    );
+}
+
 #[test]
 fn fstring_is_an_application_argument() {
     // An f-string juxtaposed as a call argument (`print f"..."`, no parens) is a

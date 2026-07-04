@@ -303,7 +303,13 @@ impl<'a> Lexer<'a> {
         let c = self.peek().unwrap();
         match c {
             b'0'..=b'9' => self.lex_number(start),
-            b'"' => self.lex_string(start),
+            // Exactly three quotes open a triple-quoted (multi-line) string; two
+            // quotes are the empty string `""` (the `"` after it, if any, opens a
+            // new literal — the Python disambiguation rule).
+            b'"' => {
+                let triple = self.quotes_at(start, 3);
+                self.lex_string(start, triple)
+            }
             // Only a doc comment (`##` at column 0, depth 0) reaches here —
             // `skip_trivia` consumes every other `#` comment.
             b'#' => {
@@ -312,12 +318,20 @@ impl<'a> Lexer<'a> {
             }
             // An adjacent `f"` (no space) opens an interpolated string. `f "x"` with a
             // space stays ordinary application, matching Python; only the pathological
-            // adjacent `f"x"` changes meaning (it was `f` applied to `"x"`).
-            b'f' if self.peek2() == Some(b'"') => self.lex_fstring(start),
+            // adjacent `f"x"` changes meaning (it was `f` applied to `"x"`). An
+            // adjacent `f"""` opens the multi-line form.
+            b'f' if self.peek2() == Some(b'"') => {
+                let triple = self.quotes_at(start + 1, 3);
+                self.lex_fstring(start, triple)
+            }
             // An adjacent `r"` (no space) opens a raw string — no escape processing,
             // backslashes stay literal. `r "x"` with a space is `r` applied to a
-            // string (like `f`). `rf"..."` is out of scope.
-            b'r' if self.peek2() == Some(b'"') => self.lex_raw_string(start),
+            // string (like `f`). `r"""..."""` is the raw multi-line form; `rf"..."`
+            // is out of scope.
+            b'r' if self.peek2() == Some(b'"') => {
+                let triple = self.quotes_at(start + 1, 3);
+                self.lex_raw_string(start, triple)
+            }
             c if is_ident_start(c) => {
                 self.lex_ident(start);
                 Ok(())
@@ -326,11 +340,25 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Lex an interpolated string `f"...{expr}..."` into a single [`Tok::FStr`],
-    /// splitting it into literal chunks and holes. `{{`/`}}` escape to literal
-    /// braces; a lone `{` opens a hole scanned by [`Self::lex_hole`].
-    fn lex_fstring(&mut self, start: usize) -> Result<(), LexError> {
-        self.pos += 2; // skip `f"`
+    /// How many consecutive `"` bytes sit at `at`, capped at `want` — so
+    /// `quotes_at(p, 3)` detects a triple-quote opener/closer without reading past
+    /// what is needed (exactly-three at the open; `""` stays the empty string).
+    fn quotes_at(&self, at: usize, want: usize) -> bool {
+        (0..want).all(|i| self.src.get(at + i) == Some(&b'"'))
+    }
+
+    /// Whether the cursor sits on a closing `"""`.
+    fn at_triple_quote(&self) -> bool {
+        self.quotes_at(self.pos, 3)
+    }
+
+    /// Lex an interpolated string `f"...{expr}..."` (or, with `triple`, the
+    /// multi-line `f"""..."""`) into a single [`Tok::FStr`], splitting it into
+    /// literal chunks and holes. `{{`/`}}` escape to literal braces; a lone `{`
+    /// opens a hole scanned by [`Self::lex_hole`]. In the triple form newlines
+    /// (and lone `"`) are literal content, and only `"""` terminates.
+    fn lex_fstring(&mut self, start: usize, triple: bool) -> Result<(), LexError> {
+        self.pos += if triple { 4 } else { 2 }; // skip `f"` / `f"""`
         let mut parts: Vec<FStrPart> = Vec::new();
         let mut lit = String::new();
         let flush = |lit: &mut String, parts: &mut Vec<FStrPart>| {
@@ -341,8 +369,8 @@ impl<'a> Lexer<'a> {
         loop {
             match self.peek() {
                 None => return Err(self.err(start, "unterminated f-string")),
-                Some(b'"') => {
-                    self.pos += 1;
+                Some(b'"') if !triple || self.at_triple_quote() => {
+                    self.pos += if triple { 3 } else { 1 };
                     flush(&mut lit, &mut parts);
                     self.push(Tok::FStr(parts), start);
                     return Ok(());
@@ -444,15 +472,18 @@ impl<'a> Lexer<'a> {
     }
 
     /// Skip a string literal inside a hole (cursor at the opening `"`), honoring
-    /// backslash escapes, so its contents can't prematurely close the hole.
+    /// backslash escapes, so its contents can't prematurely close the hole. A
+    /// nested triple-quoted string (`"""..."""`, PEP 701 quote reuse) is skipped
+    /// to its own `"""` close so braces inside it don't unbalance the hole.
     fn skip_string_in_hole(&mut self) -> Result<(), LexError> {
         let start = self.pos;
-        self.pos += 1; // opening quote
+        let triple = self.at_triple_quote();
+        self.pos += if triple { 3 } else { 1 }; // opening quote(s)
         loop {
             match self.peek() {
                 None => return Err(self.err(start, "unterminated string literal in f-string")),
-                Some(b'"') => {
-                    self.pos += 1;
+                Some(b'"') if !triple || self.at_triple_quote() => {
+                    self.pos += if triple { 3 } else { 1 };
                     return Ok(());
                 }
                 Some(b'\\') => self.pos += 2, // skip the escaped character
@@ -559,14 +590,27 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_string(&mut self, start: usize) -> Result<(), LexError> {
-        self.pos += 1; // opening quote
+    /// Lex a plain string literal — `"..."`, or with `triple` the multi-line
+    /// `"""..."""` (both produce an ordinary [`Tok::Str`]; the triple form is
+    /// lexer-only, like raw strings). Escapes process in both (Python's non-raw
+    /// triple-quote rule); in the triple form newlines and lone `"` are literal
+    /// content, and only `"""` terminates. The whole literal is consumed in this
+    /// one call, so its internal newlines never reach the offside rule.
+    fn lex_string(&mut self, start: usize, triple: bool) -> Result<(), LexError> {
+        self.pos += if triple { 3 } else { 1 }; // opening quote(s)
         let mut value = String::new();
         loop {
             match self.peek() {
-                None => return Err(self.err(start, "unterminated string literal")),
-                Some(b'"') => {
-                    self.pos += 1;
+                None => {
+                    let what = if triple {
+                        "unterminated triple-quoted string literal"
+                    } else {
+                        "unterminated string literal"
+                    };
+                    return Err(self.err(start, what));
+                }
+                Some(b'"') if !triple || self.at_triple_quote() => {
+                    self.pos += if triple { 3 } else { 1 };
                     self.push(Tok::Str(value), start);
                     return Ok(());
                 }
@@ -580,21 +624,22 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Lex a raw string `r"..."` (cursor at the `r`): no escape processing, so
-    /// backslashes are literal. Follows Python's raw-string rule — a `\` keeps both
-    /// itself and the next character literally *and* that next character does not
-    /// terminate the string, so `r"a\"b"` is the four chars `a \ " b` and a raw
-    /// string cannot end in a lone backslash-before-quote (that just continues).
-    /// Produces an ordinary [`Tok::Str`] with the raw content; the emitter re-escapes
-    /// on output, so the round-trip is faithful.
-    fn lex_raw_string(&mut self, start: usize) -> Result<(), LexError> {
-        self.pos += 2; // skip `r"`
+    /// Lex a raw string `r"..."` (cursor at the `r`; with `triple`, the multi-line
+    /// `r"""..."""`): no escape processing, so backslashes are literal. Follows
+    /// Python's raw-string rule — a `\` keeps both itself and the next character
+    /// literally *and* that next character does not terminate the string, so
+    /// `r"a\"b"` is the four chars `a \ " b` and a raw string cannot end in a lone
+    /// backslash-before-quote (that just continues). Produces an ordinary
+    /// [`Tok::Str`] with the raw content; the emitter re-escapes on output, so the
+    /// round-trip is faithful.
+    fn lex_raw_string(&mut self, start: usize, triple: bool) -> Result<(), LexError> {
+        self.pos += if triple { 4 } else { 2 }; // skip `r"` / `r"""`
         let mut value = String::new();
         loop {
             match self.peek() {
                 None => return Err(self.err(start, "unterminated raw string literal")),
-                Some(b'"') => {
-                    self.pos += 1;
+                Some(b'"') if !triple || self.at_triple_quote() => {
+                    self.pos += if triple { 3 } else { 1 };
                     self.push(Tok::Str(value), start);
                     return Ok(());
                 }
@@ -1321,6 +1366,107 @@ mod tests {
             panic!("expected an f-string")
         };
         assert_eq!(parts[0], FStrPart::Lit("café ".to_string()));
+    }
+
+    #[test]
+    fn triple_quoted_string_spans_newlines() {
+        // Embedded newlines (and indentation on continuation lines) are literal
+        // content; the whole literal is one `Tok::Str`.
+        assert_eq!(
+            kinds("\"\"\"line1\nline2\"\"\""),
+            vec![Tok::Str("line1\nline2".to_string()), Tok::Eof]
+        );
+        // A lone `"` (or `""`) inside is content; escapes still process.
+        assert_eq!(
+            kinds("\"\"\"a \"quoted\" b\"\"\""),
+            vec![Tok::Str("a \"quoted\" b".to_string()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("\"\"\"a\\tb\\u{e9}\"\"\""),
+            vec![Tok::Str("a\tbé".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn three_quotes_vs_empty_string_disambiguation() {
+        // `""` is the empty string; `""""""` (six quotes) is the empty triple
+        // string; `"" "x"` is two ordinary strings. Only exactly three quotes at
+        // the open start a triple literal.
+        assert_eq!(kinds("\"\""), vec![Tok::Str(String::new()), Tok::Eof]);
+        assert_eq!(
+            kinds("\"\"\"\"\"\""),
+            vec![Tok::Str(String::new()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("\"\" \"x\""),
+            vec![Tok::Str(String::new()), Tok::Str("x".to_string()), Tok::Eof]
+        );
+        // `"""` and `""""` open a triple with no close: unterminated.
+        assert!(lex("\"\"\"").is_err());
+        assert!(lex("\"\"\"\"").is_err());
+    }
+
+    #[test]
+    fn triple_quoted_fstring_spans_newlines_with_holes() {
+        // `f"""` opens a multi-line interpolated string; holes work exactly as in
+        // the single-line form and newlines are literal chunk content.
+        let toks = kinds("f\"\"\"a {x}\nb\"\"\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr, got {:?}", toks[0]);
+        };
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], FStrPart::Lit("a ".to_string()));
+        assert!(matches!(parts[1], FStrPart::Hole(_)));
+        assert_eq!(parts[2], FStrPart::Lit("\nb".to_string()));
+        // A debug hole works in the triple form too.
+        let toks = kinds("f\"\"\"{x=}\"\"\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr");
+        };
+        assert_eq!(parts[0], FStrPart::Lit("x=".to_string()));
+        assert!(matches!(parts[1], FStrPart::Hole(_)));
+        // `f""` stays the ordinary empty f-string (two quotes, not a triple).
+        assert_eq!(kinds("f\"\""), vec![Tok::FStr(vec![]), Tok::Eof]);
+        // A nested triple-quoted string inside a hole doesn't close the hole.
+        let toks = kinds("f\"\"\"{String.len \"\"\"x}y\"\"\"}\"\"\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr");
+        };
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(parts[0], FStrPart::Hole(_)));
+    }
+
+    #[test]
+    fn triple_quoted_raw_string() {
+        // `r"""` combines: multi-line + literal backslashes.
+        assert_eq!(
+            kinds("r\"\"\"a\\n\nb\"\"\""),
+            vec![Tok::Str("a\\n\nb".to_string()), Tok::Eof]
+        );
+    }
+
+    #[test]
+    fn triple_quoted_string_leaks_no_layout_tokens() {
+        // The literal is consumed in one pass, so its internal newlines never
+        // reach the offside rule: a multi-line string inside a `let` block emits
+        // no stray Sep/Indent/Dedent, and the next top-level item still separates.
+        assert_eq!(
+            kinds("let s =\n    \"\"\"a\nb\"\"\"\nlet t = 1"),
+            vec![
+                Tok::Let,
+                Tok::Ident("s".to_string()),
+                Tok::Eq,
+                Tok::Indent,
+                Tok::Str("a\nb".to_string()),
+                Tok::Dedent,
+                Tok::Sep,
+                Tok::Let,
+                Tok::Ident("t".to_string()),
+                Tok::Eq,
+                Tok::Int(1),
+                Tok::Eof
+            ]
+        );
     }
 
     #[test]
