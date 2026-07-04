@@ -504,10 +504,10 @@ fn a_cross_module_extern_binds_in_its_module_and_routes_from_the_consumer() {
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            ("Mathx", "extern fabs : float -> float = math.fabs"),
             (
                 "Main",
-                "import Mathx\nlet r = Mathx.cbrt 8.0\nprint r",
+                "import Mathx\nlet r = Mathx.fabs 8.0\nprint r",
             ),
         ],
     );
@@ -515,11 +515,11 @@ fn a_cross_module_extern_binds_in_its_module_and_routes_from_the_consumer() {
     // an attribute), with the Python module imported.
     let mathx = file(&files, "mathx.py");
     assert!(mathx.contains("import math"), "{mathx}");
-    assert!(mathx.contains("cbrt = math.cbrt"), "{mathx}");
+    assert!(mathx.contains("fabs = math.fabs"), "{mathx}");
     // The consumer routes the qualified reference to the module attribute.
     let main = file(&files, "main.py");
     assert!(main.contains("import mathx"), "{main}");
-    assert!(main.contains("r = mathx.cbrt(8.0)"), "{main}");
+    assert!(main.contains("r = mathx.fabs(8.0)"), "{main}");
 }
 
 #[test]
@@ -527,36 +527,36 @@ fn e2e_a_cross_module_extern_runs() {
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            ("Mathx", "extern fabs : float -> float = math.fabs"),
             (
                 "Main",
-                "import Mathx\nlet r = Mathx.cbrt 8.0\nprint r",
+                "import Mathx\nlet r = Mathx.fabs 8.0\nprint r",
             ),
         ],
     );
     let dir = Scratch::new("e2e_extern");
     if let Some(out) = run_project(&dir, &files, "main.py") {
-        assert_eq!(out.trim(), "2.0");
+        assert_eq!(out.trim(), "8.0");
     }
 }
 
 #[test]
 fn e2e_a_cross_module_extern_partial_application_curries() {
-    // `List.map Mathx.cbrt xs` partially applies the imported extern — its arity is
+    // `List.map Mathx.fabs xs` partially applies the imported extern — its arity is
     // threaded so the map still curries and runs.
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            ("Mathx", "extern fabs : float -> float = math.fabs"),
             (
                 "Main",
-                "import Mathx\nlet xs = List.map Mathx.cbrt [8.0, 27.0, 64.0]\nprint xs",
+                "import Mathx\nlet xs = List.map Mathx.fabs [8.0, 27.0, 64.0]\nprint xs",
             ),
         ],
     );
     let dir = Scratch::new("e2e_extern_partial");
     if let Some(out) = run_project(&dir, &files, "main.py") {
-        assert_eq!(out.replace(' ', "").trim(), "[2.0,3.0,4.0]");
+        assert_eq!(out.replace(' ', "").trim(), "[8.0,27.0,64.0]");
     }
 }
 
@@ -565,7 +565,7 @@ fn an_unexported_extern_is_not_a_member() {
     let project = build_mem(
         "Main",
         &[
-            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            ("Mathx", "extern fabs : float -> float = math.fabs"),
             ("Main", "import Mathx\nlet r = Mathx.hypotenuse 8.0"),
         ],
     );

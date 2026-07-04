@@ -189,9 +189,10 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 `abs`/`min`/`max : int<'u> -> …`, plus the **unit-preserving numeric conversions**
 `round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
-staying *unqualified* Pyfun names), plus the **unit-aware `sqrt : float<'u^2> -> float<'u>`** (√area =
-length — the argument's unit must be a perfect square, whose exponents halve; see §8.2; lowers to
-`math.sqrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
+staying *unqualified* Pyfun names), plus the **unit-aware roots `sqrt : float<'u^2> -> float<'u>`**
+(√area = length) **and `cbrt : float<'u^3> -> float<'u>`** (∛volume = length — the argument's unit
+must be a perfect square resp. cube, whose exponents halve resp. divide by 3; see §8.2; lower to
+`math.sqrt`/`math.cbrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the honest result of an effectful call). It also seeds the **standard combinators**
 `id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
 `flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
@@ -1137,11 +1138,13 @@ Design intent:
   abbreviation/conversion tracking (F#'s richer model is out of scope). The alias body reuses the unit
   grammar (now also accepting `1/s` for a dimensionless numerator); aliases, like `let`s, must be
   declared before use.
-- **Unit-aware `sqrt : float<'u^2> -> float<'u>` (implemented):** √area = length — `sqrt 16.0<m^2> :
-  float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, and a **non-square** unit (`<m>`, `<m^3>`) is a
-  compile-time dimensional error (`type mismatch: expected float<'a^2>, found float<m^3>`). This is
-  the *one* tractable unit-carrying power operation — F# special-cases exactly this signature —
-  because the exponent is statically the constant ½; general `x<'u> ** y` is impossible (a runtime
+- **Unit-aware roots `sqrt : float<'u^2> -> float<'u>` and `cbrt : float<'u^3> -> float<'u>`
+  (implemented):** √area = length and ∛volume = length — `sqrt 16.0<m^2> :
+  float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, `cbrt 27.0<m^3> : float<m>`, and a **non-square** (for
+  `sqrt`) or **non-cube** (for `cbrt`) unit is a
+  compile-time dimensional error (`type mismatch: expected float<'a^2>, found float<m^3>`). These are
+  the *two* tractable unit-carrying power operations — F# special-cases the `sqrt` signature —
+  because each exponent is a static rational constant (½, ⅓); general `x<'u> ** y` is impossible (a runtime
   exponent makes the result unit depend on a value → dependent types), which is why `**` stays
   dimensionless (§7.1). **Exponent-representation decision (2026-07-03):** unit exponents stay
   **integers** — no rational exponents (the more general option) and no bespoke "halve-the-unit"
@@ -1161,6 +1164,20 @@ Design intent:
   syntax), pure, lowering to `math.sqrt` with `import math` via the same routing as
   `floor`/`ceil`/`truncate`; units erase as always. Declaring `extern sqrt` now hits the ordinary
   "already defined" clash error; a user `let sqrt` still shadows the builtin.
+  **`cbrt` (added 2026-07-04)** is the exact sibling with the exponent bumped to 3 (`Unit::pow(3)`),
+  so unification thirds a perfect-cube unit (`m^3 → m`, `m^6/s^3 → m^2/s`) and rejects a non-cube
+  (`m`, `m^2`, `m^4`). It earns its keep *only* through units: dimensionless `cbrt` would just be
+  `x ** (1.0/3.0)`, but `**` is dimensionless, so a unit-aware cube root is the only version that
+  keeps the dimension — and `math.cbrt` additionally cube-roots negatives correctly, which
+  `x ** (1.0/3.0)` does not. **Where the family stops (decided 2026-07-04): `{sqrt, cbrt}` and no
+  further.** Each fixed-`n` root is a separate monomorphic builtin (`float<'u^n> -> float<'u>`) — a
+  general `root n x` is impossible because `n` is a runtime value (the same dependent-type wall as
+  `**`), so `sqrt`/`cbrt` can't be unified into one function and higher roots would each need their
+  own. Two is the principled cutoff: √ and ∛ are exactly the roots that map to physical *spatial
+  dimensions* (2D area, 3D volume), the quantities people actually take roots of; a 4th root of
+  `m^4` is not a measured quantity, and if one is ever genuinely needed a dimensionless `extern`
+  covers it. (This is also why adding `cbrt` shrank the set of `math.*` names usable as `extern`
+  examples — `sqrt`/`cbrt` are now reserved builtins; tests use `math.tan`/`math.fabs`.)
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).
 

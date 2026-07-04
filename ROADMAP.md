@@ -159,8 +159,9 @@ rather than checked — almost none of this is in the type system). Each was ver
   ordering methods; nested `Some (Ok x)` composes). Still not ordered: `Set`/`Map`/`Exception` (no natural
   order) and `List` (a possible lexicographic follow-on). Covered by typecheck/compile tests +
   `examples/hello.pyfun`.
-- **Unit-aware `sqrt : float<'u^2> -> float<'u>`** — ✅ **done 2026-07-03**. √area = length:
-  `sqrt 16.0<m^2> : float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, and a non-square unit (`<m>`,
+- **Unit-aware roots `sqrt`/`cbrt`** — ✅ **`sqrt` done 2026-07-03, `cbrt` 2026-07-04**. √area = length
+  and ∛volume = length:
+  `sqrt 16.0<m^2> : float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, `cbrt 27.0<m^3> : float<m>`, and a non-square unit (`<m>`,
   `<m^3>`) is a compile-time dimensional error. Needed **neither** rational unit exponents **nor** a
   bespoke halving scheme: the scheme is seeded in the prelude with the existing integer-exponent
   representation (arg unit `'u^2` via `Unit::pow(2)`), and the existing abelian-group unifier's
@@ -170,11 +171,18 @@ rather than checked — almost none of this is in the type system). Each was ver
   Bonus fix: `solve_unit`'s reduce step could previously recurse forever on `'u^2 ~ m^3` (a latent
   stack overflow reachable via `let sq x = x * x`); it now detects the no-progress case and reports a
   mismatch. `extern sqrt` now hits the ordinary "already defined" clash (drop the old dimensionless
-  workaround); a user `let sqrt` still shadows. **NB (unchanged):** this is the *only* tractable
-  unit-aware power op — general `x<'u> ** y` is **impossible** in a static unit system (the exponent
-  is a runtime value, so the result unit `'u^y` would depend on it → dependent types); that's why
-  `**` stays dimensionless, and integer powers-with-units are already covered by `*`
-  (`x<m> * x<m> : <m^2>`). Decided 2026-07-02.
+  workaround); a user `let sqrt` still shadows. **`cbrt` (2026-07-04)** is the exact sibling with the
+  exponent bumped to 3 (`Unit::pow(3)`): thirds a perfect-cube unit (`m^3 → m`, `m^6/s^3 → m^2/s`),
+  rejects a non-cube (`m`, `m^2`, `m^4`), lowers to `math.cbrt`. It's justified *purely* by units —
+  dimensionless `cbrt` is just `x ** (1.0/3.0)`, but `**` is dimensionless so only a unit-aware cube
+  root keeps the dimension; `math.cbrt` also handles negatives correctly, which `** (1/3)` doesn't.
+  **Where the family stops — `{sqrt, cbrt}` and no more:** each fixed-`n` root is its own monomorphic
+  builtin (`float<'u^n> -> float<'u>`); a general `root n x` is **impossible** (runtime `n` → dependent
+  types, the same wall as `x<'u> ** y`), so higher roots can't be unified into one function. Two is the
+  principled cutoff — √ and ∛ map to physical *spatial dimensions* (2D area, 3D volume), the quantities
+  people actually root; a 4th root of `m^4` isn't a measured thing (use a dimensionless `extern` if ever
+  needed). `**` stays dimensionless, and integer powers-with-units are covered by `*`
+  (`x<m> * x<m> : <m^2>`). Decided 2026-07-02 (sqrt), extended 2026-07-04 (cbrt).
 - **Chained comparisons** — ✅ **done**: `a < b < c` is Python-style (means `a < b and b < c`, `b`
   evaluated once), a dedicated `ExprKind::Compare` node lowering 1:1 to Python's native chained
   comparison. A lone comparison stays `Binary`; links may mix `== != < > <= >=`.

@@ -1116,13 +1116,14 @@ impl Lowerer {
             }
             // Prelude functions that live in Python's `math` (not bare builtins):
             // `floor`/`ceil`/`truncate` → `math.floor`/`ceil`/`trunc`, and the
-            // unit-aware `sqrt` → `math.sqrt` (units erase; + import).
-            // `round` is a bare builtin, so it falls through to `Name`.
+            // unit-aware roots `sqrt`/`cbrt` → `math.sqrt`/`math.cbrt` (units erase;
+            // + import). `round` is a bare builtin, so it falls through to `Name`.
             let math_fn = match name {
                 "floor" => Some("floor"),
                 "ceil" => Some("ceil"),
                 "truncate" => Some("trunc"),
                 "sqrt" => Some("sqrt"),
+                "cbrt" => Some("cbrt"),
                 _ => None,
             };
             if let Some(py) = math_fn {
