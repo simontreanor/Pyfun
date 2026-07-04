@@ -27,8 +27,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::lexer::Span;
 
 use crate::parser::ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, InterpPart, Item, LetBinding,
-    Module, Param, Pattern, TypeDeclKind, TypeExpr,
+    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, InterpPart,
+    Item, LetBinding, Module, Param, Pattern, TypeDeclKind, TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPattern, PyStmt};
 
@@ -135,10 +135,28 @@ pub fn runtime_module() -> PyModule {
     PyModule { body }
 }
 
+/// Lowering-side registry entry for one active-pattern **case** (`DESIGN.md`
+/// §7.2), keyed by case name. Everything here is syntactic: `total` comes from
+/// the declaration's `|_|` marker, `extra` from its parameter count, and the
+/// bool-vs-Option flavor of a partial case is revealed by the use site's binder
+/// count (the checker enforces exactly one binder for Option, zero for bool).
+#[derive(Clone)]
+struct ApUse {
+    /// The emitted recognizer function's name (`_ap_Even_Odd`).
+    py_fn: String,
+    /// Total (`(|A|B|)`) vs partial (`(|A|_|)`).
+    total: bool,
+    /// Leading parameter-argument count at a use site (`params.len() - 1`).
+    extra: usize,
+}
+
 struct Lowerer {
     /// Arity of each top-level function (params > 0), used to decide full vs
     /// partial application.
     arities: std::collections::HashMap<String, usize>,
+    /// Active-pattern cases (case name → recognizer + shape), from the module's
+    /// `let (|…|)` declarations. Drives the if/elif match lowering.
+    ap_uses: std::collections::HashMap<String, ApUse>,
     /// Field count of each data constructor, used both to drive constructor
     /// application and to know which bare references are nullary (and so must be
     /// emitted as `Ctor()`).
@@ -234,6 +252,7 @@ impl Lowerer {
         field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
+        let mut ap_uses = std::collections::HashMap::new();
         for item in &module.items {
             match item {
                 Item::Extern(decl) => {
@@ -289,6 +308,32 @@ impl Lowerer {
                         }
                     }
                 }
+                // An active pattern (`DESIGN.md` §7.2): register each case so
+                // match arms recognize it, its construction sites (total, inside
+                // the body) route to the hidden `_Case` classes, and the
+                // recognizer's deterministic Python name is known everywhere.
+                Item::ActivePattern(decl) => {
+                    let py_fn = ap_py_fn(decl);
+                    let extra = decl.params.len() - 1;
+                    for case in &decl.cases {
+                        ap_uses.insert(
+                            case.name.clone(),
+                            ApUse {
+                                py_fn: py_fn.clone(),
+                                total: !decl.partial,
+                                extra,
+                            },
+                        );
+                    }
+                    if !decl.partial {
+                        // Case construction arities (validated by the checker;
+                        // `compile` is gated on it, so the scan cannot fail here).
+                        for (case, arity) in crate::types::ap_case_arities(decl).unwrap_or_default()
+                        {
+                            ctor_arity.insert(case, arity);
+                        }
+                    }
+                }
                 // `import` lowers to nothing on its own (slice 1); the multi-file
                 // driver emits the Python `import` line and routes cross-module refs.
                 Item::Measure { .. } | Item::Import { .. } | Item::Expr(_) => {}
@@ -318,6 +363,7 @@ impl Lowerer {
         }
         Lowerer {
             arities,
+            ap_uses,
             ctor_arity,
             record_fields,
             field_to_record,
@@ -347,6 +393,21 @@ impl Lowerer {
         // User constructor classes (sum variants) and record classes.
         let mut classes = Vec::new();
         for item in &module.items {
+            // A total active pattern's hidden case classes (`_Even`, `_Odd`, …):
+            // ordinary ADT classes (structural eq/hash/repr + `__match_args__`)
+            // with no ordering (the hidden type never surfaces as a value the
+            // checker lets programs compare).
+            if let Item::ActivePattern(decl) = item
+                && !decl.partial
+            {
+                for (case, arity) in crate::types::ap_case_arities(decl).unwrap_or_default() {
+                    classes.push(PyStmt::ClassDef {
+                        name: ap_case_class(&case),
+                        fields: (0..arity).map(|i| format!("_{i}")).collect(),
+                        order: None,
+                    });
+                }
+            }
             if let Item::Type(decl) = item {
                 match &decl.kind {
                     TypeDeclKind::Sum(variants) => {
@@ -396,6 +457,21 @@ impl Lowerer {
                     }
                 }
                 Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
+                // The active-pattern recognizer lowers to a plain Python def
+                // under its deterministic `_ap_…` name; inside its body the
+                // (total) cases construct the hidden `_Case` classes via the
+                // ordinary constructor path (registered in `new`).
+                Item::ActivePattern(decl) => {
+                    let names = param_names(&decl.params);
+                    let inner = extend(&HashSet::new(), &names);
+                    let body = self.lower_fn_body(&names, &decl.value, &inner)?;
+                    code.push(PyStmt::FuncDef {
+                        name: ap_py_fn(decl),
+                        params: names,
+                        body,
+                        is_async: false,
+                    });
+                }
                 // A module's members lower to flat top-level defs/assignments with
                 // mangled names (`Geometry.area` → `Geometry_area`); bare sibling
                 // references rewrite to the same names via `cur_module` (set in
@@ -580,6 +656,11 @@ impl Lowerer {
                 Ok(stmts)
             }
             ExprKind::Match { scrutinee, arms } => {
+                // A match with active-pattern arms lowers to an if/elif chain
+                // (an active pattern is a function call, not a structural test).
+                if self.match_uses_ap(arms) {
+                    return self.lower_ap_match(scrutinee, arms, locals, None);
+                }
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
@@ -740,6 +821,12 @@ impl Lowerer {
             }
 
             ExprKind::Match { scrutinee, arms } => {
+                // Active-pattern arms: the if/elif chain assigns a temp.
+                if self.match_uses_ap(arms) {
+                    let tmp = self.fresh_tmp();
+                    let stmts = self.lower_ap_match(scrutinee, arms, locals, Some(&tmp))?;
+                    return Ok((stmts, PyExpr::Name(tmp)));
+                }
                 // Python `match` is a statement, so always hoist into a temp.
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let tmp = self.fresh_tmp();
@@ -1149,6 +1236,21 @@ impl Lowerer {
                 return PyExpr::Name(helper.to_string());
             }
         }
+        // A total active-pattern case constructed inside its recognizer's body
+        // routes to the hidden `_Case` class (the checker rejects any use of a
+        // case as a value outside its own declaration).
+        if let Some(u) = self.ap_uses.get(name)
+            && u.total
+        {
+            let class = ap_case_class(name);
+            return match self.ctor_arity.get(name) {
+                Some(0) => PyExpr::Call {
+                    func: Box::new(PyExpr::Name(class)),
+                    args: vec![],
+                },
+                _ => PyExpr::Name(class),
+            };
+        }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
                 func: Box::new(PyExpr::Name(py_ctor_name(name))),
@@ -1498,6 +1600,216 @@ impl Lowerer {
         }
     }
 
+    // ----- active patterns (`DESIGN.md` §7.2) -----
+
+    /// Does any arm of this match use an active-pattern case at its top level?
+    fn match_uses_ap(&self, arms: &[crate::parser::ast::MatchArm]) -> bool {
+        arms.iter().any(
+            |a| matches!(&a.pattern, Pattern::Ctor { name, .. } if self.ap_uses.contains_key(name)),
+        )
+    }
+
+    /// Lower a `match` that uses active patterns to an honest **if/elif chain**
+    /// (`DESIGN.md` §7.2) — an active pattern is a *function call*, not a
+    /// structural test, so Python's `match` cannot express it. The scrutinee is
+    /// evaluated once, and each **distinct** recognizer application (same
+    /// function + same parameter arguments) is hoisted to a temp before the
+    /// chain, so its side effects happen at most once per match. `assign_to`
+    /// selects value position (arm bodies assign that temp) vs return position
+    /// (arm bodies return). The checker's shape rules guarantee every arm is an
+    /// active-pattern case, a literal, a variable, or `_`, with no guards.
+    fn lower_ap_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[crate::parser::ast::MatchArm],
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let (mut stmts, subject_val) = self.lower_value(scrutinee, locals)?;
+        // A bare name is reused; anything else is bound once.
+        let subject = match &subject_val {
+            PyExpr::Name(n) => n.clone(),
+            _ => {
+                let tmp = self.fresh_tmp();
+                stmts.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value: subject_val,
+                });
+                tmp
+            }
+        };
+        // (recognizer, lowered args, temp) per distinct hoisted application.
+        let mut hoisted: Vec<(String, Vec<PyExpr>, String)> = Vec::new();
+        // (condition, binder assigns, body) per arm; `None` = catch-all.
+        let mut chain: Vec<(Option<PyExpr>, Vec<PyStmt>, Vec<PyStmt>)> = Vec::new();
+        for arm in arms {
+            if arm.guard.is_some() {
+                // The checker rejects this; defensive.
+                return Err(LowerError {
+                    message: "guards are not supported in a match using active patterns"
+                        .to_string(),
+                });
+            }
+            let (cond, binds) =
+                self.ap_arm_test(&arm.pattern, &subject, locals, &mut hoisted, &mut stmts)?;
+            let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+            let body = match assign_to {
+                None => self.lower_return(&arm.body, &arm_locals)?,
+                Some(tmp) => {
+                    let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                    with_assign(s, tmp, v)
+                }
+            };
+            let catch_all = cond.is_none();
+            chain.push((cond, binds, body));
+            if catch_all {
+                break; // any later arm is unreachable
+            }
+        }
+        // Assemble the chain back-to-front: the trailing catch-all (if any)
+        // becomes the final `else`; otherwise a defensive raise (the checker has
+        // already proven exhaustiveness or demanded a wildcard).
+        let mut else_body: Vec<PyStmt> = match chain.last() {
+            Some((None, _, _)) => {
+                let (_, mut binds, body) = chain.pop().expect("non-empty chain");
+                binds.extend(body);
+                binds
+            }
+            _ => vec![PyStmt::RaiseRuntimeError(
+                "non-exhaustive match".to_string(),
+            )],
+        };
+        while let Some((cond, mut binds, body)) = chain.pop() {
+            let test = cond.expect("only the last chain arm can be a catch-all");
+            binds.extend(body);
+            else_body = vec![PyStmt::If {
+                test,
+                body: binds,
+                orelse: else_body,
+            }];
+        }
+        stmts.extend(else_body);
+        Ok(stmts)
+    }
+
+    /// The chain condition and binder assignments for one arm of an
+    /// active-pattern match. A `None` condition marks a catch-all arm
+    /// (wildcard / variable — it becomes the chain's `else`). New recognizer
+    /// applications are hoisted into `out` and remembered in `hoisted`.
+    fn ap_arm_test(
+        &mut self,
+        pattern: &Pattern,
+        subject: &str,
+        locals: &HashSet<String>,
+        hoisted: &mut Vec<(String, Vec<PyExpr>, String)>,
+        out: &mut Vec<PyStmt>,
+    ) -> Result<(Option<PyExpr>, Vec<PyStmt>), LowerError> {
+        let subj = || PyExpr::Name(subject.to_string());
+        let eq_lit = |lit: PyExpr| PyExpr::BinOp {
+            op: PyBinOp::Eq,
+            left: Box::new(subj()),
+            right: Box::new(lit),
+        };
+        match pattern {
+            Pattern::Wildcard => Ok((None, vec![])),
+            Pattern::Var { name, .. } => Ok((
+                None,
+                vec![PyStmt::Assign {
+                    target: name.clone(),
+                    value: subj(),
+                }],
+            )),
+            Pattern::Int(n) => Ok((Some(eq_lit(PyExpr::Int(*n))), vec![])),
+            Pattern::Str(s) => Ok((Some(eq_lit(PyExpr::Str(s.clone()))), vec![])),
+            Pattern::Bool(b) => Ok((Some(eq_lit(PyExpr::Bool(*b))), vec![])),
+            Pattern::Ctor { name, args, .. } if self.ap_uses.contains_key(name) => {
+                let u = self.ap_uses[name].clone();
+                // The recognizer call: leading parameter arguments (literals /
+                // variables — checker-enforced), then the scrutinee.
+                let mut call_args = Vec::with_capacity(u.extra + 1);
+                for a in &args[..u.extra] {
+                    call_args.push(self.ap_arg_pyexpr(a, locals)?);
+                }
+                call_args.push(subj());
+                let tmp = match hoisted
+                    .iter()
+                    .find(|(f, a, _)| *f == u.py_fn && *a == call_args)
+                {
+                    Some((_, _, t)) => t.clone(),
+                    None => {
+                        let t = self.fresh_tmp();
+                        out.push(PyStmt::Assign {
+                            target: t.clone(),
+                            value: PyExpr::Call {
+                                func: Box::new(PyExpr::Name(u.py_fn.clone())),
+                                args: call_args.clone(),
+                            },
+                        });
+                        hoisted.push((u.py_fn.clone(), call_args, t.clone()));
+                        t
+                    }
+                };
+                let binders = &args[u.extra..];
+                let isinstance = |class: String| PyExpr::Call {
+                    func: Box::new(PyExpr::Name("isinstance".to_string())),
+                    args: vec![PyExpr::Name(tmp.clone()), PyExpr::Name(class)],
+                };
+                let bind_attr = |target: &str, attr: String| PyStmt::Assign {
+                    target: target.to_string(),
+                    value: PyExpr::Attribute {
+                        value: Box::new(PyExpr::Name(tmp.clone())),
+                        attr,
+                    },
+                };
+                if u.total {
+                    // A hidden-ADT case: isinstance test + field binds.
+                    let binds = binders
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| match p {
+                            Pattern::Var { name, .. } => Some(bind_attr(name, format!("_{i}"))),
+                            _ => None,
+                        })
+                        .collect();
+                    Ok((Some(isinstance(ap_case_class(name))), binds))
+                } else if binders.len() == 1 {
+                    // Option-flavored partial: test `Some`, bind the payload.
+                    self.needs_option = true;
+                    let binds = match &binders[0] {
+                        Pattern::Var { name, .. } => vec![bind_attr(name, "_0".to_string())],
+                        _ => vec![],
+                    };
+                    Ok((Some(isinstance("Some".to_string())), binds))
+                } else {
+                    // Bool-flavored partial: the recognizer's result *is* the test.
+                    Ok((Some(PyExpr::Name(tmp)), vec![]))
+                }
+            }
+            _ => Err(LowerError {
+                message: "unsupported pattern in a match using active patterns".to_string(),
+            }),
+        }
+    }
+
+    /// Lower an active-pattern *parameter argument* (the `3` in
+    /// `case DivisibleBy 3:`) — a literal or a variable reference.
+    fn ap_arg_pyexpr(
+        &mut self,
+        pat: &Pattern,
+        locals: &HashSet<String>,
+    ) -> Result<PyExpr, LowerError> {
+        match pat {
+            Pattern::Int(n) => Ok(PyExpr::Int(*n)),
+            Pattern::Str(s) => Ok(PyExpr::Str(s.clone())),
+            Pattern::Bool(b) => Ok(PyExpr::Bool(*b)),
+            Pattern::Var { name, .. } => Ok(self.lower_var(name, locals)),
+            _ => Err(LowerError {
+                message: "an active-pattern parameter argument must be a literal or a variable"
+                    .to_string(),
+            }),
+        }
+    }
+
     // ----- computation expressions (`DESIGN.md` §8.1) -----
 
     fn lower_ce(
@@ -1838,6 +2150,22 @@ fn dotted_path(segments: &[String]) -> PyExpr {
         };
     }
     expr
+}
+
+/// The deterministic Python name of an active pattern's recognizer function:
+/// `_ap_` + its case names joined by `_` (`_ap_Even_Odd`, `_ap_Prime`). Case
+/// names are globally unique across constructors and active patterns, so two
+/// recognizers can never collide.
+fn ap_py_fn(decl: &ActivePatternDecl) -> String {
+    let names: Vec<&str> = decl.cases.iter().map(|c| c.name.as_str()).collect();
+    format!("_ap_{}", names.join("_"))
+}
+
+/// The hidden Python class of a total active-pattern case (`Even` → `_Even`) —
+/// underscore-prefixed to signal it is compiler-generated, and to keep it out of
+/// the user constructor namespace.
+fn ap_case_class(case: &str) -> String {
+    format!("_{case}")
 }
 
 /// Mangle a constructor name to a valid, non-keyword Python identifier.

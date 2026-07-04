@@ -32,8 +32,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::lexer::Span;
 use crate::parser::ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, MatchArm,
-    Module, Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
+    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item,
+    LetBinding, MatchArm, Module, Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
 };
 
 /// A factor in a unit term: a base measure or a unit variable.
@@ -646,6 +646,37 @@ struct RecordInfo {
     fields: Vec<(String, Ty)>,
 }
 
+/// How an active-pattern case behaves at a `case` use site (`DESIGN.md` §7.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApKind {
+    /// A case of a total pattern `(|A|B|)` — a hidden-ADT constructor; the case
+    /// set is closed for exhaustiveness.
+    Total,
+    /// The case of a partial pattern whose body returns `Option a`: binds the
+    /// `Some` payload.
+    PartialOption,
+    /// The case of a partial pattern whose body returns `bool`: a predicate,
+    /// binds nothing.
+    PartialBool,
+}
+
+/// Registry entry for one active-pattern **case** (keyed by case name in
+/// [`Decls::active_patterns`]). Case names share the constructor namespace, so a
+/// clash with an ADT constructor (either direction) is a compile error.
+#[derive(Debug, Clone)]
+struct ApInfo {
+    /// The env key of the recognizer function's scheme ([`ap_fn_key`] — the
+    /// banana-bracket spelling, unreachable from surface syntax).
+    fn_key: String,
+    kind: ApKind,
+    /// Leading parameter-argument count at a use site (`params.len() - 1`; only
+    /// a parameterized partial pattern has any).
+    extra: usize,
+    /// All case names of the declaring pattern (the closed set, for
+    /// exhaustiveness of a total pattern).
+    cases: Vec<String>,
+}
+
 /// The result of the declaration pre-pass.
 #[derive(Default)]
 struct Decls {
@@ -680,6 +711,11 @@ struct Decls {
     /// User-declared in-file module names (`module Foo = …`), for the "X is a
     /// module" diagnostic on a bare reference.
     modules: HashSet<String>,
+    /// Active-pattern cases in scope, keyed by **case name** (`DESIGN.md` §7.2).
+    /// Registered when the declaring `let (|…|)` item is processed
+    /// (declare-before-use, like every binding); total cases *also* join
+    /// `ctors`/`type_ctors` under a hidden type named by [`ap_fn_key`].
+    active_patterns: HashMap<String, ApInfo>,
 }
 
 /// Type-check a whole module, returning every independent error found.
@@ -982,6 +1018,16 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                     }
                 }
             }
+            // An active pattern registers its cases (and, for a total pattern,
+            // the hidden ADT) and binds its recognizer under an internal key
+            // (`DESIGN.md` §7.2). Module-local: not exported (its hidden types
+            // and mono field vars cannot cross a module boundary soundly).
+            Item::ActivePattern(decl) => match inf.infer_active_pattern(decl, &env) {
+                Ok((key, scheme)) => {
+                    env.insert(key, scheme);
+                }
+                Err(e) => errors.push(e),
+            },
             Item::Expr(expr) => {
                 if let Err(e) = inf.infer_expr(expr, &env) {
                     errors.push(e);
@@ -1616,6 +1662,224 @@ fn has_suffix_star(pat: &Pattern) -> bool {
         | Pattern::Str(_)
         | Pattern::Bool(_) => false,
     }
+}
+
+/// The internal environment key — and display type name — of an active pattern:
+/// its banana-bracket spelling, e.g. `(|Even|Odd|)` / `(|Prime|_|)`. Not
+/// expressible in surface syntax, so it can never clash with a user name; for a
+/// total pattern it doubles as the hidden ADT's `Ty::Con` name, which is what a
+/// hover of the recognizer displays (`int -> (|Even|Odd|)`).
+pub fn ap_fn_key(decl: &ActivePatternDecl) -> String {
+    let mut s = String::from("(|");
+    for case in &decl.cases {
+        s.push_str(&case.name);
+        s.push('|');
+    }
+    if decl.partial {
+        s.push_str("_|");
+    }
+    s.push(')');
+    s
+}
+
+/// The construction arity of each case of a **total** active pattern, determined
+/// syntactically from its body (`DESIGN.md` §7.2): an application/pipe spine
+/// headed by a case name records that case at the spine's argument count; a bare
+/// (unapplied) case reference records arity 0. All sites must agree, and every
+/// case must be constructed at least once (otherwise its shape is unknowable).
+/// Shared by the type checker (which registers the hidden ADT's constructors)
+/// and lowering (which sizes the emitted case classes); errors are plain
+/// messages for the checker to attach a span to.
+pub fn ap_case_arities(decl: &ActivePatternDecl) -> Result<Vec<(String, usize)>, String> {
+    let cases: HashSet<&str> = decl.cases.iter().map(|c| c.name.as_str()).collect();
+    let mut found: HashMap<String, usize> = HashMap::new();
+    scan_ap_body(&decl.value, &cases, &mut found)?;
+    decl.cases
+        .iter()
+        .map(|c| match found.get(&c.name) {
+            Some(&n) => Ok((c.name.clone(), n)),
+            None => Err(format!(
+                "active-pattern case `{}` is never constructed in the body, so its shape \
+                 cannot be inferred",
+                c.name
+            )),
+        })
+        .collect()
+}
+
+/// Record one construction site of an active-pattern case at `arity`, rejecting
+/// a disagreement with an earlier site.
+fn record_ap_use(
+    name: &str,
+    arity: usize,
+    found: &mut HashMap<String, usize>,
+) -> Result<(), String> {
+    match found.get(name) {
+        Some(&prev) if prev != arity => Err(format!(
+            "active-pattern case `{name}` is constructed with {prev} argument(s) in one \
+             place and {arity} in another"
+        )),
+        _ => {
+            found.insert(name.to_string(), arity);
+            Ok(())
+        }
+    }
+}
+
+/// Flatten an application/pipe spine into `(head, args)` — the same shape
+/// lowering flattens, so the scanned arity matches the emitted call.
+fn flatten_ap_spine<'a>(expr: &'a Expr, args: &mut Vec<&'a Expr>) -> &'a Expr {
+    match &expr.kind {
+        ExprKind::App { func, arg } => {
+            let head = flatten_ap_spine(func, args);
+            args.push(arg);
+            head
+        }
+        ExprKind::Pipe { lhs, rhs, backward } => {
+            let (callee, arg) = if *backward { (lhs, rhs) } else { (rhs, lhs) };
+            let head = flatten_ap_spine(callee, args);
+            args.push(arg);
+            head
+        }
+        _ => expr,
+    }
+}
+
+/// Walk an active-pattern body recording every case construction site (see
+/// [`ap_case_arities`]). Case names are capitalized, and nothing in an
+/// expression binds a capitalized name, so no scope tracking is needed.
+fn scan_ap_body(
+    expr: &Expr,
+    cases: &HashSet<&str>,
+    found: &mut HashMap<String, usize>,
+) -> Result<(), String> {
+    match &expr.kind {
+        ExprKind::Var(n) => {
+            if cases.contains(n.as_str()) {
+                record_ap_use(n, 0, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::App { .. } | ExprKind::Pipe { .. } => {
+            let mut args = Vec::new();
+            let head = flatten_ap_spine(expr, &mut args);
+            if let ExprKind::Var(n) = &head.kind
+                && cases.contains(n.as_str())
+            {
+                record_ap_use(n, args.len(), found)?;
+            } else {
+                scan_ap_body(head, cases, found)?;
+            }
+            for a in args {
+                scan_ap_body(a, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Unit
+        | ExprKind::OpFunc(_) => Ok(()),
+        ExprKind::Interp { parts } => {
+            for part in parts {
+                if let InterpPart::Expr(e) = part {
+                    scan_ap_body(e, cases, found)?;
+                }
+            }
+            Ok(())
+        }
+        ExprKind::Fn { body, .. } => scan_ap_body(body, cases, found),
+        ExprKind::If { cond, then, else_ } => {
+            scan_ap_body(cond, cases, found)?;
+            scan_ap_body(then, cases, found)?;
+            scan_ap_body(else_, cases, found)
+        }
+        ExprKind::Try { body } => scan_ap_body(body, cases, found),
+        ExprKind::Match { scrutinee, arms } => {
+            scan_ap_body(scrutinee, cases, found)?;
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    scan_ap_body(g, cases, found)?;
+                }
+                scan_ap_body(&arm.body, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Compose { lhs, rhs, .. } => {
+            scan_ap_body(lhs, cases, found)?;
+            scan_ap_body(rhs, cases, found)
+        }
+        ExprKind::Unary { expr, .. } => scan_ap_body(expr, cases, found),
+        ExprKind::Compare { first, rest } => {
+            scan_ap_body(first, cases, found)?;
+            for (_, e) in rest {
+                scan_ap_body(e, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::Ce { items, .. } => {
+            for item in items {
+                match item {
+                    CeItem::Let { value, .. } | CeItem::LetBang { value, .. } => {
+                        scan_ap_body(value, cases, found)?;
+                    }
+                    CeItem::DoBang(e)
+                    | CeItem::Return(e)
+                    | CeItem::ReturnBang(e)
+                    | CeItem::Yield(e)
+                    | CeItem::YieldBang(e) => scan_ap_body(e, cases, found)?,
+                }
+            }
+            Ok(())
+        }
+        ExprKind::Annot { value, .. } => scan_ap_body(value, cases, found),
+        ExprKind::List { elems } | ExprKind::Tuple { elems } => {
+            for e in elems {
+                scan_ap_body(e, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::Record { fields, .. } => {
+            for f in fields {
+                scan_ap_body(&f.value, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::RecordUpdate { base, fields } => {
+            scan_ap_body(base, cases, found)?;
+            for f in fields {
+                scan_ap_body(&f.value, cases, found)?;
+            }
+            Ok(())
+        }
+        ExprKind::Field { base, .. } => scan_ap_body(base, cases, found),
+        ExprKind::Block { stmts } => {
+            for stmt in stmts {
+                match stmt {
+                    BlockStmt::Let(b) => scan_ap_body(&b.value, cases, found)?,
+                    BlockStmt::Expr(e) => scan_ap_body(e, cases, found)?,
+                }
+            }
+            Ok(())
+        }
+        ExprKind::Assign { value, .. } => scan_ap_body(value, cases, found),
+    }
+}
+
+/// Convert a pattern used as an active-pattern *parameter argument* into the
+/// expression it denotes (the `3` in `case DivisibleBy 3:`). Only literals and
+/// variable references qualify — the lowerer re-evaluates the argument in the
+/// hoisted recognizer call, so it must be a pure, re-emittable expression.
+fn ap_arg_expr(pat: &Pattern, span: Span) -> Option<Expr> {
+    let kind = match pat {
+        Pattern::Int(n) => ExprKind::Int(*n),
+        Pattern::Str(s) => ExprKind::Str(s.clone()),
+        Pattern::Bool(b) => ExprKind::Bool(*b),
+        Pattern::Var { name, .. } => ExprKind::Var(name.clone()),
+        _ => return None,
+    };
+    Some(Expr::new(kind, span))
 }
 
 /// The top-level alternatives a pattern denotes: an or-pattern flattens to its
@@ -3341,6 +3605,402 @@ impl Infer {
             .collect()
     }
 
+    /// Infer an active-pattern declaration (`DESIGN.md` §7.2), registering its
+    /// cases and returning the recognizer's env key + scheme.
+    ///
+    /// A **total** pattern's cases become constructors of a hidden ADT named by
+    /// [`ap_fn_key`]: each case's arity comes from a syntactic scan of the body
+    /// ([`ap_case_arities`]) and its field types are fresh **monomorphic** vars,
+    /// pinned by the body's construction sites and by `case` use sites — sharing
+    /// one module-wide substitution keeps every site consistent, exactly like a
+    /// `let mut` binding's type. A **partial** pattern registers its one case,
+    /// with the flavor decided by the body's resolved type: `Option a` (the case
+    /// binds the payload) or `bool` (a predicate; binds nothing).
+    ///
+    /// The recognizer itself is inferred like a function binding — defining it
+    /// is pure; its body's effect is latent on the innermost arrow, and is
+    /// *performed* by any `match` that uses the pattern. The scheme is
+    /// monomorphic: a total pattern's hidden field vars are shared with the
+    /// (mono) case-constructor schemes, so generalizing would let use sites
+    /// drift apart from the constructors.
+    fn infer_active_pattern(
+        &mut self,
+        decl: &ActivePatternDecl,
+        env: &Env,
+    ) -> Result<(String, Scheme), TypeError> {
+        let fn_key = ap_fn_key(decl);
+        // Case names share the constructor namespace: a clash with an ADT
+        // constructor or another active pattern is a compile error.
+        for case in &decl.cases {
+            if self.decls.ctors.contains_key(&case.name)
+                || self.decls.active_patterns.contains_key(&case.name)
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "active-pattern case `{}` clashes with an existing constructor \
+                         or active pattern",
+                        case.name
+                    ),
+                    span: case.name_span.span(),
+                });
+            }
+        }
+        let case_names: Vec<String> = decl.cases.iter().map(|c| c.name.clone()).collect();
+        let mut body_env = env.clone();
+        if !decl.partial {
+            // Register the hidden ADT: the body constructs the cases, `case`
+            // patterns destructure them, exhaustiveness sees a closed set.
+            let arities = ap_case_arities(decl).map_err(|message| TypeError {
+                message,
+                span: decl.span.span(),
+            })?;
+            let result_ty = Ty::Con(fn_key.clone(), vec![]);
+            self.decls
+                .type_ctors
+                .insert(fn_key.clone(), case_names.clone());
+            for (name, arity) in &arities {
+                let fields: Vec<Ty> = (0..*arity).map(|_| self.fresh()).collect();
+                let ctor_ty = fields.into_iter().rev().fold(result_ty.clone(), |acc, f| {
+                    Ty::Fun(Box::new(f), Box::new(acc), Effect::pure())
+                });
+                let scheme = Scheme::mono(ctor_ty);
+                body_env.insert(name.clone(), scheme.clone());
+                self.decls.ctors.insert(
+                    name.clone(),
+                    CtorInfo {
+                        scheme,
+                        arity: *arity,
+                    },
+                );
+            }
+        }
+        // Infer the recognizer like a function binding (params are never empty —
+        // the parser guarantees at least the match input).
+        let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+        let mut fn_env = body_env;
+        let mut param_tys = Vec::with_capacity(decl.params.len());
+        for param in &decl.params {
+            let pty = self.fresh();
+            param_tys.push(pty.clone());
+            if self.record_types {
+                self.recorded.push((param.span.span(), pty.clone()));
+            }
+            fn_env.insert(param.name.clone(), Scheme::mono(pty));
+        }
+        let body_res = self.infer_expr(&decl.value, &fn_env);
+        let body_eff = std::mem::replace(&mut self.cur_eff, outer);
+        let body_ty = body_res?;
+        let mut ty = body_ty.clone();
+        let mut eff = body_eff;
+        for p in param_tys.into_iter().rev() {
+            ty = Ty::Fun(Box::new(p), Box::new(ty), eff);
+            eff = Effect::pure();
+        }
+        let kind = if decl.partial {
+            // The body's type decides the partial flavor.
+            match self.apply(&body_ty) {
+                Ty::Con(name, _) if name == "Option" => ApKind::PartialOption,
+                Ty::Bool => ApKind::PartialBool,
+                other => {
+                    return Err(TypeError {
+                        message: format!(
+                            "a partial active pattern's body must return `Option a` (a \
+                             binding case) or `bool` (a predicate), found {}",
+                            show(&other)
+                        ),
+                        span: decl.value.span(),
+                    });
+                }
+            }
+        } else {
+            // The body must produce one of the cases (the hidden ADT).
+            self.unify(
+                &body_ty,
+                &Ty::Con(fn_key.clone(), vec![]),
+                decl.value.span(),
+            )?;
+            ApKind::Total
+        };
+        for case in &case_names {
+            self.decls.active_patterns.insert(
+                case.clone(),
+                ApInfo {
+                    fn_key: fn_key.clone(),
+                    kind: kind.clone(),
+                    extra: decl.params.len() - 1,
+                    cases: case_names.clone(),
+                },
+            );
+        }
+        // Record each case's span for hover (a total case shows its ctor type).
+        if self.record_types {
+            for case in &decl.cases {
+                if let Some(info) = self.decls.ctors.get(&case.name) {
+                    self.recorded
+                        .push((case.name_span.span(), info.scheme.ty.clone()));
+                }
+            }
+        }
+        Ok((fn_key, Scheme::mono(self.apply(&ty))))
+    }
+
+    /// Bind an active-pattern `case` use site (`DESIGN.md` §7.2): type-check the
+    /// leading parameter arguments (expressions), unify the recognizer's input
+    /// with the scrutinee, **perform the recognizer's latent effect** (the match
+    /// calls it — this is what makes a `let pure` binding whose match uses an
+    /// impure active pattern a compile error), then bind the case's binders.
+    fn bind_ap_pattern(
+        &mut self,
+        name: &str,
+        span: Span,
+        ap: &ApInfo,
+        args: &[Pattern],
+        scrut_ty: &Ty,
+        env: &mut Env,
+    ) -> Result<(), TypeError> {
+        let binders = match ap.kind {
+            ApKind::Total => self.decls.ctors[name].arity,
+            ApKind::PartialOption => 1,
+            ApKind::PartialBool => 0,
+        };
+        let expected = ap.extra + binders;
+        if args.len() != expected {
+            let hint = match ap.kind {
+                ApKind::PartialBool if args.len() > expected => {
+                    " (a bool active pattern is a predicate and binds nothing)"
+                }
+                ApKind::PartialOption if args.len() < expected => {
+                    " (an Option active pattern binds its payload — add a binder)"
+                }
+                _ => "",
+            };
+            return Err(TypeError {
+                message: format!(
+                    "active pattern `{name}` expects {expected} argument(s) here, \
+                     found {}{hint}",
+                    args.len()
+                ),
+                span,
+            });
+        }
+        let Some(fn_scheme) = env.get(&ap.fn_key).cloned() else {
+            return Err(TypeError {
+                message: format!(
+                    "active pattern `{name}` cannot be used before its declaration completes"
+                ),
+                span,
+            });
+        };
+        let mut fn_ty = self.instantiate(&fn_scheme);
+        // Leading parameter arguments are expressions (restricted to literals
+        // and variables so the lowerer can re-emit them in the hoisted call).
+        for arg in &args[..ap.extra] {
+            let arg_expr = ap_arg_expr(arg, span).ok_or_else(|| TypeError {
+                message: format!(
+                    "an active-pattern parameter argument must be a literal or a \
+                     variable (in `{name}`)"
+                ),
+                span,
+            })?;
+            let arg_ty = self.infer_expr(&arg_expr, env)?;
+            fn_ty = self.apply_ap_arrow(&fn_ty, &arg_ty, span, name)?;
+        }
+        // The scrutinee fills the recognizer's last parameter.
+        let result = self.apply_ap_arrow(&fn_ty, scrut_ty, span, name)?;
+        // The case's binders must be variables or `_` (MVP — keeps the if/elif
+        // lowering a simple bind, and exhaustiveness sub-columns trivial).
+        let sub = &args[ap.extra..];
+        for p in sub {
+            if !matches!(p, Pattern::Var { .. } | Pattern::Wildcard) {
+                return Err(TypeError {
+                    message: format!(
+                        "an active-pattern case argument must be a variable or `_` \
+                         (in `{name}`)"
+                    ),
+                    span,
+                });
+            }
+        }
+        match ap.kind {
+            ApKind::Total => {
+                let info = self.decls.ctors[name].clone();
+                let cty = self.instantiate(&info.scheme);
+                let (field_tys, result_ty) = split_fun(&cty, info.arity);
+                self.unify(&result_ty, &result, span)?;
+                for (p, fty) in sub.iter().zip(field_tys) {
+                    self.bind_pattern(p, &fty, span, env)?;
+                }
+            }
+            ApKind::PartialOption => {
+                let payload = self.fresh();
+                let option_ty = Ty::Con("Option".to_string(), vec![payload.clone()]);
+                self.unify(&result, &option_ty, span)?;
+                let payload = self.apply(&payload);
+                self.bind_pattern(&sub[0], &payload, span, env)?;
+            }
+            ApKind::PartialBool => {
+                self.unify(&result, &Ty::Bool, span)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply one arrow of a recognizer's type: unify against `arg -> r` and
+    /// perform the arrow's latent effect, returning the result type.
+    fn apply_ap_arrow(
+        &mut self,
+        fn_ty: &Ty,
+        arg_ty: &Ty,
+        span: Span,
+        name: &str,
+    ) -> Result<Ty, TypeError> {
+        let result = self.fresh();
+        let latent = self.fresh_eff();
+        let expected = Ty::Fun(
+            Box::new(arg_ty.clone()),
+            Box::new(result.clone()),
+            latent.clone(),
+        );
+        self.unify(fn_ty, &expected, span).map_err(|mut e| {
+            e.message = format!("in active pattern `{name}`: {}", e.message);
+            e
+        })?;
+        let latent = self.apply_eff(&latent);
+        self.perform(&latent);
+        Ok(self.apply(&result))
+    }
+
+    /// Does a pattern mention an active-pattern case anywhere (any depth)?
+    fn pattern_mentions_ap(&self, pat: &Pattern) -> bool {
+        match pat {
+            Pattern::Ctor { name, args, .. } => {
+                self.decls.active_patterns.contains_key(name)
+                    || args.iter().any(|a| self.pattern_mentions_ap(a))
+            }
+            Pattern::Record { fields, .. } => {
+                fields.iter().any(|f| self.pattern_mentions_ap(&f.pattern))
+            }
+            Pattern::Tuple { elems } => elems.iter().any(|e| self.pattern_mentions_ap(e)),
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                prefix
+                    .iter()
+                    .chain(suffix)
+                    .any(|p| self.pattern_mentions_ap(p))
+                    || rest.as_deref().is_some_and(|r| self.pattern_mentions_ap(r))
+            }
+            Pattern::Or(alts) => alts.iter().any(|a| self.pattern_mentions_ap(a)),
+            Pattern::As { pattern, .. } => self.pattern_mentions_ap(pattern),
+            Pattern::Wildcard
+            | Pattern::Var { .. }
+            | Pattern::Int(_)
+            | Pattern::Str(_)
+            | Pattern::Bool(_) => false,
+        }
+    }
+
+    /// Enforce the MVP shape rules for a `match` that uses active patterns
+    /// (`DESIGN.md` §7.2). An active pattern is a *function call*, not a
+    /// structural test, so such a match lowers to an if/elif chain; to keep that
+    /// chain honest: (1) an active pattern may appear only as the **whole**
+    /// pattern of an arm (no nesting under constructors / or- / as-patterns);
+    /// (2) the other arms must be literals, variables, or `_` (each expressible
+    /// as one condition); (3) guards are not supported (a failing guard would
+    /// need fall-through past already-bound names).
+    fn check_ap_match_shape(&self, arms: &[MatchArm], span: Span) -> Result<(), TypeError> {
+        let mut uses_ap = false;
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Ctor { name, args, .. }
+                    if self.decls.active_patterns.contains_key(name) =>
+                {
+                    uses_ap = true;
+                    if args.iter().any(|a| self.pattern_mentions_ap(a)) {
+                        return Err(TypeError {
+                            message: "an active pattern may only appear as the whole \
+                                      pattern of a `case` arm (MVP)"
+                                .to_string(),
+                            span,
+                        });
+                    }
+                }
+                p if self.pattern_mentions_ap(p) => {
+                    return Err(TypeError {
+                        message: "an active pattern may only appear as the whole pattern \
+                                  of a `case` arm (MVP)"
+                            .to_string(),
+                        span,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if !uses_ap {
+            return Ok(());
+        }
+        for arm in arms {
+            if arm.guard.is_some() {
+                return Err(TypeError {
+                    message: "guards are not supported in a `match` that uses an active \
+                              pattern (MVP)"
+                        .to_string(),
+                    span,
+                });
+            }
+            match &arm.pattern {
+                Pattern::Ctor { name, .. } if self.decls.active_patterns.contains_key(name) => {}
+                Pattern::Int(_)
+                | Pattern::Str(_)
+                | Pattern::Bool(_)
+                | Pattern::Var { .. }
+                | Pattern::Wildcard => {}
+                _ => {
+                    return Err(TypeError {
+                        message: "a `match` that uses an active pattern can mix only \
+                                  literal, variable, and `_` arms (MVP)"
+                            .to_string(),
+                        span,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The closed case set of a **total** active pattern, when every present
+    /// head constructor in a column is a case of the same one (`DESIGN.md`
+    /// §7.2). The declared totality is trusted (exactly as F# trusts it) — a
+    /// runtime miss is a Python error, not unsoundness in the checker's claim
+    /// that the *cases* are covered. Partial cases, mixed patterns, or cases of
+    /// two different active patterns yield `None` (conservative: only a
+    /// wildcard exhausts).
+    fn ap_signature(&self, present: &[Tag]) -> Option<Vec<Tag>> {
+        if present.is_empty() {
+            return None;
+        }
+        let mut fn_key: Option<&str> = None;
+        let mut cases: Option<&Vec<String>> = None;
+        for tag in present {
+            let Tag::Sum(name) = tag else { return None };
+            let info = self.decls.active_patterns.get(name)?;
+            if info.kind != ApKind::Total {
+                return None;
+            }
+            match fn_key {
+                None => {
+                    fn_key = Some(&info.fn_key);
+                    cases = Some(&info.cases);
+                }
+                Some(k) if k == info.fn_key => {}
+                Some(_) => return None,
+            }
+        }
+        cases.map(|cs| cs.iter().map(|c| Tag::Sum(c.clone())).collect())
+    }
+
     /// Infer the type of `expr`, recording it for hover when `record_types` is
     /// set. The recording happens here (around the real inference in
     /// [`infer_expr_inner`](Infer::infer_expr_inner)) so every subexpression is
@@ -3559,6 +4219,8 @@ impl Infer {
 
             ExprKind::Match { scrutinee, arms } => {
                 let scrut_ty = self.infer_expr(scrutinee, env)?;
+                // Active-pattern arms constrain the match's shape (MVP rules).
+                self.check_ap_match_shape(arms, span)?;
                 let result = self.fresh();
                 for arm in arms {
                     let mut arm_env = env.clone();
@@ -4127,7 +4789,16 @@ impl Infer {
             Pattern::Int(_) => self.unify(scrut_ty, &Ty::Int(Unit::dimensionless()), span),
             Pattern::Str(_) => self.unify(scrut_ty, &Ty::Str, span),
             Pattern::Bool(_) => self.unify(scrut_ty, &Ty::Bool, span),
-            Pattern::Ctor { name, args, .. } => {
+            Pattern::Ctor {
+                name,
+                name_span,
+                args,
+            } => {
+                // An active-pattern case resolves through the AP registry, not
+                // the constructor table (`DESIGN.md` §7.2).
+                if let Some(ap) = self.decls.active_patterns.get(name).cloned() {
+                    return self.bind_ap_pattern(name, name_span.span(), &ap, args, scrut_ty, env);
+                }
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
                     return Err(TypeError {
                         message: format!("unknown constructor `{name}`"),
@@ -4347,7 +5018,13 @@ impl Infer {
         let col_ty = self.apply(&types[0]);
         let rest = &types[1..];
         let present = self.present_tags(matrix);
-        let full_sig = self.ctor_signature(&col_ty);
+        // A column whose present heads are all cases of one *total* active
+        // pattern is closed over that case set (`DESIGN.md` §7.2) — checked
+        // before the column type's own signature, since the scrutinee type is
+        // the recognizer's *input* (e.g. `int`), not the hidden case ADT.
+        let full_sig = self
+            .ap_signature(&present)
+            .or_else(|| self.ctor_signature(&col_ty));
         let complete = full_sig
             .as_ref()
             .is_some_and(|sig| sig.iter().all(|t| present.contains(t)));
@@ -4821,9 +5498,10 @@ impl Infer {
             // has no integer solution (`e ∤ r`): a genuine dimension mismatch
             // (e.g. `sqrt` demanding `'u^2 ~ m^3`). Report it rather than
             // recursing forever (this non-termination predated `sqrt`).
-            if u.factors.iter().all(|(a, exp)| {
-                matches!(a, Atom::Var(x) if *x == v) || exp.div_euclid(e) == 0
-            }) {
+            if u.factors
+                .iter()
+                .all(|(a, exp)| matches!(a, Atom::Var(x) if *x == v) || exp.div_euclid(e) == 0)
+            {
                 return false;
             }
             let w = self.next;

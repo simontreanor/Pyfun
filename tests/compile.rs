@@ -44,8 +44,7 @@ fn no_functools_import_when_unused() {
 
 #[test]
 fn extern_lowers_to_its_python_target_with_import() {
-    let py =
-        pyfun::compile("extern pure tan: float -> float = math.tan\nlet r = tan 8.0").unwrap();
+    let py = pyfun::compile("extern pure tan: float -> float = math.tan\nlet r = tan 8.0").unwrap();
     assert!(py.contains("import math"), "{py}");
     assert!(py.contains("r = math.tan(8.0)"), "{py}");
 }
@@ -2352,6 +2351,137 @@ fn e2e_option_module() {
             ("d", "True"),
             ("e", "Some(6)"),
         ],
+    );
+}
+
+// ---------- active patterns (`DESIGN.md` §7.2) ----------
+
+#[test]
+fn active_pattern_match_lowers_to_an_if_elif_chain() {
+    let py = pyfun::compile(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even: \"e\"\n    case Odd: \"o\"",
+    )
+    .unwrap();
+    // The recognizer is a plain def; the match tests its hoisted result.
+    assert!(py.contains("def _ap_Even_Odd(n):"), "{py}");
+    assert!(py.contains("if isinstance("), "{py}");
+    assert!(py.contains("elif isinstance("), "{py}");
+    // Hidden case classes are underscore-mangled.
+    assert!(py.contains("class _Even:"), "{py}");
+    assert!(py.contains("class _Odd:"), "{py}");
+    // Evaluated once: the recognizer is called at exactly one site (plus its def).
+    assert_eq!(py.matches("_ap_Even_Odd(").count(), 2, "{py}");
+}
+
+#[test]
+fn bool_partial_lowers_to_a_truthiness_test() {
+    let py = pyfun::compile(
+        "let (|Blank|_|) s = s == \"\"\n\
+         let f s =\n  match s:\n    case Blank: 1\n    case _: 0",
+    )
+    .unwrap();
+    assert!(py.contains("def _ap_Blank(s):"), "{py}");
+    // The hoisted bool result is the test itself — no isinstance.
+    assert!(py.contains("if _pf_t0:"), "{py}");
+    assert!(!py.contains("isinstance"), "{py}");
+}
+
+#[test]
+fn distinct_parameterized_applications_hoist_separately() {
+    let py = pyfun::compile(
+        "let (|DivisibleBy|_|) d n = n % d == 0\n\
+         let f n =\n  match n:\n    case DivisibleBy 3: 1\n    case DivisibleBy 5: 2\n    case _: 0",
+    )
+    .unwrap();
+    // Two distinct applications (different arguments) → two hoisted calls + def.
+    assert_eq!(py.matches("_ap_DivisibleBy(").count(), 3, "{py}");
+    assert!(py.contains("_ap_DivisibleBy(3, n)"), "{py}");
+    assert!(py.contains("_ap_DivisibleBy(5, n)"), "{py}");
+}
+
+#[test]
+fn e2e_total_active_pattern() {
+    run_and_check(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even: \"even\"\n    case Odd: \"odd\"\n\
+         let a = f 4\n\
+         let b = f 7",
+        &[("a", "even"), ("b", "odd")],
+    );
+}
+
+#[test]
+fn e2e_total_active_pattern_with_fields() {
+    run_and_check(
+        "let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)\n\
+         let f n =\n  match n:\n    case Small s: s\n    case Big b: b\n\
+         let a = f 7\n\
+         let b = f 25",
+        &[("a", "7"), ("b", "15")],
+    );
+}
+
+#[test]
+fn e2e_option_partial_active_pattern() {
+    run_and_check(
+        "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+         let f n =\n  match n:\n    case Positive p: p\n    case _: 0\n\
+         let a = f 7\n\
+         let b = f (-3)",
+        &[("a", "7"), ("b", "0")],
+    );
+}
+
+#[test]
+fn e2e_bool_partial_active_pattern() {
+    run_and_check(
+        "let (|Blank|_|) s = String.strip s == \"\"\n\
+         let f s =\n  match s:\n    case Blank: \"empty\"\n    case _: \"text\"\n\
+         let a = f \"   \"\n\
+         let b = f \"hi\"",
+        &[("a", "empty"), ("b", "text")],
+    );
+}
+
+#[test]
+fn e2e_parameterized_active_pattern_fizzbuzz() {
+    run_and_check(
+        "let (|DivisibleBy|_|) d n = n % d == 0\n\
+         let fizz n =\n  match n:\n    case DivisibleBy 15: \"fizzbuzz\"\n    case DivisibleBy 3: \"fizz\"\n    case DivisibleBy 5: \"buzz\"\n    case _: String.fromInt n\n\
+         let a = fizz 15\n\
+         let b = fizz 9\n\
+         let c = fizz 10\n\
+         let d = fizz 7",
+        &[("a", "fizzbuzz"), ("b", "fizz"), ("c", "buzz"), ("d", "7")],
+    );
+}
+
+#[test]
+fn e2e_active_pattern_side_effects_run_once_per_match() {
+    // The recognizer prints; two arms use it, but the hoisted call runs once.
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program = pyfun::compile(
+        "let (|Tag|Untag|) n =\n  print \"eval\"\n  if n > 0 then Tag n else Untag\n\
+         let r =\n  match 5:\n    case Tag v: v\n    case Untag: 0\n\
+         print r",
+    )
+    .unwrap();
+    let stdout = run_python(&python, &program);
+    assert_eq!(stdout.replace("\r\n", "\n"), "eval\n5\n", "{program}");
+}
+
+#[test]
+fn e2e_active_pattern_match_in_value_position() {
+    // A match with active-pattern arms works as a top-level value binding too
+    // (the chain assigns a temp instead of returning).
+    run_and_check(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let r =\n  match 6:\n    case Even: \"even\"\n    case Odd: \"odd\"",
+        &[("r", "even")],
     );
 }
 

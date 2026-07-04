@@ -139,6 +139,19 @@ rather than checked — almost none of this is in the type system). Each was ver
 
 ### Deferred (real, no current demand — say the word and I'll scope it)
 *Language*
+- **Active patterns** — ✅ **done 2026-07-04** (`DESIGN.md` §7.2.1). F#'s named recognizers, all four
+  flavors: **total** `let (|Even|Odd|) n = …` (a hidden ADT + function; the case set is **closed for
+  exhaustiveness** — `case Even:`/`case Odd:` needs no `_`, a missing case gets a witness), **partial
+  Option** `let (|Positive|_|) n = … Some n … None` (the case binds the payload), **partial bool**
+  `let (|Blank|_|) s = …` (a predicate — binds nothing, no `Some ()` ceremony; flavor inferred from the
+  body type), and **parameterized partial** `let (|DivisibleBy|_|) d n = …` (`case DivisibleBy 3:`).
+  Uses are ordinary ctor patterns (no new pattern syntax); the recognizer's effect is *performed* by a
+  match that uses it (a `let pure` + impure AP is rejected); lowering is an honest **if/elif chain**
+  with each distinct recognizer application hoisted once per match (side effects once), `isinstance`
+  tests + field binds, truthiness for bool cases. **Deferred fast-follows (MVP shape rules, all clean
+  checker errors):** an AP only as an arm's *whole* pattern (no nesting under ctors / or- / as-patterns),
+  binder-only case arguments (no nested literal sub-patterns like `case Rect 0 b:`), no guards and no
+  structural-pattern arms in an AP match, and no cross-module export of an AP (module-local).
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing

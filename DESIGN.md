@@ -1039,6 +1039,91 @@ let grade n =
   else "F"
 ```
 
+### 7.2.1 Active patterns (implemented)
+
+F#'s signature pattern-matching extension: a **named recognizer** whose cases are used like
+constructors in `case` patterns, so ad-hoc classification logic gets the same exhaustive,
+declarative surface as an ADT.
+
+**Definition — banana brackets at the `let` name position** (top level only; an `(` immediately
+after `let` is unambiguous, since a binding name is an identifier or `_`):
+
+```
+let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd            # total (closed case set)
+let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)   # cases carry data
+let (|Positive|_|) n = if n > 0 then Some n else None            # partial, Option — binds
+let (|Blank|_|) s = String.strip s == ""                         # partial, bool — a predicate
+let (|DivisibleBy|_|) d n = n % d == 0                           # parameterized partial (d before n)
+```
+
+**The mental model.** A **total** pattern `(|A|B|)` is a hidden ADT (its case set) plus a function
+`input -> <hidden>`: the cases behave exactly like ADT constructors (fields, structural eq/repr),
+except they exist only in patterns and in the recognizer's own body — never as values elsewhere. A
+**partial** pattern `(|A|_|)` is a function returning `Option a` (the case binds the `Some`
+payload) or — the F#-9-style improvement — plain `bool` (a pure predicate; the case binds nothing,
+no `Some ()`/`None` ceremony). The flavor is **inferred from the body's type**, and `case Blank x:`
+on a bool pattern is a clear "binds nothing" error. The last parameter is always the match input;
+only a *partial* pattern may take leading extra parameters (F#'s rule), filled by literal/variable
+*expressions* at the use site (`case DivisibleBy 3:`).
+
+**Use — ordinary `case` patterns, no new pattern syntax.** `case Even:`, `case Small s:`,
+`case Positive p:`, `case DivisibleBy 3:` all parse as constructor patterns; the checker resolves a
+case name through the active-pattern registry (case names share the constructor namespace — a clash
+with an ADT constructor, in either declaration order, is a compile error).
+
+**Typing.** A total pattern's case arities come from a syntactic scan of its body (every
+construction site must agree; a never-constructed case is an error); the field types are fresh
+*monomorphic* vars pinned by the body and by use sites (one module-wide substitution keeps every
+site consistent — the `let mut` model), and the body must produce the hidden type, whose display
+name is the banana spelling (`int -> (|Even|Odd|)` on hover). The recognizer is monomorphic and
+**module-local** (not exported — its hidden type and mono field vars can't cross a module boundary
+soundly). **Effects:** the recognizer's body effect is latent on its innermost arrow, and a `match`
+that uses the pattern *performs* it — so a `let pure` binding whose match uses an impure active
+pattern is rejected.
+
+**Exhaustiveness.** A **total** pattern's cases are a closed set: `case Even:`/`case Odd:` is
+exhaustive with no `_`, and a missing case is reported with a witness (`` `Odd` is not matched ``).
+Totality is *trusted* from the declaration (as F# does — a body that misses at runtime is a Python
+error, not a checker unsoundness). The case-set signature applies only when **every** head in the
+column is a case of the *same* total pattern (`Infer::ap_signature`, consulted before the column
+type's own constructor signature since the scrutinee type is the recognizer's *input*); a partial
+case is a refutable leaf, and any mixing (two patterns, or literals beside cases) conservatively
+demands a wildcard.
+
+**MVP shape rules** (all checker errors, keeping the lowering honest): an active pattern may appear
+only as the **whole** pattern of an arm (no nesting under constructors / or- / as-patterns); case
+arguments after the parameter expressions must be **binders** (variables or `_`); the other arms of
+such a match must be literals, variables, or `_`; **guards are not supported** in it (a failing
+guard would need fall-through past already-bound names). Lifting these is a fast-follow.
+
+**Lowering — an honest if/elif chain.** An active pattern is a *function call*, not a structural
+test, so Python's `match` cannot express it. The declaration lowers to a plain def
+(`_ap_Even_Odd(n)`) plus, for a total pattern, hidden case classes (`_Even`, `_Odd` — ordinary ADT
+classes, underscore-mangled, no ordering); a partial-Option pattern reuses `Some`/`None_`, a bool
+one needs no classes. A `match` containing any active-pattern arm evaluates the scrutinee once,
+hoists each **distinct** recognizer application (function + arguments) to a temp — so side effects
+run at most once per match — then emits the chain: total/Option cases test `isinstance` and bind
+fields (`s = _pf_t0._0`), bool cases test truthiness (`if _pf_t0:`), literal arms compare (`==`), a
+trailing `_`/variable arm becomes the `else` (else a defensive raise). The emitter collapses
+`else: if` into `elif`, so the output reads as hand-written Python. A match with no active-pattern
+arms keeps the native `match`/`case` lowering unchanged.
+
+```python
+def _ap_Even_Odd(n):
+    if n % 2 == 0:
+        return _Even()
+    else:
+        return _Odd()
+def describe(n):
+    _pf_t0 = _ap_Even_Odd(n)
+    if isinstance(_pf_t0, _Even):
+        return "even"
+    elif isinstance(_pf_t0, _Odd):
+        return "odd"
+    else:
+        raise RuntimeError("non-exhaustive match")
+```
+
 ## 8. Showcase features (MVP): computation expressions & units of measure
 
 These two F# flagships are deliberately in the MVP — they are the clearest demonstrations of "what

@@ -37,9 +37,9 @@ pub mod ast;
 
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
-    BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
-    FieldPattern, InterpPart, Item, LetBinding, MatchArm, Module, NodeSpan, Param, Pattern,
-    TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl,
+    FieldDecl, FieldInit, FieldPattern, InterpPart, Item, LetBinding, MatchArm, Module, NodeSpan,
+    Param, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -257,6 +257,12 @@ impl Parser {
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
             Tok::Import => self.parse_import(),
+            // `let (|…` opens an active-pattern definition (`DESIGN.md` §7.2): an
+            // `(` immediately after `let` is unambiguous, since a binding name is
+            // an identifier or `_`.
+            Tok::Let if *self.peek2() == Tok::LParen && *self.peek3() == Tok::Bar => {
+                Ok(Item::ActivePattern(self.parse_active_pattern()?))
+            }
             Tok::Let => Ok(Item::Let(self.parse_let_binding()?)),
             _ => Ok(Item::Expr(self.parse_expr()?)),
         }
@@ -500,6 +506,71 @@ impl Parser {
         }
     }
 
+    /// Parse `let (|A|B|) params… = body` / `let (|A|_|) params… = body` — an
+    /// active-pattern definition (`DESIGN.md` §7.2). The `let` has not been
+    /// consumed. Case names sit between bars; a trailing `|_|` before the `|)`
+    /// marks the pattern partial. The last parameter is the match input.
+    fn parse_active_pattern(&mut self) -> Result<ActivePatternDecl, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Let, "`let`")?;
+        self.expect(&Tok::LParen, "`(`")?;
+        self.expect(&Tok::Bar, "`|`")?;
+        let mut cases = Vec::new();
+        let mut partial = false;
+        // First case, then `| Name`* with an optional final `| _`, then `|)`.
+        loop {
+            if self.eat(&Tok::Underscore) {
+                if cases.is_empty() {
+                    return Err(self.error("expected an active-pattern case name before `_`"));
+                }
+                partial = true;
+                self.expect(&Tok::Bar, "`|`")?;
+                break;
+            }
+            let case_start = self.cur_start();
+            let name = self.parse_upper_ident("an active-pattern case name")?;
+            let name_span = NodeSpan::new(Span::new(case_start, self.prev_end()));
+            cases.push(ApCase { name, name_span });
+            self.expect(&Tok::Bar, "`|`")?;
+            if matches!(self.peek(), Tok::RParen) {
+                break;
+            }
+        }
+        self.expect(&Tok::RParen, "`)` closing the active pattern")?;
+        if partial && cases.len() != 1 {
+            return Err(ParseError {
+                message: "a partial active pattern has exactly one case (`(|Name|_|)`)".to_string(),
+                span: Span::new(start, self.prev_end()),
+            });
+        }
+        let mut params = Vec::new();
+        while matches!(self.peek(), Tok::Ident(_)) {
+            params.push(self.parse_param()?);
+        }
+        if params.is_empty() {
+            return Err(self.error("an active pattern needs a parameter (the match input)"));
+        }
+        if !partial && params.len() != 1 {
+            return Err(ParseError {
+                message: "a total active pattern takes exactly one parameter (the match \
+                          input); only a partial active pattern (`(|A|_|)`) can take extra \
+                          parameters"
+                    .to_string(),
+                span: Span::new(start, self.prev_end()),
+            });
+        }
+        self.expect(&Tok::Eq, "`=`")?;
+        let value = self.parse_block_or_expr()?;
+        Ok(ActivePatternDecl {
+            doc: None,
+            cases,
+            partial,
+            params,
+            value,
+            span: NodeSpan::new(Span::new(start, self.prev_end())),
+        })
+    }
+
     fn parse_let_binding(&mut self) -> Result<LetBinding, ParseError> {
         self.expect(&Tok::Let, "`let`")?;
         // Optional `mut` / `pure` modifiers, in any order.
@@ -513,6 +584,14 @@ impl Parser {
             } else {
                 break;
             }
+        }
+        // `let (|…` here means an active pattern in a position that doesn't allow
+        // one (inside a block / module body, or after `mut`/`pure`).
+        if matches!(self.peek(), Tok::LParen) && matches!(self.peek2(), Tok::Bar) {
+            return Err(self.error(
+                "an active pattern is declared as a plain top-level `let (|A|B|) …` \
+                 (no `mut`/`pure`, not inside a block or module)",
+            ));
         }
         let name_start = self.cur_start();
         // `let _ = e` discards the result (useful for a non-`unit` expression whose
@@ -1713,6 +1792,7 @@ fn starts_atom_pattern(tok: &Tok) -> bool {
         Tok::Underscore
             | Tok::Ident(_)
             | Tok::Int(_)
+            | Tok::Str(_)
             | Tok::True
             | Tok::False
             | Tok::LParen
@@ -1745,6 +1825,7 @@ fn attach_doc(item: &mut Item, doc: Option<String>) {
         Item::Let(binding) => binding.doc = Some(doc),
         Item::Type(decl) => decl.doc = Some(doc),
         Item::Extern(decl) => decl.doc = Some(doc),
+        Item::ActivePattern(decl) => decl.doc = Some(doc),
         _ => {}
     }
 }
