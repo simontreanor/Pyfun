@@ -93,6 +93,12 @@ pub enum Tok {
     Dot,        // . (record field access)
     Underscore, // _
 
+    /// A typed hole in expression position: `?` (anonymous) or `?name` (named, the
+    /// identifier lexed adjacently, like `f"`/`r"`). A placeholder the type checker
+    /// accepts and reports the inferred type of (`DESIGN.md` §9). `?` is otherwise
+    /// unused. The payload is the hole's name, or `None` for a bare `?`.
+    Hole(Option<String>),
+
     /// A doc-comment line: `## text` at column 0 (bracket depth 0). Ordinary `#`
     /// comments — and `##` anywhere else (indented, trailing, inside brackets) —
     /// remain trivia; only this top-level form is attached, by the parser, to the

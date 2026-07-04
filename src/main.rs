@@ -98,26 +98,46 @@ fn check(path: &str) -> ExitCode {
     if has_imports(&module) {
         return check_project(path);
     }
-    match pyfun::types::check(&module) {
-        Ok(()) => {
-            eprintln!("ok: no type errors");
-            ExitCode::SUCCESS
-        }
-        Err(errors) => {
-            for (i, e) in errors.iter().enumerate() {
-                if i > 0 {
-                    eprintln!();
-                }
-                eprintln!(
-                    "{}",
-                    diagnostics::render(&source, Level::Error, &e.message, e.span)
-                );
-            }
-            let n = errors.len();
-            eprintln!("\n{n} error{}", if n == 1 { "" } else { "s" });
-            ExitCode::FAILURE
-        }
+    let (errors, _types, holes) = pyfun::types::check_collecting(&module);
+    if errors.is_empty() && holes.is_empty() {
+        eprintln!("ok: no type errors");
+        return ExitCode::SUCCESS;
     }
+    let mut first = true;
+    for e in &errors {
+        if !first {
+            eprintln!();
+        }
+        first = false;
+        eprintln!(
+            "{}",
+            diagnostics::render(&source, Level::Error, &e.message, e.span)
+        );
+    }
+    // Typed holes are reported informatively (a "note", not an error), but they
+    // keep `check` non-zero so a leftover hole is caught.
+    for h in &holes {
+        if !first {
+            eprintln!();
+        }
+        first = false;
+        eprintln!(
+            "{}",
+            diagnostics::render(&source, Level::Note, &h.message(), h.span)
+        );
+    }
+    let n = errors.len();
+    let hn = holes.len();
+    if n > 0 {
+        eprintln!("\n{n} error{}", if n == 1 { "" } else { "s" });
+    }
+    if hn > 0 {
+        eprintln!(
+            "{hn} unfilled hole{}",
+            if hn == 1 { "" } else { "s" }
+        );
+    }
+    ExitCode::FAILURE
 }
 
 fn compile(path: &str, out: Option<&str>) -> ExitCode {

@@ -43,6 +43,13 @@ let dropped = ignore 42                # unit (None) — ignore discards its arg
 ## Returns 1 when the flag is set, else 0.
 let pick b = if b then 1 else 0
 
+# Typed holes (shown as a comment — a hole blocks compilation by design, so this
+# file can still `run`): write `?` or `?name` in expression position and the
+# compiler reports the type it expects there, for type-driven development. E.g.
+#     let f x = ?body + 1
+# makes `pyfun check` report `note: hole ?body has type int` and hover show it;
+# `compile`/`run` refuse until the hole is filled. Fill inward from the types.
+
 # Blocks: an indented body is a sequence of statements ending in the value. They
 # open after `=` (a `let` body), `->` (a lambda), `case P:` (a `match` arm), `then`/`else`.
 # `let mut` + `<-` give local mutation; reassigning a plain `let` is a compile

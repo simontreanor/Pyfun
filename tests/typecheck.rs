@@ -2414,6 +2414,48 @@ fn a_user_definition_shadows_the_prelude_combinators() {
     assert!(pyfun::check("let id x = x + 1\nlet r = id 10").is_ok());
 }
 
+// ---------- typed holes ----------
+
+/// The holes reported for `source` (their `name`, resolved `ty`).
+fn holes_of(source: &str) -> Vec<(Option<String>, String)> {
+    let module = pyfun::parse(source).expect("parse");
+    let (_errors, _types, holes) = pyfun::types::check_collecting(&module);
+    holes.into_iter().map(|h| (h.name, h.ty)).collect()
+}
+
+#[test]
+fn a_hole_infers_its_type_from_context() {
+    // `x + ?` forces the hole numeric; a `string` context forces `string`.
+    let hs = holes_of("let f = ?body + 1");
+    assert_eq!(hs.len(), 1);
+    assert_eq!(hs[0].0, Some("body".to_string()));
+    assert!(hs[0].1.contains("int"), "hole ty was {:?}", hs[0].1);
+    let hs = holes_of("let f = String.concat ? \"!\"");
+    assert_eq!(hs[0].1, "string");
+    // A function-typed context: `List.map ? xs` — the hole is a function.
+    let hs = holes_of("let f xs = List.map ? xs");
+    assert!(hs[0].1.contains("->"), "hole ty was {:?}", hs[0].1);
+}
+
+#[test]
+fn a_hole_does_not_corrupt_inference_of_the_rest() {
+    // A hole unifies freely, so the surrounding program still type-checks with no
+    // errors (the hole is reported separately, not as a type error).
+    assert!(pyfun::check("let f x = x + ?\nlet g = f 5").is_ok());
+    // An anonymous and a named hole can coexist.
+    assert_eq!(holes_of("let f = (?, ?two)").len(), 2);
+}
+
+#[test]
+fn a_hole_blocks_compilation() {
+    let err = pyfun::compile("let f x = ?").unwrap_err();
+    assert!(
+        err.message().contains("hole"),
+        "compile error was {:?}",
+        err.message()
+    );
+}
+
 // ---------- error-quality: guiding messages ----------
 
 #[test]

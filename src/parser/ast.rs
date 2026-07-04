@@ -284,6 +284,12 @@ pub enum ExprKind {
     Int(i64),
     Float(f64),
     Str(String),
+    /// A typed hole `?` / `?name` (`DESIGN.md` §9): a placeholder the type checker
+    /// accepts (as a fresh type variable, unifying freely) and reports the inferred
+    /// type of. It blocks lowering — a program with holes does not compile.
+    Hole {
+        name: Option<String>,
+    },
     /// An interpolated string `f"...{expr}..."`: a sequence of literal chunks and
     /// embedded expressions. Evaluates to a `string`; each hole may be any type
     /// (stringified by the emitted Python f-string).

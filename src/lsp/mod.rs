@@ -552,7 +552,7 @@ impl Server {
         let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
             return publish_diagnostics(uri, Json::Array(vec![]));
         };
-        let items = analysis
+        let mut items: Vec<Json> = analysis
             .diagnostics
             .iter()
             .map(|e| {
@@ -564,6 +564,16 @@ impl Server {
                 ])
             })
             .collect();
+        // Typed holes are published at Information severity (3) — an intentional
+        // blank reporting its type, not a mistake.
+        for h in &analysis.holes {
+            items.push(obj(vec![
+                ("range", span_range(text, h.span)),
+                ("severity", int(3)), // Information
+                ("source", str("pyfun")),
+                ("message", str(h.message())),
+            ]));
+        }
         publish_diagnostics(uri, Json::Array(items))
     }
 
@@ -1609,6 +1619,37 @@ mod tests {
             out[0].get("method").unwrap().as_str(),
             Some("textDocument/publishDiagnostics")
         );
+    }
+
+    #[test]
+    fn a_typed_hole_is_published_at_information_severity_and_hovers_its_type() {
+        let mut server = Server::default();
+        let uri = "file:///hole.pyfun";
+        let src = "let f = ?body + 1";
+        let out = server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(diags.len(), 1);
+        // Severity 3 = Information (an intentional blank, not a red error).
+        assert_eq!(diags[0].get("severity").unwrap().as_i64(), Some(3));
+        assert!(
+            diags[0]
+                .get("message")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("hole `?body`"),
+            "diagnostic was {:?}",
+            diags[0]
+        );
+        // Hover on the hole shows its inferred type.
+        let value = hover_value(&mut server, uri, 0, 9); // the `?body`
+        assert!(value.contains("int"), "hover value was {value:?}");
     }
 
     #[test]

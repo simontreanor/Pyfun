@@ -343,6 +343,10 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Float(f) => format!("{f:?}"),
         ExprKind::Str(s) => print_string(s),
         ExprKind::Interp { parts } => print_interp(parts),
+        ExprKind::Hole { name } => match name {
+            Some(n) => format!("?{n}"),
+            None => "?".to_string(),
+        },
         ExprKind::Bool(b) => b.to_string(),
         ExprKind::Unit => "()".to_string(),
         ExprKind::Var(name) => name.clone(),

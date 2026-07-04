@@ -156,6 +156,16 @@ rather than checked — almost none of this is in the type system). Each was ver
   each), so all fire regardless of which arm wins — invisible for pure APs (just redundant work), a minor
   effect-timing quirk for impure ones (F# is lazy/short-circuit here). Making it lazy needs the same
   smarter fall-through lowering as guards + sub-pattern case args, so those three would land together.
+- **Typed holes** — ✅ **done 2026-07-04** (`DESIGN.md` §9). `?` / `?name` in expression position — the
+  type-driven-development tool from Haskell/Idris (past the F# model, which has none). Inferred as a
+  **fresh type variable that unifies freely** (so it never causes a spurious error and takes the context's
+  type — `?body + 1` ⇒ `int`, `List.map ? xs` ⇒ a function), collected and resolved into
+  `types::Hole { name, ty, span }`. Reported **informatively, not as a red error**: `pyfun check` prints a
+  `note` and exits non-zero; the LSP publishes at **Information severity** with hover showing the type
+  (free — the hole's type is already in the span→type table). It **blocks `compile`/`run`** (no value to
+  lower). `?` chosen over Haskell's `_` (already the wildcard + `let _ =` discard). Covered by
+  `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. **Deferred follow-on (MVP was type-only):**
+  listing *relevant in-scope bindings / valid hole fits* (the Haskell extra) — genuinely useful, more work.
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing
