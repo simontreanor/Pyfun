@@ -286,6 +286,71 @@ fn round_preserves_units() {
     );
 }
 
+// ---------- unit-aware sqrt : float<'u^2> -> float<'u> ----------
+
+#[test]
+fn sqrt_halves_a_square_unit() {
+    // √area = length: the unit's exponents halve (`m^2` → `m`).
+    assert!(
+        pyfun::check("measure m\nlet side = sqrt 16.0<m^2>\nlet ok = side + 1.0<m>").is_ok()
+    );
+}
+
+#[test]
+fn sqrt_halves_even_mixed_exponents() {
+    // `m^4/s^2` → `m^2/s` (every exponent even ⇒ a perfect square).
+    assert!(
+        pyfun::check("measure m\nmeasure s\nlet r = sqrt 2.0<m^4/s^2>\nlet ok = r + 1.0<m^2/s>")
+            .is_ok()
+    );
+}
+
+#[test]
+fn rejects_sqrt_of_an_odd_exponent_unit() {
+    // `m^3` is not a square — a dimensional error, not a silently-lost unit.
+    assert_error_contains("measure m\nlet bad = sqrt 2.0<m^3>", "found float<m^3>");
+}
+
+#[test]
+fn rejects_sqrt_of_a_bare_unit() {
+    // `m` is not a square either: there is no unit whose square is `m`.
+    assert_error_contains("measure m\nlet bad = sqrt 2.0<m>", "found float<m>");
+    // The expected side names the square, pointing at what sqrt needs.
+    assert_error_contains("measure m\nlet bad = sqrt 2.0<m>", "^2>");
+}
+
+#[test]
+fn sqrt_of_dimensionless_float_is_dimensionless() {
+    assert!(pyfun::check("let r = sqrt 2.0\nlet ok = r + 1.0").is_ok());
+    // Pure, so usable inside a `let pure` binding; the halving propagates
+    // through inference: `norm x = sqrt (x * x) : float<'u> -> float<'u>`.
+    assert!(
+        pyfun::check(
+            "measure m\nlet pure norm x = sqrt (x * x)\nlet ok = norm 3.0<m> + 1.0<m>"
+        )
+        .is_ok()
+    );
+    // float-only, like `**` (a num literal coerces, a real int does not).
+    assert!(pyfun::check("let r = sqrt 4").is_ok());
+    assert_error_contains("let bad = sqrt (List.len [1, 2])", "float");
+}
+
+#[test]
+fn a_user_definition_still_shadows_the_sqrt_builtin() {
+    // User `let`s shadow prelude names, sqrt included.
+    assert!(pyfun::check("let sqrt s = s\nlet r = sqrt \"not a number\"").is_ok());
+}
+
+#[test]
+fn a_non_square_unit_equation_errors_instead_of_hanging() {
+    // Regression: `'u^2 ~ m^3` used to overflow the stack in `solve_unit`
+    // (the no-progress reduce step recursed forever). It is a dimension error.
+    assert_error_contains(
+        "measure m\nlet sq x = x * x\nlet f x = sq x == 5.0<m^3>",
+        "type mismatch",
+    );
+}
+
 #[test]
 fn accepts_scientific_notation() {
     assert!(pyfun::check("let x = 1e6").is_ok());
@@ -2120,7 +2185,7 @@ fn rejects_duplicate_module() {
 
 #[test]
 fn accepts_extern_with_concrete_type() {
-    assert!(pyfun::check("extern pure sqrt: float -> float = math.sqrt\nlet r = sqrt 2.0").is_ok());
+    assert!(pyfun::check("extern pure cbrt: float -> float = math.cbrt\nlet r = cbrt 2.0").is_ok());
 }
 
 #[test]
@@ -2133,7 +2198,7 @@ fn extern_type_is_generalized_over_its_variables() {
 #[test]
 fn extern_is_type_checked_at_the_call_site() {
     assert_error_contains(
-        "extern pure sqrt: float -> float = math.sqrt\nlet bad = sqrt \"x\"",
+        "extern pure cbrt: float -> float = math.cbrt\nlet bad = cbrt \"x\"",
         "expected float, found string",
     );
 }
@@ -2151,7 +2216,7 @@ fn extern_boundary_is_effectful_by_default() {
 #[test]
 fn pure_extern_can_be_used_in_a_pure_binding() {
     assert!(
-        pyfun::check("extern pure sqrt: float -> float = math.sqrt\nlet pure root x = sqrt x")
+        pyfun::check("extern pure cbrt: float -> float = math.cbrt\nlet pure root x = cbrt x")
             .is_ok()
     );
 }
@@ -2168,6 +2233,12 @@ fn partial_application_of_an_extern_is_pure() {
 fn rejects_extern_redefining_an_existing_name() {
     assert_error_contains(
         "extern print: string -> unit\nlet r = print \"hi\"",
+        "already defined",
+    );
+    // `sqrt` is a prelude builtin now, so the old dimensionless-extern
+    // workaround gets the same clear clash error (drop the extern instead).
+    assert_error_contains(
+        "extern pure sqrt: float -> float = math.sqrt\nlet r = sqrt 2.0",
         "already defined",
     );
 }

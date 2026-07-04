@@ -159,14 +159,21 @@ rather than checked — almost none of this is in the type system). Each was ver
   ordering methods; nested `Some (Ok x)` composes). Still not ordered: `Set`/`Map`/`Exception` (no natural
   order) and `List` (a possible lexicographic follow-on). Covered by typecheck/compile tests +
   `examples/hello.pyfun`.
-- **Unit-aware `sqrt : float<'u^2> -> float<'u>`** (M) — √area = length, the one genuinely useful
-  unit-carrying power op (F# special-cases exactly this signature). Today `sqrt` is a dimensionless
-  `extern` (`float -> float`), so `sqrt area` loses the unit. Needs either **rational unit exponents**
-  (to halve `'u^2` → `'u`, and to reject an odd/non-square unit like `<m^3>`) or a bespoke "halve the
-  unit" scheme in the checker — a bounded piece of the unit machinery. **NB:** this is the *only*
-  tractable unit-aware power op — general `x<'u> ** y` is **impossible** in a static unit system (the
-  exponent is a runtime value, so the result unit `'u^y` would depend on it → dependent types); that's
-  why `**` is deliberately dimensionless, and integer powers-with-units are already covered by `*`
+- **Unit-aware `sqrt : float<'u^2> -> float<'u>`** — ✅ **done 2026-07-03**. √area = length:
+  `sqrt 16.0<m^2> : float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, and a non-square unit (`<m>`,
+  `<m^3>`) is a compile-time dimensional error. Needed **neither** rational unit exponents **nor** a
+  bespoke halving scheme: the scheme is seeded in the prelude with the existing integer-exponent
+  representation (arg unit `'u^2` via `Unit::pow(2)`), and the existing abelian-group unifier's
+  elimination step already halves even exponents / fails odd ones — the "perfect square" constraint
+  falls out of unification, and it propagates (`let norm x = sqrt (x * x) : float<'u> -> float<'u>`).
+  Pure; lowers to `math.sqrt` (+ `import math`, the `floor`/`ceil`/`truncate` routing); units erase.
+  Bonus fix: `solve_unit`'s reduce step could previously recurse forever on `'u^2 ~ m^3` (a latent
+  stack overflow reachable via `let sq x = x * x`); it now detects the no-progress case and reports a
+  mismatch. `extern sqrt` now hits the ordinary "already defined" clash (drop the old dimensionless
+  workaround); a user `let sqrt` still shadows. **NB (unchanged):** this is the *only* tractable
+  unit-aware power op — general `x<'u> ** y` is **impossible** in a static unit system (the exponent
+  is a runtime value, so the result unit `'u^y` would depend on it → dependent types); that's why
+  `**` stays dimensionless, and integer powers-with-units are already covered by `*`
   (`x<m> * x<m> : <m^2>`). Decided 2026-07-02.
 - **Chained comparisons** — ✅ **done**: `a < b < c` is Python-style (means `a < b and b < c`, `b`
   evaluated once), a dedicated `ExprKind::Compare` node lowering 1:1 to Python's native chained
@@ -227,12 +234,12 @@ rather than checked — almost none of this is in the type system). Each was ver
   yields an ordinary `Tok::Str`; the emitter's `string_literal` escaper re-escapes on output, so there is
   no AST/type/lowering change. `rf"..."` out of scope. Covered by lexer + compile tests + `examples/hello.pyfun`.
 *Cross-module (file-modules follow-ons)*
-- **Cross-module externs / measures** — ✅ **done 2026-07-03**. An imported `extern` (`Mathx.sqrt`) now
+- **Cross-module externs / measures** — ✅ **done 2026-07-03**. An imported `extern` (`Mathx.cbrt`) now
   exports like a value (its name joins `run()`'s `exported`, so its scheme — `io` on the innermost arrow
   for a non-`pure` extern — joins `ModuleExports.schemes`) and, in the **project lowering path**, is also
-  bound at top level in its own module (`sqrt = math.sqrt`, `import math` hoisted, via `Lowerer::project_mode`
-  — single-file still erases externs); the consumer routes `Mathx.sqrt` → `mathx.sqrt` and `export_arities`
-  includes externs so partial application (`List.map Mathx.sqrt xs`) curries. **Measures** merge *unqualified*
+  bound at top level in its own module (`cbrt = math.cbrt`, `import math` hoisted, via `Lowerer::project_mode`
+  — single-file still erases externs); the consumer routes `Mathx.cbrt` → `mathx.cbrt` and `export_arities`
+  includes externs so partial application (`List.map Mathx.cbrt xs`) curries. **Measures** merge *unqualified*
   (there is no qualified unit syntax — `<m>` is bare): `ModuleExports` carries `measures`/`measure_aliases`,
   `merge_imported_types` inserts base names idempotently (a shared `Units` module imported everywhere is the
   common case) and aliases with a **different-expansion conflict error** (two imports mapping `N` to

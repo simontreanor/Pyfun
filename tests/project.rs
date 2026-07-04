@@ -504,19 +504,22 @@ fn a_cross_module_extern_binds_in_its_module_and_routes_from_the_consumer() {
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
-            ("Main", "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r"),
+            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            (
+                "Main",
+                "import Mathx\nlet r = Mathx.cbrt 8.0\nprint r",
+            ),
         ],
     );
     // The defining module binds the extern at top level (so it is referenceable as
     // an attribute), with the Python module imported.
     let mathx = file(&files, "mathx.py");
     assert!(mathx.contains("import math"), "{mathx}");
-    assert!(mathx.contains("sqrt = math.sqrt"), "{mathx}");
+    assert!(mathx.contains("cbrt = math.cbrt"), "{mathx}");
     // The consumer routes the qualified reference to the module attribute.
     let main = file(&files, "main.py");
     assert!(main.contains("import mathx"), "{main}");
-    assert!(main.contains("r = mathx.sqrt(16.0)"), "{main}");
+    assert!(main.contains("r = mathx.cbrt(8.0)"), "{main}");
 }
 
 #[test]
@@ -524,27 +527,30 @@ fn e2e_a_cross_module_extern_runs() {
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
-            ("Main", "import Mathx\nlet r = Mathx.sqrt 16.0\nprint r"),
+            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            (
+                "Main",
+                "import Mathx\nlet r = Mathx.cbrt 8.0\nprint r",
+            ),
         ],
     );
     let dir = Scratch::new("e2e_extern");
     if let Some(out) = run_project(&dir, &files, "main.py") {
-        assert_eq!(out.trim(), "4.0");
+        assert_eq!(out.trim(), "2.0");
     }
 }
 
 #[test]
 fn e2e_a_cross_module_extern_partial_application_curries() {
-    // `List.map Mathx.sqrt xs` partially applies the imported extern — its arity is
+    // `List.map Mathx.cbrt xs` partially applies the imported extern — its arity is
     // threaded so the map still curries and runs.
     let files = compile(
         "Main",
         &[
-            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
+            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
             (
                 "Main",
-                "import Mathx\nlet xs = List.map Mathx.sqrt [4.0, 9.0, 16.0]\nprint xs",
+                "import Mathx\nlet xs = List.map Mathx.cbrt [8.0, 27.0, 64.0]\nprint xs",
             ),
         ],
     );
@@ -559,16 +565,14 @@ fn an_unexported_extern_is_not_a_member() {
     let project = build_mem(
         "Main",
         &[
-            ("Mathx", "extern sqrt : float -> float = math.sqrt"),
-            ("Main", "import Mathx\nlet r = Mathx.cbrt 8.0"),
+            ("Mathx", "extern cbrt : float -> float = math.cbrt"),
+            ("Main", "import Mathx\nlet r = Mathx.hypotenuse 8.0"),
         ],
     );
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].errors[0]
-            .message
-            .contains("not a member of `Mathx`"),
+        errors[0].errors[0].message.contains("not a member of `Mathx`"),
         "got: {}",
         errors[0].errors[0].message
     );
@@ -587,13 +591,17 @@ fn an_imported_impure_extern_keeps_its_effect_across_the_boundary() {
                 "extern log : string -> unit = builtins.print\n\
                  extern pure ident : int -> int = builtins.abs",
             ),
-            ("Main", "import Logx\nlet pure bad s = Logx.log s"),
+            (
+                "Main",
+                "import Logx\nlet pure bad s = Logx.log s",
+            ),
         ],
     );
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
     assert!(
-        errors[0].errors[0].message.contains("pure") && errors[0].errors[0].message.contains("io"),
+        errors[0].errors[0].message.contains("pure")
+            && errors[0].errors[0].message.contains("io"),
         "got: {}",
         errors[0].errors[0].message
     );
@@ -658,7 +666,10 @@ fn e2e_a_cross_module_measure_annotated_value_runs() {
 fn using_a_measure_without_importing_its_module_is_an_error() {
     let project = build_mem(
         "Main",
-        &[("Units", "measure m"), ("Main", "let d = 100<m>")],
+        &[
+            ("Units", "measure m"),
+            ("Main", "let d = 100<m>"),
+        ],
     );
     let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
