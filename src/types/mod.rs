@@ -624,15 +624,25 @@ pub struct Hole {
     /// The hole's inferred type, resolved against the final substitution and
     /// rendered (e.g. `int -> string`; an unconstrained hole shows a type var).
     pub ty: String,
+    /// **Valid hole fits**: in-scope binding names whose type could fill the hole
+    /// (their scheme unifies with the hole's type), most-specific first, capped.
+    /// Empty for a fully-unconstrained hole (everything fits — unhelpful).
+    pub fits: Vec<String>,
     pub span: Span,
 }
 
 impl Hole {
-    /// The informative one-line message, e.g. `` hole `?body` has type `int -> string` ``.
+    /// The informative one-line message, e.g.
+    /// `` hole `?body` has type `int -> string` — try: show, toStr ``.
     pub fn message(&self) -> String {
-        match &self.name {
+        let head = match &self.name {
             Some(n) => format!("hole `?{n}` has type `{}`", self.ty),
             None => format!("hole `?` has type `{}`", self.ty),
+        };
+        if self.fits.is_empty() {
+            head
+        } else {
+            format!("{head} — try: {}", self.fits.join(", "))
         }
     }
 }
@@ -1114,14 +1124,19 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         .collect();
 
     // Resolve each hole's type variable against the final substitution and render
-    // it (informative — a hole is reported, not an error; it blocks compilation).
-    let holes: Vec<Hole> = inf
-        .holes
-        .iter()
-        .map(|(span, name, ty)| Hole {
-            name: name.clone(),
-            ty: show(&inf.apply(ty)),
-            span: *span,
+    // it (informative — a hole is reported, not an error; it blocks compilation),
+    // and search the captured environment for **valid hole fits**.
+    let recorded_holes = std::mem::take(&mut inf.holes);
+    let holes: Vec<Hole> = recorded_holes
+        .into_iter()
+        .map(|(span, name, ty, env)| {
+            let fits = inf.hole_fits(&env, &ty);
+            Hole {
+                name,
+                ty: show(&inf.apply(&ty)),
+                fits,
+                span,
+            }
         })
         .collect();
 
@@ -3072,6 +3087,19 @@ fn resolve(
     }
 }
 
+/// Most valid hole fits to report — enough to be useful without drowning the note.
+const HOLE_FIT_CAP: usize = 6;
+
+/// A rollback point for the unification state, used by [`Infer::hole_fits`] to try a
+/// candidate binding against a hole's type without committing.
+struct SubstSnapshot {
+    subst: HashMap<u32, Ty>,
+    unit_subst: HashMap<u32, Unit>,
+    num_subst: HashMap<u32, NumRef>,
+    ord: HashSet<u32>,
+    eff_subst: HashMap<u32, Effect>,
+}
+
 #[derive(Default)]
 struct Infer {
     subst: HashMap<u32, Ty>,
@@ -3095,11 +3123,12 @@ struct Infer {
     /// Collected `(span, ty)` pairs (unresolved — resolved in [`run`] once the
     /// substitution is final). Empty unless `record_types` is set.
     recorded: Vec<(Span, Ty)>,
-    /// Typed holes (`?` / `?name`) seen while inferring, with each hole's fresh
-    /// type variable — resolved against the final substitution in [`run`] and
+    /// Typed holes (`?` / `?name`) seen while inferring: each hole's span, name,
+    /// fresh type variable, and a snapshot of the environment in scope at it (for
+    /// **valid hole fits**). Resolved against the final substitution in [`run`] and
     /// reported informatively (`DESIGN.md` §9). Always collected (holes block
     /// compilation regardless of `record_types`).
-    holes: Vec<(Span, Option<String>, Ty)>,
+    holes: Vec<(Span, Option<String>, Ty, Env)>,
     /// Set per `match` by [`check_exhaustive`](Infer::check_exhaustive) when an arm
     /// contains a suffix-star list pattern (`[*r, s…]`) — the only patterns that can
     /// reproduce themselves under specialization — enabling the cycle guard in
@@ -4067,7 +4096,8 @@ impl Infer {
             // context demands), recorded so `run` can report its resolved type.
             ExprKind::Hole { name } => {
                 let ty = self.fresh();
-                self.holes.push((span, name.clone(), ty.clone()));
+                // Snapshot the environment for valid-hole-fit search (post-hoc).
+                self.holes.push((span, name.clone(), ty.clone(), env.clone()));
                 Ok(ty)
             }
             // Integer literals are polymorphic numerics (`num 'a => 'a`) so they
@@ -5571,6 +5601,64 @@ impl Infer {
             let reduced = self.apply_unit(&u);
             self.solve_unit(reduced)
         }
+    }
+
+    /// Snapshot the unification state so a *trial* unification (valid hole fits)
+    /// can be rolled back — clones only the maps [`unify`](Self::unify) mutates.
+    fn subst_snapshot(&self) -> SubstSnapshot {
+        SubstSnapshot {
+            subst: self.subst.clone(),
+            unit_subst: self.unit_subst.clone(),
+            num_subst: self.num_subst.clone(),
+            ord: self.ord.clone(),
+            eff_subst: self.eff_subst.clone(),
+        }
+    }
+
+    fn subst_restore(&mut self, snap: &SubstSnapshot) {
+        self.subst = snap.subst.clone();
+        self.unit_subst = snap.unit_subst.clone();
+        self.num_subst = snap.num_subst.clone();
+        self.ord = snap.ord.clone();
+        self.eff_subst = snap.eff_subst.clone();
+    }
+
+    /// **Valid hole fits** (`DESIGN.md` §9): in-scope binding names whose type could
+    /// fill a hole of type `target` — their instantiated scheme unifies with it.
+    /// Ranked most-specific (least polymorphic) first, capped at [`HOLE_FIT_CAP`].
+    /// Empty when `target` is a bare unresolved variable (everything fits — noise).
+    /// Each candidate is tried by a real unification that is immediately rolled back,
+    /// so the checker's own substitution is untouched.
+    fn hole_fits(&mut self, env: &Env, target: &Ty) -> Vec<String> {
+        let target = self.apply(target);
+        if matches!(target, Ty::Var(_)) {
+            return Vec::new();
+        }
+        let snap = self.subst_snapshot();
+        let mut fits: Vec<(usize, bool, String)> = Vec::new();
+        for (name, scheme) in env {
+            let candidate = self.instantiate(scheme);
+            let ok = self.unify(&candidate, &target, Span::new(0, 0)).is_ok();
+            self.subst_restore(&snap);
+            if ok {
+                // Rank by (1) fewer generalized variables ⇒ a tighter fit — this is
+                // the load-bearing key: it puts specific matches (`String.upper` for
+                // a `string -> string` hole) ahead of trivially-general combinators
+                // (`id`, `ignore`, `Some`) that fit almost anything but are rarely
+                // the answer. Then (2) unqualified names (the user's own bindings)
+                // before qualified module members, and (3) name for stable output.
+                let poly = scheme.vars.len()
+                    + scheme.uvars.len()
+                    + scheme.num_vars.len()
+                    + scheme.eff_vars.len();
+                fits.push((poly, name.contains('.'), name.clone()));
+            }
+        }
+        fits.sort();
+        fits.into_iter()
+            .map(|(_, _, n)| n)
+            .take(HOLE_FIT_CAP)
+            .collect()
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
