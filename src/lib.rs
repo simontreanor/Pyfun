@@ -61,6 +61,9 @@ pub struct Analysis {
     pub diagnostics: Vec<types::TypeError>,
     /// The span→type table for hover (best-effort, even for a partial module).
     pub types: Vec<types::TypeSpan>,
+    /// Typed holes (`?` / `?name`) and their inferred types — surfaced by the LSP
+    /// at `Information` severity (an intentional blank, not an error).
+    pub holes: Vec<types::Hole>,
     /// Whether the document lexed and parsed with no syntax errors. Mutating
     /// features (rename) require this — a partial module could hide occurrences.
     pub parse_ok: bool,
@@ -106,7 +109,7 @@ pub fn analyze_with_imports(
     let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
     let imports = resolve(&module);
-    let (type_errors, types) = types::check_collecting_with_imports(&module, &imports);
+    let (type_errors, types, holes) = types::check_collecting_with_imports(&module, &imports);
     // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
     // by position so cascading errors read top-to-bottom.
     let mut syntax_errors: Vec<_> = lex_errors
@@ -124,6 +127,8 @@ pub fn analyze_with_imports(
         module: Some(module),
         diagnostics: if parse_ok { type_errors } else { syntax_errors },
         types,
+        // Holes surface only once the file parses clean (like type errors).
+        holes: if parse_ok { holes } else { Vec::new() },
         parse_ok,
     }
 }
@@ -137,9 +142,17 @@ pub fn compile(source: &str) -> Result<String, CompileError> {
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
     // them as `7.0` (matching their inferred type — see `float_literal_spans`).
-    let (mut errors, types) = types::check_collecting(&module);
+    let (mut errors, types, holes) = types::check_collecting(&module);
     if !errors.is_empty() {
         return Err(CompileError::Type(errors.remove(0)));
+    }
+    // A hole has no value to lower — a program with holes is intentionally
+    // incomplete, so compilation is blocked (with the hole's location + type).
+    if let Some(hole) = holes.first() {
+        return Err(CompileError::Type(types::TypeError {
+            message: format!("cannot compile: unfilled {} (fill it in)", hole.message()),
+            span: hole.span,
+        }));
     }
     let floats = float_literal_spans(&types);
     let py = lowering::lower(&module, &floats).map_err(CompileError::Lower)?;

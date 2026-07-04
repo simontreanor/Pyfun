@@ -613,6 +613,30 @@ pub struct TypeError {
     pub span: Span,
 }
 
+/// A typed hole (`?` / `?name`) and its inferred type (`DESIGN.md` §9). Reported
+/// informatively — a hole is an intentional blank, not a mistake — but it blocks
+/// compilation (a program with holes has no complete value to lower). Rendered at
+/// a "note" level in the CLI and LSP `Information` severity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hole {
+    /// The hole's name (`?name`), or `None` for a bare `?`.
+    pub name: Option<String>,
+    /// The hole's inferred type, resolved against the final substitution and
+    /// rendered (e.g. `int -> string`; an unconstrained hole shows a type var).
+    pub ty: String,
+    pub span: Span,
+}
+
+impl Hole {
+    /// The informative one-line message, e.g. `` hole `?body` has type `int -> string` ``.
+    pub fn message(&self) -> String {
+        match &self.name {
+            Some(n) => format!("hole `?{n}` has type `{}`", self.ty),
+            None => format!("hole `?` has type `{}`", self.ty),
+        }
+    }
+}
+
 /// The inferred type of one expression node, rendered for display. Collected by
 /// [`check_collecting`] so an editor (the LSP, `DESIGN.md` §9) can show a type on
 /// hover — Pyfun types are inferred, never written, so this is the only way to see
@@ -720,7 +744,7 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _schemes, _exports, _records, _measures) =
+    let (errors, _types, _schemes, _exports, _records, _measures, _holes) =
         run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
@@ -775,7 +799,7 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes, types, records, (measures, measure_aliases)) =
+    let (errors, _types, schemes, types, records, (measures, measure_aliases), _holes) =
         run(module, false, imports);
     (
         errors,
@@ -797,7 +821,7 @@ pub fn check_module_collecting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports) {
-    let (errors, types, schemes, tys, records, (measures, measure_aliases)) =
+    let (errors, types, schemes, tys, records, (measures, measure_aliases), _holes) =
         run(module, true, imports);
     (
         errors,
@@ -818,9 +842,10 @@ pub fn check_module_collecting(
 pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
-) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports, _records, _measures) = run(module, true, imports);
-    (errors, types)
+) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
+    let (errors, types, _schemes, _exports, _records, _measures, holes) =
+        run(module, true, imports);
+    (errors, types, holes)
 }
 
 /// Type-check `module` and, in the same pass, collect the inferred type of every
@@ -828,10 +853,10 @@ pub fn check_collecting_with_imports(
 /// error list alongside a span→type table resolved against the final substitution.
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
-pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>) {
-    let (errors, types, _schemes, _exports, _records, _measures) =
+pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
+    let (errors, types, _schemes, _exports, _records, _measures, holes) =
         run(module, true, &HashMap::new());
-    (errors, types)
+    (errors, types, holes)
 }
 
 /// Shared core of [`check`] / [`check_collecting`] / [`check_module`]. When
@@ -849,6 +874,7 @@ type RunResult = (
     Vec<ExportedType>,
     Vec<(String, RecordInfo)>,
     ExportedMeasures,
+    Vec<Hole>,
 );
 
 /// This module's own measures, for its export interface: base names and derived
@@ -1087,6 +1113,18 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         })
         .collect();
 
+    // Resolve each hole's type variable against the final substitution and render
+    // it (informative — a hole is reported, not an error; it blocks compilation).
+    let holes: Vec<Hole> = inf
+        .holes
+        .iter()
+        .map(|(span, name, ty)| Hole {
+            name: name.clone(),
+            ty: show(&inf.apply(ty)),
+            span: *span,
+        })
+        .collect();
+
     (
         errors,
         types,
@@ -1094,6 +1132,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         exported_types,
         exported_records,
         exported_measures,
+        holes,
     )
 }
 
@@ -1780,6 +1819,7 @@ fn scan_ap_body(
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Unit
+        | ExprKind::Hole { .. }
         | ExprKind::OpFunc(_) => Ok(()),
         ExprKind::Interp { parts } => {
             for part in parts {
@@ -1900,6 +1940,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
         | ExprKind::Unit
+        | ExprKind::Hole { .. }
         | ExprKind::OpFunc(_) => {}
         ExprKind::Interp { parts } => {
             for part in parts {
@@ -3054,6 +3095,11 @@ struct Infer {
     /// Collected `(span, ty)` pairs (unresolved — resolved in [`run`] once the
     /// substitution is final). Empty unless `record_types` is set.
     recorded: Vec<(Span, Ty)>,
+    /// Typed holes (`?` / `?name`) seen while inferring, with each hole's fresh
+    /// type variable — resolved against the final substitution in [`run`] and
+    /// reported informatively (`DESIGN.md` §9). Always collected (holes block
+    /// compilation regardless of `record_types`).
+    holes: Vec<(Span, Option<String>, Ty)>,
     /// Set per `match` by [`check_exhaustive`](Infer::check_exhaustive) when an arm
     /// contains a suffix-star list pattern (`[*r, s…]`) — the only patterns that can
     /// reproduce themselves under specialization — enabling the cycle guard in
@@ -4016,6 +4062,14 @@ impl Infer {
     fn infer_expr_inner(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
         let span = expr.span();
         match &expr.kind {
+            // A typed hole `?` / `?name`: a fresh type variable that unifies freely
+            // (so it never causes a spurious error and takes whatever type the
+            // context demands), recorded so `run` can report its resolved type.
+            ExprKind::Hole { name } => {
+                let ty = self.fresh();
+                self.holes.push((span, name.clone(), ty.clone()));
+                Ok(ty)
+            }
             // Integer literals are polymorphic numerics (`num 'a => 'a`) so they
             // adapt to int or float by context; float literals are concretely
             // float (§7.1).

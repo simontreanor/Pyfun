@@ -1124,6 +1124,10 @@ impl Parser {
                     parts: Self::parse_interp(parts)?,
                 }
             }
+            Tok::Hole(name) => {
+                self.bump();
+                ExprKind::Hole { name }
+            }
             Tok::True => {
                 self.bump();
                 ExprKind::Bool(true)
@@ -1774,6 +1778,7 @@ fn starts_atom(tok: &Tok) -> bool {
             | Tok::Float(_)
             | Tok::Str(_)
             | Tok::FStr(_)
+            | Tok::Hole(_)
             | Tok::True
             | Tok::False
             | Tok::Ident(_)

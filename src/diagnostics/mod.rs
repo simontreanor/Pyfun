@@ -9,6 +9,9 @@ use crate::lexer::Span;
 pub enum Level {
     Error,
     Warning,
+    /// An informational note — used for typed holes (`?` / `?name`), which report a
+    /// type but aren't mistakes.
+    Note,
 }
 
 impl Level {
@@ -16,6 +19,7 @@ impl Level {
         match self {
             Level::Error => "error",
             Level::Warning => "warning",
+            Level::Note => "note",
         }
     }
 }

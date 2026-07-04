@@ -489,6 +489,7 @@ impl Resolver {
             | ExprKind::Float(_)
             | ExprKind::Str(_)
             | ExprKind::Bool(_)
+            | ExprKind::Hole { .. }
             | ExprKind::Unit => {}
             ExprKind::Var(name) => match self.lookup(name) {
                 Some(span) => self.refs.push(Reference {

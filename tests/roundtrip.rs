@@ -89,6 +89,11 @@ const PROGRAMS: &[&str] = &[
     "let piped = x |> f >> g",
     "let mapped = List.map (double >> inc) xs",
     "let choose = if cond then a else b",
+    // Typed holes: anonymous `?` and named `?name`, in any expression position.
+    "let f x = ?",
+    "let g x = ?body + 1",
+    "let h = List.map ?fn xs",
+    "let i = f ? ?other",
     // `let _ = e` discards a result (top-level and in a block).
     "let _ = f 1",
     "let g x =\n    let _ = h x\n    x",

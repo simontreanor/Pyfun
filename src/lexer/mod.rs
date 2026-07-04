@@ -219,6 +219,16 @@ impl<'a> Lexer<'a> {
         String::from_utf8_lossy(&self.src[self.pos..i]).into_owned()
     }
 
+    /// Read and consume the identifier starting at the cursor (the caller has
+    /// checked the first byte is an identifier start). Used for `?name` holes.
+    fn peek_ident_and_advance(&mut self) -> String {
+        let start = self.pos;
+        while matches!(self.peek(), Some(b) if is_ident_continue(b)) {
+            self.pos += 1;
+        }
+        String::from_utf8_lossy(&self.src[start..self.pos]).into_owned()
+    }
+
     /// The column (0-based) of the current position, i.e. bytes since the last
     /// newline. Assumes space indentation (a tab counts as one column).
     fn column(&self) -> usize {
@@ -331,6 +341,19 @@ impl<'a> Lexer<'a> {
             b'r' if self.peek2() == Some(b'"') => {
                 let triple = self.quotes_at(start + 1, 3);
                 self.lex_raw_string(start, triple)
+            }
+            // A typed hole `?` (anonymous) or `?name` (an identifier lexed
+            // adjacently, no space — like `f"`/`r"`; `? name` with a space is a bare
+            // hole followed by an identifier).
+            b'?' => {
+                self.pos += 1;
+                let name = if matches!(self.peek(), Some(b) if is_ident_start(b)) {
+                    Some(self.peek_ident_and_advance())
+                } else {
+                    None
+                };
+                self.push(Tok::Hole(name), start);
+                Ok(())
             }
             c if is_ident_start(c) => {
                 self.lex_ident(start);

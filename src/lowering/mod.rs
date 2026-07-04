@@ -722,6 +722,14 @@ impl Lowerer {
     /// Python expression denoting the value.
     fn lower_value(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         match &expr.kind {
+            // A hole never reaches lowering — `compile`/`run` are gated on a clean
+            // type check, which reports holes and blocks. Defensive.
+            ExprKind::Hole { name } => Err(LowerError {
+                message: match name {
+                    Some(n) => format!("cannot compile: unfilled hole `?{n}`"),
+                    None => "cannot compile: unfilled hole `?`".to_string(),
+                },
+            }),
             ExprKind::Int(n) => {
                 // An integer literal that inference resolved to `float` is emitted
                 // as a Python float, so the runtime value matches its type.
@@ -3030,6 +3038,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         | ExprKind::Bool(_)
         | ExprKind::Unit
         | ExprKind::OpFunc(_)
+        | ExprKind::Hole { .. }
         | ExprKind::Var(_) => {}
     }
 }

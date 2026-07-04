@@ -1550,6 +1550,29 @@ latency win at this scale. (Doc-comment hover has **shipped** — `##` doc comme
 §7, rendered below the type.) The `editors/vscode/` client is intentionally thin —
 all language smarts live in the Rust server.
 
+**Typed holes (implemented).** A hole — `?` (anonymous) or `?name` (named) — is a
+placeholder in *expression* position that the type checker accepts and reports the
+inferred type of. It's the type-driven-development tool from Haskell/Idris/Agda,
+and it's a natural fit here because Pyfun has (a) complete HM inference, so the
+compiler always knows the expected type at a hole, and (b) an LSP to surface it. It
+reaches beyond the F# model — F# has no typed holes. Syntax: `?` is lexed as
+`Tok::Hole(Option<String>)` (a name is lexed adjacently, like `f"`/`r"`); the
+parser produces `ExprKind::Hole { name }`, which round-trips. `?` was otherwise
+unused, and is preferred over Haskell's `_` because `_` is already the wildcard
+pattern + `let _ =` discard. **Semantics:** a hole infers as a **fresh type
+variable that unifies freely**, so it never causes a spurious error and takes
+whatever type the context demands (`?body + 1` ⇒ `int`, `List.map ? xs` ⇒ a
+function type); it's recorded (`Infer::holes`) and, once the substitution is
+final, resolved and rendered (`types::Hole { name, ty, span }`). It's reported
+**informatively, not as a red error** — a hole is an intentional blank: `pyfun
+check` prints each as a **note** (`` hole `?body` has type `int` ``) and the LSP
+publishes it at **Information severity** (3) with hover showing the type (free,
+since the hole expression's type is already in the span→type table). But a hole
+**blocks `compile`/`run`** — there's no value to lower — with a clear "cannot
+compile: unfilled hole" error, and `check` exits non-zero so a leftover hole is
+caught. **MVP scope:** the *type* only; listing relevant in-scope bindings / valid
+fits (Haskell's extra) is a deferred follow-on.
+
 **Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
 smarts, `editors/vscode/pyfun.tmLanguage.json` gives static, parse-free
 highlighting (keywords, declarations, types/constructors, numbers + adjacent unit
