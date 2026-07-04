@@ -2,7 +2,7 @@
   "name": "pyfun",
   "displayName": "Pyfun",
   "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "publisher": "pyfun",
   "repository": {
     "type": "git",
@@ -72,6 +72,26 @@
             ],
             "settings": {
               "foreground": "#F92672",
+              "fontStyle": ""
+            }
+          },
+          {
+            "comment": "Computation-expression builders `async`/`seq`/`result` — pinned to Monokai purple to give the CE openers their own identity, distinct from keywords and declarations.",
+            "scope": [
+              "keyword.other.computation.pyfun"
+            ],
+            "settings": {
+              "foreground": "#AE81FF",
+              "fontStyle": ""
+            }
+          },
+          {
+            "comment": "Unit-of-measure annotations `<m>`, `<m/s^2>` — pinned to Monokai orange so dimensional units stand out from types and keywords.",
+            "scope": [
+              "storage.type.unit.pyfun"
+            ],
+            "settings": {
+              "foreground": "#FD971F",
               "fontStyle": ""
             }
           }
