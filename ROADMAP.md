@@ -151,7 +151,11 @@ rather than checked — almost none of this is in the type system). Each was ver
   tests + field binds, truthiness for bool cases. **Deferred fast-follows (MVP shape rules, all clean
   checker errors):** an AP only as an arm's *whole* pattern (no nesting under ctors / or- / as-patterns),
   binder-only case arguments (no nested literal sub-patterns like `case Rect 0 b:`), no guards and no
-  structural-pattern arms in an AP match, and no cross-module export of an AP (module-local).
+  structural-pattern arms in an AP match, and no cross-module export of an AP (module-local). Also
+  **eager, not lazy, recognizer evaluation**: every distinct recognizer in the match runs up front (once
+  each), so all fire regardless of which arm wins — invisible for pure APs (just redundant work), a minor
+  effect-timing quirk for impure ones (F# is lazy/short-circuit here). Making it lazy needs the same
+  smarter fall-through lowering as guards + sub-pattern case args, so those three would land together.
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing
