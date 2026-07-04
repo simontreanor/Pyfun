@@ -361,6 +361,10 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("floor", 1),
     ("ceil", 1),
     ("truncate", 1),
+    // Unit-aware square root: `sqrt : float<'u^2> -> float<'u>` (√area = length).
+    // The one tractable unit-carrying power op (F# special-cases exactly this
+    // signature); general `x ** y` stays dimensionless (§7.1).
+    ("sqrt", 1),
     // Standard combinators (`DESIGN.md` §6). Fully type-polymorphic, pure —
     // except `flip`, which is effect-polymorphic (it *calls* its argument).
     ("id", 1),
@@ -1876,6 +1880,30 @@ fn seed_prelude(env: &mut Env) {
     for name in ["round", "floor", "ceil", "truncate"] {
         env.insert(name.to_string(), f_to_i.clone());
     }
+    // sqrt : float<'u^2> -> float<'u>  (pure, unit-halving — √area = length).
+    // The argument unit is the *square* of the result's, expressed with the
+    // existing integer-exponent representation (`Unit::pow(2)`); applying it to
+    // `float<m^2>` makes the abelian-group unifier solve `'u^2 ~ m^2` → `'u = m`
+    // (and `m^4/s^2` → `m^2/s`), while a non-square unit (`m`, `m^3`) fails
+    // unification — a compile-time dimensional error. Dimensionless stays
+    // dimensionless. See `DESIGN.md` §8.2; the extern surface can't express this
+    // (it has no unit syntax), which is why it is a prelude builtin.
+    env.insert(
+        "sqrt".to_string(),
+        Scheme {
+            vars: vec![],
+            uvars: vec![PRELUDE_UVAR],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![],
+            mutable: false,
+            ty: Ty::Fun(
+                Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(2))),
+                Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
+                Effect::pure(),
+            ),
+        },
+    );
 
     // Standard combinators (`DESIGN.md` §6). Plain type-var polymorphism, no
     // num/unit/comparison constraints. `id`/`const`/`ignore` never call anything,
@@ -4631,7 +4659,19 @@ impl Infer {
             self.unit_subst.insert(v, s);
             true
         } else {
-            // Introduce a fresh variable and reduce exponents toward zero.
+            // Introduce a fresh variable and reduce exponents toward zero. If
+            // every non-pivot quotient is zero the substitution would be a bare
+            // renaming (`v ↦ w`) and the equation would come back unchanged —
+            // that happens exactly when `v` is the only variable left and every
+            // base exponent `r` satisfies `0 < r < |e|`, so `v^e · ∏ b^r = 1`
+            // has no integer solution (`e ∤ r`): a genuine dimension mismatch
+            // (e.g. `sqrt` demanding `'u^2 ~ m^3`). Report it rather than
+            // recursing forever (this non-termination predated `sqrt`).
+            if u.factors.iter().all(|(a, exp)| {
+                matches!(a, Atom::Var(x) if *x == v) || exp.div_euclid(e) == 0
+            }) {
+                return false;
+            }
             let w = self.next;
             self.next += 1;
             let mut s = Unit::var(w);

@@ -45,9 +45,9 @@ fn no_functools_import_when_unused() {
 #[test]
 fn extern_lowers_to_its_python_target_with_import() {
     let py =
-        pyfun::compile("extern pure sqrt: float -> float = math.sqrt\nlet r = sqrt 16.0").unwrap();
+        pyfun::compile("extern pure cbrt: float -> float = math.cbrt\nlet r = cbrt 8.0").unwrap();
     assert!(py.contains("import math"), "{py}");
-    assert!(py.contains("r = math.sqrt(16.0)"), "{py}");
+    assert!(py.contains("r = math.cbrt(8.0)"), "{py}");
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn partial_application_of_extern_uses_functools_partial() {
 
 #[test]
 fn unused_extern_imports_nothing() {
-    let py = pyfun::compile("extern pure sqrt: float -> float = math.sqrt\nlet r = 1").unwrap();
+    let py = pyfun::compile("extern pure cbrt: float -> float = math.cbrt\nlet r = 1").unwrap();
     assert!(!py.contains("import math"), "{py}");
 }
 
@@ -455,6 +455,36 @@ fn numeric_conversions_lower_correctly() {
     assert!(
         py.contains("d = math.trunc(3.9)"),
         "truncate -> math.trunc: {py}"
+    );
+}
+
+#[test]
+fn sqrt_lowers_to_math_sqrt_with_units_erased() {
+    // The unit-aware prelude sqrt (`float<'u^2> -> float<'u>`) lowers to
+    // `math.sqrt` with the unit annotation fully erased.
+    let py = pyfun::compile("measure m\nlet side = sqrt 16.0<m^2>").unwrap();
+    assert!(py.contains("import math"), "{py}");
+    assert!(py.contains("side = math.sqrt(16.0)"), "units erased: {py}");
+    // A bare reference is the attribute itself (first-class value).
+    let py = pyfun::compile("let f = sqrt\nlet r = f 4.0").unwrap();
+    assert!(py.contains("f = math.sqrt"), "{py}");
+}
+
+#[test]
+fn a_user_sqrt_shadows_the_builtin_in_lowering() {
+    let py = pyfun::compile("let sqrt x = x\nlet r = sqrt 3").unwrap();
+    assert!(py.contains("def sqrt(x):"), "{py}");
+    assert!(!py.contains("math.sqrt"), "user def must win: {py}");
+}
+
+#[test]
+fn e2e_unit_aware_sqrt() {
+    // √(16 m²) = 4 m — the number is right and the unit is gone at runtime.
+    run_and_check(
+        "measure m\n\
+         let side = sqrt 16.0<m^2>\n\
+         let hyp = sqrt (2.0 * 2.0 + 2.0 * 2.0)",
+        &[("side", "4.0"), ("hyp", "2.8284271247461903")],
     );
 }
 
@@ -2014,11 +2044,11 @@ fn e2e_extern_calls_python() {
     run_and_check(
         "extern show: a -> string = str\n\
          extern ord: string -> int\n\
-         extern pure sqrt: float -> float = math.sqrt\n\
+         extern pure cbrt: float -> float = math.cbrt\n\
          let label = show 42\n\
          let code = ord \"A\"\n\
-         let root = sqrt 16.0",
-        &[("label", "42"), ("code", "65"), ("root", "4.0")],
+         let root = cbrt 27.0",
+        &[("label", "42"), ("code", "65"), ("root", "3.0")],
     );
 }
 

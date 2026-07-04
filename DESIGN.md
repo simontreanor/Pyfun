@@ -189,7 +189,9 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 `abs`/`min`/`max : int<'u> -> …`, plus the **unit-preserving numeric conversions**
 `round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
-staying *unqualified* Pyfun names), plus a `unit` type whose one value is written `()` (both lower to
+staying *unqualified* Pyfun names), plus the **unit-aware `sqrt : float<'u^2> -> float<'u>`** (√area =
+length — the argument's unit must be a perfect square, whose exponents halve; see §8.2; lowers to
+`math.sqrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the honest result of an effectful call). It also seeds the **standard combinators**
 `id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
 `flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
@@ -211,23 +213,25 @@ function" story is now a first-class declaration:
 ```
 extern len : string -> int                  # Pyfun name = Python name
 extern show : a -> string = str             # aliased to a Python builtin
-extern pure sqrt : float -> float = math.sqrt   # dotted path; module auto-imported
+extern pure cbrt : float -> float = math.cbrt   # dotted path; module auto-imported
 ```
 
 `extern [pure] name : type [= a.b.c]` binds `name` to a Python callable (or value) at a declared
 Pyfun type. Type variables are bare lowercase identifiers (as in `type` declarations) and are
 generalized, so `show : a -> string` is polymorphic. The optional `= a.b.c` clause is the dotted
 Python target; omitted, it defaults to the Pyfun name (the prelude convention). A reference lowers
-directly to its target (`math.sqrt`), and any module prefix of a *used* extern is emitted as an
+directly to its target (`math.cbrt`), and any module prefix of a *used* extern is emitted as an
 `import` (deduplicated, sorted). Arity is the number of leading arrows, so partial application of an
 extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still
-type-checked at the boundary (`sqrt "x"` is rejected) — but only against the *declared* type; Pyfun
+type-checked at the boundary (`cbrt "x"` is rejected) — but only against the *declared* type; Pyfun
 trusts the annotation, which is where the §4 "effectful/unsafe at the boundary" relaxation bites.
+(An extern may not redeclare an existing name, prelude builtins included — so the old dimensionless
+`extern pure sqrt … = math.sqrt` workaround now errors, pointing at the built-in unit-aware `sqrt`.)
 
 This makes the boundary's effectful-by-default rule (§4) concrete: a plain `extern`'s innermost
 arrow carries `io` (the Python call is the effect, performed on full application), so an impure
 `extern` cannot be called from a `let pure` binding. `extern pure` asserts the call is effect-free
-("pure up to its arguments", like `let pure`) — used for the likes of `math.sqrt`. A third option is
+("pure up to its arguments", like `let pure`) — used for the likes of `math.cbrt`. A third option is
 an explicit effect annotation on the innermost arrow (`extern fetch : string ->{async} string =
 httpx.get`), which is trusted as written instead of the `io` default (§4). Externs are
 erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
@@ -558,9 +562,9 @@ values, with **exhaustiveness checked across the boundary** (a missing arm repor
 `Geometry.Rect _ _`). **Records cross too** (`DESIGN.md` §8.3): construct `Geometry.Point { x = 1, y = 2 }`,
 pattern `case Geometry.Point { x, y }:`, update `{ p with x = 3 }`, and bare-access `p.x` on an imported
 value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **Externs and
-measures cross too:** an imported `extern` (`Mathx.sqrt`) is exported like a value (its scheme joins the
-interface) and — in the project lowering path — also **bound at top level in its own module** (`sqrt =
-math.sqrt`, `import math` hoisted) so a dependent module references it as `mathx.sqrt`; single-file lowering
+measures cross too:** an imported `extern` (`Mathx.cbrt`) is exported like a value (its scheme joins the
+interface) and — in the project lowering path — also **bound at top level in its own module** (`cbrt =
+math.cbrt`, `import math` hoisted) so a dependent module references it as `mathx.cbrt`; single-file lowering
 still erases externs (references inline to their dotted target). **Measures** merge *unqualified* — there is
 no qualified unit syntax (`<m>` is bare) — so a shared `Units` module's `measure m`/`measure s` and its
 derived aliases become available wherever it is imported; a base measure re-imported under the same name is
@@ -655,7 +659,7 @@ renames to an uppercase type name; builtins are refused). The **project-wide LSP
 **Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
 (construct + qualified-pattern-match + cross-boundary exhaustiveness), **cross-module records** (§8.3),
 **cross-module externs and measures** (an imported `extern` bound in its own module + referenced as
-`mathx.sqrt`; measures merged unqualified with an alias-conflict check), and **cross-file LSP navigation**
+`mathx.cbrt`; measures merged unqualified with an alias-conflict check), and **cross-file LSP navigation**
 (go-to-definition across files — including on a **qualified record tag** `Geometry.Point` — workspace
 symbols, project-wide find-references + rename of top-level values and constructors, and in-file
 find-references / rename of type names). **Explicit non-goals
@@ -773,7 +777,8 @@ constraint with polymorphic literals (step b).
    is Python `/` (result type `float`, `7 / 2 == 3.5`), `//` is Python floor division (`7 // 2 == 3`,
    result `int`), `%` is Python modulo (`10 % 3 == 1`, same `*`/`/` precedence tier), and `**` is Python
    exponentiation — **float-only and dimensionless** (`float -> float -> float`; a runtime exponent
-   can't be dimensionally checked, and `int ** -1` isn't an int, so following F# it stays float),
+   can't be dimensionally checked, and `int ** -1` isn't an int, so following F# it stays float;
+   the one unit-carrying power op that *is* static is the prelude `sqrt : float<'u^2> -> float<'u>`, §8.2),
    **right-associative**, and **tighter than unary minus** (`-2.0 ** 2.0 == -4`, `2.0 ** 3.0 ** 2.0 ==
    512`). This
    matches Python 3's most well-known numeric fact (the old floor-meaning `/` was the single most
@@ -1132,7 +1137,30 @@ Design intent:
   abbreviation/conversion tracking (F#'s richer model is out of scope). The alias body reuses the unit
   grammar (now also accepting `1/s` for a dimensionless numerator); aliases, like `let`s, must be
   declared before use.
-- Open questions: measure-generic functions (unit polymorphism) in the MVP vs. later; how units
+- **Unit-aware `sqrt : float<'u^2> -> float<'u>` (implemented):** √area = length — `sqrt 16.0<m^2> :
+  float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, and a **non-square** unit (`<m>`, `<m^3>`) is a
+  compile-time dimensional error (`type mismatch: expected float<'a^2>, found float<m^3>`). This is
+  the *one* tractable unit-carrying power operation — F# special-cases exactly this signature —
+  because the exponent is statically the constant ½; general `x<'u> ** y` is impossible (a runtime
+  exponent makes the result unit depend on a value → dependent types), which is why `**` stays
+  dimensionless (§7.1). **Exponent-representation decision (2026-07-03):** unit exponents stay
+  **integers** — no rational exponents (the more general option) and no bespoke "halve-the-unit"
+  constraint either. Neither is needed: `sqrt`'s scheme is expressed with the existing
+  representation (its argument unit is `'u^2`, `Unit::pow(2)` in `seed_prelude`), and the existing
+  abelian-group unifier's variable-elimination step *already* halves even exponents when solving
+  `'u^2 ~ m^4 s^-2` (`'u := m^2 s^-1`) and fails on odd ones — the constraint "is a perfect square"
+  falls out of unification for free, and inference propagates it (`let norm x = sqrt (x * x)` is
+  unit-polymorphic `float<'u> -> float<'u>`). Nothing else in the language can *produce* a
+  fractional dimension, so rational exponents would generalize the whole `Unit` type, its display,
+  and every unification path for a capability with exactly one client. The one real change this
+  surfaced: `solve_unit`'s reduce step could previously recurse forever on an unsolvable
+  odd-vs-even equation (`'u^2 ~ m^3` overflowed the stack — a latent, reachable bug via
+  `let sq x = x * x`); it now detects the no-progress case (a bare `v ↦ w` renaming, i.e. one
+  variable left and every base exponent a non-multiple of the pivot's) and reports a dimension
+  mismatch. `sqrt` is a **prelude builtin** (not an extern — the `extern` surface has no unit
+  syntax), pure, lowering to `math.sqrt` with `import math` via the same routing as
+  `floor`/`ceil`/`truncate`; units erase as always. Declaring `extern sqrt` now hits the ordinary
+  "already defined" clash error; a user `let sqrt` still shadows the builtin.
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).
 

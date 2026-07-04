@@ -221,6 +221,11 @@ let area w h = w * h
 let floor = area 4<m> 5<m>            # int<m^2>
 # `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
+# Unit-aware square root: sqrt : float<'u^2> -> float<'u> (√area = length).
+# The unit's exponents halve — and a non-square unit is a compile error:
+# `sqrt 2.0<m>` and `sqrt 2.0<m^3>` are rejected dimensionally.
+let side = sqrt 16.0<m^2>            # float<m> — 4.0, unit halved (m^2 -> m)
+
 # Float literals support scientific notation (`1e6`, `2.5e-3`) — the exponent sign
 # is part of the literal. Physics constants read naturally, units and all:
 let lightSpeed = 3.0e8<m/s>          # float<m/s>
@@ -255,12 +260,13 @@ let mask = 0xFF                     # 255  (hex; also 0o17 octal, 0b1010 binary)
 # Pyfun name equals the Python name unless a `= target` clause gives a dotted
 # path (which is imported automatically). Type variables are bare lowercase, as
 # in `type` decls. The boundary is effectful-by-default — a plain `extern` is
-# `io` at full application — unless asserted `pure`; `math.sqrt` is pure.
+# `io` at full application — unless asserted `pure`; `math.cbrt` is pure.
+# (`extern sqrt` would clash — sqrt is the built-in unit-aware square root now.)
 extern show: a -> string = str
-extern pure sqrt: float -> float = math.sqrt
+extern pure cbrt: float -> float = math.cbrt
 
 let label = show 42                  # "42"  (str(42))
-let root = sqrt 16.0                 # 4.0   (math.sqrt(16.0))
+let root = cbrt 27.0                 # 3.0   (math.cbrt(27.0))
 
 # `try e` catches a Python exception (e.g. from an `extern`) into a `Result a
 # Exception`, so the imperative FFI boundary becomes the FP error type. The
@@ -390,6 +396,7 @@ print lightSpeed                     # 300000000.0  (scientific notation, unit e
 print planck                         # 6.626e-34    (scientific notation)
 print rounded                        # 4     (round, float -> int)
 print truncated                      # 10    (truncate, unit-preserving)
+print side                           # 4.0   (unit-aware sqrt: float<m^2> -> float<m>)
 print parsedF                        # 2.71828  (String.toFloat)
 print cube                            # 27.0  (exponentiation)
 print tower                           # 512.0  (right-associative `**`)
@@ -438,9 +445,9 @@ let describe p =
 print (describe (Point { x = 0, y = 0 }))   # origin
 print (describe here)                 # elsewhere
 
-# Externs in action (call out to Python's str / math.sqrt).
+# Externs in action (call out to Python's str / math.cbrt).
 print label                           # 42
-print root                            # 4.0
+print root                            # 3.0
 
 # `try` in action: recover a default, and read the caught exception's kind.
 print parsed42                        # 42
