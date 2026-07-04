@@ -508,6 +508,29 @@ fn e2e_unit_aware_cbrt() {
     );
 }
 
+/// The showcase example must always type-check and lower — a guard so a change
+/// like reserving a new builtin (which can clash with an `extern` name in the
+/// example) can't silently break it. Always runs (no interpreter needed).
+#[test]
+fn the_hello_example_type_checks_and_compiles() {
+    let src = include_str!("../examples/hello.pyfun");
+    pyfun::compile(src).expect("examples/hello.pyfun must type-check and compile");
+}
+
+/// And it must actually run without a Python exception. Skips when no interpreter
+/// is on PATH (like the other e2e tests).
+#[test]
+fn e2e_the_hello_example_runs() {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping hello.pyfun e2e: no python interpreter found");
+        return;
+    };
+    let src = include_str!("../examples/hello.pyfun");
+    let program = pyfun::compile(src).expect("compile hello.pyfun");
+    // `run_python` asserts the process exits successfully, panicking otherwise.
+    let _ = run_python(&python, &program);
+}
+
 #[test]
 fn e2e_numeric_conversions() {
     run_and_check(

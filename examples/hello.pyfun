@@ -35,8 +35,12 @@ let always7 = const 7 "discarded"      # 7
 let subtract a b = a - b
 let backwards = flip subtract 3 10     # subtract 10 3 = 7
 let zeroed = List.map (const 0) [1, 2, 3]   # [0, 0, 0]
+let dropped = ignore 42                # unit (None) — ignore discards its argument
 
-# Expression-oriented `if`; the condition must be a bool.
+# Doc comments: a `##` line at column 0 attaches to the following top-level
+# declaration as documentation (LSP hover shows it below the type), unlike an
+# ordinary `#` comment. It erases at compile time.
+## Returns 1 when the flag is set, else 0.
 let pick b = if b then 1 else 0
 
 # Blocks: an indented body is a sequence of statements ending in the value. They
@@ -263,13 +267,21 @@ let mask = 0xFF                     # 255  (hex; also 0o17 octal, 0b1010 binary)
 # Pyfun name equals the Python name unless a `= target` clause gives a dotted
 # path (which is imported automatically). Type variables are bare lowercase, as
 # in `type` decls. The boundary is effectful-by-default — a plain `extern` is
-# `io` at full application — unless asserted `pure`; `math.cbrt` is pure.
-# (`extern sqrt` would clash — sqrt is the built-in unit-aware square root now.)
+# `io` at full application — unless asserted `pure`; `math.fabs` is pure.
+# (`extern sqrt`/`extern cbrt` would clash — sqrt/cbrt are the built-in unit-aware
+# roots now, so a Python name that isn't a Pyfun builtin is used here.)
 extern show: a -> string = str
-extern pure cbrt: float -> float = math.cbrt
+extern pure fabs: float -> float = math.fabs
+
+# Declared-arrow effect annotations: effects are inferred everywhere, but an
+# `extern` (or declared `type`) arrow may state effect labels explicitly with
+# `->{label, …}` — beyond the default inferred `io`, e.g. the `async` label.
+# (Uncalled here, so it erases; calling `fetchAsync` would make its caller
+# perform `async`, so it couldn't sit inside a `let pure`.)
+extern fetchAsync: string ->{async} string = httpx.get
 
 let label = show 42                  # "42"  (str(42))
-let root = cbrt 27.0                 # 3.0   (math.cbrt(27.0))
+let root = fabs (0.0 - 3.0)          # 3.0   (math.fabs(-3.0))
 
 # `try e` catches a Python exception (e.g. from an `extern`) into a `Result a
 # Exception`, so the imperative FFI boundary becomes the FP error type. The
@@ -376,6 +388,9 @@ let banner = """== pyfun ==
 a "quoted" word"""
 let summary = f"""who: {who}
 score: {parsed}"""
+# Raw triple-quoted `r"""..."""`: spans lines AND leaves backslashes literal.
+let rawBlock = r"""C:\logs
+a\tb"""                                # backslashes + newline all literal
 
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
 #   pyfun run examples/hello.pyfun
@@ -383,6 +398,7 @@ score: {parsed}"""
 # break back to the left margin), not braces or semicolons. Units erase, so the
 # printed numbers are plain Python numbers.
 print answer                         # 42
+print dropped                        # None  (ignore : 'a -> unit)
 print stillFortyTwo                   # Some(42)  (as-pattern binds the whole value)
 print tenEven                          # True  (mutual recursion: isEven/isOdd)
 print (fact 5)                       # 120  (recursive)
@@ -449,7 +465,24 @@ let describe p =
 print (describe (Point { x = 0, y = 0 }))   # origin
 print (describe here)                 # elsewhere
 
-# Externs in action (call out to Python's str / math.cbrt).
+# List/sequence patterns in `match` over a `List`: `[]`, a fixed `[x]`, and a
+# `*rest` star that may sit ANYWHERE (Python's one-star rule) — `[x, *rest]`
+# (head + tail), `[*init, last]` (all but the last), `[a, *mid, z]` (first and
+# last, middle bound). `[]` plus a star arm is exhaustive.
+let shape xs =
+  match xs:
+    case []: "empty"
+    case [only]: "one"
+    case [a, *mid, z]: "first and last, some middle"
+let lastOf xs =
+  match xs:
+    case []: 0
+    case [*init, last]: last
+print (shape [1, 2, 3, 4])            # first and last, some middle
+print (shape [7])                     # one
+print (lastOf [10, 20, 30])           # 30  (non-last star: [*init, last])
+
+# Externs in action (call out to Python's str / math.fabs).
 print label                           # 42
 print root                            # 3.0
 
@@ -502,6 +535,7 @@ print sumLine                         # 41 doubled is 82
 print debugLine                       # parsed=41             (f-string `{x=}`)
 print banner                          # two lines: == pyfun == / a "quoted" word
 print summary                         # two lines: who: Ada / score: 41
+print (String.len rawBlock)           # 12   (r""" — backslashes/tab-escape are literal chars)
 
 # In-file module members.
 print floorArea                       # 20
