@@ -2,7 +2,7 @@
   "name": "pyfun",
   "displayName": "Pyfun",
   "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "publisher": "pyfun",
   "repository": {
     "type": "git",
@@ -92,6 +92,17 @@
             ],
             "settings": {
               "foreground": "#FD971F",
+              "fontStyle": ""
+            }
+          },
+          {
+            "comment": "Control-flow keywords (`if`/`then`/`else`/`elif`/`match`/`case`/`with`/`return`/`yield`/`do`/`in`) and the logical `and`/`or`/`not` — pinned to bracket-gold so control flow stays distinct and pink remains reserved for the `mut`/`<-`/`extern` escape hatches.",
+            "scope": [
+              "keyword.control.pyfun",
+              "keyword.operator.logical.pyfun"
+            ],
+            "settings": {
+              "foreground": "#FFD700",
               "fontStyle": ""
             }
           }
