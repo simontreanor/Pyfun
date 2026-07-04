@@ -168,8 +168,13 @@ rather than checked — almost none of this is in the type system). Each was ver
   a *trial unification* of every visible scheme against the hole's type, rolled back so the checker's
   substitution is untouched (`Infer::hole_fits` + `subst_snapshot`/`restore`). Ranked most-specific (fewest
   generalized vars) first, unqualified names (the user's own bindings) before qualified module members,
-  capped at 6; a fully-unconstrained hole lists none (everything would fit). Covered by
-  `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. Fully done — no residual.
+  capped at 6; a fully-unconstrained hole lists none (everything would fit). **Refinement fits** (added
+  2026-07-04): a function whose *result* (after applying 1–2 args) unifies with the hole is also suggested,
+  applied to further holes (`String.upper ?`, `String.concat ? ?`) — `hole_refinements` peels leading
+  arrows and trial-unifies the tail; a structural filter (skip a bare-var return) keeps `id`/`const` out.
+  So a `string` hole reads `` try: greeting — or: String.upper ?, String.fromInt ? ``. Covered by
+  `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. **Fully done — no residual** (both direct and
+  refinement fits).
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing

@@ -624,26 +624,32 @@ pub struct Hole {
     /// The hole's inferred type, resolved against the final substitution and
     /// rendered (e.g. `int -> string`; an unconstrained hole shows a type var).
     pub ty: String,
-    /// **Valid hole fits**: in-scope binding names whose type could fill the hole
-    /// (their scheme unifies with the hole's type), most-specific first, capped.
-    /// Empty for a fully-unconstrained hole (everything fits — unhelpful).
+    /// **Valid hole fits** (direct): in-scope binding names whose type could fill
+    /// the hole directly (their scheme unifies with the hole's type), most-specific
+    /// first, capped. Empty for a fully-unconstrained hole (everything fits).
     pub fits: Vec<String>,
+    /// **Refinement fits**: function bindings whose *result* (after applying one or
+    /// more arguments) unifies with the hole's type — shown applied to further holes
+    /// (`String.upper ?`, `String.concat ? ?`). Fewest-holes-first, capped.
+    pub refinements: Vec<String>,
     pub span: Span,
 }
 
 impl Hole {
     /// The informative one-line message, e.g.
-    /// `` hole `?body` has type `int -> string` — try: show, toStr ``.
+    /// `` hole `?g` has type `string` — try: greeting — or: String.upper ? ``.
     pub fn message(&self) -> String {
-        let head = match &self.name {
+        let mut parts = vec![match &self.name {
             Some(n) => format!("hole `?{n}` has type `{}`", self.ty),
             None => format!("hole `?` has type `{}`", self.ty),
-        };
-        if self.fits.is_empty() {
-            head
-        } else {
-            format!("{head} — try: {}", self.fits.join(", "))
+        }];
+        if !self.fits.is_empty() {
+            parts.push(format!("try: {}", self.fits.join(", ")));
         }
+        if !self.refinements.is_empty() {
+            parts.push(format!("or: {}", self.refinements.join(", ")));
+        }
+        parts.join(" — ")
     }
 }
 
@@ -1131,10 +1137,13 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         .into_iter()
         .map(|(span, name, ty, env)| {
             let fits = inf.hole_fits(&env, &ty);
+            let direct: std::collections::HashSet<String> = fits.iter().cloned().collect();
+            let refinements = inf.hole_refinements(&env, &ty, &direct);
             Hole {
                 name,
                 ty: show(&inf.apply(&ty)),
                 fits,
+                refinements,
                 span,
             }
         })
@@ -3089,6 +3098,11 @@ fn resolve(
 
 /// Most valid hole fits to report — enough to be useful without drowning the note.
 const HOLE_FIT_CAP: usize = 6;
+/// Most refinement fits (functions applied to further holes) to report.
+const REFINE_CAP: usize = 4;
+/// How many arguments a refinement fit may apply (so `f ?` / `f ? ?`, no deeper —
+/// beyond a couple of holes the suggestion stops being helpful).
+const MAX_REFINE_DEPTH: usize = 2;
 
 /// A rollback point for the unification state, used by [`Infer::hole_fits`] to try a
 /// candidate binding against a hole's type without committing.
@@ -5658,6 +5672,70 @@ impl Infer {
         fits.into_iter()
             .map(|(_, _, n)| n)
             .take(HOLE_FIT_CAP)
+            .collect()
+    }
+
+    /// **Refinement fits** (`DESIGN.md` §9): function bindings whose *result* — after
+    /// applying 1..[`MAX_REFINE_DEPTH`] arguments — unifies with the hole's type,
+    /// rendered applied to that many further holes (`String.upper ?`,
+    /// `String.concat ? ?`). Like [`hole_fits`](Self::hole_fits) but peeling leading
+    /// arrows off the candidate and unifying the *tail* against the target. A
+    /// **structural filter** — skip a peeled result that is a bare type variable —
+    /// keeps out trivially-general combinators (`id`, `const`) that would otherwise
+    /// "refine" into every hole. `direct` is the set already reported as direct fits.
+    /// Fewest-holes-first, then fewest generalized vars, then unqualified, then name.
+    fn hole_refinements(
+        &mut self,
+        env: &Env,
+        target: &Ty,
+        direct: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        let target = self.apply(target);
+        if matches!(target, Ty::Var(_)) {
+            return Vec::new();
+        }
+        let snap = self.subst_snapshot();
+        let mut out: Vec<(usize, usize, bool, String)> = Vec::new();
+        for (name, scheme) in env {
+            if direct.contains(name) {
+                continue;
+            }
+            let candidate = self.instantiate(scheme);
+            let mut rest = candidate;
+            let mut depth = 0;
+            let mut found = None;
+            while depth < MAX_REFINE_DEPTH {
+                let Ty::Fun(_, ret, _) = self.apply(&rest) else {
+                    break;
+                };
+                depth += 1;
+                let ret_ty = self.apply(&ret);
+                // Only a structured return counts (not a bare var — that fits
+                // everything). Try to unify it with the hole's type, then roll back.
+                if !matches!(ret_ty, Ty::Var(_)) {
+                    let ok = self.unify(&ret_ty, &target, Span::new(0, 0)).is_ok();
+                    self.subst_restore(&snap);
+                    if ok {
+                        found = Some(depth);
+                        break;
+                    }
+                }
+                rest = *ret;
+            }
+            self.subst_restore(&snap);
+            if let Some(d) = found {
+                let poly = scheme.vars.len()
+                    + scheme.uvars.len()
+                    + scheme.num_vars.len()
+                    + scheme.eff_vars.len();
+                let holes = vec!["?"; d].join(" ");
+                out.push((d, poly, name.contains('.'), format!("{name} {holes}")));
+            }
+        }
+        out.sort();
+        out.into_iter()
+            .map(|(_, _, _, s)| s)
+            .take(REFINE_CAP)
             .collect()
     }
 

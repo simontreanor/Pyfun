@@ -45,12 +45,13 @@ let pick b = if b then 1 else 0
 
 # Typed holes (shown as a comment — a hole blocks compilation by design, so this
 # file can still `run`): write `?` or `?name` in expression position and the
-# compiler reports the type it expects there — plus in-scope bindings that would
-# fit — for type-driven development. E.g. with `let transform f = f "hi"`,
-#     let r = transform ?fn
-# makes `pyfun check` report `note: hole ?fn has type string -> 'a — try: shout,
-# quiet, String.upper, …` and hover show it; `compile`/`run` refuse until it's
-# filled. Fill inward from the types (and the suggested fits).
+# compiler reports the type it expects there — plus in-scope bindings that fit
+# directly (`try:`) and functions whose result fits, applied to more holes
+# (`or:`) — for type-driven development. E.g.
+#     let use = String.concat ?g "!"
+# makes `pyfun check` report `note: hole ?g has type string — try: greeting — or:
+# String.upper ?, String.fromInt ?` and hover show it; `compile`/`run` refuse
+# until it's filled. Fill inward from the types (and the suggested fits).
 
 # Blocks: an indented body is a sequence of statements ending in the value. They
 # open after `=` (a `let` body), `->` (a lambda), `case P:` (a `match` arm), `then`/`else`.

@@ -1578,9 +1578,17 @@ maps, instantiates each candidate scheme, unifies against the resolved hole type
 restores — so the checker's own state is untouched). Fits are ranked most-specific
 (fewest generalized variables) first, with unqualified names (the user's own
 bindings, prelude) before qualified module members (`String.concat`), capped at 6; a
-fully-unconstrained hole (`'a`) lists none, since everything would fit. This is
-Haskell's "valid hole fits," minus the *refinement* fits (applying a function to
-further holes to reach the type), which stays a possible follow-on.
+fully-unconstrained hole (`'a`) lists none, since everything would fit. **Refinement
+fits** go further (Haskell's second mode): a function binding whose *result* — after
+applying one or two arguments — unifies with the hole's type is reported *applied to
+that many further holes* (`String.upper ?`, `String.concat ? ?`), so it reads as a
+sketch you can fill inward. `Infer::hole_refinements` peels leading arrows off each
+candidate (up to `MAX_REFINE_DEPTH` = 2) and trial-unifies the tail, skipping a
+peeled result that is a bare variable — a **structural filter** that keeps out
+trivially-general combinators (`id`, `const`) which would otherwise "refine" into
+every hole. So a `string` hole reports `` try: greeting — or: String.upper ?,
+String.fromInt ? ``. Fewest-holes-first, capped at 4, and never duplicating a direct
+fit.
 
 **Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
 smarts, `editors/vscode/pyfun.tmLanguage.json` gives static, parse-free

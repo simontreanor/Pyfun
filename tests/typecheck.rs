@@ -2489,6 +2489,36 @@ fn an_unconstrained_hole_lists_no_fits() {
     assert!(fits_of("let x = ?anything").is_empty());
 }
 
+/// The refinement fits (functions applied to holes) reported for the single hole.
+fn refinements_of(source: &str) -> Vec<String> {
+    let module = pyfun::parse(source).expect("parse");
+    let (_e, _t, holes) = pyfun::types::check_collecting(&module);
+    assert_eq!(holes.len(), 1, "expected exactly one hole");
+    holes.into_iter().next().unwrap().refinements
+}
+
+#[test]
+fn refinement_fits_suggest_functions_whose_result_matches() {
+    // A `string` hole: functions returning `string`, applied to a hole
+    // (`String.lower ?`, `String.fromInt ?`, …).
+    let refs = refinements_of("let use = String.concat ?g \"!\"");
+    assert!(!refs.is_empty(), "expected refinement fits");
+    assert!(
+        refs.iter().all(|r| r.ends_with(" ?") || r.contains(" ? ")),
+        "refinements should show applied holes: {refs:?}"
+    );
+    assert!(
+        refs.iter().any(|r| r.starts_with("String.")),
+        "refs: {refs:?}"
+    );
+    // The structural filter keeps `id`/`const`/`ignore` (which return a bare var)
+    // out of refinements — they'd "refine" into every hole otherwise.
+    assert!(
+        !refs.iter().any(|r| r.starts_with("id ") || r.starts_with("const ")),
+        "trivial combinators must be filtered: {refs:?}"
+    );
+}
+
 // ---------- error-quality: guiding messages ----------
 
 #[test]
