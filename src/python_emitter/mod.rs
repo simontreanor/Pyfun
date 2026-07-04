@@ -313,9 +313,18 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::If { test, body, orelse } => {
             line(out, depth, &format!("if {}:", expr(test)));
             emit_block(body, depth + 1, out);
-            if !orelse.is_empty() {
+            // Collapse an `else:` whose sole statement is another `if` into
+            // `elif`, so nested chains (elif sugar, active-pattern matches) emit
+            // idiomatic Python instead of stair-stepped `else: if:`.
+            let mut rest = orelse;
+            while let [PyStmt::If { test, body, orelse }] = rest.as_slice() {
+                line(out, depth, &format!("elif {}:", expr(test)));
+                emit_block(body, depth + 1, out);
+                rest = orelse;
+            }
+            if !rest.is_empty() {
                 line(out, depth, "else:");
-                emit_block(orelse, depth + 1, out);
+                emit_block(rest, depth + 1, out);
             }
         }
         PyStmt::Match { subject, cases } => {

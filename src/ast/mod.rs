@@ -7,8 +7,9 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit, InterpPart, Item,
-    LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
+    ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
+    InterpPart, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr,
+    UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -62,8 +63,32 @@ pub fn print_item(item: &Item) -> String {
             s
         }
         Item::Import { name, .. } => format!("import {name}"),
+        Item::ActivePattern(decl) => {
+            format!("{}{}", print_doc(&decl.doc), print_active_pattern(decl))
+        }
         Item::Expr(expr) => print_layout(expr, 0),
     }
+}
+
+/// Print an active-pattern definition (`DESIGN.md` §7.2): the banana brackets
+/// (`(|A|B|)` / `(|A|_|)`), the parameters, and the body like a `let` binding.
+fn print_active_pattern(decl: &ActivePatternDecl) -> String {
+    let mut s = String::from("let (|");
+    for case in &decl.cases {
+        s.push_str(&case.name);
+        s.push('|');
+    }
+    if decl.partial {
+        s.push_str("_|");
+    }
+    s.push(')');
+    for param in &decl.params {
+        s.push(' ');
+        s.push_str(&param.name);
+    }
+    s.push_str(" =");
+    s.push_str(&print_body(&decl.value, 0));
+    s
 }
 
 /// Render a unit expression as it appears inside `<...>`.

@@ -274,6 +274,17 @@ const PROGRAMS: &[&str] = &[
     "## A shape.\ntype Shape = Circle float | Rect float float",
     "## Square root from Python.\nextern sqrt : float -> float = math.sqrt",
     "## Documented.\nlet a = 1\nlet b = 2",
+    // Active patterns (`DESIGN.md` §7.2): total, partial (Option and bool),
+    // parameterized partial — and matches using the cases (ordinary ctor
+    // patterns, so they need no new pattern syntax).
+    "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd",
+    "let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)",
+    "let (|Prime|_|) n = if n > 1 then Some n else None",
+    "let (|Blank|_|) s = s == \"\"",
+    "let (|DivisibleBy|_|) d n = n % d == 0",
+    "## Splits parity.\nlet (|Even|Odd|) n = if n % 2 == 0 then Even else Odd",
+    "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f n =\n  match n:\n    case Even: 1\n    case Odd: 2",
+    "let f n =\n  match n:\n    case DivisibleBy 3: 1\n    case Prime p: p\n    case _: 0",
 ];
 
 #[test]
@@ -603,6 +614,57 @@ fn a_list_pattern_allows_at_most_one_star() {
     let err = parse("let f xs =\n  match xs:\n    case [*a, *b]: 0").unwrap_err();
     assert!(
         err.message().contains("at most one `*`"),
+        "unexpected message: {}",
+        err.message()
+    );
+}
+
+// ---------- active patterns (`DESIGN.md` §7.2) ----------
+
+#[test]
+fn active_pattern_declarations_parse_to_the_expected_shape() {
+    let module = parse("let (|DivisibleBy|_|) d n = n % d == 0").unwrap();
+    let Item::ActivePattern(decl) = &module.items[0] else {
+        panic!("expected an active-pattern item")
+    };
+    assert!(decl.partial);
+    assert_eq!(decl.cases.len(), 1);
+    assert_eq!(decl.cases[0].name, "DivisibleBy");
+    let params: Vec<&str> = decl.params.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(params, ["d", "n"]);
+
+    let module = parse("let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd").unwrap();
+    let Item::ActivePattern(decl) = &module.items[0] else {
+        panic!("expected an active-pattern item")
+    };
+    assert!(!decl.partial);
+    let cases: Vec<&str> = decl.cases.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(cases, ["Even", "Odd"]);
+}
+
+#[test]
+fn a_total_active_pattern_takes_exactly_one_parameter() {
+    let err = parse("let (|Even|Odd|) d n = Even").unwrap_err();
+    assert!(
+        err.message().contains("exactly one parameter"),
+        "unexpected message: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn an_active_pattern_is_top_level_only() {
+    // Inside a block (a local `let`) the banana brackets are a guiding error.
+    let err = parse("let f x =\n  let (|A|_|) n = n == 0\n  x").unwrap_err();
+    assert!(
+        err.message().contains("top-level"),
+        "unexpected message: {}",
+        err.message()
+    );
+    // And the `mut`/`pure` modifiers don't apply to one.
+    let err = parse("let pure (|A|_|) n = n == 0").unwrap_err();
+    assert!(
+        err.message().contains("top-level"),
         "unexpected message: {}",
         err.message()
     );

@@ -291,9 +291,7 @@ fn round_preserves_units() {
 #[test]
 fn sqrt_halves_a_square_unit() {
     // √area = length: the unit's exponents halve (`m^2` → `m`).
-    assert!(
-        pyfun::check("measure m\nlet side = sqrt 16.0<m^2>\nlet ok = side + 1.0<m>").is_ok()
-    );
+    assert!(pyfun::check("measure m\nlet side = sqrt 16.0<m^2>\nlet ok = side + 1.0<m>").is_ok());
 }
 
 #[test]
@@ -325,10 +323,8 @@ fn sqrt_of_dimensionless_float_is_dimensionless() {
     // Pure, so usable inside a `let pure` binding; the halving propagates
     // through inference: `norm x = sqrt (x * x) : float<'u> -> float<'u>`.
     assert!(
-        pyfun::check(
-            "measure m\nlet pure norm x = sqrt (x * x)\nlet ok = norm 3.0<m> + 1.0<m>"
-        )
-        .is_ok()
+        pyfun::check("measure m\nlet pure norm x = sqrt (x * x)\nlet ok = norm 3.0<m> + 1.0<m>")
+            .is_ok()
     );
     // float-only, like `**` (a num literal coerces, a real int does not).
     assert!(pyfun::check("let r = sqrt 4").is_ok());
@@ -344,9 +340,7 @@ fn a_user_definition_still_shadows_the_sqrt_builtin() {
 #[test]
 fn cbrt_thirds_a_cube_unit() {
     // ∛volume = length: the unit's exponents divide by 3 (`m^3` → `m`).
-    assert!(
-        pyfun::check("measure m\nlet side = cbrt 27.0<m^3>\nlet ok = side + 1.0<m>").is_ok()
-    );
+    assert!(pyfun::check("measure m\nlet side = cbrt 27.0<m^3>\nlet ok = side + 1.0<m>").is_ok());
     // `m^6/s^3` → `m^2/s` (every exponent divisible by 3 ⇒ a perfect cube).
     assert!(
         pyfun::check("measure m\nmeasure s\nlet r = cbrt 8.0<m^6/s^3>\nlet ok = r + 1.0<m^2/s>")
@@ -2348,8 +2342,7 @@ fn extern_boundary_is_effectful_by_default() {
 #[test]
 fn pure_extern_can_be_used_in_a_pure_binding() {
     assert!(
-        pyfun::check("extern pure tan: float -> float = math.tan\nlet pure root x = tan x")
-            .is_ok()
+        pyfun::check("extern pure tan: float -> float = math.tan\nlet pure root x = tan x").is_ok()
     );
 }
 
@@ -2454,6 +2447,255 @@ fn float_patterns_are_rejected_with_a_guiding_message() {
     assert_error_contains(
         "let f x =\n  match x:\n    case -1.5: 0\n    case _: 1",
         "guard",
+    );
+}
+
+// ---------- active patterns (`DESIGN.md` §7.2) ----------
+
+#[test]
+fn total_active_pattern_match_is_exhaustive_without_a_wildcard() {
+    assert!(
+        pyfun::check(
+            "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+             let f n =\n  match n:\n    case Even: \"e\"\n    case Odd: \"o\""
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn total_active_pattern_cases_may_carry_data() {
+    assert!(
+        pyfun::check(
+            "let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)\n\
+             let f n =\n  match n:\n    case Small s: s\n    case Big b: b"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn missing_total_case_is_reported_with_a_witness() {
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even: 1",
+        "`Odd` is not matched",
+    );
+}
+
+#[test]
+fn partial_active_pattern_needs_a_wildcard() {
+    assert_error_contains(
+        "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+         let f n =\n  match n:\n    case Positive p: p",
+        "add a wildcard",
+    );
+}
+
+#[test]
+fn option_partial_binds_the_payload_at_its_type() {
+    // `Positive` carries the int, so `p + 1` type-checks.
+    assert!(
+        pyfun::check(
+            "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+             let f n =\n  match n:\n    case Positive p: p + 1\n    case _: 0"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn option_partial_without_a_binder_is_rejected() {
+    assert_error_contains(
+        "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+         let f n =\n  match n:\n    case Positive: 1\n    case _: 0",
+        "add a binder",
+    );
+}
+
+#[test]
+fn bool_partial_binds_nothing() {
+    assert!(
+        pyfun::check(
+            "let (|Blank|_|) s = String.strip s == \"\"\n\
+             let f s =\n  match s:\n    case Blank: \"empty\"\n    case _: \"text\""
+        )
+        .is_ok()
+    );
+    // `case Blank x:` is a clear error, not a silent bool bind.
+    assert_error_contains(
+        "let (|Blank|_|) s = String.strip s == \"\"\n\
+         let f s =\n  match s:\n    case Blank x: x\n    case _: \"text\"",
+        "binds nothing",
+    );
+}
+
+#[test]
+fn partial_body_must_return_option_or_bool() {
+    assert_error_contains("let (|Weird|_|) n = n + 1", "must return `Option a`");
+}
+
+#[test]
+fn parameterized_partial_type_checks_and_checks_its_arguments() {
+    assert!(
+        pyfun::check(
+            "let (|DivisibleBy|_|) d n = n % d == 0\n\
+             let f n =\n  match n:\n    case DivisibleBy 3: \"fizz\"\n    case _: \"n\""
+        )
+        .is_ok()
+    );
+    // The use-site argument is an expression checked against the parameter type.
+    assert_error_contains(
+        "let (|DivisibleBy|_|) d n = n % d == 0\n\
+         let f n =\n  match n:\n    case DivisibleBy \"x\": \"fizz\"\n    case _: \"n\"",
+        "active pattern `DivisibleBy`",
+    );
+}
+
+#[test]
+fn using_an_impure_active_pattern_is_an_effect() {
+    // The match *calls* the recognizer, so a `let pure` binding whose match uses
+    // an impure active pattern must be rejected.
+    assert_error_contains(
+        "let (|Loud|Quiet|) n =\n  print n\n  if n > 5 then Loud else Quiet\n\
+         let pure classify n =\n  match n:\n    case Loud: 1\n    case Quiet: 2",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn a_pure_active_pattern_keeps_the_match_pure() {
+    assert!(
+        pyfun::check(
+            "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+             let pure f n =\n  match n:\n    case Even: 1\n    case Odd: 2"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn case_name_clash_with_a_constructor_is_rejected() {
+    // Type first, active pattern second…
+    assert_error_contains(
+        "type Color = Red | Green\n\
+         let (|Red|Other|) n = if n == 0 then Red else Other",
+        "clashes with an existing constructor",
+    );
+    // …and the other declaration order too (the `type` pre-pass registers its
+    // constructors before any active pattern is processed).
+    assert_error_contains(
+        "let (|Red|Other|) n = if n == 0 then Red else Other\n\
+         type Color = Red | Green",
+        "clashes with an existing constructor",
+    );
+    // Two active patterns cannot share a case name either.
+    assert_error_contains(
+        "let (|Hot|_|) n = n > 30\nlet (|Hot|Cold|) n = if n > 30 then Hot else Cold",
+        "clashes with an existing constructor",
+    );
+}
+
+#[test]
+fn a_case_never_constructed_in_the_body_is_rejected() {
+    assert_error_contains("let (|Even|Odd|) n = Even", "`Odd` is never constructed");
+}
+
+#[test]
+fn inconsistent_case_arity_in_the_body_is_rejected() {
+    assert_error_contains(
+        "let (|Wrap|) n = if n > 0 then Wrap n else Wrap",
+        "constructed with",
+    );
+}
+
+#[test]
+fn total_body_must_produce_a_case() {
+    // The body constructs the cases somewhere (so their shapes are known) but
+    // one branch produces a non-case value — a type mismatch against the hidden
+    // case type, whose display name is the banana-bracket spelling.
+    assert_error_contains(
+        "let (|Even|Odd|) n =\n  if n == 0 then Even\n  elif n == 1 then Odd\n  else 42",
+        "(|Even|Odd|)",
+    );
+}
+
+#[test]
+fn a_case_is_not_a_value_outside_its_declaration() {
+    // The cases exist only in patterns (and in the recognizer's own body).
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet x = Even",
+        "unbound name `Even`",
+    );
+}
+
+#[test]
+fn nested_active_patterns_are_rejected() {
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f o =\n  match o:\n    case Some Even: 1\n    case _: 0",
+        "whole pattern",
+    );
+}
+
+#[test]
+fn guards_are_rejected_in_an_active_pattern_match() {
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even if n > 0: 1\n    case _: 0",
+        "guards are not supported",
+    );
+}
+
+#[test]
+fn structural_patterns_cannot_mix_with_active_patterns() {
+    // A constructor/list arm beside an active-pattern arm is rejected (MVP shape).
+    assert_error_contains(
+        "let (|Empty|_|) xs = List.isEmpty xs\n\
+         let f xs =\n  match xs:\n    case Empty: 0\n    case [x]: x\n    case _: 1",
+        "can mix only",
+    );
+}
+
+#[test]
+fn literal_arms_mix_with_active_patterns_but_need_a_wildcard() {
+    assert!(
+        pyfun::check(
+            "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+             let f n =\n  match n:\n    case 0: 0\n    case Even: 2\n    case Odd: 1\n    case _: 9"
+        )
+        .is_ok()
+    );
+    // Mixing a literal into the column is conservative: a wildcard is demanded.
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case 0: 0\n    case Even: 2\n    case Odd: 1",
+        "non-exhaustive match",
+    );
+}
+
+#[test]
+fn active_pattern_input_type_flows_from_the_body() {
+    // `(|Even|Odd|)` is over int (the body does `n % 2`), so matching a string
+    // with it is a type error.
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f =\n  match \"x\":\n    case Even: 1\n    case Odd: 2",
+        "in active pattern",
+    );
+}
+
+#[test]
+fn total_active_pattern_over_an_adt_scrutinee_is_exhaustive() {
+    // The scrutinee type has its own constructor signature, but the total AP's
+    // closed case set takes precedence when every arm is one of its cases.
+    assert!(
+        pyfun::check(
+            "type Shape = Circle float | Rect float float\n\
+             let (|Round|Angular|) s =\n  match s:\n    case Circle r: Round\n    case Rect w h: Angular\n\
+             let f s =\n  match s:\n    case Round: 1\n    case Angular: 2"
+        )
+        .is_ok()
     );
 }
 

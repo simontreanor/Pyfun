@@ -71,7 +71,44 @@ pub enum Item {
         name: String,
         span: NodeSpan,
     },
+    /// `let (|A|B|) input = …` / `let (|A|_|) params… input = …` — an active
+    /// pattern (`DESIGN.md` §7.2): a named recognizer whose cases are used as
+    /// constructors in `case` patterns. Top level only.
+    ActivePattern(ActivePatternDecl),
     Expr(Expr),
+}
+
+/// One case name of an active pattern's banana brackets, with its span (for
+/// editor navigation; `NodeSpan` compares equal — invisible to roundtrip).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApCase {
+    pub name: String,
+    pub name_span: NodeSpan,
+}
+
+/// `let (|Even|Odd|) n = body` — an **active pattern** (`DESIGN.md` §7.2).
+///
+/// A *total* pattern (`partial: false`) names 1+ cases and is conceptually a
+/// hidden ADT (the case set) plus a function `input -> <hidden>`; its cases are
+/// used like ADT constructors in `case` patterns and form a closed set for
+/// exhaustiveness. A *partial* pattern (`(|A|_|)`, `partial: true`) has exactly
+/// one case and a body returning `Option a` (the case binds the payload) or
+/// `bool` (a pure predicate — the case binds nothing). The last parameter is the
+/// match input; a partial pattern may take leading extra parameters
+/// (`(|DivisibleBy|_|) d n`), filled by expressions at the use site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActivePatternDecl {
+    /// Doc-comment lines (`## …`) preceding the declaration, as on [`LetBinding`].
+    pub doc: Option<String>,
+    /// The case names between the bars, e.g. `Even`, `Odd`. One for a partial.
+    pub cases: Vec<ApCase>,
+    /// `(|A|_|)` — the trailing `|_|` marks the pattern partial.
+    pub partial: bool,
+    /// All parameters; the **last** is the match input (a total pattern has
+    /// exactly one, a partial pattern may have leading extra parameters).
+    pub params: Vec<Param>,
+    pub value: Expr,
+    pub span: NodeSpan,
 }
 
 /// `extern [pure] name : type [= a.b.c]`.

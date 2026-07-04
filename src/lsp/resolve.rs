@@ -117,6 +117,18 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                 span: span.span(),
                 kind: SymbolKind::Module,
             }),
+            // An active pattern's cases behave like constructors — each appears
+            // in the outline at its own name span, so go-to-definition on a
+            // `case Even:` use lands on the case name in the banana brackets.
+            Item::ActivePattern(decl) => {
+                for case in &decl.cases {
+                    out.push(Symbol {
+                        name: case.name.clone(),
+                        span: case.name_span.span(),
+                        kind: SymbolKind::Constructor,
+                    });
+                }
+            }
             Item::Expr(_) => {}
         }
     }
@@ -199,6 +211,18 @@ fn walk(module: &Module) -> Resolver {
                 for member in items {
                     r.walk_binding(member);
                 }
+            }
+            // An active pattern's body is walked like a binding's (params in
+            // scope); its case constructions resolve as module-level refs.
+            Item::ActivePattern(decl) => {
+                r.push_scope(
+                    decl.params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.span.span()))
+                        .collect(),
+                );
+                r.walk_expr(&decl.value);
+                r.scopes.pop();
             }
             _ => {}
         }

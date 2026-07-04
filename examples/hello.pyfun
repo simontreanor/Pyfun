@@ -564,3 +564,32 @@ print (pairUp 1 2)                     # (1, 2)
 print origin                          # (0, 0)
 print (swap (1, 2))                   # (2, 1)
 print (firstOf labelled)              # 1
+
+# Active patterns (DESIGN.md 7.2.1): named recognizers whose cases are matched
+# like constructors. A total pattern (|A|B|) is a closed case set, so its match
+# needs no `_`; a partial pattern (|A|_|) returns Option (the case binds the
+# payload) or bool (a pure predicate, binds nothing) and needs a fallthrough.
+let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd
+let parity n =
+  match n:
+    case Even: "even"
+    case Odd: "odd"
+
+let (|Positive|_|) n = if n > 0 then Some n else None
+let clamped n =
+  match n:
+    case Positive p: p
+    case _: 0
+
+let (|Blank|_|) s = String.strip s == ""
+let lineKind s =
+  match s:
+    case Blank: "empty"
+    case _: "text"
+
+print (parity 4)                      # even
+print (parity 7)                      # odd
+print (clamped 9)                     # 9
+print (clamped (0 - 5))               # 0
+print (lineKind "   ")                # empty
+print (lineKind "hi")                 # text
