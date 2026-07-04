@@ -342,6 +342,43 @@ fn a_user_definition_still_shadows_the_sqrt_builtin() {
 }
 
 #[test]
+fn cbrt_thirds_a_cube_unit() {
+    // ∛volume = length: the unit's exponents divide by 3 (`m^3` → `m`).
+    assert!(
+        pyfun::check("measure m\nlet side = cbrt 27.0<m^3>\nlet ok = side + 1.0<m>").is_ok()
+    );
+    // `m^6/s^3` → `m^2/s` (every exponent divisible by 3 ⇒ a perfect cube).
+    assert!(
+        pyfun::check("measure m\nmeasure s\nlet r = cbrt 8.0<m^6/s^3>\nlet ok = r + 1.0<m^2/s>")
+            .is_ok()
+    );
+}
+
+#[test]
+fn rejects_cbrt_of_a_non_cube_unit() {
+    // `m^2`, bare `m`, and `m^4` are not perfect cubes — dimensional errors, not
+    // silently-lost units. The expected side names the cube (`'a^3`).
+    assert_error_contains("measure m\nlet bad = cbrt 4.0<m^2>", "found float<m^2>");
+    assert_error_contains("measure m\nlet bad = cbrt 4.0<m^2>", "^3>");
+    assert_error_contains("measure m\nlet bad = cbrt 2.0<m>", "found float<m>");
+    assert_error_contains("measure m\nlet bad = cbrt 2.0<m^4>", "found float<m^4>");
+}
+
+#[test]
+fn cbrt_of_dimensionless_float_is_dimensionless() {
+    assert!(pyfun::check("let r = cbrt 8.0\nlet ok = r + 1.0").is_ok());
+    // Pure and float-only, like `sqrt`.
+    assert!(pyfun::check("let pure c x = cbrt x\nlet r = c 27.0").is_ok());
+    assert!(pyfun::check("let r = cbrt 8").is_ok());
+    assert_error_contains("let bad = cbrt (List.len [1, 2])", "float");
+}
+
+#[test]
+fn a_user_definition_still_shadows_the_cbrt_builtin() {
+    assert!(pyfun::check("let cbrt s = s\nlet r = cbrt \"nope\"").is_ok());
+}
+
+#[test]
 fn a_non_square_unit_equation_errors_instead_of_hanging() {
     // Regression: `'u^2 ~ m^3` used to overflow the stack in `solve_unit`
     // (the no-progress reduce step recursed forever). It is a dimension error.
@@ -2280,7 +2317,7 @@ fn rejects_duplicate_module() {
 
 #[test]
 fn accepts_extern_with_concrete_type() {
-    assert!(pyfun::check("extern pure cbrt: float -> float = math.cbrt\nlet r = cbrt 2.0").is_ok());
+    assert!(pyfun::check("extern pure tan: float -> float = math.tan\nlet r = tan 2.0").is_ok());
 }
 
 #[test]
@@ -2293,7 +2330,7 @@ fn extern_type_is_generalized_over_its_variables() {
 #[test]
 fn extern_is_type_checked_at_the_call_site() {
     assert_error_contains(
-        "extern pure cbrt: float -> float = math.cbrt\nlet bad = cbrt \"x\"",
+        "extern pure tan: float -> float = math.tan\nlet bad = tan \"x\"",
         "expected float, found string",
     );
 }
@@ -2311,7 +2348,7 @@ fn extern_boundary_is_effectful_by_default() {
 #[test]
 fn pure_extern_can_be_used_in_a_pure_binding() {
     assert!(
-        pyfun::check("extern pure cbrt: float -> float = math.cbrt\nlet pure root x = cbrt x")
+        pyfun::check("extern pure tan: float -> float = math.tan\nlet pure root x = tan x")
             .is_ok()
     );
 }

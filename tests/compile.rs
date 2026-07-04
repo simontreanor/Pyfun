@@ -45,9 +45,9 @@ fn no_functools_import_when_unused() {
 #[test]
 fn extern_lowers_to_its_python_target_with_import() {
     let py =
-        pyfun::compile("extern pure cbrt: float -> float = math.cbrt\nlet r = cbrt 8.0").unwrap();
+        pyfun::compile("extern pure tan: float -> float = math.tan\nlet r = tan 8.0").unwrap();
     assert!(py.contains("import math"), "{py}");
-    assert!(py.contains("r = math.cbrt(8.0)"), "{py}");
+    assert!(py.contains("r = math.tan(8.0)"), "{py}");
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn partial_application_of_extern_uses_functools_partial() {
 
 #[test]
 fn unused_extern_imports_nothing() {
-    let py = pyfun::compile("extern pure cbrt: float -> float = math.cbrt\nlet r = 1").unwrap();
+    let py = pyfun::compile("extern pure tan: float -> float = math.tan\nlet r = 1").unwrap();
     assert!(!py.contains("import math"), "{py}");
 }
 
@@ -485,6 +485,26 @@ fn e2e_unit_aware_sqrt() {
          let side = sqrt 16.0<m^2>\n\
          let hyp = sqrt (2.0 * 2.0 + 2.0 * 2.0)",
         &[("side", "4.0"), ("hyp", "2.8284271247461903")],
+    );
+}
+
+#[test]
+fn cbrt_lowers_to_math_cbrt_with_units_erased() {
+    let py = pyfun::compile("measure m\nlet side = cbrt 27.0<m^3>").unwrap();
+    assert!(py.contains("import math"), "{py}");
+    assert!(py.contains("side = math.cbrt(27.0)"), "units erased: {py}");
+    let py = pyfun::compile("let f = cbrt\nlet r = f 8.0").unwrap();
+    assert!(py.contains("f = math.cbrt"), "{py}");
+}
+
+#[test]
+fn e2e_unit_aware_cbrt() {
+    // ∛(27 m³) = 3 m, and `math.cbrt` cube-roots negatives correctly (unlike `**`).
+    run_and_check(
+        "measure m\n\
+         let side = cbrt 27.0<m^3>\n\
+         let neg = cbrt (0.0 - 8.0)",
+        &[("side", "3.0"), ("neg", "-2.0")],
     );
 }
 
@@ -2085,11 +2105,11 @@ fn e2e_extern_calls_python() {
     run_and_check(
         "extern show: a -> string = str\n\
          extern ord: string -> int\n\
-         extern pure cbrt: float -> float = math.cbrt\n\
+         extern pure tan: float -> float = math.tan\n\
          let label = show 42\n\
          let code = ord \"A\"\n\
-         let root = cbrt 27.0",
-        &[("label", "42"), ("code", "65"), ("root", "3.0")],
+         let root = tan 0.0",
+        &[("label", "42"), ("code", "65"), ("root", "0.0")],
     );
 }
 

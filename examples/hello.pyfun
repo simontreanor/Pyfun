@@ -221,10 +221,13 @@ let area w h = w * h
 let floor = area 4<m> 5<m>            # int<m^2>
 # `distance + elapsed` would be a compile error: int<m> vs int<s>.
 
-# Unit-aware square root: sqrt : float<'u^2> -> float<'u> (√area = length).
-# The unit's exponents halve — and a non-square unit is a compile error:
-# `sqrt 2.0<m>` and `sqrt 2.0<m^3>` are rejected dimensionally.
+# Unit-aware roots: sqrt : float<'u^2> -> float<'u> (√area = length) and
+# cbrt : float<'u^3> -> float<'u> (∛volume = length). The unit's exponents halve
+# (sqrt) or divide by 3 (cbrt); a non-square/non-cube unit is a compile error
+# (`sqrt 2.0<m>`, `cbrt 2.0<m^2>` are rejected dimensionally). These two are the
+# only tractable unit-carrying power ops — `**` stays dimensionless.
 let side = sqrt 16.0<m^2>            # float<m> — 4.0, unit halved (m^2 -> m)
+let edge = cbrt 27.0<m^3>            # float<m> — 3.0, unit thirded (m^3 -> m)
 
 # Float literals support scientific notation (`1e6`, `2.5e-3`) — the exponent sign
 # is part of the literal. Physics constants read naturally, units and all:
@@ -397,6 +400,7 @@ print planck                         # 6.626e-34    (scientific notation)
 print rounded                        # 4     (round, float -> int)
 print truncated                      # 10    (truncate, unit-preserving)
 print side                           # 4.0   (unit-aware sqrt: float<m^2> -> float<m>)
+print edge                           # 3.0   (unit-aware cbrt: float<m^3> -> float<m>)
 print parsedF                        # 2.71828  (String.toFloat)
 print cube                            # 27.0  (exponentiation)
 print tower                           # 512.0  (right-associative `**`)

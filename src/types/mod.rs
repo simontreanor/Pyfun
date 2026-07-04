@@ -361,10 +361,13 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("floor", 1),
     ("ceil", 1),
     ("truncate", 1),
-    // Unit-aware square root: `sqrt : float<'u^2> -> float<'u>` (√area = length).
-    // The one tractable unit-carrying power op (F# special-cases exactly this
-    // signature); general `x ** y` stays dimensionless (§7.1).
+    // Unit-aware roots: `sqrt : float<'u^2> -> float<'u>` (√area = length) and
+    // `cbrt : float<'u^3> -> float<'u>` (∛volume = length). The two tractable
+    // unit-carrying power ops — they map to physical spatial dimensions (2D/3D);
+    // general `x ** y` stays dimensionless and arbitrary nth roots are a non-goal
+    // (a runtime `n` is undecidable for units — §7.1).
     ("sqrt", 1),
+    ("cbrt", 1),
     // Standard combinators (`DESIGN.md` §6). Fully type-polymorphic, pure —
     // except `flip`, which is effect-polymorphic (it *calls* its argument).
     ("id", 1),
@@ -1935,6 +1938,28 @@ fn seed_prelude(env: &mut Env) {
             mutable: false,
             ty: Ty::Fun(
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(2))),
+                Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
+                Effect::pure(),
+            ),
+        },
+    );
+    // cbrt : float<'u^3> -> float<'u>  (pure, unit-cube-rooting — ∛volume = length).
+    // The exact sibling of `sqrt` with the exponent bumped to 3: the argument unit
+    // is the *cube* of the result's (`Unit::pow(3)`), so `float<m^3>` solves
+    // `'u^3 ~ m^3` → `'u = m` (and `m^6/s^3` → `m^2/s`), while a non-cube unit
+    // (`m`, `m^2`, `m^4`) fails unification. `math.cbrt` also cube-roots negatives
+    // correctly (unlike `x ** (1.0/3.0)`). See `DESIGN.md` §8.2.
+    env.insert(
+        "cbrt".to_string(),
+        Scheme {
+            vars: vec![],
+            uvars: vec![PRELUDE_UVAR],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![],
+            mutable: false,
+            ty: Ty::Fun(
+                Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(3))),
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
                 Effect::pure(),
             ),
