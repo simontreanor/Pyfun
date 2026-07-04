@@ -27,8 +27,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::lexer::Span;
 
 use crate::parser::ast::{
-    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, InterpPart,
-    Item, LetBinding, Module, Param, Pattern, TypeDeclKind, TypeExpr,
+    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, FieldUpdate,
+    InterpPart, Item, LetBinding, Module, Param, Pattern, TypeDeclKind, TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPattern, PyStmt};
 
@@ -1080,40 +1080,80 @@ impl Lowerer {
     fn lower_record_update(
         &mut self,
         base: &Expr,
-        fields: &[FieldInit],
+        fields: &[FieldUpdate],
         locals: &HashSet<String>,
     ) -> Lowered {
-        // An update carries no tag; the record is resolved from the first field's
-        // owner (the type checker has verified it is unambiguous). The owner tag may
-        // be qualified for an imported record.
-        let tag = self.field_to_record[&fields[0].name].clone();
-        let order = self.record_fields[&tag].clone();
-        let class = self.record_class_name(&tag);
+        // The base is bound to a temp so it is evaluated **once**; every field of the
+        // reconstruction (updated or copied, at any depth) then reads from the temp.
         let (mut stmts, base_val) = self.lower_value(base, locals)?;
         let tmp = self.fresh_tmp();
         stmts.push(PyStmt::Assign {
             target: tmp.clone(),
             value: base_val,
         });
-        let (field_stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
-        stmts.extend(field_stmts);
+        // Lower each update's value (hoisting any statements), keeping its path.
+        let mut updates: Vec<(Vec<String>, PyExpr)> = Vec::with_capacity(fields.len());
+        for fu in fields {
+            let (mut s, v) = self.lower_value(&fu.value, locals)?;
+            stmts.append(&mut s);
+            updates.push((fu.path.clone(), v));
+        }
+        // The outer record's tag is resolved from the first path's first segment
+        // (the type checker has verified all paths start in the base's record).
+        let tag = self.field_to_record[&fields[0].path[0]].clone();
+        let value = self.build_record_update(PyExpr::Name(tmp.clone()), &tag, updates);
+        Ok((stmts, value))
+    }
+
+    /// Reconstruct a record value `class(...)` from `base_py` (a pure expression —
+    /// the shared temp or an attribute chain off it), replacing the given field
+    /// paths. Nested paths (`a.b = v`) recurse, reconstructing the sub-record from
+    /// `base_py.a`; paths sharing a prefix are grouped so a field is rebuilt once.
+    fn build_record_update(
+        &mut self,
+        base_py: PyExpr,
+        tag: &str,
+        updates: Vec<(Vec<String>, PyExpr)>,
+    ) -> PyExpr {
+        let order = self.record_fields[tag].clone();
+        let class = self.record_class_name(tag);
+        // Group updates by their first path segment; the remaining path (possibly
+        // empty, meaning a wholesale set of that field) goes to the recursion.
+        let mut by_field: HashMap<String, Vec<(Vec<String>, PyExpr)>> = HashMap::new();
+        for (path, val) in updates {
+            let (head, rest) = path.split_first().expect("non-empty update path");
+            by_field
+                .entry(head.clone())
+                .or_default()
+                .push((rest.to_vec(), val));
+        }
         let mut args = Vec::with_capacity(order.len());
-        for name in &order {
-            match lowered.iter().position(|(n, _)| n == name) {
-                Some(i) => args.push(lowered.remove(i).1),
-                None => args.push(PyExpr::Attribute {
-                    value: Box::new(PyExpr::Name(tmp.clone())),
-                    attr: name.clone(),
-                }),
+        for field in &order {
+            let attr = PyExpr::Attribute {
+                value: Box::new(base_py.clone()),
+                attr: field.clone(),
+            };
+            match by_field.remove(field) {
+                // Not updated: copy from the base.
+                None => args.push(attr),
+                Some(group) => {
+                    if let Some(pos) = group.iter().position(|(p, _)| p.is_empty()) {
+                        // A wholesale set (`a = v`, empty remaining path) replaces the
+                        // field; the checker forbids mixing it with a sub-path update.
+                        args.push(group.into_iter().nth(pos).unwrap().1);
+                    } else {
+                        // Nested: rebuild the sub-record from `base_py.field`. The
+                        // sub-record's tag is the owner of the next path segment.
+                        let sub_tag = self.field_to_record[&group[0].0[0]].clone();
+                        args.push(self.build_record_update(attr, &sub_tag, group));
+                    }
+                }
             }
         }
-        Ok((
-            stmts,
-            PyExpr::Call {
-                func: Box::new(PyExpr::Name(class)),
-                args,
-            },
-        ))
+        PyExpr::Call {
+            func: Box::new(PyExpr::Name(class)),
+            args,
+        }
     }
 
     /// Lower a list of `name = value` field initializers in source order, hoisting

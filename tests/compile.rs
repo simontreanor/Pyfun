@@ -1861,6 +1861,33 @@ fn e2e_records_construct_access_and_update() {
 }
 
 #[test]
+fn e2e_nested_record_update() {
+    // `{ o with inner.a = v }` rebuilds only the touched path; sibling fields
+    // (`inner.b`, `tag`) are preserved from the (once-evaluated) base.
+    run_and_check(
+        "
+        type Inner = { a: int, b: int }
+        type Outer = { inner: Inner, tag: string }
+        let o = Outer { inner = Inner { a = 1, b = 2 }, tag = \"x\" }
+        let o2 = { o with inner.a = 99 }
+        let both = { o with inner.a = 10, tag = \"y\" }
+        let na = o2.inner.a
+        let nb = o2.inner.b
+        let nt = o2.tag
+        let ba = both.inner.a
+        let bt = both.tag
+        ",
+        &[
+            ("na", "99"),
+            ("nb", "2"),
+            ("nt", "x"),
+            ("ba", "10"),
+            ("bt", "y"),
+        ],
+    );
+}
+
+#[test]
 fn e2e_polymorphic_record_field() {
     run_and_check(
         "

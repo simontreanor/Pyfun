@@ -4616,32 +4616,83 @@ impl Infer {
     fn infer_record_update(
         &mut self,
         base: &Expr,
-        fields: &[crate::parser::ast::FieldInit],
+        fields: &[crate::parser::ast::FieldUpdate],
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        let owner = self.record_of_field(&fields[0].name, span)?;
+        // The outer record is resolved from the first path's *first* segment (all
+        // paths' first segments must be fields of the same record — the base's).
+        let owner = self.record_of_field(&fields[0].path[0], span)?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         let bt = self.infer_expr(base, env)?;
         self.unify(&record_ty, &bt, base.span())?;
 
+        // A field may not be updated both wholesale and through a sub-path (`{ p
+        // with a = v, a.b = w }`) — one would silently override the other.
+        for (i, a) in fields.iter().enumerate() {
+            for b in &fields[i + 1..] {
+                if a.path.starts_with(&b.path) || b.path.starts_with(&a.path) {
+                    return Err(TypeError {
+                        message: format!(
+                            "field `{}` is updated both directly and through a sub-field",
+                            a.path[0]
+                        ),
+                        span: b.value.span(),
+                    });
+                }
+            }
+        }
+
         let mut seen: HashSet<String> = HashSet::new();
-        for init in fields {
-            if !seen.insert(init.name.clone()) {
+        for fu in fields {
+            if !seen.insert(fu.path.join(".")) {
                 return Err(TypeError {
-                    message: format!("field `{}` is set twice", init.name),
-                    span: init.value.span(),
+                    message: format!("field `{}` is set twice", fu.path.join(".")),
+                    span: fu.value.span(),
                 });
             }
-            let Some((_, fty)) = field_tys.iter().find(|(n, _)| n == &init.name) else {
-                return Err(TypeError {
-                    message: format!("record `{owner}` has no field `{}`", init.name),
-                    span: init.value.span(),
-                });
-            };
-            let fty = fty.clone();
-            let vt = self.infer_expr(&init.value, env)?;
-            self.unify(&fty, &vt, init.value.span())?;
+            let vt = self.infer_expr(&fu.value, env)?;
+            // Walk the dotted path, descending into a record field at each step and
+            // unifying the value with the last segment's type.
+            let mut cur_fields = field_tys.clone();
+            let mut cur_owner = owner.clone();
+            for (i, seg) in fu.path.iter().enumerate() {
+                let Some((_, fty)) = cur_fields.iter().find(|(n, _)| n == seg) else {
+                    return Err(TypeError {
+                        message: format!("record `{cur_owner}` has no field `{seg}`"),
+                        span: fu.value.span(),
+                    });
+                };
+                let fty = self.apply(fty);
+                if i == fu.path.len() - 1 {
+                    self.unify(&fty, &vt, fu.value.span())?;
+                } else {
+                    // An intermediate segment must be a record, so we can descend.
+                    let Ty::Con(rec, _) = &fty else {
+                        return Err(TypeError {
+                            message: format!(
+                                "field `{seg}` is not a record, so `.{}` cannot be updated through it",
+                                fu.path[i + 1]
+                            ),
+                            span: fu.value.span(),
+                        });
+                    };
+                    if !self.decls.records.contains_key(rec) {
+                        return Err(TypeError {
+                            message: format!(
+                                "field `{seg}` (type `{rec}`) is not a record type, so `.{}` cannot be updated",
+                                fu.path[i + 1]
+                            ),
+                            span: fu.value.span(),
+                        });
+                    }
+                    let rec = rec.clone();
+                    let (inst_ty, inst_fields) = self.instantiate_record(&rec);
+                    self.unify(&inst_ty, &fty, fu.value.span())?;
+                    cur_fields = inst_fields;
+                    cur_owner = rec;
+                }
+            }
         }
         Ok(self.apply(&record_ty))
     }

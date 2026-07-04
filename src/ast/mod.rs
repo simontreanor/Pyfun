@@ -427,7 +427,7 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("{ty} {{ {} }}", fields.join(", "))
         }
         ExprKind::RecordUpdate { base, fields } => {
-            let fields: Vec<String> = fields.iter().map(print_field_init).collect();
+            let fields: Vec<String> = fields.iter().map(print_field_update).collect();
             format!("{{ {} with {} }}", print_expr(base), fields.join(", "))
         }
         ExprKind::Field { base, name } => format!("{}.{name}", print_expr(base)),
@@ -442,6 +442,11 @@ pub fn print_expr(expr: &Expr) -> String {
 
 fn print_field_init(field: &FieldInit) -> String {
     format!("{} = {}", field.name, print_expr(&field.value))
+}
+
+/// Print a record-update assignment, joining a dotted field path (`a.b = v`).
+fn print_field_update(field: &crate::syntax::FieldUpdate) -> String {
+    format!("{} = {}", field.path.join("."), print_expr(&field.value))
 }
 
 fn print_ce_item(item: &CeItem) -> String {

@@ -175,6 +175,18 @@ rather than checked — almost none of this is in the type system). Each was ver
   So a `string` hole reads `` try: greeting — or: String.upper ?, String.fromInt ? ``. Covered by
   `tests/{roundtrip,typecheck}.rs` + in-crate LSP tests. **Fully done — no residual** (both direct and
   refinement fits).
+- **Nested record-update sugar** — ✅ **done 2026-07-04** (`DESIGN.md` §8.3). A record-update field may be a
+  **dotted path**: `{ p with a.b = v }` desugars to `{ p with a = { p.a with b = v } }` — the lightweight-
+  optics remedy for the perennial deep-immutable-update pain (previously you hand-wrote the nested
+  reconstruction). Arbitrary depth (`a.b.c = v`), mixes with plain fields (`{ p with a.b = 1, x = 2 }`), and
+  paths sharing a prefix rebuild the shared field once (`a.b`/`a.c`). `RecordUpdate` now carries
+  `Vec<FieldUpdate { path, value }>` (pretty-printer re-emits `a.b`, so it round-trips); `infer_record_update`
+  walks the path — each intermediate field must itself be a record (else a clear error), the leaf's type
+  unifies the value; `lower_record_update` + `build_record_update` reconstruct each level from the **single
+  base temp** (`{ o with inner.a = 99 }` → `_t = o; Outer(Inner(99, _t.inner.b), _t.tag)` — base evaluated
+  once, siblings copied, at every depth). A field set both wholesale and via a sub-path is rejected. No new
+  machinery beyond the field multimap; full lenses/optics (composable, first-class) stay out — they need the
+  HKT/type-class layer that is a non-goal. Covered by `tests/{roundtrip,typecheck,compile}.rs`.
 - **Sequence patterns on `List`** — ✅ **done 2026-07-03**. `case []`, `case [x]`, `case [x, y]`,
   `case [x, *rest]`, `case [*rest]` in `match` over the existing `List` (a Python array). Python-native and
   big-O-honest (`*rest` is a visible slice-copy). `Pattern::List { prefix, rest }` (rest = the trailing

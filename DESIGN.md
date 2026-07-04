@@ -1348,10 +1348,23 @@ Decisions:
    constructor does; decision 2). There is **no bare `{ f = v }` literal** — that form is removed, which is
    what eliminates the dict false friend outright. The type-declaration body keeps bare braces (`type Point
    = { x: int, y: int }` — a *type* body, not an expression), and access `p.x` is unchanged.
-4. **Update stays bare: `{ e with f = v }`.** The base expression `e` already fixes the record type, and
-   the `with` keyword makes the form unambiguously an update (Python has no `{ … with … }`), so it is not
-   a false friend and needs no tag. (Lowering unchanged: bind base to a temp, then a positional
-   constructor call — `{ p with x = 3 }` → `_t = p; Point(3, _t.y)`.)
+4. **Update stays bare: `{ e with f = v }`, and a field may be a dotted path.** The base expression `e`
+   already fixes the record type, and the `with` keyword makes the form unambiguously an update (Python has
+   no `{ … with … }`), so it is not a false friend and needs no tag. Lowering binds the base to a temp
+   (evaluated **once**) then reconstructs positionally — `{ p with x = 3 }` → `_t = p; Point(3, _t.y)`.
+   **Nested-update sugar (implemented):** a field may be a **dotted path**, `{ p with a.b = v }`, meaning
+   `{ p with a = { p.a with b = v } }` — the standard remedy for the deep-immutable-update pain (today you'd
+   hand-write the nested reconstruction). Arbitrary depth (`a.b.c = v`), and paths mix with plain fields
+   (`{ p with a.b = 1, x = 2 }`) and share prefixes (`{ p with a.b = 1, a.c = 2 }` rebuilds `a` once). It is
+   *not* a false friend and needs no new machinery beyond the field multimap: the type checker walks the
+   path, descending into each intermediate record field (which must itself be a record — else a clear
+   error) and unifying the value with the leaf field's type; lowering reconstructs each level from the
+   single base temp (`{ o with inner.a = 99 }` → `_t = o; Outer(Inner(99, _t.inner.b), _t.tag)`), so the
+   base is still evaluated once and sibling fields are copied, at every depth. A field updated both
+   wholesale and through a sub-path (`{ p with a = v, a.b = w }`) is rejected (one would silently override
+   the other). This is *lightweight optics* — the readability win of a lens for nested update without the
+   HKT/type-class machinery full optics need (which is a non-goal). `RecordUpdate` carries `Vec<FieldUpdate
+   { path, value }>`; the pretty-printer re-emits `a.b`, so it round-trips.
 5. **Lowering reuses the ADT class machinery** (§5). A record type becomes a Python class with its real
    field names, `__match_args__`, structural `__eq__`/`__hash__`, `__repr__`. `Point { x = 1, y = 2 }`
    lowers to the positional call `Point(1, 2)` in declared field order — i.e. the *tag erases into the

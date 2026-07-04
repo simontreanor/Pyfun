@@ -462,6 +462,16 @@ print here.x                          # 3
 print shifted.x                       # 10
 print (dot here)                      # 7
 print here                            # Point(3, 4)
+
+# Nested-update sugar: a dotted path `{ r with a.b = v }` updates a field deep in
+# a record — sugar for `{ r with a = { r.a with b = v } }`. Arbitrary depth, and
+# the base is evaluated once with sibling fields (here `start.y`, `finish`) copied.
+type Segment = { start: Point, finish: Point }
+let seg = Segment { start = Point { x = 0, y = 0 }, finish = here }
+let moved = { seg with start.x = 99 }
+print moved.start.x                   # 99  (updated through the path)
+print moved.start.y                   # 0   (sibling preserved)
+print moved.finish.x                  # 3   (untouched field preserved)
 print (scaled 3 4)                    # 14   ((3 + 4) * 2, via local mutation)
 print accumulate                      # 15   (closure capturing a mutable)
 
