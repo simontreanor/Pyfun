@@ -22,6 +22,27 @@ client only launches it and wires up document sync.
 All of the above run over **resilient analysis**: the lexer and parser both
 recover, so a half-typed file still hovers, navigates, and completes.
 
+## Syntax colours
+
+The TextMate grammar (`pyfun.tmLanguage.json`) tags tokens by their semantic
+role, and the extension **pins a colour per role** via `configurationDefaults`
+so the palette reads the same across themes (values are Monokai's, plus the
+bracket-pair gold). Control-flow keywords and the escape hatches stay visibly
+distinct; pink is reserved exclusively for the mutability/FFI escape hatches.
+
+| Role | Tokens | Colour |
+| --- | --- | --- |
+| Declarations — *introduces a name* | `let` `fun` `type` `measure` `module` | cyan `#66D9EF` |
+| Escape hatches — mutation + FFI | `mut` `<-` `extern` | pink `#F92672` |
+| Computation-expression builders | `async` `seq` `result` | purple `#AE81FF` |
+| Units of measure | `<m>`, `<m/s^2>` | orange `#FD971F` |
+| Control flow + logical | `if` `then` `else` `elif` `match` `case` `with` `return` `yield` `do` `in` · `and` `or` `not` | gold `#FFD700` |
+
+Everything else (identifiers, type names, constructors, strings, numbers,
+operators) follows your active theme. To override a pin, add your own
+`editor.tokenColorCustomizations` rule for the scope (e.g.
+`keyword.control.pyfun`) in user settings — it wins over the extension default.
+
 ## Install (to just use it)
 
 If you only want the extension working in your editor — not to hack on the
