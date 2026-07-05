@@ -2,7 +2,7 @@
   "name": "pyfun",
   "displayName": "Pyfun",
   "description": "Pyfun language support: syntax highlighting plus diagnostics, hover, navigation, and more, backed by `pyfun lsp`.",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "publisher": "pyfun",
   "repository": {
     "type": "git",
@@ -106,7 +106,65 @@
               "fontStyle": ""
             }
           }
-        ]
+        ],
+        "[*Light*]": {
+          "comment": "Light-theme overrides: the Monokai palette above is tuned for a dark background and washes out on white. These keep each role's hue family but darken to WCAG-AA contrast (>= ~4.9:1 on white). This block only applies to themes whose name contains `Light`; dark themes keep the values above.",
+          "textMateRules": [
+            {
+              "comment": "Declarations — teal, the darkened cyan.",
+              "scope": [
+                "keyword.declaration.pyfun"
+              ],
+              "settings": {
+                "foreground": "#0E7490",
+                "fontStyle": ""
+              }
+            },
+            {
+              "comment": "Escape hatches (`mut`/`<-`/`extern`) — deep magenta, the darkened pink.",
+              "scope": [
+                "storage.modifier.mutable.pyfun",
+                "keyword.operator.mutation.pyfun",
+                "keyword.other.extern.pyfun"
+              ],
+              "settings": {
+                "foreground": "#C71D6C",
+                "fontStyle": ""
+              }
+            },
+            {
+              "comment": "CE builders (`async`/`seq`/`result`) — violet, the darkened purple.",
+              "scope": [
+                "keyword.other.computation.pyfun"
+              ],
+              "settings": {
+                "foreground": "#7C3AED",
+                "fontStyle": ""
+              }
+            },
+            {
+              "comment": "Units of measure — burnt orange, the darkened orange.",
+              "scope": [
+                "storage.type.unit.pyfun"
+              ],
+              "settings": {
+                "foreground": "#C2410C",
+                "fontStyle": ""
+              }
+            },
+            {
+              "comment": "Control flow + logical — dark amber, the darkened gold (bright gold is near-invisible on white).",
+              "scope": [
+                "keyword.control.pyfun",
+                "keyword.operator.logical.pyfun"
+              ],
+              "settings": {
+                "foreground": "#9A6700",
+                "fontStyle": ""
+              }
+            }
+          ]
+        }
       }
     }
   },
