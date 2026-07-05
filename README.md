@@ -1,9 +1,17 @@
 # Pyfun
 
-**An F#-inspired, functional-first language for the Python ecosystem.** Immutable by default,
-expression-oriented, and fully type-inferred. Its compiler is written in Rust and emits
-**readable Python**. You write typed, exhaustively-checked functional code; you get plain
-`.py` files that call straight into NumPy, pandas, httpx, or anything else on PyPI.
+**Functional programming for the language classrooms already teach.**
+
+Pyfun is an F#-inspired, functional-first language that compiles to readable Python. It brings
+algebraic data types, exhaustive matching, currying, inferred effects, and units of measure to the
+Python ecosystem, and its Rust compiler checks every one of them before a single line of Python is
+emitted.
+
+It exists to make functional programming teachable where students already are. CS courses run on
+Python; learning FP usually means leaving it for Haskell, OCaml, or F# and adopting a whole new
+ecosystem students rarely touch again. Pyfun keeps them in Python, with no new runtime and no new
+package manager, and compiles to Python they can read, so every concept stays visible in the code
+they already understand.
 
 ```fsharp
 type Shape = Circle float | Rect float float
@@ -27,6 +35,25 @@ error: non-exhaustive match: `Rect _ _` is not matched
 > and you debug the `TypeError` an hour downstream. Pyfun's Rust compiler checks types, effects,
 > units, and match exhaustiveness **before a single line of Python is emitted**, then hands you
 > code you can read, diff, and ship.
+
+---
+
+## Made for the classroom
+
+Teaching FP normally forces a detour: a new language, a new toolchain, and a new ecosystem the
+students abandon the moment the course ends. Pyfun removes the detour.
+
+- **They already have the runtime.** Pyfun compiles to plain Python, so anything a student writes
+  runs on the interpreter already installed on every lab machine. No VM, no new package manager.
+- **The concepts stay visible.** `pyfun compile` shows the Python your functional code becomes, so a
+  student watches an ADT turn into a class, a `match` into `match`/`case`, and currying into a
+  closure. They learn the idea and how it maps to the imperative code they know.
+- **Good habits are enforced, not suggested.** The compiler refuses to skip a case, ignore a `None`,
+  or mutate what should stay immutable, so students learn to handle every path because the tool insists.
+- **A small, learnable core.** Pyfun is deliberately compact, so the language stays out of the way of
+  the ideas you are teaching.
+
+Pyfun is a real, general-purpose language, not a toy. But teaching is why it exists.
 
 ---
 
@@ -256,35 +283,64 @@ chained comparisons. Every tool here reaches the full Python ecosystem
 
 Reach for Fable when you want all of F# and are happy to bring the .NET toolchain and a runtime
 library along. Reach for Pyfun when you want the emitted Python to be a first-class, readable
-artifact you own outright.
+artifact you own outright, or when you are teaching functional programming to people who live in
+Python.
 
 ---
 
 ## Getting started
 
-You need [Rust](https://rustup.rs/) (the toolchain is pinned to 1.96) to build the compiler, and
-**Python 3.12+** on your `PATH` to run the emitted code.
+Pyfun runs on the Python you already have. You need two things:
+
+- **Python 3.12+** on your `PATH`, to run the emitted code.
+- **[Rust](https://rustup.rs/)** to build the compiler (it auto-selects the pinned 1.96 toolchain).
+  *Prebuilt binaries and a `pip install` path are on the roadmap, which will remove this step.*
+
+**Install the `pyfun` compiler** onto your `PATH`:
+
+```bash
+cargo install --git https://github.com/simontreanor/Pyfun pyfun
+```
+
+Or build from a clone, if you want to hack on the compiler itself:
 
 ```bash
 git clone https://github.com/simontreanor/Pyfun
 cd Pyfun
-cargo build --release
-
-# Type-check, compile, and run:
-cargo run -- check   examples/hello.pyfun     # rustc-style diagnostics
-cargo run -- compile examples/hello.pyfun     # emit Python to stdout
-cargo run -- compile examples/hello.pyfun -o out.py
-cargo run -- run     examples/hello.pyfun     # compile + execute via python
-cargo run -- parse   examples/hello.pyfun     # canonical pretty-print
-cargo run -- repl                             # interactive REPL
+cargo install --path .
 ```
 
-Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and the CLI
-drives the whole graph:
+**Try it** on the bundled examples:
 
 ```bash
-cargo run -- run examples/modules/main.pyfun
+pyfun run   examples/hello.pyfun     # compile, then execute via python
+pyfun check examples/hello.pyfun     # type-check, rustc-style diagnostics
+pyfun repl                           # interactive REPL
 ```
+
+**Write your first program.** Save this as `hello.pyfun`:
+
+```fsharp
+type Shape = Circle float | Rect float float
+
+let area s =
+  match s:
+    case Circle r: 3.14159 * r * r
+    case Rect w h: w * h
+
+print (area (Circle 2.0))
+```
+
+Then run it (prints `12.56636`), or see the Python it becomes:
+
+```bash
+pyfun run     hello.pyfun            # 12.56636
+pyfun compile hello.pyfun            # emit readable Python to stdout
+pyfun compile hello.pyfun -o hello.py
+```
+
+Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and any
+command drives the whole graph (`pyfun run examples/modules/main.pyfun`).
 
 ---
 
@@ -298,6 +354,9 @@ Pyfun ships a dependency-free language server (`pyfun lsp`) and a VS Code client
 - **Go-to-definition** and **find-references**, across files
 - **Rename**, project-wide, for values, constructors, and types
 - **Completion**, **document symbols**, and **workspace symbols**
+
+Build and install the extension from [`editors/vscode/`](editors/vscode/); once `pyfun` is on your
+`PATH`, it launches `pyfun lsp` automatically.
 
 ---
 
