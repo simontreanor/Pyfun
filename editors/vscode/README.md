@@ -26,17 +26,22 @@ recover, so a half-typed file still hovers, navigates, and completes.
 
 The TextMate grammar (`pyfun.tmLanguage.json`) tags tokens by their semantic
 role, and the extension **pins a colour per role** via `configurationDefaults`
-so the palette reads the same across themes (values are Monokai's, plus the
-bracket-pair gold). Control-flow keywords and the escape hatches stay visibly
-distinct; pink is reserved exclusively for the mutability/FFI escape hatches.
+so the palette reads the same across themes. The dark values are Monokai's (plus
+the bracket-pair gold); light themes get **darkened, same-hue variants** so each
+role stays legible on white (WCAG-AA contrast). Control-flow keywords and the
+escape hatches stay visibly distinct; pink/magenta is reserved exclusively for
+the mutability/FFI escape hatches.
 
-| Role | Tokens | Colour |
-| --- | --- | --- |
-| Declarations — *introduces a name* | `let` `fun` `type` `measure` `module` | cyan `#66D9EF` |
-| Escape hatches — mutation + FFI | `mut` `<-` `extern` | pink `#F92672` |
-| Computation-expression builders | `async` `seq` `result` | purple `#AE81FF` |
-| Units of measure | `<m>`, `<m/s^2>` | orange `#FD971F` |
-| Control flow + logical | `if` `then` `else` `elif` `match` `case` `with` `return` `yield` `do` `in` · `and` `or` `not` | gold `#FFD700` |
+| Role | Tokens | Dark | Light |
+| --- | --- | --- | --- |
+| Declarations — *introduces a name* | `let` `fun` `type` `measure` `module` | cyan `#66D9EF` | teal `#0E7490` |
+| Escape hatches — mutation + FFI | `mut` `<-` `extern` | pink `#F92672` | magenta `#C71D6C` |
+| Computation-expression builders | `async` `seq` `result` | purple `#AE81FF` | violet `#7C3AED` |
+| Units of measure | `<m>`, `<m/s^2>` | orange `#FD971F` | burnt orange `#C2410C` |
+| Control flow + logical | `if` `then` `else` `elif` `match` `case` `with` `return` `yield` `do` `in` · `and` `or` `not` | gold `#FFD700` | amber `#9A6700` |
+
+The light overrides live under a `"[*Light*]"` key, so they apply only to themes
+whose name contains *Light*.
 
 Everything else (identifiers, type names, constructors, strings, numbers,
 operators) follows your active theme. To override a pin, add your own
