@@ -30,11 +30,24 @@ Mechanically Pyfun is a *transpiler* — the TypeScript-to-JavaScript relationsh
 language on a shared VM: it compiles *to* Python source (F# does not compile to C#). The F#/C#
 analogy is one of *role and philosophy*, not architecture.
 
-**Novelty & precedent.** No existing project does "F# for Python." **Hy** (Lisp → Python AST,
-~12 years to 1.0) is the closest *architectural* precedent and the blueprint for lowering — but
-Hy is a syntax change, not a philosophy change. Pyfun's hard parts are **semantic design and
-Python interop**, not parser complexity. (Related but not Pyfun: Cython = Python→C; ty/mypy/
-pyright = type checkers; RustPython = a Python interpreter in Rust; Pyrs = Python→Rust.)
+**Prior work & positioning.** Pyfun enters a *populated* space — bringing functional and/or
+statically-typed code to Python has several precedents, and being honest about them matters more
+than a novelty claim. [**Fable**](https://fable.io) compiles real F# to Python and is the most
+capable option (it *is* F#, with the whole language + a mature ecosystem), at the cost of the .NET
+toolchain and a runtime-library dependency (`fable_library`) in its output. [**Erg**](https://erg-lang.org)
+is a statically-typed, Python-compatible language with a rich type system and marker-based effect
+control — closest to Pyfun in ambition, but "rusty"/OO rather than ML-family, with *explicit* effect
+annotations. [**Coconut**](https://coconut-lang.org) is a functional *superset* of Python whose static
+typing is an optional MyPy add-on (no enforced gatekeeper). Dynamically-typed dialects (**Hy**
+Lisp→Python-AST, **Mochi**, **Dogelang**) round out the field. Pyfun does **not** out-feature Fable's
+F#; its bet is a narrower one — an ML-family, FP-first language with *mandatory* static checking (HM
+inference + enforced exhaustiveness + inferred effects + units) that compiles to **self-contained,
+idiomatic Python**: no runtime library (a `List` *is* a `list`), no .NET, a single dependency-free
+binary, and a language designed for Python interop first. It trades language breadth for readable,
+runtime-free output and a Python-native toolchain. Architecturally, **Hy** is the closest lowering
+precedent (source → Python AST), though it changes syntax, not philosophy; Pyfun's hard parts are
+**semantic design and interop**, not parsing. (Related but distinct: Cython = Python→C;
+ty/mypy/pyright = type checkers; RustPython = a Python interpreter in Rust.)
 
 ## 2. The central idea: the compiler is the gatekeeper
 
