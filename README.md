@@ -1,7 +1,7 @@
 # Pyfun
 
-**Pyfun is to Python what F# is to C#.** An FP-first language — immutable by default,
-expression-oriented, fully type-inferred — whose compiler is written in Rust and emits
+**An F#-inspired, functional-first language for the Python ecosystem.** Immutable by default,
+expression-oriented, fully type-inferred — its compiler is written in Rust and emits
 **readable Python**. You write typed, exhaustively-checked functional code; you get plain
 `.py` files that call straight into NumPy, pandas, httpx, or anything else on PyPI.
 
