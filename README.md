@@ -228,7 +228,8 @@ Legend: ✅ yes · ⚠️ partial · ➖ different approach · ❌ no
 | FP-first language (not a Python superset) | ✅ | ✅ | ✅ | ➖ |
 | ML / F#-family syntax | ✅ | ✅ | ➖ | ➖ |
 | **Mandatory** static typing | ✅ | ✅ | ✅ | ❌ |
-| Inference, few/no annotations | ✅ | ✅ | ⚠️ | ➖ |
+| Type inference | ✅ | ✅ | ✅ | ➖ |
+| **Zero** annotations required | ✅ | ⚠️ | ⚠️ | ❌ |
 | ADTs + **enforced** exhaustiveness | ✅ | ✅ | ⚠️ | ⚠️ |
 | **Inferred** effects (never annotated) | ✅ | ❌ | ➖ | ❌ |
 | Units of measure | ✅ | ✅ | ❌ | ❌ |
