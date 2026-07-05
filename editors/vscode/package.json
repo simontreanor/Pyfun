@@ -9,6 +9,25 @@
     "url": "https://github.com/simontreanor/Pyfun.git",
     "directory": "editors/vscode"
   },
+  "homepage": "https://github.com/simontreanor/Pyfun#readme",
+  "bugs": {
+    "url": "https://github.com/simontreanor/Pyfun/issues"
+  },
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#272822",
+    "theme": "dark"
+  },
+  "keywords": [
+    "functional",
+    "fsharp",
+    "ml",
+    "language",
+    "lsp",
+    "pyfun",
+    "transpiler"
+  ],
   "engines": {
     "vscode": "^1.75.0"
   },
