@@ -1,0 +1,27 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyfun-lang"
+description = "An F#-inspired, functional-first language that compiles to readable Python."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [{ name = "Simon Treanor" }]
+keywords = ["functional", "compiler", "fsharp", "transpiler", "education"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Programming Language :: Python",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Compilers",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/simontreanor/Pyfun"
+
+[tool.maturin]
+bindings = "bin"
