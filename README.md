@@ -290,33 +290,14 @@ Python.
 
 ## Getting started
 
-Pyfun runs on the Python you already have. You need two things:
-
-- **Python 3.12+** on your `PATH`, to run the emitted code.
-- **[Rust](https://rustup.rs/)** to build the compiler (it auto-selects the pinned 1.96 toolchain).
-  *Prebuilt binaries and a `pip install` path are on the roadmap, which will remove this step.*
-
-**Install the `pyfun` compiler** onto your `PATH`:
+Pyfun runs on the Python you already have. With **Python 3.12+** and pip, install the compiler:
 
 ```bash
-cargo install --git https://github.com/simontreanor/Pyfun pyfun
+pip install pyfun-lang
 ```
 
-Or build from a clone, if you want to hack on the compiler itself:
-
-```bash
-git clone https://github.com/simontreanor/Pyfun
-cd Pyfun
-cargo install --path .
-```
-
-**Try it** on the bundled examples:
-
-```bash
-pyfun run   examples/hello.pyfun     # compile, then execute via python
-pyfun check examples/hello.pyfun     # type-check, rustc-style diagnostics
-pyfun repl                           # interactive REPL
-```
+That puts the `pyfun` command on your `PATH`, with no Rust toolchain required. (The PyPI package is
+`pyfun-lang`; the command it installs is `pyfun`.)
 
 **Write your first program.** Save this as `hello.pyfun`:
 
@@ -331,16 +312,26 @@ let area s =
 print (area (Circle 2.0))
 ```
 
-Then run it (prints `12.56636`), or see the Python it becomes:
+Then run it, type-check it, or see the Python it becomes:
 
 ```bash
 pyfun run     hello.pyfun            # 12.56636
+pyfun check   hello.pyfun            # type-check, rustc-style diagnostics
 pyfun compile hello.pyfun            # emit readable Python to stdout
-pyfun compile hello.pyfun -o hello.py
+pyfun repl                           # interactive REPL
 ```
 
-Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and any
-command drives the whole graph (`pyfun run examples/modules/main.pyfun`).
+Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and any command
+drives the whole graph. Clone the repo for a runnable tour in [`examples/`](examples/), including a
+multi-module project (`pyfun run examples/modules/main.pyfun`).
+
+**Building from source** (or hacking on the compiler) needs [Rust](https://rustup.rs/), which
+auto-selects the pinned 1.96 toolchain:
+
+```bash
+cargo install --git https://github.com/simontreanor/Pyfun pyfun
+# or, from a clone:  cargo install --path .
+```
 
 ---
 
