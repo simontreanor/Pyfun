@@ -1,0 +1,15 @@
+Pyfun
+Copyright (c) 2026 Simon Treanor
+
+This product includes software originally designed and written by
+Simon Treanor (the "Original Author").
+
+Pyfun is an FP-first programming language that compiles to readable Python,
+together with its Rust compiler, type checker, language server, and tooling.
+The language design, compiler architecture, and this codebase are the
+original work of Simon Treanor.
+
+If you redistribute this software or any derivative work, you must retain
+this NOTICE file and the accompanying LICENSE, and you must preserve the
+attribution to the Original Author, in accordance with the terms of the
+Apache License, Version 2.0.
