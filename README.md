@@ -195,6 +195,47 @@ multi-file projects with `import`.
 
 ---
 
+## How Pyfun compares
+
+Pyfun isn't the only way to bring functional or statically-typed code to Python, and it doesn't
+pretend to be. The honest picture of where it fits:
+
+- **[Fable](https://fable.io)** compiles real F# to Python — the most capable option by far, because
+  it *is* F#, with the whole language and a mature ecosystem. The trade-offs: it needs the **.NET
+  toolchain**, and its output depends on a **runtime library** (`fable_library`).
+- **[Erg](https://erg-lang.org)** is a statically-typed, Python-compatible language with a rich type
+  system and marker-based effect control — closest to Pyfun in ambition, but "rusty"/OO rather than
+  ML-family, with *explicit* effect annotations.
+- **[Coconut](https://coconut-lang.org)** is a functional *superset* of Python; static typing is an
+  optional MyPy add-on, so nothing is enforced.
+- Dynamically-typed dialects (**Hy**, **Mochi**, **Dogelang**) round out the field.
+
+Legend: ✅ yes · ⚠️ partial · ➖ different approach · ❌ no
+
+| | **Pyfun** | **Fable** | **Erg** | **Coconut** |
+|---|:--:|:--:|:--:|:--:|
+| FP-first language (not a Python superset) | ✅ | ✅ | ✅ | ➖ |
+| ML / F#-family syntax | ✅ | ✅ | ➖ | ➖ |
+| **Mandatory** static typing | ✅ | ✅ | ✅ | ❌ |
+| Inference, few/no annotations | ✅ | ✅ | ⚠️ | ➖ |
+| ADTs + **enforced** exhaustiveness | ✅ | ✅ | ⚠️ | ⚠️ |
+| **Inferred** effects (never annotated) | ✅ | ❌ | ➖ | ❌ |
+| Units of measure | ✅ | ✅ | ❌ | ❌ |
+| Computation expressions | ✅ | ✅ | ❌ | ❌ |
+| Compiler-as-gatekeeper | ✅ | ✅ | ✅ | ❌ |
+| **Self-contained output** (no runtime library) | ✅ | ❌ | ❌ | ❌ |
+| **No .NET / host-runtime toolchain** | ✅ | ❌ | ✅ | ➖ |
+| Python-library interop | ✅ | ✅ | ✅ | ✅ |
+
+Pyfun does **not** out-feature Fable's F# — Fable ties or beats it on nearly every *language* row,
+because it's the real thing. Pyfun's bet is the bottom of the table: **self-contained, runtime-free
+Python output**, a **single dependency-free compiler** (no .NET), **inferred effects**, and a language
+**designed for Python interop first**. If you want F#'s full power and don't mind adopting .NET or a
+runtime library, Fable is the stronger choice. If you want the emitted Python to be a first-class,
+readable, self-contained artifact you can own — that's Pyfun.
+
+---
+
 ## Getting started
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned to 1.96) to build the compiler, and
