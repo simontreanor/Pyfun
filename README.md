@@ -305,7 +305,8 @@ gatekeeper: **nothing is emitted until every check passes.**
            rule       descent                                    string-spliced
 ```
 
-- **Type inference** is full HM with let-generalization, so you rarely write a type; it also does
+- **Type inference** is full HM with let-generalization — you never annotate a value; the only
+  types you write are in `type`/`extern` declarations, and every signature is inferred. It also does
   unit-of-measure inference (abelian-group unification), effect-row inference, and Maranget-style
   exhaustiveness with concrete witnesses.
 - **Lowering** targets a Python-AST IR and emits real, formatted Python — curried functions
