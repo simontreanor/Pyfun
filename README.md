@@ -1,6 +1,6 @@
 # Pyfun
 
-[![PyPI](https://img.shields.io/pypi/v/pyfun-lang.svg)](https://pypi.org/project/pyfun-lang/) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/pyfun-lang.svg)](https://pypi.org/project/pyfun-lang/) [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/pyfun.pyfun.svg?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=pyfun.pyfun) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)
 
 **Functional programming for the language classrooms already teach.**
 
@@ -345,8 +345,8 @@ cargo install --git https://github.com/simontreanor/Pyfun pyfun
 
 ## Editor support
 
-Pyfun ships a dependency-free language server (`pyfun lsp`) and a VS Code client in
-[`editors/vscode/`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode). Over resilient analysis that survives a half-typed file, you get:
+Pyfun ships a dependency-free language server (`pyfun lsp`) and a [VS Code
+extension](https://marketplace.visualstudio.com/items?itemName=pyfun.pyfun). Over resilient analysis that survives a half-typed file, you get:
 
 - **Diagnostics** as you type
 - **Hover** showing the inferred type *and* effect of any expression, binding, or parameter
@@ -354,8 +354,10 @@ Pyfun ships a dependency-free language server (`pyfun lsp`) and a VS Code client
 - **Rename**, project-wide, for values, constructors, and types
 - **Completion**, **document symbols**, and **workspace symbols**
 
-Build and install the extension from [`editors/vscode/`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode); once `pyfun` is on your
-`PATH`, it launches `pyfun lsp` automatically.
+Install **Pyfun** from the VS Code Marketplace (or search "Pyfun" in the Extensions panel); once
+`pyfun` is on your `PATH` (from `pip install pyfun-lang`), it launches `pyfun lsp` automatically.
+Building the extension from source is covered in
+[`editors/vscode/DEVELOPMENT.md`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode/DEVELOPMENT.md).
 
 ---
 
