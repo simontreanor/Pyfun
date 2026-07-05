@@ -57,7 +57,7 @@ What the compiler enforces, mirroring (and exceeding) F#:
 - **Type safety** — Hindley–Milner inference (no annotations required). *Optional* type annotations
   (`let x : T`, `(x: T)`) are **parked** — deprioritized, not merely deferred (see ROADMAP): HM inference
   is complete so the compiler needs none, and their strongest concrete driver (lifting the field-name
-  uniqueness restriction) already shipped 2026-07-03 via the use-site multimap *without* annotations.
+  uniqueness restriction) already shipped via the use-site multimap *without* annotations.
   Today everything is inferred and surfaced by LSP hover / `pyfun check` / REPL `:type`.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
 - **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
@@ -182,8 +182,7 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 `round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
 staying *unqualified* Pyfun names), plus the **unit-aware roots `sqrt : float<'u^2> -> float<'u>`**
-(√area = length) **and `cbrt : float<'u^3> -> float<'u>`** (∛volume = length — the argument's unit
-must be a perfect square resp. cube, whose exponents halve resp. divide by 3; see §8.2; lower to
+(√area = length) **and `cbrt : float<'u^3> -> float<'u>`** (∛volume = length; see §8.2; lower to
 `math.sqrt`/`math.cbrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the honest result of an effectful call). It also seeds the **standard combinators**
 `id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
@@ -362,16 +361,14 @@ stay ordinary holes. Resolved entirely at lex time (`debug_marker` in `lex_hole`
 preceding literal chunk and the hole's tokens exclude the marker, so parser, checker, lowering, and
 emitter see an ordinary literal + hole (the value is `str()`ed like any hole, not Python's `repr`;
 the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` is
-**implemented** — see the triple-quoted-strings paragraph below. **Format specifiers (`:.2f`, `!r`) are a non-goal** (decided
-2026-07-03): a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
+**implemented** — see the triple-quoted-strings paragraph below. **Format specifiers (`:.2f`, `!r`) are a non-goal**: a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
 compiler can't see into it, so `.2f`→`.3f` silently changes output, `.2f`→`.f2` only fails at runtime,
 and nothing enforces consistency across call sites. That is exactly the stringly-typed footgun Pyfun
 refuses elsewhere (float patterns, unchecked field access, unit mismatches), so blessing a format
 mini-language would contradict "the compiler is the gatekeeper." The FP alternative is **centralized
 formatting functions** — `formatCurrency : float<gbp> -> string`, `formatPercent`, `formatDate` — defined
 once, checked at every call, changed in one place (a future small `Format` module over the `String` ops).
-The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded. Covered by
-lexer/roundtrip/typecheck/compile tests + `examples/hello.pyfun`.
+The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded.
 
 **Raw strings — `r"..."` (implemented).** A raw string suppresses escape processing, so backslashes are
 literal — handy for Windows paths (`r"C:\Users\pyfun"`) and regex via `extern`. **Lexer-only, no AST /
@@ -383,7 +380,7 @@ string cannot end in a lone backslash-before-quote (it just continues). It produ
 `Tok::Str` holding the raw content; from there it is an ordinary string literal, and the emitter's
 existing `string_literal` escaper re-escapes on output (`C:\path` → Python `"C:\\path"` → reads back as
 `C:\path`), so the round-trip is faithful with zero downstream changes. Combined `rf"..."` (raw +
-interpolated) is out of scope. Covered by lexer + compile tests + `examples/hello.pyfun`.
+interpolated) is out of scope.
 
 **Triple-quoted (multi-line) strings — `"""..."""`, `f"""..."""`, `r"""..."""` (implemented).**
 Python's multi-line string forms: embedded newlines (and lone `"`/`""`) are literal content, and only
@@ -405,8 +402,7 @@ escaped single-line form** (`"a\nb"`, via the existing `string_literal`/`fstring
 its block depth), and a real multi-line literal would force unindented continuation lines through that
 model — while `"a\nb"` is value-identical, self-contained, and keeps one escaping path. The Pyfun
 pretty-printer likewise prints the escaped `"a\nb"` form, so the parse→print→parse roundtrip holds on
-value equality. `rf"""…"""` is out of scope (as is `rf"…"`). Covered by lexer(inline)/roundtrip/
-typecheck/compile tests + `examples/hello.pyfun`.
+value equality. `rf"""…"""` is out of scope (as is `rf"…"`).
 
 **`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns
 `Error`); the only reason to catch is the **Python FFI boundary** — an `extern` call can throw. So rather
@@ -426,8 +422,7 @@ binding): `try:  t = Ok(<body>)  except Exception as e:  t = Error(_Exception(ty
 There is deliberately **no `raise`, no `finally`, no exception hierarchy** (Pyfun signals failure with
 `Error`; the `result {}` CE + `Result` module compose the rest). Enabled by **string-literal patterns**
 (`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `string` type, so a string `match`
-still needs a wildcard), which landed alongside. Covered by roundtrip/typecheck/compile/run tests +
-`examples/hello.pyfun`.
+still needs a wildcard), which landed alongside.
 
 **Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
@@ -514,11 +509,9 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   (which would clash with the boolean `and`). A value cycle (`let a = b\nlet b = a`) is not a function
   group, so it stays rejected; and a one-way forward reference between *independent* (non-cyclic) bindings
   still requires declare-before-use. Lowering is unchanged (Python module-level `def`s resolve names at
-  call time). **Tail-call optimization
-  is deferred** — CPython does no TCO and caps recursion (~1000 frames), so deep recursion can
-  `RecursionError`, exactly like hand-written Python; the **stack-safe path is the `List`/`Seq`
-  combinators** (they lower to Python's iterative `reduce`/`map`). A future slice may rewrite
-  self-tail-calls to a `while` loop in the emitted Python (the F#/Scala move; output stays readable).
+  call time). **Tail-call optimization is a non-goal** (below) — CPython does no TCO and caps recursion
+  (~1000 frames), so deep recursion can `RecursionError` exactly like hand-written Python; the
+  **stack-safe path is the `List`/`Seq` combinators** (they lower to Python's iterative `reduce`/`map`).
 
 **Module identity.** Source files are lowercase (`geometry.pyfun`), avoiding case-insensitive-filesystem
 pitfalls; the **module name is the stem with its first letter uppercased** (`Geometry`), per Pyfun's
@@ -622,12 +615,9 @@ import) and seeds the type-check (`types::check_collecting_with_imports`), so a 
 type-checks `Geometry.area` cleanly instead of flagging "not a member" — while a genuine cross-module type
 error is still reported. The server maps the document's `file:` URI to a directory (`uri_to_path`,
 percent-decoding + the Windows `/C:/` fixup) and passes it in; a non-`file:` URI or a no-imports file is
-analyzed exactly as before. **Both former MVP limitations were fixed with the project-wide LSP cache
-(2026-07-03, §9):** imported modules are now read from the editor's **open buffer** when the file is open
-(else disk, matching every other cross-file feature), and a document's cached analysis records the imported
-files it consulted (with content fingerprints), so editing an imported file — in a buffer or on disk —
-invalidates its dependents on their next request. *Cross-file navigation follow-on
-(landed):* (1) **go-to-definition crosses files** — a qualified reference to an imported file module
+analyzed exactly as before. Both former MVP limitations here (disk-only reads, no invalidation when an
+imported file changes) are fixed by the project-wide LSP cache — see §9. *Cross-file navigation:*
+(1) **go-to-definition crosses files** — a qualified reference to an imported file module
 (`Geometry.area`, `Geometry.Circle`) jumps to the definition in that module's `.pyfun`
 (`resolve::qualified_at` records expression-position qualified refs with spans; the server resolves the
 sibling URI and locates the member via `resolve::definitions`, reading an open buffer over disk); (2)
@@ -794,7 +784,7 @@ constraint with polymorphic literals (step b).
    (`2.0`/`1.0`), so its printed value matches its type — `compile` runs one `check_collecting` pass,
    `float_literal_spans` collects the `float`-typed spans, and lowering emits `PyExpr::Float` for a
    value-position integer literal whose span is in that set. A *generalized* `let x = 7` stays `7`: `x` is
-   polymorphic `num`, not `float`, so no coercion is due. (This was a former wart — fixed 2026-07-03.)
+   polymorphic `num`, not `float`, so no coercion is due.
 4. **No implicit int→float coercion between *variables*.** Mixing two values of genuinely different
    concrete numeric type (an `int`-typed variable plus a `float`-typed one) is a (gentle) error
    rather than a silent widening. Full coercion would require subtyping (`int <: float`), which
@@ -1208,7 +1198,7 @@ Design intent:
   the *two* tractable unit-carrying power operations — F# special-cases the `sqrt` signature —
   because each exponent is a static rational constant (½, ⅓); general `x<'u> ** y` is impossible (a runtime
   exponent makes the result unit depend on a value → dependent types), which is why `**` stays
-  dimensionless (§7.1). **Exponent-representation decision (2026-07-03):** unit exponents stay
+  dimensionless (§7.1). **Exponent-representation decision:** unit exponents stay
   **integers** — no rational exponents (the more general option) and no bespoke "halve-the-unit"
   constraint either. Neither is needed: `sqrt`'s scheme is expressed with the existing
   representation (its argument unit is `'u^2`, `Unit::pow(2)` in `seed_prelude`), and the existing
@@ -1226,12 +1216,12 @@ Design intent:
   syntax), pure, lowering to `math.sqrt` with `import math` via the same routing as
   `floor`/`ceil`/`truncate`; units erase as always. Declaring `extern sqrt` now hits the ordinary
   "already defined" clash error; a user `let sqrt` still shadows the builtin.
-  **`cbrt` (added 2026-07-04)** is the exact sibling with the exponent bumped to 3 (`Unit::pow(3)`),
+  **`cbrt`** is the exact sibling with the exponent bumped to 3 (`Unit::pow(3)`),
   so unification thirds a perfect-cube unit (`m^3 → m`, `m^6/s^3 → m^2/s`) and rejects a non-cube
   (`m`, `m^2`, `m^4`). It earns its keep *only* through units: dimensionless `cbrt` would just be
   `x ** (1.0/3.0)`, but `**` is dimensionless, so a unit-aware cube root is the only version that
   keeps the dimension — and `math.cbrt` additionally cube-roots negatives correctly, which
-  `x ** (1.0/3.0)` does not. **Where the family stops (decided 2026-07-04): `{sqrt, cbrt}` and no
+  `x ** (1.0/3.0)` does not. **Where the family stops — `{sqrt, cbrt}` and no
   further.** Each fixed-`n` root is a separate monomorphic builtin (`float<'u^n> -> float<'u>`) — a
   general `root n x` is impossible because `n` is a runtime value (the same dependent-type wall as
   `**`), so `sqrt`/`cbrt` can't be unified into one function and higher roots would each need their
@@ -1263,7 +1253,7 @@ Decisions:
 1. **Nominal, not structural / row-polymorphic.** (Unchanged.) A record literal/access resolves to a
    *declared* record type. Records reuse the existing `Ty::Con` machinery (a record is a type constructor
    with a field registry), so no new `Ty` variant, and they unify and generalize exactly like ADTs.
-2. **Field names are not globally unique — lazy, use-site ambiguity.** *(Revised 2026-07-03.)*
+2. **Field names are not globally unique — lazy, use-site ambiguity.**
    Resolution of a bare `p.x` access is still by field name — an access carries no tag and no type
    annotation (Pyfun has none on `let`/params) — but the field name no longer has to be *globally*
    unique. Field names live in a **multimap** (`field_owner : field → [records]`), and a bare `p.x`
@@ -1483,7 +1473,7 @@ features, all reusing the existing front end:
   "incremental" half is a per-document analysis cache keyed on a monotonic version
   stamp: repeated requests on an unchanged document (hover, then go-to-def, then
   references) reuse one parse + type-check instead of redoing it each time.
-- **Project-wide cache + import invalidation** (2026-07-03) — import-aware analysis
+- **Project-wide cache + import invalidation** — import-aware analysis
   is cached at two levels, both validated by **content fingerprints** (a
   `DefaultHasher` of the source text; an analysis is a pure function of the entry
   text plus every imported source it consulted, so equal fingerprints prove an
@@ -1519,7 +1509,7 @@ spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/struct
 equality is unaffected; lowering erases them (`param_names`).
 
 Deferred: *truly* incremental reparsing — an edit still re-analyzes the whole
-document — and deliberately so, decided against rather than postponed (2026-07-03):
+document — and deliberately so, decided against rather than postponed:
 a whole-file lex + parse + check is milliseconds at realistic Pyfun file sizes, the
 two caches above already eliminate all *redundant* whole-file work (unchanged
 documents, unchanged imports, shared imports), and region-based reparse would
