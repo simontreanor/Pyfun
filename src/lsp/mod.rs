@@ -621,7 +621,7 @@ impl Server {
                 let mut value = format!("```pyfun\n{}\n```", t.ty);
                 if let Some((_, doc)) = doc {
                     value.push_str("\n\n---\n\n");
-                    value.push_str(&doc);
+                    value.push_str(&doc_to_markdown(&doc));
                 }
                 obj(vec![
                     (
@@ -636,7 +636,10 @@ impl Server {
             (None, Some((span, doc))) => obj(vec![
                 (
                     "contents",
-                    obj(vec![("kind", str("markdown")), ("value", str(doc))]),
+                    obj(vec![
+                        ("kind", str("markdown")),
+                        ("value", str(doc_to_markdown(&doc))),
+                    ]),
                 ),
                 ("range", span_range(text, span)),
             ]),
@@ -1251,6 +1254,14 @@ fn is_ctor_identifier(name: &str) -> bool {
 /// The declaration span of a *user* type `name` (a `type`/record decl in this
 /// module), if any — so only user types, not builtins, are go-to-def / rename
 /// targets.
+/// Render doc-comment text for a Markdown hover. `collect_docs` joins successive
+/// `##` lines with a single `\n`, but Markdown collapses a lone newline into a
+/// space — so promote each line break to a hard break (two trailing spaces),
+/// preserving the author's line structure in the hover popup.
+fn doc_to_markdown(doc: &str) -> String {
+    doc.replace('\n', "  \n")
+}
+
 /// The doc comment attached to the module-level declaration named `name`
 /// (a top-level `let`, `type`, or `extern`), if any.
 fn item_doc(module: &crate::syntax::Module, name: &str) -> Option<String> {
@@ -1600,6 +1611,21 @@ mod tests {
         server.handle(&json::parse(&open_msg(uri, src)).unwrap());
         let value = hover_value(&mut server, uri, 1, 6);
         assert!(value.contains("A 2D point."), "hover value was {value:?}");
+    }
+
+    #[test]
+    fn hover_preserves_line_breaks_in_a_multi_line_doc_comment() {
+        // Successive `##` lines join with `\n`; the hover promotes each to a
+        // Markdown hard break (two trailing spaces) so the lines don't collapse.
+        let mut server = Server::default();
+        let uri = "file:///docm.pyfun";
+        let src = "## First line.\n## Second line.\ntype Signal = Walk | Wait";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let value = hover_value(&mut server, uri, 2, 6);
+        assert!(
+            value.contains("First line.  \nSecond line."),
+            "hover value was {value:?}"
+        );
     }
 
     #[test]
