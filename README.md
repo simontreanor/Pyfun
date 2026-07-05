@@ -158,7 +158,7 @@ print (safe "oops")   # 0   (the ValueError was caught into an Error)
 ## A whistle-stop tour
 
 Everything below type-checks, compiles, and runs today. See
-[`examples/hello.pyfun`](examples/hello.pyfun) for the exhaustive version.
+[`examples/hello.pyfun`](https://github.com/simontreanor/Pyfun/blob/main/examples/hello.pyfun) for the exhaustive version.
 
 **Algebraic data types, records, and exhaustive matching.** `None` cannot bite you:
 
@@ -322,7 +322,7 @@ pyfun repl                           # interactive REPL
 ```
 
 Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and any command
-drives the whole graph. Clone the repo for a runnable tour in [`examples/`](examples/), including a
+drives the whole graph. Clone the repo for a runnable tour in [`examples/`](https://github.com/simontreanor/Pyfun/tree/main/examples), including a
 multi-module project (`pyfun run examples/modules/main.pyfun`).
 
 **Building from source** (or hacking on the compiler) needs [Rust](https://rustup.rs/), which
@@ -338,7 +338,7 @@ cargo install --git https://github.com/simontreanor/Pyfun pyfun
 ## Editor support
 
 Pyfun ships a dependency-free language server (`pyfun lsp`) and a VS Code client in
-[`editors/vscode/`](editors/vscode/). Over resilient analysis that survives a half-typed file, you get:
+[`editors/vscode/`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode). Over resilient analysis that survives a half-typed file, you get:
 
 - **Diagnostics** as you type
 - **Hover** showing the inferred type *and* effect of any expression, binding, or parameter
@@ -346,7 +346,7 @@ Pyfun ships a dependency-free language server (`pyfun lsp`) and a VS Code client
 - **Rename**, project-wide, for values, constructors, and types
 - **Completion**, **document symbols**, and **workspace symbols**
 
-Build and install the extension from [`editors/vscode/`](editors/vscode/); once `pyfun` is on your
+Build and install the extension from [`editors/vscode/`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode); once `pyfun` is on your
 `PATH`, it launches `pyfun lsp` automatically.
 
 ---
@@ -372,7 +372,7 @@ gatekeeper: **nothing is emitted until every check passes.**
   desugar to their natural Python (`async`/`await`, generators, railway `Result`), and units erase.
 - **No CPython fork.** Pyfun is a front end for the Python ecosystem, not a competing runtime.
 
-The full language design and rationale live in [`DESIGN.md`](DESIGN.md).
+The full language design and rationale live in [`DESIGN.md`](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md).
 
 ---
 
@@ -381,7 +381,7 @@ The full language design and rationale live in [`DESIGN.md`](DESIGN.md).
 MVP showcase complete and runnable: ADTs, records, tuples, computation expressions (including
 user-defined builders), units of measure, mutability, inferred multi-label effects, general Python
 FFI via `extern`, a module-qualified standard library, string interpolation, active patterns,
-typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](ROADMAP.md) for what's next.
+typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](https://github.com/simontreanor/Pyfun/blob/main/ROADMAP.md) for what's next.
 
 This is a solo, actively-developed project: the MVP is feature-complete and runnable, but it's
 pre-1.0. Expect sharp edges; the language surface is stabilizing but not frozen.
@@ -390,8 +390,8 @@ pre-1.0. Expect sharp edges; the language surface is stabilizing but not frozen.
 
 ## License
 
-Pyfun is free and open source under the **[Apache License 2.0](LICENSE)**: use, modify, and
-redistribute it, including commercially. The accompanying [`NOTICE`](NOTICE) names **Simon Treanor**
+Pyfun is free and open source under the **[Apache License 2.0](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)**: use, modify, and
+redistribute it, including commercially. The accompanying [`NOTICE`](https://github.com/simontreanor/Pyfun/blob/main/NOTICE) names **Simon Treanor**
 as the original author; keep it with any redistribution or derivative work.
 
 Copyright © 2026 Simon Treanor.
