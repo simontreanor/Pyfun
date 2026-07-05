@@ -15,8 +15,9 @@ enabling syntax exists: effect inference (and a general offside rule for nested 
 
 ## 1. Identity
 
-**Pyfun is to Python as F# is to C#.** An FP-first language that compiles to Python and
-interoperates with the Python ecosystem the way F# does with C#:
+**An F#-inspired, functional-first language for the Python ecosystem.** Pyfun takes the role F#
+plays on .NET — the typed, functional-first sibling to a dominant imperative language — and brings
+it to Python, interoperating with the ecosystem much as F# does with C#:
 
 - **Shared runtime + ecosystem** — runs on CPython, imports Python libraries directly; Python can
   consume Pyfun-compiled modules.
@@ -24,6 +25,10 @@ interoperates with the Python ecosystem the way F# does with C#:
   ADTs + exhaustive matching + effect tracking), where Python is mutable, statement-oriented,
   dynamic.
 - **Rust compiler** — language-tooling-grade front end, shipped as a standalone binary.
+
+Mechanically Pyfun is a *transpiler* — the TypeScript-to-JavaScript relationship — not a co-equal
+language on a shared VM: it compiles *to* Python source (F# does not compile to C#). The F#/C#
+analogy is one of *role and philosophy*, not architecture.
 
 **Novelty & precedent.** No existing project does "F# for Python." **Hy** (Lisp → Python AST,
 ~12 years to 1.0) is the closest *architectural* precedent and the blueprint for lowering — but
@@ -104,22 +109,9 @@ extern still calls Python. Note declared effects are **exact** (no sub-effecting
 does not satisfy a declared `->{io}` parameter, because two closed effect sets unify only when equal.
 Effect subsumption (pure ≤ io) is a possible later refinement.
 
-Original design intent (now realized):
-
-- **Pure by default.** A function with no observable side effects has a pure type. Purity is
-  inferred, not just annotated, and propagates: a function that calls an impure function is impure
-  unless the effect is discharged.
-- **Effects are tracked in the type.** Start coarse — at minimum an `IO`-style effect for
-  side-effecting operations (printing, mutation of `mut` state, file/network) — with room to grow
-  toward an effect-row system (Koka/Eff style) rather than a single monolithic `IO`. Avoid
-  over-engineering: a small, well-defined effect lattice beats a sprawling one in the MVP.
-- **The Python boundary is inherently effectful.** Any call into arbitrary Python code is treated
-  as impure / `unsafe` at the boundary unless the programmer asserts otherwise (see §6). Interop
-  cannot be silently pure.
-- **Effects must lower cleanly.** Pure code and effectful code both compile to ordinary Python;
-  the effect tracking exists at compile time and leaves little or no runtime residue, the same way
-  types do. Decide early how (or whether) effect wrappers appear in emitted Python — the bias is
-  toward zero-cost, readable output.
+The original coarse-`IO` design intent — pure-by-default with inferred, propagating purity; effects
+tracked in the type with room to grow toward an effect row; the Python boundary inherently effectful;
+effects lowering to zero-residue Python — is fully realized above, extended to multi-label effect rows.
 
 **Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
 written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or
@@ -232,9 +224,8 @@ trusts the annotation, which is where the §4 "effectful/unsafe at the boundary"
 This makes the boundary's effectful-by-default rule (§4) concrete: a plain `extern`'s innermost
 arrow carries `io` (the Python call is the effect, performed on full application), so an impure
 `extern` cannot be called from a `let pure` binding. `extern pure` asserts the call is effect-free
-("pure up to its arguments", like `let pure`) — used for the likes of `math.cbrt`. A third option is
-an explicit effect annotation on the innermost arrow (`extern fetch : string ->{async} string =
-httpx.get`), which is trusted as written instead of the `io` default (§4). Externs are
+("pure up to its arguments", like `let pure`) — used for the likes of `math.cbrt`; or an explicit
+innermost-arrow annotation (`->{async}`) overrides the `io` default (§4). Externs are
 erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
 `extern` type syntax can't yet express.
@@ -657,34 +648,20 @@ resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name
 `resolve::type_at` / `type_use_references` drive go-to-definition, find-references, and rename (a type
 renames to an uppercase type name; builtins are refused). The **project-wide LSP cache landed** (§9).
 
-**Post-Phase-2 follow-ons.** Landed after the seven slices: **cross-module sum-type ADTs**
-(construct + qualified-pattern-match + cross-boundary exhaustiveness), **cross-module records** (§8.3),
-**cross-module externs and measures** (an imported `extern` bound in its own module + referenced as
-`mathx.cbrt`; measures merged unqualified with an alias-conflict check), and **cross-file LSP navigation**
-(go-to-definition across files — including on a **qualified record tag** `Geometry.Point` — workspace
-symbols, project-wide find-references + rename of top-level values and constructors, and in-file
-find-references / rename of type names). **Explicit non-goals
-(decided not to build):** visibility (`pub`) — Pyfun is
-all-public by design, the Python-natural model, so enforced visibility would fight the ethos; and **TCO** —
-CPython has none and the `List`/`Seq` combinators are the stack-safe path, so deep self-recursion matching
-hand-written Python's `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from
-X import y` / `open`; nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*`
-runtime. (Cross-module **records, externs, and measures** all **landed
-2026-07-03**, §6.1/§8.3; the **project-wide LSP cache** also landed 2026-07-03, §9.)
-**Implementation slices (ordered):** (0) implicit
-recursion [**done**]; (1) `import` syntax + AST + pretty-print + roundtrip [**done**]; (2) multi-file
-driver: graph, cycle/missing-file errors, topo sort [**done** — `src/project`, a loader-injected
-DFS so the graph logic is filesystem-free and unit-testable; `build_from_path` is the `.pyfun`-file
-wrapper]; (3) cross-module value checking [**done** — `types::check_module` (seeded env + exported
-schemes) + `project::check` over the topo order]; (4) shared
-`_pyfun_rt.py` + cross-module lowering + parallel-file emit [**done** — `lowering::lower_in_project` +
-`lowering::runtime_module` + `project::compile`]; (5) CLI over the graph (temp-dir `run`,
-`-o <dir>`) [**done** — import-detecting `check`/`compile`/`run` in `src/main.rs`, single-file
-back-compat preserved]; (6) minimal-import-awareness LSP [**done** — `analyze_in_dir` +
-`project::resolve_imports` + `types::check_collecting_with_imports`, URI→dir in the server]; (7)
-docs/example [**done** — this section, plus the runnable `examples/modules/` project]. **All seven
-slices have landed — Phase 2 file-based modules are complete**, plus the cross-module-ADT and
-cross-file-LSP-navigation follow-ons (above).
+**Post-Phase-2 follow-ons (each detailed above):** cross-module sum-type ADTs, cross-module records
+(§8.3), cross-module externs and measures, and cross-file LSP navigation. **Explicit non-goals
+(decided not to build):** visibility (`pub`) — Pyfun is all-public by design, the Python-natural model,
+so enforced visibility would fight the ethos; and **TCO** — CPython has none and the `List`/`Seq`
+combinators are the stack-safe path, so deep self-recursion matching hand-written Python's
+`RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from X import y` / `open`;
+nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
+
+**Phase 2 is complete** — all seven implementation slices landed: implicit recursion; `import` syntax;
+the `src/project` graph driver (a loader-injected, filesystem-free DFS); cross-module value checking
+(`types::check_module` + `project::check` over the topo order); shared `_pyfun_rt.py` + cross-module
+lowering + parallel-file emit (`lowering::lower_in_project` / `runtime_module` / `project::compile`);
+the import-detecting CLI (`check`/`compile`/`run`, single-file back-compat preserved); and docs + the
+runnable `examples/modules/` project.
 
 ## 7. Surface language (MVP)
 
@@ -1323,25 +1300,13 @@ Decisions:
    variable standing for "whatever other fields are present," so the function works on any record with an
    `x`. PureScript/Elm build extensible records on it. It stays out of scope.)*
 
-   **Cross-module records, precisely (current behavior — done 2026-07-03).** Records now cross a module
-   boundary on the **same rails as sum-type ADTs**. The exporting module publishes its records
-   (`ModuleExports.records`); the importer merges each under its **bare identity name** (`Point`, like a
-   sum type — with a qualified surface alias `Geometry.Point → Point`, and the record's fields appended to
-   the multimap). The consumer can then:
-   - **construct** — `Geometry.Point { x = 1, y = 2 }` (a qualified tag, like `Geometry.Circle`);
-   - **pattern-match** — `case Geometry.Point { x = 0, y }:` (qualified tag, subset fields);
-   - **update** — `{ p with x = 3 }` (base fixes the type, no tag needed);
-   - **field-access** — `p.x` on any imported-typed value, resolved by the multimap.
-
-   An imported record **must be tagged qualified** to construct/pattern (a bare `Point { … }` is rejected,
-   exactly as a bare `Circle` is), so lowering can route it to the exporting class. It lowers to
-   `geometry.Point(...)` / `case geometry.Point(...):` with `import geometry` hoisted — the record class is
-   defined in **exactly one** emitted module, so a value constructed on either side is the same class
-   (`isinstance`/`match`-compatible), and the consumer never redefines it. Record *identity* is the bare
-   name, so — as with imported sum types — an imported record whose name clashes with an existing type is
-   rejected. Parameterized records cross soundly (the closed-scheme transplant instantiates the record's
-   parameters afresh, like an imported ctor scheme). Cross-module records, **externs, and measures** are all
-   **done** (§6.1); only the field-registry (the multimap, decision 2) was the interesting case.
+   **Cross-module records** ride the **same rails as sum-type ADTs** — construct/pattern/update/access an
+   imported record via a qualified tag (`Geometry.Point { x = 1 }`, `case Geometry.Point { x, y }:`), lowered
+   to a single emitted `geometry.Point` class that both sides share (`isinstance`/`match`-compatible); see
+   §6.1 for that mechanism. The only *record-specific* wrinkle is the field registry: an imported record is
+   merged under its bare identity name (with a `Geometry.Point → Point` surface alias) and its fields append
+   to the **use-site multimap** (decision 2), so bare `p.x` field-access on an imported value resolves exactly
+   as for a local record.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
    always names its type: `Point { x = 1, y = 2 }`, or — for an imported record — the **qualified** tag
    `Geometry.Point { x = 1, y = 2 }` (a bare tag resolves only to a *local* record, exactly as a bare
