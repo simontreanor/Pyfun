@@ -1,6 +1,6 @@
 # Pyfun
 
-[![PyPI](https://img.shields.io/pypi/v/pyfun-lang.svg)](https://pypi.org/project/pyfun-lang/) [![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/pyfun.pyfun.svg?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=pyfun.pyfun) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/pyfun-lang.svg)](https://pypi.org/project/pyfun-lang/) [![VS Code Marketplace](https://img.shields.io/badge/VS_Code-Marketplace-007ACC?logo=visualstudiocode&logoColor=white)](https://marketplace.visualstudio.com/items?itemName=pyfun.pyfun) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)
 
 **Functional programming for the language classrooms already teach.**
 
