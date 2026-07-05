@@ -1,5 +1,7 @@
 # Pyfun
 
+[![PyPI](https://img.shields.io/pypi/v/pyfun-lang.svg)](https://pypi.org/project/pyfun-lang/) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://github.com/simontreanor/Pyfun/blob/main/LICENSE)
+
 **Functional programming for the language classrooms already teach.**
 
 Pyfun is an F#-inspired, functional-first language that compiles to readable Python. It brings
@@ -12,6 +14,12 @@ Python; learning FP usually means leaving it for Haskell, OCaml, or F# and adopt
 ecosystem students rarely touch again. Pyfun keeps them in Python, with no new runtime and no new
 package manager, and compiles to Python they can read, so every concept stays visible in the code
 they already understand.
+
+Install it with **Python 3.12+**:
+
+```bash
+pip install pyfun-lang
+```
 
 ```fsharp
 type Shape = Circle float | Rect float float
