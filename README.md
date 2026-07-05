@@ -6,44 +6,55 @@ expression-oriented, fully type-inferred — its compiler is written in Rust and
 `.py` files that call straight into NumPy, pandas, httpx, or anything else on PyPI.
 
 ```fsharp
-type Summary = { n: int, mean: float, stdev: float }
+type Shape = Circle float | Rect float float
 
-extern pure mean:  List float -> float = statistics.mean
-extern pure stdev: List float -> float = statistics.stdev
-
-let summarize xs =
-  Summary { n = List.len xs, mean = mean xs, stdev = stdev xs }
-
-print (summarize [1.0, 2.0, 3.0, 4.0])
+# `area` handles Circle but forgets Rect — so Pyfun refuses to compile it:
+let area s =
+  match s:
+    case Circle r: 3.14159 * r * r
 ```
 
-> No syntax errors that Python would have found only at runtime. No `TypeError` an hour into a
-> job. The Rust compiler checks types, effects, units, and match exhaustiveness **before a single
-> line of Python is emitted** — then hands you code you can read, diff, and ship.
+```console
+$ pyfun check shapes.pyfun
+error: non-exhaustive match: `Rect _ _` is not matched
+ --> 4:3
+  |
+4 |   match s:
+  |   ^^^^^^^^
+```
+
+> Plain Python compiles and runs this — then silently returns `None` the day a `Rect` reaches it,
+> and you debug the `TypeError` an hour downstream. Pyfun's Rust compiler checks types, effects,
+> units, and match exhaustiveness **before a single line of Python is emitted**, then hands you
+> code you can read, diff, and ship.
 
 ---
 
 ## Why Pyfun over plain Python?
 
-Python is the best ecosystem in the world and one of the least safe languages to write large
-programs in. Pyfun keeps the ecosystem and removes the footguns.
+Python is the best ecosystem in the world, and even with `mypy`/`pyright` bolted on, large Python
+programs still fail in ways a compiler could have caught. Pyfun keeps the ecosystem and makes the
+checks mandatory.
 
 | | Plain Python | Pyfun |
 |---|---|---|
-| **Type errors** | found at runtime, in production | found at compile time, by the Rust checker |
+| **Type errors** | `mypy`/`pyright` are optional and unsound — they warn, they don't gate | found at compile time; no Python is emitted until they pass |
 | **`None` handling** | `AttributeError: 'NoneType'…` | `Option a` with exhaustive `match` — the compiler makes you handle `None` |
-| **Missing `case`** | silently falls through | **exhaustiveness error** with a concrete missing-case witness |
+| **Missing `case`** | silently falls through, returns `None` | **exhaustiveness error** with a concrete missing-case witness |
 | **Mutation** | everything is mutable, everywhere | immutable by default; `let mut` + `<-` is opt-in and tracked |
 | **Side effects** | invisible | **inferred and tracked** — `let pure` is a compile-checked promise |
 | **Units / dimensions** | a comment and a prayer | `10<N> / 2<m^2> : float<Pa>`, checked and then erased |
-| **Refactoring** | grep and hope | a real language server: types on hover, rename, go-to-def, find-refs |
 | **Runtime** | CPython | **CPython** — Pyfun *is* Python once compiled |
 
-You don't give up the ecosystem to get any of this. That's the whole point.
+**Why not just `mypy`/`pyright`?** They're a gradual, optional overlay — unsound by design, never
+required, and one `# type: ignore` from silence. They report; they don't gate. Pyfun makes the same
+class of check *mandatory*: it blocks compilation, infers the signatures pyright often needs spelled
+out, and there is no untyped Pyfun to fall back to. You don't give up the ecosystem to get it —
+that's the whole point.
 
 ---
 
-## The killer feature: type-checked Python interop
+## Type-checked Python interop
 
 `extern` imports **any** Python callable or value at a Pyfun type. The dotted target is imported
 for you; the boundary is *effectful by default* (a Python call can do anything), and `pure` opts
@@ -226,13 +237,17 @@ Legend: ✅ yes · ⚠️ partial · ➖ different approach · ❌ no
 | **Self-contained output** (no runtime library) | ✅ | ❌ | ❌ | ❌ |
 | **No .NET / host-runtime toolchain** | ✅ | ❌ | ✅ | ➖ |
 | Python-library interop | ✅ | ✅ | ✅ | ✅ |
+| Maturity / production use | ❌ research | ⚠️ Py beta | ⚠️ | ✅ |
+| Language breadth beyond the core | ⚠️ small | ✅ all of F# | ⚠️ | ✅ all Python |
+| Community, docs, support | ❌ solo | ✅ | ⚠️ | ✅ |
 
-Pyfun does **not** out-feature Fable's F# — Fable ties or beats it on nearly every *language* row,
-because it's the real thing. Pyfun's bet is the bottom of the table: **self-contained, runtime-free
-Python output**, a **single dependency-free compiler** (no .NET), **inferred effects**, and a language
-**designed for Python interop first**. If you want F#'s full power and don't mind adopting .NET or a
-runtime library, Fable is the stronger choice. If you want the emitted Python to be a first-class,
-readable, self-contained artifact you can own — that's Pyfun.
+Read that honestly: Fable ties or beats Pyfun on nearly every *language* row (it's real F#), and
+Pyfun trails on maturity, breadth, and community. Pyfun's bet is the four bold rows Fable can't
+match — **self-contained, runtime-free Python output**, a **single dependency-free compiler** (no
+.NET), **inferred effects**, and a language **designed for Python interop first**. If you want F#'s
+full power and don't mind adopting .NET or a runtime library, Fable is the stronger choice. If you
+want the emitted Python to be a first-class, readable, self-contained artifact you can own — that's
+Pyfun.
 
 ---
 
@@ -307,24 +322,17 @@ The full language design and rationale live in [`DESIGN.md`](DESIGN.md).
 MVP showcase complete and runnable: ADTs, records, tuples, computation expressions (including
 user-defined builders), units of measure, mutability, inferred multi-label effects, general Python
 FFI via `extern`, a module-qualified standard library, string interpolation, active patterns,
-typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](ROADMAP.md) for what's next and
-[`GUIDE.md`](GUIDE.md) for the working notes.
+typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](ROADMAP.md) for what's next.
 
 This is a solo research project under active development. Expect sharp edges; the language surface
 is stabilizing but not frozen.
 
 ---
 
-## License and attribution
+## License
 
-Pyfun is free and open source under the **[Apache License 2.0](LICENSE)**.
-
-You may use, modify, and redistribute it, including commercially. In return, the license requires
-that attribution to the original author travels with the code: if you redistribute Pyfun or build a
-derivative work, you must retain the [`LICENSE`](LICENSE) and reproduce the [`NOTICE`](NOTICE) file,
-which names **Simon Treanor** as the creator and original author of Pyfun.
-
-The **Pyfun** language, its Rust compiler, and this design are the original work of Simon Treanor.
-Please keep the credit.
+Pyfun is free and open source under the **[Apache License 2.0](LICENSE)** — use, modify, and
+redistribute it, including commercially. The accompanying [`NOTICE`](NOTICE) names **Simon Treanor**
+as the original author; keep it with any redistribution or derivative work.
 
 Copyright © 2026 Simon Treanor.
