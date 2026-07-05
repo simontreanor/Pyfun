@@ -239,12 +239,13 @@ Legend: ✅ yes · ⚠️ partial · ➖ different approach · ❌ no
 | **No .NET / host-runtime toolchain** | ✅ | ❌ | ✅ | ➖ |
 | Python-library interop | ✅ | ✅ | ✅ | ✅ |
 | Maturity / production use | ❌ research | ⚠️ Py beta | ⚠️ | ✅ |
-| Language breadth beyond the core | ⚠️ small | ✅ all of F# | ⚠️ | ✅ all Python |
+| Language surface (built-in constructs) | ⚠️ small core | ✅ full F# | ⚠️ | ✅ Python superset |
 | Community, docs, support | ❌ solo | ✅ | ⚠️ | ✅ |
 
 Read that honestly: Fable ties or beats Pyfun on nearly every *language* row (it's real F#), and
-Pyfun trails on maturity, breadth, and community. Pyfun's bet is the four bold rows Fable can't
-match — **self-contained, runtime-free Python output**, a **single dependency-free compiler** (no
+Pyfun trails on maturity, language surface, and community. But a small *language* isn't a small
+*reach* — every tool here calls the full Python ecosystem (the interop row), so Pyfun's minimal core
+buys simplicity, not fewer libraries. Pyfun's bet is the four bold rows Fable can't match — **self-contained, runtime-free Python output**, a **single dependency-free compiler** (no
 .NET), **inferred effects**, and a language **designed for Python interop first**. If you want F#'s
 full power and don't mind adopting .NET or a runtime library, Fable is the stronger choice. If you
 want the emitted Python to be a first-class, readable, self-contained artifact you can own — that's
