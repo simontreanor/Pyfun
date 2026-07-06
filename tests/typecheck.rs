@@ -2877,11 +2877,24 @@ fn nested_active_patterns_are_rejected() {
 }
 
 #[test]
-fn guards_are_rejected_in_an_active_pattern_match() {
-    assert_error_contains(
-        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
-         let f n =\n  match n:\n    case Even if n > 0: 1\n    case _: 0",
-        "guards are not supported",
+fn guards_are_accepted_in_an_active_pattern_match() {
+    // A guard on an active-pattern arm type-checks; a guarded arm never counts
+    // toward exhaustiveness, so the `_` covers the rest.
+    assert!(
+        pyfun::check(
+            "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+             let f n =\n  match n:\n    case Even if n > 0: 1\n    case _: 0"
+        )
+        .is_ok()
+    );
+    // A partial-Option case may bind its payload and guard on it; the trailing
+    // unguarded case keeps the match exhaustive.
+    assert!(
+        pyfun::check(
+            "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+             let f n =\n  match n:\n    case Positive p if p > 100: \"big\"\n    case Positive p: \"small\"\n    case _: \"nonpos\""
+        )
+        .is_ok()
     );
 }
 

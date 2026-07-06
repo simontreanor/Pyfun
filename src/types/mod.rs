@@ -4103,8 +4103,9 @@ impl Infer {
     /// chain honest: (1) an active pattern may appear only as the **whole**
     /// pattern of an arm (no nesting under constructors / or- / as-patterns);
     /// (2) the other arms must be literals, variables, or `_` (each expressible
-    /// as one condition); (3) guards are not supported (a failing guard would
-    /// need fall-through past already-bound names).
+    /// as one condition). Guards **are** supported: a guarded match lowers to a
+    /// fall-through `if`-sequence with early exit (`lower_ap_match_seq`), so a
+    /// failing guard falls through to the next arm.
     fn check_ap_match_shape(&self, arms: &[MatchArm], span: Span) -> Result<(), TypeError> {
         let mut uses_ap = false;
         for arm in arms {
@@ -4137,14 +4138,6 @@ impl Infer {
             return Ok(());
         }
         for arm in arms {
-            if arm.guard.is_some() {
-                return Err(TypeError {
-                    message: "guards are not supported in a `match` that uses an active \
-                              pattern (MVP)"
-                        .to_string(),
-                    span,
-                });
-            }
             match &arm.pattern {
                 Pattern::Ctor { name, .. } if self.decls.active_patterns.contains_key(name) => {}
                 Pattern::Int(_)

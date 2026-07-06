@@ -2470,6 +2470,33 @@ fn distinct_parameterized_applications_hoist_separately() {
 }
 
 #[test]
+fn e2e_guarded_active_pattern_falls_through() {
+    // A failing guard falls through to the next arm (return position).
+    run_and_check(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let describe n =\n  match n:\n    case Even if n > 100: \"big even\"\n    case Even: \"even\"\n    case Odd: \"odd\"\n\
+         let a = describe 200\n\
+         let b = describe 4\n\
+         let c = describe 7",
+        &[("a", "big even"), ("b", "even"), ("c", "odd")],
+    );
+}
+
+#[test]
+fn e2e_guarded_active_pattern_in_value_position() {
+    // The match is a `let` value (then used), so the guarded lowering uses the
+    // `_done` sentinel rather than an early `return`. A partial-Option guard binds.
+    run_and_check(
+        "let (|Positive|_|) n = if n > 0 then Some n else None\n\
+         let classify n =\n  let label =\n    match n:\n      case Positive p if p > 100: \"big\"\n      case Positive p: \"small\"\n      case _: \"nonpos\"\n  String.concat label \"!\"\n\
+         let a = classify 250\n\
+         let b = classify 5\n\
+         let c = classify 0",
+        &[("a", "big!"), ("b", "small!"), ("c", "nonpos!")],
+    );
+}
+
+#[test]
 fn e2e_total_active_pattern() {
     run_and_check(
         "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
