@@ -34,9 +34,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **Persistent-process REPL** (M) — today's REPL re-runs the accumulated definitions on each eval, so pure
   defs feel persistent but top-level effects / `let mut` don't carry across entries. A long-lived Python
   process would make state genuinely persistent.
-- **List lexicographic ordering** (S) — user ADTs / records / tuples and built-in `Option`/`Result` order
-  structurally; `List` could get a lexicographic `<` as a follow-on. `Set`/`Map` stay unordered (no natural
-  order).
 - **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
   `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
   date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.

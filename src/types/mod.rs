@@ -328,16 +328,13 @@ type Env = HashMap<String, Scheme>;
 
 const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 
-/// Built-in container/reserved `Con` types that do **not** derive structural
-/// ordering (`DESIGN.md` §7.1): `Option`/`Result` would need their bespoke prelude
-/// classes extended, `Set`/`Map` have no natural order, and `Exception` is reserved.
-/// Only *user* sum types and records (plus tuples) are orderable — these are excluded
-/// even though some appear in `type_ctors`/`records`. A deferred follow-on.
-// Built-in `Con` types that do NOT derive ordering. `Option`/`Result` DO (their
-// prelude classes carry ordering methods, `None < Some`, `Ok < Error`); `List`
-// lowers to a Python list (a follow-on could order it lexicographically), `Set`/
-// `Map` have no natural order, and `Async`/`Seq`/`Exception` aren't comparable.
-const RESERVED_UNORDERED: [&str; 6] = ["List", "Set", "Map", "Async", "Seq", "Exception"];
+/// Built-in container / reserved `Con` types that do **not** derive structural
+/// ordering (`DESIGN.md` §7.1). `Option`/`Result` are absent on purpose — they order
+/// structurally (`None < Some`, `Ok < Error`), as do user sum types, records, tuples,
+/// and **`List`** (lexicographic, handled explicitly in [`Infer::require_ord_rec`],
+/// matching the Python list it lowers to). `Set`/`Map` have no natural order, and
+/// `Async`/`Seq`/`Exception` aren't comparable.
+const RESERVED_UNORDERED: [&str; 5] = ["Set", "Map", "Async", "Seq", "Exception"];
 
 /// A depth cap on the structural-ordering check, so a pathological *non-regular*
 /// recursive type (whose expansion never repeats a `(name, args)` key) can't loop
@@ -3557,6 +3554,14 @@ impl Infer {
                     self.require_ord_rec(e, span, visiting)?;
                 }
                 Ok(())
+            }
+            // A list is orderable iff its element type is — Python compares lists
+            // lexicographically, so it lowers with no codegen (like the tuple above).
+            // `List (List a)` nesting terminates structurally; a cycle can only pass
+            // through a user type, which the `Con` arm's `visiting` guard catches.
+            Ty::Con(name, args) if name == "List" && args.len() == 1 => {
+                let elem = args[0].clone();
+                self.require_ord_rec(&elem, span, visiting)
             }
             Ty::Con(name, args) => {
                 let name = name.clone();

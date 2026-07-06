@@ -1195,6 +1195,29 @@ fn accepts_ordering_of_tuples() {
 }
 
 #[test]
+fn accepts_ordering_of_lists() {
+    // A list orders lexicographically when its element type does (no codegen —
+    // Python lists already compare element-wise).
+    assert!(pyfun::check("let r = [1, 2] < [1, 3]").is_ok());
+    assert!(pyfun::check("let r = [\"a\"] < [\"b\", \"c\"]").is_ok());
+    // Nested lists, and `List.sort` over a list of lists (its `comparison`
+    // constraint is now satisfied by `List a`).
+    assert!(pyfun::check("let r = [[1], [2]] < [[1], [3]]").is_ok());
+    assert!(pyfun::check("let s = List.sort [[2], [1]]").is_ok());
+    // A list of a comparable user sum type.
+    assert!(
+        pyfun::check("type Color = Red | Green | Blue\nlet r = [Red, Green] < [Red, Blue]").is_ok()
+    );
+}
+
+#[test]
+fn rejects_ordering_of_a_list_with_an_unorderable_element() {
+    // `unit` has no ordering, so `List unit` doesn't either — the constraint
+    // recurses into the element type.
+    assert_error_contains("let bad = [()] < [()]", "does not support comparison");
+}
+
+#[test]
 fn accepts_ordering_of_a_recursive_type() {
     // A recursive type orders structurally; the checker's recursion guard terminates.
     let src = "type Tree = Leaf int | Node Tree Tree\n\
