@@ -352,6 +352,19 @@ mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Py
 `Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
 prelude. Overloading `+` for strings is deferred — `String.concat` is the concatenation path.
 
+**Formatting — the `Format` module (implemented).** The typed alternative to Python's format specifiers
+(the `:.2f`/`!r` mini-language, a non-goal below): checked functions that build the spec themselves, so
+a `.2f`→`.f2` typo is impossible. First cut (single source of truth `types::FORMAT_PRELUDE` +
+`seed_format_prelude`): `Format.fixed n x` (n decimals, no grouping), `Format.thousands n x` (decimals +
+grouping), `Format.percent n x` (ratio → percent), `Format.currency sym n x` (symbol + grouped amount),
+`Format.grouped x` (grouped integer), and `Format.padLeft`/`padRight w fill s` (alignment, replacing
+`:>N`/`:<N`). The numeric formatters are **unit-polymorphic** over `float<'u>`/`int<'u>` — the unit is
+compile-time only and erases at lowering — so `Format.currency "£" 2 19.5<gbp>` checks; padding is
+monomorphic over `string` (`fill` is a length-1 string, per the no-`char` rule). All **pure**; each
+lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a nested f-string assembled
+from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
+Python `datetime` `extern`).
+
 **String interpolation — `f"..."` (implemented).** Python-style interpolated strings: an `f` prefix
 (adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
 holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a
@@ -380,8 +393,8 @@ compiler can't see into it, so `.2f`→`.3f` silently changes output, `.2f`→`.
 and nothing enforces consistency across call sites. That is exactly the stringly-typed footgun Pyfun
 refuses elsewhere (float patterns, unchecked field access, unit mismatches), so blessing a format
 mini-language would contradict "the compiler is the gatekeeper." The FP alternative is **centralized
-formatting functions** — `formatCurrency : float<gbp> -> string`, `formatPercent`, `formatDate` — defined
-once, checked at every call, changed in one place (a future small `Format` module over the `String` ops).
+formatting functions** — the **`Format` module** above (`Format.currency "£" 2 19.5<gbp>`,
+`Format.percent`, `Format.fixed`) — defined once, checked at every call, changed in one place.
 The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded.
 
 **Raw strings — `r"..."` (implemented).** A raw string suppresses escape processing, so backslashes are
@@ -451,7 +464,7 @@ generator the `seq {}` CE already produces.
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The
-built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`/`String`; members paired in
+built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`/`String`/`Format`; members paired in
 `MODULE_PRELUDES`) and **user-declared in-file modules** (below) share one access syntax. The access
 mechanism needed **no parser change**: `Module.member` is parsed as the ordinary field-access node
 `Field { base: Var("List"), name: "map" }`; `types::qualified_name` recognizes an **uppercase** base

@@ -1783,6 +1783,32 @@ fn partial_application_of_an_annotated_extern_is_pure() {
 }
 
 #[test]
+fn format_module_signatures_check() {
+    // Every first-cut member resolves and returns `string`.
+    let src = "let a = Format.fixed 2 3.14159\n\
+               let b = Format.thousands 2 1234567.5\n\
+               let c = Format.percent 1 0.256\n\
+               let d = Format.currency \"$\" 2 1234.5\n\
+               let e = Format.grouped 1234567\n\
+               let f = Format.padLeft 6 \"0\" \"42\"\n\
+               let g = Format.padRight 6 \".\" \"42\"";
+    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::analyze(src).diagnostics);
+}
+
+#[test]
+fn format_currency_is_unit_polymorphic() {
+    // The showcase: a unit-carrying amount (`float<gbp>`) is accepted, since the
+    // numeric formatters generalize the unit var (it erases at lowering).
+    assert!(pyfun::check("measure gbp\nlet s = Format.currency \"£\" 2 19.5<gbp>").is_ok());
+}
+
+#[test]
+fn format_fixed_rejects_a_non_numeric_amount() {
+    // The value argument is `float<'u>`, so a string amount is a type error.
+    assert!(pyfun::check("let bad = Format.fixed 2 \"nope\"").is_err());
+}
+
+#[test]
 fn declared_io_arrow_in_a_type_decl_flows_through_matching() {
     // A ctor field declared `string ->{io} unit` yields an effectful function
     // when matched out — calling it makes the caller impure.
