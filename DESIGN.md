@@ -132,13 +132,14 @@ effects-as-keywords (Rust/Python `async` *coloring*, the very pain we avoid). Th
 mindset: tooling reports the property, the source stays clean. This is why the only surface syntax is
 the opt-in, definition-level `let pure` assertion — never expression-body pollution.
 
-Still open: the exact discharge story (is `io` terminal until a runtime boundary?); whether the
-`async {}` CE should *produce* the `async` label (the label is representable, annotatable, and
-inferrable today — via `->{async}` externs and propagation — but the CE still types purely via its
-`Async a` value form); and effect subsumption (declared effects are exact — see above). Effect
-annotations in declared function types are now **done** (`->{label, …}`), as is surfacing inferred
-effects in hover output — the LSP (§9) shows `->{io}` / `->{io, async}` on arrows when you hover an
-expression or binding name.
+`async {}` now **produces** the `async` label: an async block performs `async` at its lexical site,
+so a function whose body is an async block has an `->{async}` arrow and a `let pure` binding wrapping
+one is rejected (the label was already representable, annotatable via `->{async}` externs, and
+inferrable by propagation; the CE now contributes it too). Still open: the exact discharge story
+(is `io` terminal until a runtime boundary?) and effect subsumption (declared effects are exact — see
+above). Effect annotations in declared function types are **done** (`->{label, …}`), as is surfacing
+inferred effects in hover output — the LSP (§9) shows `->{io}` / `->{io, async}` on arrows when you
+hover an expression or binding name.
 
 **Relationship to computation expressions (§8).** Effects and CEs are distinct but related:
 effects track side effects *in types*; CEs provide *monadic sugar*. They coexist (F# has CEs and

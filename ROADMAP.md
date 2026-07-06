@@ -25,9 +25,12 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   not lazy** recognizer evaluation (every distinct recognizer runs once up front). Lazy evaluation +
   sub-pattern case args + guards all need the same smarter fall-through lowering, so they'd land together.
   `DESIGN.md` §7.2.1.
-- **`async {}` → the `async` effect label** (S–M) — effects are now multi-label and annotatable
-  (`->{async}` on declared arrows), but the `async {}` CE doesn't yet *produce* the `async` label. Related:
-  **effect subsumption** (declared effects are currently exact, not lower bounds).
+- **Effect subsumption** (M) — declared effects are exact (two closed effect sets unify only when
+  equal), so a *pure* function does not satisfy a declared `->{io}`/`->{async}` parameter. Sound
+  subsumption (pure ≤ io) is *directional* — safe only at contravariant argument positions — so it needs
+  **polarity threaded through the unifier** (`unify` currently unifies `Ty::Fun` arg/result/effect
+  symmetrically) plus a directional effect-coerce. Low demand today, and done carelessly it lets effects
+  slip past `let pure`, so it wants its own careful pass. `DESIGN.md` §4.
 - **Separate effect line in LSP hover** (S) — hover shows `->{io}` inline on arrows; a dedicated effect
   line is the remaining display polish. (Doc-comment hover already shipped.)
 - **Persistent-process REPL** (M) — today's REPL re-runs the accumulated definitions on each eval, so pure

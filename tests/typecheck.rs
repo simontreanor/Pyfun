@@ -1687,6 +1687,42 @@ fn annotated_async_extern_carries_the_async_label() {
 }
 
 #[test]
+fn async_ce_block_performs_the_async_effect() {
+    // Building an `async {}` workflow introduces the `async` effect, so a `let pure`
+    // binding whose body is an async block is rejected (`DESIGN.md` §4).
+    assert_error_contains(
+        "let pure go x = async { return x }",
+        "declared `pure` but performs `async`",
+    );
+}
+
+#[test]
+fn async_ce_arrow_displays_the_async_label() {
+    // A function whose body is an async block carries `->{async}` on its arrow.
+    let src = "let go x = async { return x }";
+    let analysis = pyfun::analyze(src);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(
+        analysis.types.iter().any(|t| t.ty.contains("->{async}")),
+        "expected an `->{{async}}` arrow, got {:?}",
+        analysis.types
+    );
+}
+
+#[test]
+fn async_ce_and_print_union_to_io_async() {
+    // A body that prints (io) and builds an async workflow accumulates both labels.
+    assert_error_contains(
+        "let pure go x =\n    print x\n    async { return x }",
+        "declared `pure` but performs `io, async`",
+    );
+}
+
+#[test]
 fn labels_union_across_calls_and_display_in_canonical_order() {
     // A body that prints (io) and fetches (async) accumulates both labels; the
     // `pure` violation renders the set deterministically, `io` first.
