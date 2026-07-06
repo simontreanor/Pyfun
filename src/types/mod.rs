@@ -146,10 +146,9 @@ pub enum EffLabel {
     /// Observable side effects: printing, `<-` mutation, the (non-`pure`) Python
     /// FFI boundary.
     Io,
-    /// Asynchronous execution. Inference-level only for now: representable,
-    /// annotatable (`->{async}`), and displayable; the `async {}` CE still types
-    /// via its `Async a` value form (whether it *produces* this label is an open
-    /// design point — `DESIGN.md` §4).
+    /// Asynchronous execution. Produced both by `->{async}` annotations on
+    /// declared arrows (externs / type decls) and by an `async {}` CE block,
+    /// which performs `async` at its lexical site (`DESIGN.md` §4).
     Async,
 }
 
@@ -4731,7 +4730,16 @@ impl Infer {
         match builder {
             CeBuilder::Seq => self.infer_seq(items, span, env),
             CeBuilder::Result => self.infer_monad(items, span, env, "Result", true),
-            CeBuilder::Async => self.infer_monad(items, span, env, "Async", false),
+            CeBuilder::Async => {
+                let ty = self.infer_monad(items, span, env, "Async", false)?;
+                // An `async {}` block introduces the `async` effect (`DESIGN.md`
+                // §4): it accumulates into the enclosing function's latent effect,
+                // so its innermost arrow carries `->{async}` and a `let pure`
+                // binding wrapping an async block is rejected. Effects erase at
+                // lowering, so this is a pure inference-time attribution.
+                self.perform(&Effect::label(EffLabel::Async));
+                Ok(ty)
+            }
             // A user builder desugars to plain calls on its module's protocol
             // functions; ordinary inference takes it from there.
             CeBuilder::User(name) => {
