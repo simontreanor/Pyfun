@@ -2026,6 +2026,28 @@ fn e2e_async_ce_produces_a_coroutine() {
 }
 
 #[test]
+fn e2e_format_module_formats_numbers_and_strings() {
+    // The `Format` members run and produce the expected strings. Uses an ASCII `$`
+    // (not `£`) so the assertion doesn't depend on the console's output encoding.
+    let Some(python) = python_cmd() else { return };
+    let src = "let a = Format.fixed 2 3.14159\n\
+               let b = Format.thousands 2 1234567.5\n\
+               let c = Format.percent 1 0.256\n\
+               let d = Format.currency \"$\" 2 1234.5\n\
+               let e = Format.grouped 1234567\n\
+               let f = Format.padLeft 6 \"0\" \"42\"\n\
+               let g = Format.padRight 6 \".\" \"42\"";
+    let mut program = pyfun::compile(src).unwrap();
+    program.push_str("\nfor s in [a, b, c, d, e, f, g]:\n    print(s)\n");
+    // Normalize CRLF: Python prints `\r\n` line endings on Windows.
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(
+        out.trim(),
+        "3.14\n1,234,567.50\n25.6%\n$1,234.50\n1,234,567\n000042\n42...."
+    );
+}
+
+#[test]
 fn e2e_user_monad_ce_binds_and_short_circuits() {
     // A user-defined `Maybe` builder desugars to bind/return_ calls and runs.
     run_and_check(

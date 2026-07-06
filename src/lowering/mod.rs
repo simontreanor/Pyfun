@@ -1491,6 +1491,16 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_str_to_int")
             }
+            // Format — checked formatting, the typed alternative to `:.2f` specifiers.
+            // Each lowers to a `format(x, spec)` / `str.rjust`/`ljust` helper; the spec
+            // is built from the checked `int` decimal count, never a user spec string.
+            "Format.fixed" => coll(self, "_pf_fmt_fixed"),
+            "Format.thousands" => coll(self, "_pf_fmt_thousands"),
+            "Format.percent" => coll(self, "_pf_fmt_percent"),
+            "Format.currency" => coll(self, "_pf_fmt_currency"),
+            "Format.grouped" => coll(self, "_pf_fmt_grouped"),
+            "Format.padLeft" => coll(self, "_pf_fmt_pad_left"),
+            "Format.padRight" => coll(self, "_pf_fmt_pad_right"),
             // A user module member (`Geometry.area`). An imported *file* module
             // lowers to Python attribute access on the imported module
             // (`geometry.area`, with `import geometry` hoisted); an in-file
@@ -2906,6 +2916,94 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     binding: None,
                     handler: vec![PyStmt::Return(call0("None_"))],
                 }],
+            ),
+            // Format helpers — the format spec is assembled from the checked `int`
+            // decimal count (a nested f-string), so a `.2f` -> `.f2` typo can't arise.
+            // Format.fixed(n, x) -> format(x, f".{n}f")
+            "_pf_fmt_fixed" => def1(
+                helper,
+                &["n", "x"],
+                call(
+                    "format",
+                    vec![
+                        name("x"),
+                        PyExpr::FStr(vec![
+                            PyFStrPart::Lit(".".to_string()),
+                            PyFStrPart::Expr(name("n")),
+                            PyFStrPart::Lit("f".to_string()),
+                        ]),
+                    ],
+                ),
+            ),
+            // Format.thousands(n, x) -> format(x, f",.{n}f")
+            "_pf_fmt_thousands" => def1(
+                helper,
+                &["n", "x"],
+                call(
+                    "format",
+                    vec![
+                        name("x"),
+                        PyExpr::FStr(vec![
+                            PyFStrPart::Lit(",.".to_string()),
+                            PyFStrPart::Expr(name("n")),
+                            PyFStrPart::Lit("f".to_string()),
+                        ]),
+                    ],
+                ),
+            ),
+            // Format.percent(n, x) -> format(x, f".{n}%")  (Python `%` scales by 100)
+            "_pf_fmt_percent" => def1(
+                helper,
+                &["n", "x"],
+                call(
+                    "format",
+                    vec![
+                        name("x"),
+                        PyExpr::FStr(vec![
+                            PyFStrPart::Lit(".".to_string()),
+                            PyFStrPart::Expr(name("n")),
+                            PyFStrPart::Lit("%".to_string()),
+                        ]),
+                    ],
+                ),
+            ),
+            // Format.currency(sym, n, x) -> sym + format(x, f",.{n}f")
+            "_pf_fmt_currency" => def1(
+                helper,
+                &["sym", "n", "x"],
+                binop(
+                    PyBinOp::Add,
+                    name("sym"),
+                    call(
+                        "format",
+                        vec![
+                            name("x"),
+                            PyExpr::FStr(vec![
+                                PyFStrPart::Lit(",.".to_string()),
+                                PyFStrPart::Expr(name("n")),
+                                PyFStrPart::Lit("f".to_string()),
+                            ]),
+                        ],
+                    ),
+                ),
+            ),
+            // Format.grouped(x) -> format(x, ",")  (thousands-grouped integer)
+            "_pf_fmt_grouped" => def1(
+                helper,
+                &["x"],
+                call("format", vec![name("x"), PyExpr::Str(",".to_string())]),
+            ),
+            // Format.padLeft(w, fill, s) -> s.rjust(w, fill)
+            "_pf_fmt_pad_left" => def1(
+                helper,
+                &["w", "fill", "s"],
+                method(name("s"), "rjust", vec![name("w"), name("fill")]),
+            ),
+            // Format.padRight(w, fill, s) -> s.ljust(w, fill)
+            "_pf_fmt_pad_right" => def1(
+                helper,
+                &["w", "fill", "s"],
+                method(name("s"), "ljust", vec![name("w"), name("fill")]),
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

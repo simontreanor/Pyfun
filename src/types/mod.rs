@@ -471,13 +471,31 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("tryIndexOf", 2),
 ];
 
+/// The `Format` module (`DESIGN.md` §6): checked formatting functions, the typed
+/// alternative to Python's `:.2f` format specifiers (a non-goal — the compiler
+/// can't see into a spec string). The numeric formatters are unit-polymorphic over
+/// `float<'u>`/`int<'u>` (the unit is compile-time only and erases at lowering), so
+/// `Format.currency "£" 2 19.5<gbp>` checks; padding is monomorphic over `string`.
+/// All pure, and each lowers to `format(x, spec)` / `str.rjust`/`ljust`.
+pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
+    ("fixed", 2),
+    ("thousands", 2),
+    ("percent", 2),
+    ("currency", 3),
+    ("grouped", 1),
+    ("padLeft", 3),
+    ("padRight", 3),
+];
+
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
 /// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
 /// no parser change was needed); the checker and lowering recognize a base that is
 /// one of these names and resolve the dotted member against the prelude instead of
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
-pub const MODULES: &[&str] = &["List", "Set", "Map", "Option", "Result", "Seq", "String"];
+pub const MODULES: &[&str] = &[
+    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format",
+];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
 /// truth for seeding qualified schemes, registering arities, and editor completion.
@@ -489,6 +507,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Result", RESULT_PRELUDE),
     ("Seq", SEQ_PRELUDE),
     ("String", STRING_PRELUDE),
+    ("Format", FORMAT_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -1334,6 +1353,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_set_prelude(&mut env);
     seed_map_prelude(&mut env);
     seed_string_prelude(&mut env);
+    seed_format_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
     seed_seq_prelude(&mut env);
@@ -2598,6 +2618,60 @@ fn seed_string_prelude(env: &mut Env) {
     );
     // String.tryIndexOf sub s -> Some i (first occurrence) or None if absent.
     put("tryIndexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
+}
+
+/// Seed the `Format` module ([`FORMAT_PRELUDE`]) — checked formatting functions, the
+/// typed alternative to Python `:.2f` format specifiers. The numeric formatters are
+/// unit-polymorphic over `float<'u>`/`int<'u>` (each scheme quantifies the shared
+/// [`PRELUDE_UVAR`], so uses instantiate a fresh unit var, and the unit erases at
+/// lowering); the string-padding ops are closed over `string`. All pure.
+fn seed_format_prelude(env: &mut Env) {
+    let str_ = || Ty::Str;
+    let int = || Ty::Int(Unit::dimensionless());
+    let float_u = || Ty::Float(Unit::var(PRELUDE_UVAR));
+    let int_u = || Ty::Int(Unit::var(PRELUDE_UVAR));
+    let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    // A unit-polymorphic scheme (generalizes the prelude unit var).
+    let uscheme = |ty: Ty| Scheme {
+        vars: vec![],
+        uvars: vec![PRELUDE_UVAR],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    // A closed scheme (no quantified vars) — the `string`-only padding ops.
+    let cscheme = |ty: Ty| Scheme {
+        vars: vec![],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    // Format.fixed n x -> n decimal places, no grouping (`n` first, curry-friendly).
+    let nx = || pure_fn(int(), pure_fn(float_u(), str_()));
+    env.insert("Format.fixed".to_string(), uscheme(nx()));
+    // Format.thousands n x -> n decimals with thousands grouping.
+    env.insert("Format.thousands".to_string(), uscheme(nx()));
+    // Format.percent n x -> ratio to percent, n decimals (`0.256` -> `"25.6%"`).
+    env.insert("Format.percent".to_string(), uscheme(nx()));
+    // Format.currency sym n x -> symbol + grouped amount (`sym`/`n` first so
+    // `Format.currency "£" 2` partially applies into a reusable GBP formatter).
+    env.insert(
+        "Format.currency".to_string(),
+        uscheme(pure_fn(str_(), pure_fn(int(), pure_fn(float_u(), str_())))),
+    );
+    // Format.grouped x -> thousands-grouped integer.
+    env.insert("Format.grouped".to_string(), uscheme(pure_fn(int_u(), str_())));
+    // Format.padLeft w fill s -> pad on the left to width w (right-justify); `fill`
+    // is a length-1 string (Pyfun has no `char`).
+    let pad = || pure_fn(int(), pure_fn(str_(), pure_fn(str_(), str_())));
+    env.insert("Format.padLeft".to_string(), cscheme(pad()));
+    // Format.padRight w fill s -> pad on the right to width w (left-justify).
+    env.insert("Format.padRight".to_string(), cscheme(pad()));
 }
 
 /// Seed the `Map` module ([`MAP_PRELUDE`]) — pure functions over `Map k v`

@@ -39,9 +39,9 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **List lexicographic ordering** (S) — user ADTs / records / tuples and built-in `Option`/`Result` order
   structurally; `List` could get a lexicographic `<` as a follow-on. `Set`/`Map` stay unordered (no natural
   order).
-- **A `Format` module** (S) — centralized formatting functions (`formatCurrency : float<gbp> -> string`,
-  `formatPercent`, `formatDate`) over the existing `String` ops — the checked, single-source-of-truth
-  alternative to f-string format specifiers (a non-goal below).
+- **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
+  `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
+  date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
