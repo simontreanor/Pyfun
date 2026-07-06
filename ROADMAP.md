@@ -31,8 +31,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   **polarity threaded through the unifier** (`unify` currently unifies `Ty::Fun` arg/result/effect
   symmetrically) plus a directional effect-coerce. Low demand today, and done carelessly it lets effects
   slip past `let pure`, so it wants its own careful pass. `DESIGN.md` §4.
-- **Separate effect line in LSP hover** (S) — hover shows `->{io}` inline on arrows; a dedicated effect
-  line is the remaining display polish. (Doc-comment hover already shipped.)
 - **Persistent-process REPL** (M) — today's REPL re-runs the accumulated definitions on each eval, so pure
   defs feel persistent but top-level effects / `let mut` don't carry across entries. A long-lived Python
   process would make state genuinely persistent.

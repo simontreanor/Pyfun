@@ -1431,7 +1431,10 @@ features, all reusing the existing front end:
   as `textDocument/publishDiagnostics` on open/change (full document sync).
 - **Hover-for-type** — the inferred type of the narrowest expression, binding name,
   **parameter, or pattern variable** under the cursor, **with latent effects** shown
-  on arrows (e.g. `string ->{io} unit`). This is the display half of the type+effect
+  on arrows (e.g. `string ->{io} unit`) plus a **dedicated `Effect:` line** summarizing
+  the concrete effect performed on full application (the union of the type's
+  *result-spine* arrows — `io`/`async`; argument arrows are a callback's effect, not
+  the value's, and pure values omit the line — `types::effect_summary`). This is the display half of the type+effect
   system: Pyfun types are inferred and never written, so hover is the only way to
   *see* one without provoking an error. It works because the checker, in a
   `record`-enabled pass (`types::check_collecting`, surfaced via `analyze`),

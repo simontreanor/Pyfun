@@ -675,11 +675,35 @@ impl Hole {
 /// [`check_collecting`] so an editor (the LSP, `DESIGN.md` §9) can show a type on
 /// hover — Pyfun types are inferred, never written, so this is the only way to see
 /// one without provoking an error. The rendered string includes latent effects
-/// (e.g. `string ->{io} unit`), since `show` prints them on arrows.
+/// (e.g. `string ->{io} unit`), since `show` prints them on arrows; `effect`
+/// additionally summarizes the concrete effect the value performs when fully applied,
+/// for a dedicated hover line ([`effect_summary`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeSpan {
     pub span: Span,
     pub ty: String,
+    /// The concrete latent effect performed on full application (`"io"`,
+    /// `"io, async"`), or `None` when pure / not a function.
+    pub effect: Option<String>,
+}
+
+/// The concrete latent effect a value of type `ty` performs when **fully applied**:
+/// the union of the labels on its *result-spine* arrows. Argument arrows are skipped
+/// on purpose — an arrow in argument position (`(a ->{io} b) -> c`) carries the
+/// *callback's* effect, not this value's. `None` when the union is empty (pure) or
+/// `ty` is not a function. Rendered in canonical order (`io` before `async`).
+fn effect_summary(ty: &Ty) -> Option<String> {
+    let mut acc = Effect::pure();
+    let mut cur = ty;
+    while let Ty::Fun(_, res, eff) = cur {
+        acc = acc.union(eff);
+        cur = res;
+    }
+    if acc.labels.is_empty() {
+        None
+    } else {
+        Some(acc.show_labels())
+    }
 }
 
 impl std::fmt::Display for TypeError {
@@ -1121,9 +1145,13 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     let types = if record {
         inf.recorded
             .iter()
-            .map(|(span, ty)| TypeSpan {
-                span: *span,
-                ty: show(&inf.apply(ty)),
+            .map(|(span, ty)| {
+                let applied = inf.apply(ty);
+                TypeSpan {
+                    span: *span,
+                    ty: show(&applied),
+                    effect: effect_summary(&applied),
+                }
             })
             .collect()
     } else {

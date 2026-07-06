@@ -619,6 +619,13 @@ impl Server {
             (None, None) => Json::Null,
             (Some(t), doc) => {
                 let mut value = format!("```pyfun\n{}\n```", t.ty);
+                // A dedicated effect line when the value performs a concrete effect
+                // on full application — a quicker read than spotting `->{io}` inline,
+                // and it surfaces the effect buried on a curried function's inner
+                // arrow (`DESIGN.md` §4, §9).
+                if let Some(eff) = &t.effect {
+                    value.push_str(&format!("\n\n**Effect:** `{eff}`"));
+                }
                 if let Some((_, doc)) = doc {
                     value.push_str("\n\n---\n\n");
                     value.push_str(&doc_to_markdown(&doc));
@@ -1599,6 +1606,46 @@ mod tests {
         // An undocumented symbol shows no doc separator.
         let value = hover_value(&mut server, uri, 2, 4); // `r`
         assert!(!value.contains("---"), "hover value was {value:?}");
+    }
+
+    #[test]
+    fn hover_shows_a_dedicated_effect_line_for_an_impure_function() {
+        let mut server = Server::default();
+        let uri = "file:///eff.pyfun";
+        // `go` prints, so it performs `io`; hovering its name adds the effect line.
+        let src = "let go u = print u";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let value = hover_value(&mut server, uri, 0, 4); // `go`
+        assert!(
+            value.contains("**Effect:** `io`"),
+            "hover value was {value:?}"
+        );
+    }
+
+    #[test]
+    fn hover_omits_the_effect_line_for_a_pure_function() {
+        let mut server = Server::default();
+        let uri = "file:///pure.pyfun";
+        let src = "let add a b = a + b";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let value = hover_value(&mut server, uri, 0, 4); // `add`
+        assert!(
+            !value.contains("**Effect:**"),
+            "hover value was {value:?}"
+        );
+    }
+
+    #[test]
+    fn hover_effect_line_reports_async_from_an_async_block() {
+        let mut server = Server::default();
+        let uri = "file:///asy.pyfun";
+        let src = "let go x = async { return x }";
+        server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let value = hover_value(&mut server, uri, 0, 4); // `go`
+        assert!(
+            value.contains("**Effect:** `async`"),
+            "hover value was {value:?}"
+        );
     }
 
     #[test]
