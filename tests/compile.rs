@@ -2150,6 +2150,26 @@ fn e2e_comparison_and_structural_equality() {
 }
 
 #[test]
+fn e2e_lists_compare_and_sort_lexicographically() {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program = pyfun::compile(
+        "print ([1, 2] < [1, 3])\n\
+         print ([1, 2, 3] < [1, 2])\n\
+         print ([\"apple\"] < [\"banana\"])\n\
+         print (List.sort [[2], [1], [1, 0]])",
+    )
+    .unwrap();
+    let stdout = run_python(&python, &program);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        ["True", "False", "True", "[[1], [1, 0], [2]]"]
+    );
+}
+
+#[test]
 fn e2e_boolean_logic() {
     let Some(python) = python_cmd() else {
         eprintln!("skipping end-to-end check: no python interpreter found");
