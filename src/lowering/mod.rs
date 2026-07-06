@@ -1696,18 +1696,17 @@ impl Lowerer {
                 tmp
             }
         };
+        // A guard can fail *after* binding names, so a guarded match needs a
+        // fall-through lowering (a forward `if`-sequence with early exit); the
+        // guard-free shape keeps the flat if/elif chain below unchanged.
+        if arms.iter().any(|a| a.guard.is_some()) {
+            return self.lower_ap_match_seq(&subject, arms, locals, assign_to, stmts);
+        }
         // (recognizer, lowered args, temp) per distinct hoisted application.
         let mut hoisted: Vec<(String, Vec<PyExpr>, String)> = Vec::new();
         // (condition, binder assigns, body) per arm; `None` = catch-all.
         let mut chain: Vec<(Option<PyExpr>, Vec<PyStmt>, Vec<PyStmt>)> = Vec::new();
         for arm in arms {
-            if arm.guard.is_some() {
-                // The checker rejects this; defensive.
-                return Err(LowerError {
-                    message: "guards are not supported in a match using active patterns"
-                        .to_string(),
-                });
-            }
             let (cond, binds) =
                 self.ap_arm_test(&arm.pattern, &subject, locals, &mut hoisted, &mut stmts)?;
             let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
@@ -1747,6 +1746,102 @@ impl Lowerer {
             }];
         }
         stmts.extend(else_body);
+        Ok(stmts)
+    }
+
+    /// Lower a `match` that uses active patterns **and has a guard** to a forward
+    /// `if`-sequence with early exit (`DESIGN.md` §7.2). Each arm computes its
+    /// recognizer **lazily** — only when the arm is reached, memoized (via
+    /// `hoisted`) so a repeated application runs at most once — then, on a full
+    /// match (structural test *and* guard), exits: by `return` in return position,
+    /// or by setting a `_done` sentinel that gates the remaining arms in value
+    /// position. A failing guard binds nothing durable and falls through.
+    fn lower_ap_match_seq(
+        &mut self,
+        subject: &str,
+        arms: &[crate::parser::ast::MatchArm],
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+        mut stmts: Vec<PyStmt>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let mut hoisted: Vec<(String, Vec<PyExpr>, String)> = Vec::new();
+        // Value position has no `return`, so a sentinel stops later arms once one
+        // has matched; return position needs none.
+        let done = match assign_to {
+            Some(_) => {
+                let d = self.fresh_tmp();
+                stmts.push(PyStmt::Assign {
+                    target: d.clone(),
+                    value: PyExpr::Bool(false),
+                });
+                Some(d)
+            }
+            None => None,
+        };
+        for arm in arms {
+            // The recognizer application is hoisted into this arm's own block, so
+            // it runs only when the arm is reached (lazy).
+            let mut arm_block: Vec<PyStmt> = Vec::new();
+            let (cond, binds) =
+                self.ap_arm_test(&arm.pattern, subject, locals, &mut hoisted, &mut arm_block)?;
+            let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+            let guard = self.lower_guard(&arm.guard, &arm_locals)?;
+            // The arm body: return it, or assign the temp and mark the sentinel.
+            let body: Vec<PyStmt> = match (assign_to, &done) {
+                (None, _) => self.lower_return(&arm.body, &arm_locals)?,
+                (Some(tmp), Some(d)) => {
+                    let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                    let mut b = with_assign(s, tmp, v);
+                    b.push(PyStmt::Assign {
+                        target: d.clone(),
+                        value: PyExpr::Bool(true),
+                    });
+                    b
+                }
+                (Some(_), None) => unreachable!("value position always allocates a sentinel"),
+            };
+            // binds, then the (optionally guarded) body.
+            let mut inner = binds;
+            match guard {
+                Some(g) => inner.push(PyStmt::If {
+                    test: g,
+                    body,
+                    orelse: vec![],
+                }),
+                None => inner.extend(body),
+            }
+            // Gate by the structural condition (a catch-all arm has none).
+            let unconditional = cond.is_none() && arm.guard.is_none();
+            match cond {
+                Some(c) => arm_block.push(PyStmt::If {
+                    test: c,
+                    body: inner,
+                    orelse: vec![],
+                }),
+                None => arm_block.extend(inner),
+            }
+            // In value position, run the arm only while still unmatched.
+            match &done {
+                Some(d) => stmts.push(PyStmt::If {
+                    test: PyExpr::Not(Box::new(PyExpr::Name(d.clone()))),
+                    body: arm_block,
+                    orelse: vec![],
+                }),
+                None => stmts.extend(arm_block),
+            }
+            // A guard-free catch-all matches unconditionally; in return position it
+            // returns, making any later arm (and a trailing raise) dead code.
+            if unconditional && assign_to.is_none() {
+                return Ok(stmts);
+            }
+        }
+        // Return position without an unconditional catch-all: exhaustiveness is
+        // proven (or a wildcard was demanded), so this is defensive.
+        if assign_to.is_none() {
+            stmts.push(PyStmt::RaiseRuntimeError(
+                "non-exhaustive match".to_string(),
+            ));
+        }
         Ok(stmts)
     }
 

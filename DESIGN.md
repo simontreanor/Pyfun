@@ -1086,11 +1086,12 @@ type's own constructor signature since the scrutinee type is the recognizer's *i
 case is a refutable leaf, and any mixing (two patterns, or literals beside cases) conservatively
 demands a wildcard.
 
-**MVP shape rules** (all checker errors, keeping the lowering honest): an active pattern may appear
-only as the **whole** pattern of an arm (no nesting under constructors / or- / as-patterns); case
-arguments after the parameter expressions must be **binders** (variables or `_`); the other arms of
-such a match must be literals, variables, or `_`; **guards are not supported** in it (a failing
-guard would need fall-through past already-bound names). Lifting these is a fast-follow.
+**Shape rules** (checker errors, keeping the lowering honest): an active pattern may appear only as
+the **whole** pattern of an arm (no nesting under constructors / or- / as-patterns); case arguments
+after the parameter expressions must be **binders** (variables or `_`); the other arms of such a
+match must be literals, variables, or `_`. **Guards are supported** — a guarded match lowers to a
+fall-through `if`-sequence (below), so a failing guard falls through to the next arm. Lifting the
+remaining restrictions (nested case args, structural non-AP arms) is a fast-follow.
 
 **Lowering — an honest if/elif chain.** An active pattern is a *function call*, not a structural
 test, so Python's `match` cannot express it. The declaration lowers to a plain def
@@ -1101,8 +1102,12 @@ hoists each **distinct** recognizer application (function + arguments) to a temp
 run at most once per match — then emits the chain: total/Option cases test `isinstance` and bind
 fields (`s = _pf_t0._0`), bool cases test truthiness (`if _pf_t0:`), literal arms compare (`==`), a
 trailing `_`/variable arm becomes the `else` (else a defensive raise). The emitter collapses
-`else: if` into `elif`, so the output reads as hand-written Python. A match with no active-pattern
-arms keeps the native `match`/`case` lowering unchanged.
+`else: if` into `elif`, so the output reads as hand-written Python. A **guarded** match instead
+lowers to a forward `if`-sequence with early exit (`lower_ap_match_seq`): each arm computes its
+recognizer **lazily** (only when reached, memoized so a repeated application still runs at most
+once), and a full match (structural test *and* guard) returns — or, in value position, sets a
+`_done` sentinel that gates the remaining arms — so a failing guard falls through. A match with no
+active-pattern arms keeps the native `match`/`case` lowering unchanged.
 
 ```python
 def _ap_Even_Odd(n):
