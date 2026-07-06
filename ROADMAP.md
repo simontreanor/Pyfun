@@ -18,12 +18,14 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   opener, so `let x : T` needs a disambiguating rule. **Revisit on a concrete driver:** error localization
   becomes a real pain (better: improve HM *diagnostics* directly), or a deliberate F#-parity call. Cheap
   partial slice if wanted: param annotations `(x: T)` alone (inside brackets `:` is free). `DESIGN.md` §8.3.
-- **Active-pattern fast-follows** (M) — the MVP shipped total / partial-Option / partial-bool /
-  parameterized recognizers, but with shape rules: an AP only as an arm's *whole* pattern (no nesting under
-  ctors / or- / as-patterns), binder-only case arguments (no nested literals like `case Rect 0 b:`), no
-  guards or structural-pattern arms in an AP match, and module-local (no cross-module export). Also **eager,
-  not lazy** recognizer evaluation (every distinct recognizer runs once up front). Lazy evaluation +
-  sub-pattern case args + guards all need the same smarter fall-through lowering, so they'd land together.
+- **Active-pattern fast-follows (residual)** (M) — **guards + lazy recognizer eval shipped** (the
+  fall-through `if`-sequence lowering, `lower_ap_match_seq`). Remaining shape rules: an AP only as an arm's
+  *whole* pattern (no nesting under ctors / or- / as-patterns); **binder-only case arguments** — no nested
+  *destructuring* like `case Small (x, y):` (a nested *literal* `case Small 0:` is already expressible as
+  `case Small s if s == 0:` via guards); structural non-AP arms restricted to literals/vars/`_`; and
+  module-local (cross-module export is a **non-goal** — the hidden type and mono field vars can't cross a
+  module boundary soundly). Nested destructuring case args need the usefulness algorithm to recurse into
+  AP-case field types (soundness-sensitive), for low marginal value now that guards cover literals.
   `DESIGN.md` §7.2.1.
 - **Effect subsumption** (M) — declared effects are exact (two closed effect sets unify only when
   equal), so a *pure* function does not satisfy a declared `->{io}`/`->{async}` parameter. Sound
