@@ -447,8 +447,8 @@ impl Lowerer {
                 // reference it as `mathx.sqrt` (`DESIGN.md` §6.1).
                 Item::Extern(decl) => {
                     if self.project_mode {
-                        if decl.target.len() > 1 {
-                            self.needed_imports.insert(decl.target[0].clone());
+                        if let Some(module) = extern_import(&decl.target) {
+                            self.needed_imports.insert(module);
                         }
                         code.push(PyStmt::Assign {
                             target: decl.name.clone(),
@@ -1244,8 +1244,8 @@ impl Lowerer {
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
             if let Some(target) = self.extern_targets.get(name).cloned() {
-                if target.len() > 1 {
-                    self.needed_imports.insert(target[0].clone());
+                if let Some(module) = extern_import(&target) {
+                    self.needed_imports.insert(module);
                 }
                 return dotted_path(&target);
             }
@@ -2303,6 +2303,33 @@ fn dotted_path(segments: &[String]) -> PyExpr {
         };
     }
     expr
+}
+
+/// The Python module a referenced `extern` target must import, or `None` for a
+/// bare builtin (`str`, a single segment — nothing to import).
+///
+/// The dotted target mixes a module path and an attribute path
+/// (`urllib.request.urlopen` is module `urllib.request` + attr `urlopen`;
+/// `sqlite3.Connection.execute` is module `sqlite3` + attrs `Connection.execute`),
+/// and only the shape tells them apart. We follow PEP 8: packages/modules are
+/// lowercase, classes are capitalized. So the module to import is the **maximal
+/// leading run of lowercase-initial segments** among everything before the final
+/// referenced name — but always at least the top-level package. This imports
+/// `urllib.request` (submodule) yet stops at `sqlite3` before the `Connection`
+/// class. The lone assumption it can't see through is a *lowercase attribute* that
+/// is a value rather than a submodule (`sys.stdout.write`); such a target must be
+/// reached through a small Python-side wrapper instead (`DESIGN.md` §6).
+fn extern_import(target: &[String]) -> Option<String> {
+    if target.len() < 2 {
+        return None;
+    }
+    let prefix = &target[..target.len() - 1];
+    let lower_run = prefix
+        .iter()
+        .take_while(|seg| seg.chars().next().is_some_and(char::is_lowercase))
+        .count()
+        .max(1); // always import at least the top-level package
+    Some(prefix[..lower_run].join("."))
 }
 
 /// The deterministic Python name of an active pattern's recognizer function:

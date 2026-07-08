@@ -70,10 +70,13 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   wrapper library would pull in the deferred package manager).
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
-- **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`): the
-  importer emits only the *first* dotted segment (`import urllib`), so a target in a
-  **submodule** (`urllib.request.urlopen`, `http.client`) fails at runtime — which is why
-  the HTTP entry uses `requests`, not stdlib; a **nullary** Python function can't be called
+- **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`).
+  **Fixed:** submodule imports — a target like `urllib.parse.quote` now emits
+  `import urllib.parse` (the importer takes the maximal lowercase-initial prefix, stopping
+  before a capitalized class). **Remaining:** a **nullary** Python function can't be called
   (`gettempdir ()` passes unit as an argument); a dotted target on a **builtin type**
-  (`bytes.decode`) tries to `import bytes`; and object **properties** (`response.text`,
-  `.status_code`) aren't reachable by the unbound-method trick (only real methods are).
+  (`bytes.decode`) tries to `import bytes`; and **attributes** — object properties
+  (`response.text`, `.status_code`) and *lowercase* attributes/legacy classes
+  (`urllib.response.addinfourl`) — aren't reachable (the unbound-method trick calls only real
+  methods, and the import heuristic reads a lowercase class as a submodule). The HTTP entry
+  therefore still uses `requests` (its response read would hit the attribute limit).

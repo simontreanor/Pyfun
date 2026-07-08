@@ -70,6 +70,29 @@ fn unused_extern_imports_nothing() {
 }
 
 #[test]
+fn extern_in_submodule_imports_the_submodule() {
+    // A target inside a submodule must import the submodule, not just the top-level
+    // package — `import urllib` would leave `urllib.parse` unbound at runtime.
+    let py =
+        pyfun::compile("extern q: string -> string = urllib.parse.quote\nlet r = q \"a b\"").unwrap();
+    assert!(py.contains("import urllib.parse"), "{py}");
+    assert!(py.contains("r = urllib.parse.quote("), "{py}");
+}
+
+#[test]
+fn extern_on_class_method_imports_only_the_module() {
+    // A capitalized segment is a class attribute, not a submodule, so the import
+    // stops before it: `sqlite3.Connection.execute` imports `sqlite3`, not
+    // `sqlite3.Connection` (which is not importable).
+    let py = pyfun::compile(
+        "type C = CH\nextern ex: C -> string -> C = sqlite3.Connection.execute\nlet f c = ex c \"x\"",
+    )
+    .unwrap();
+    assert!(py.contains("import sqlite3\n") || py.contains("import sqlite3\r"), "{py}");
+    assert!(!py.contains("import sqlite3.Connection"), "{py}");
+}
+
+#[test]
 fn list_literal_lowers_to_a_python_list() {
     let py = pyfun::compile("let xs = [1, 2, 3]").unwrap();
     assert!(py.contains("xs = [1, 2, 3]"), "{py}");
