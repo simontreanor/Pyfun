@@ -39,6 +39,17 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
   `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
   date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
+- **Extern FFI reach** (M) — four related boundary gaps surfaced by the `examples/interop/` cookbook
+  (dogfooding real Python libraries). None blocks the showcase — each has a workaround noted in that
+  README — but together they decide how many popular libraries wrap cleanly: (1) the importer emits only
+  the *first* dotted segment (`import urllib`), so a target inside a **submodule**
+  (`urllib.request.urlopen`, `http.client.HTTPConnection`) fails at runtime — emit the full parent
+  package path instead; (2) a **nullary** Python callable can't be invoked — `f : unit -> a` lowers
+  `f ()` to `f(None)`, not `f()`; needs a zero-arg calling convention for a `unit` domain; (3) a dotted
+  target on a **builtin type** (`bytes.decode`) emits `import bytes` and fails — recognize builtins;
+  (4) object **properties/attributes** (`response.text`, `.status_code`) aren't reachable — the
+  unbound-method trick only calls real methods, so an attribute-getter extern form (or `operator.attrgetter`
+  sugar) would round it out. `DESIGN.md` §6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
