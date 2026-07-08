@@ -740,8 +740,13 @@ block structure by a layout rule, not semicolons or braces. At lexing time a lay
 columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
 synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates two statements.
 - A block opens after any **tail-position keyword** at bracket depth 0: a `let … =` body, a `match`
-  arm or lambda `->`, or an `if`'s `then`/`else`. (An inline body crosses no newline, so the priming
-  lapses and no block opens.) The top level is the outermost (implicit) block.
+  arm or lambda `->`, an `if`'s `then`/`else`, or a `type … =` body. (An inline body crosses no
+  newline, so the priming lapses and no block opens.) The top level is the outermost (implicit) block.
+  For a `type`, this is what lets a sum be laid out one constructor per line (the F#/ML habit) —
+  `type T =` then an indented `| A` / `| B` / … — since `|` is a continuation token (below), the arms
+  attach as continuations rather than separate statements; a leading `|` on each line is optional and a
+  record body (`{ … }`) may likewise sit on the indented next line. The printer canonicalizes any of
+  these back to the single-line `type T = A | B | C` form, so it is pure surface sugar (no AST change).
 - A line on the current block's column starts a **new statement** (`Sep`) *unless* it leads with a
   continuation token (an infix operator, `|`, `then`/`else`/`with`/`and`/`or`/`in`) — none of which
   can begin a statement. A line indented *past* the block continues the current statement. So

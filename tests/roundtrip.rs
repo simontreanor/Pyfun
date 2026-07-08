@@ -172,6 +172,12 @@ const PROGRAMS: &[&str] = &[
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
     "type Option a = None | Some a\nlet unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
+    // Offside union layout: one `| Variant` per line after `=` (the F#/ML form).
+    // Prints back to the single-line canonical form, so roundtrip holds.
+    "type Color =\n  | Red\n  | Green\n  | Blue",
+    "type Shape =\n  | Circle float\n  | Rect float float\n  | Square float",
+    // A record body may likewise sit on the next indented line.
+    "type Point =\n  { x: int, y: int }",
     // List literals: empty, simple, nested, and compound elements.
     "let xs = [1, 2, 3]",
     "let e = []",
@@ -295,6 +301,42 @@ const PROGRAMS: &[&str] = &[
     "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f n =\n  match n:\n    case Even: 1\n    case Odd: 2",
     "let f n =\n  match n:\n    case DivisibleBy 3: 1\n    case Prime p: p\n    case _: 0",
 ];
+
+#[test]
+fn multiline_union_parses_like_inline() {
+    // The offside `| Variant`-per-line layout must produce exactly the same AST
+    // as the single-line form — the difference is pure surface whitespace. A
+    // leading `|` on each line is optional, and a record body may also be
+    // indented onto the next line.
+    let cases = [
+        (
+            "type Color =\n  | Red\n  | Green\n  | Blue",
+            "type Color = Red | Green | Blue",
+        ),
+        (
+            "type Color =\n  Red\n  | Green\n  | Blue",
+            "type Color = Red | Green | Blue",
+        ),
+        (
+            "type Shape =\n  | Circle float\n  | Rect float float",
+            "type Shape = Circle float | Rect float float",
+        ),
+        // Same-line `|` and newline `|` may be mixed within the block.
+        (
+            "type M =\n  | A | B\n  | C",
+            "type M = A | B | C",
+        ),
+        (
+            "type Point =\n  { x: int, y: int }",
+            "type Point = { x: int, y: int }",
+        ),
+    ];
+    for (multiline, inline) in cases {
+        let a = parse(multiline).unwrap_or_else(|e| panic!("failed to parse {multiline:?}: {e}"));
+        let b = parse(inline).unwrap();
+        assert_eq!(a, b, "multi-line and inline forms differ for {multiline:?}");
+    }
+}
 
 #[test]
 fn parse_print_parse_is_idempotent() {

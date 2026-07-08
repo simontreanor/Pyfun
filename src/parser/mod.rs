@@ -374,18 +374,36 @@ impl Parser {
             params.push(self.parse_ident("type parameter")?);
         }
         self.expect(&Tok::Eq, "`=`")?;
-        // A `{` after `=` introduces a record body; otherwise it is a sum of
-        // constructors.
+        // The body may sit inline after `=` or on the next indented line — the
+        // lexer opens an offside `Indent` in the latter case (the F#/ML layout).
+        let indented = self.eat(&Tok::Indent);
+        // A `{` introduces a record body; otherwise it is a sum of constructors.
         let kind = if matches!(self.peek(), Tok::LBrace) {
             TypeDeclKind::Record(self.parse_record_decl_fields()?)
         } else {
+            // A sum, either inline (`= A | B | C`) or one `| Variant` per line.
+            // In the indented form lines are separated by `Sep`; a leading `|`
+            // on each line is optional.
             self.eat(&Tok::Bar); // optional leading bar
             let mut variants = vec![self.parse_variant()?];
-            while self.eat(&Tok::Bar) {
-                variants.push(self.parse_variant()?);
+            loop {
+                if self.eat(&Tok::Bar) {
+                    variants.push(self.parse_variant()?);
+                } else if indented && self.eat(&Tok::Sep) {
+                    if matches!(self.peek(), Tok::Dedent) {
+                        break;
+                    }
+                    self.eat(&Tok::Bar); // optional leading bar on the next line
+                    variants.push(self.parse_variant()?);
+                } else {
+                    break;
+                }
             }
             TypeDeclKind::Sum(variants)
         };
+        if indented {
+            self.expect(&Tok::Dedent, "end of the type declaration")?;
+        }
         let span = crate::parser::ast::NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(TypeDecl {
             doc: None,
