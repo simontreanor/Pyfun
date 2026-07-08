@@ -8,10 +8,11 @@
 #   1. Opaque handle types. A Connection/Cursor is a Python object Pyfun never looks
 #      inside, so we model each as a nullary phantom ADT (`type Conn = ConnH`) — only
 #      ever passed along, never constructed or matched.
-#   2. Instance-method externs (`= .method`). A method `conn.execute(sql)` is an
-#      extern whose target starts with a dot: the first argument is the receiver.
-#      So `execute conn sql` lowers to `conn.execute(sql)` — no need to name (or
-#      import) the `sqlite3.Connection` class, and inherited methods work too.
+#   2. Instance-method externs (`= .method()`). A method `conn.execute(sql)` is an
+#      extern whose target starts with a dot and ends with `()` (the "call" marker):
+#      the first argument is the receiver. So `execute conn sql` lowers to
+#      `conn.execute(sql)` — no need to name (or import) the `sqlite3.Connection`
+#      class, and inherited methods work too.
 
 type Conn = ConnH
 type Cursor = CursorH
@@ -19,8 +20,8 @@ type Cursor = CursorH
 # `connect` is a plain dotted extern (a module function); `execute`/`fetchall` are
 # instance methods. All are `io` by the boundary default. `sqlite3` auto-imports.
 extern connect: string -> Conn = sqlite3.connect
-extern execute: Conn -> string -> Cursor = .execute
-extern fetchall: Cursor -> List a = .fetchall
+extern execute: Conn -> string -> Cursor = .execute()
+extern fetchall: Cursor -> List a = .fetchall()
 
 # Set up an in-memory database. `let _ = e` discards the cursor a DDL/DML call
 # returns; the effect still happens.
@@ -45,4 +46,5 @@ print total                              # 6
 
 # The remaining frontier is ergonomic: heterogeneous rows come back as mixed-type
 # tuples the checker trusts but can't see into (the same untyped-boundary caveat as
-# JSON), and reading a plain object *property* isn't expressible yet (only methods).
+# JSON). Reading a plain object *property* uses the sibling `= .attr` form (no `()`) —
+# see http_fetch.pyfun.

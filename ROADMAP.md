@@ -44,14 +44,12 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   README — but together they decide how many popular libraries wrap cleanly. **Submodule imports are
   now fixed** (`extern_import` emits the maximal lowercase-initial prefix, so `urllib.request.urlopen`
   imports `urllib.request` while `sqlite3.Connection.execute` stops at `sqlite3` — `DESIGN.md` §6).
-  **Instance methods now fixed too** — the `= .method` extern form calls the method on its first
-  argument (`resp.read()`), reaching inherited/delegated methods and legacy lowercase classes
-  (`urllib.response.addinfourl.read`) without naming or importing the class. Remaining: (1) a **nullary**
-  Python callable can't be invoked — `f : unit -> a` lowers `f ()` to `f(None)`, not `f()`; needs a
-  zero-arg calling convention for a `unit` domain; (2) a dotted target on a **builtin type**
-  (`bytes.decode`) emits `import bytes` and fails — recognize builtins; (3) reading a plain object
-  **property** (`response.text`, `.status_code`) — the no-call sibling of the instance-method form
-  (`= .text` reading `resp.text`, or `operator.attrgetter` sugar). `DESIGN.md` §6.
+  **Instance access now fixed too** — the `= .method()` extern form calls a method on its first argument
+  (`resp.read()`) and `= .attr` reads a property (`url.scheme`), reaching inherited/delegated members and
+  legacy lowercase classes (`urllib.response.addinfourl.read`) without naming or importing the class.
+  Remaining: (1) a **nullary** Python callable can't be invoked — `f : unit -> a` lowers `f ()` to
+  `f(None)`, not `f()`; needs a zero-arg calling convention for a `unit` domain; (2) a dotted target on a
+  **builtin type** (`bytes.decode`) emits `import bytes` and fails — recognize builtins. `DESIGN.md` §6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 

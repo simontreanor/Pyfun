@@ -128,13 +128,24 @@ pub struct ExternDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub target: Vec<String>,
-    /// Instance-method form (`= .read`): `target` is a method/attribute path called
-    /// on the first argument as the receiver — `read resp` lowers to `resp.read()`,
-    /// `execute conn sql` to `conn.execute(sql)`. Sidesteps naming (and importing)
-    /// the receiver's class, and reaches inherited/delegated methods the unbound
-    /// `Class.method` form cannot (`DESIGN.md` §6).
-    pub receiver: bool,
+    /// Instance-access form for a target beginning with `.` (`DESIGN.md` §6). The
+    /// `target` is a member path applied to the first argument (the receiver);
+    /// `None` is an ordinary module-qualified target. Sidesteps naming (and
+    /// importing) the receiver's class, and reaches inherited/delegated members the
+    /// unbound `Class.member` form cannot.
+    pub receiver: Option<Receiver>,
     pub span: NodeSpan,
+}
+
+/// How an instance-access `extern` (`= .member`) uses its first argument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Receiver {
+    /// `= .read()` — call the method on the receiver: `read resp` → `resp.read()`,
+    /// `execute conn sql` → `conn.execute(sql)`.
+    Method,
+    /// `= .text` — read the attribute/property of the receiver (no call):
+    /// `text resp` → `resp.text`.
+    Property,
 }
 
 /// A surface unit expression, e.g. `<m/s^2>`, stored as `(measure, exponent)`

@@ -251,18 +251,19 @@ erased to nothing themselves; only their reference sites and imports survive low
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
 `extern` type syntax can't yet express.
 
-**Instance-method externs (`= .method`).** A leading dot marks the target as a *method path called
-on the first argument* — the receiver — rather than a module-qualified free function. `extern read :
-Response -> string = .read` lowers `read resp` to `resp.read()`, and `extern execute : Conn -> string
--> Cursor = .execute` lowers `execute conn sql` to `conn.execute(sql)`; currying falls out of Python's
-own binding, so the receiver-only partial `execute conn` is the bound method `conn.execute` (no
-`functools.partial`), and a bare reference is a receiver-taking lambda. This is the idiomatic way to
-wrap object-oriented libraries: it never names the receiver's *class*, so it needs no class-module
-import and no casing guess, and — unlike the alternative of an unbound `Class.method` target — it
-reaches methods that are **inherited or delegated** rather than defined directly on the named class
-(e.g. `urllib.response.addinfourl.read`, which exists only on an instance). Reading a plain **property**
-(`response.text`) is the remaining sibling case, still on the backlog. Both target forms coexist; the
-dotted form stays right for genuine module functions and staticmethods.
+**Instance-access externs (`= .member`).** A leading dot marks the target as a *member path applied to
+the first argument* — the receiver — rather than a module-qualified free function. Trailing `()` is the
+"call" marker that separates the two forms: a **method** `= .read()` lowers `read resp` to `resp.read()`
+and `extern execute : Conn -> string -> Cursor = .execute()` lowers `execute conn sql` to
+`conn.execute(sql)`; a **property** `= .scheme` (no `()`) lowers `scheme url` to `url.scheme` — an
+attribute read, no call. For a method, currying falls out of Python's own binding, so the receiver-only
+partial `execute conn` is the bound method `conn.execute` (no `functools.partial`); a bare reference to
+either form is a receiver-taking lambda (`lambda r: r.read()` / `lambda r: r.scheme`). This is the
+idiomatic way to wrap object-oriented libraries: it never names the receiver's *class*, so it needs no
+class-module import and no casing guess, and — unlike the alternative of an unbound `Class.method`
+target — it reaches members that are **inherited or delegated** rather than defined directly on the
+named class (e.g. `urllib.response.addinfourl.read`, which exists only on an instance). All three target
+forms coexist; the plain dotted form stays right for genuine module functions and staticmethods.
 
 **Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and

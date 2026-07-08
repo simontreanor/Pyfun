@@ -81,9 +81,9 @@ fn extern_in_submodule_imports_the_submodule() {
 
 #[test]
 fn instance_method_extern_lowers_to_a_method_call() {
-    // `= .read` calls the method on the first argument (the receiver).
+    // `= .read()` calls the method on the first argument (the receiver).
     let py = pyfun::compile(
-        "type R = RH\nextern readBody: R -> string = .read\nlet f r = readBody r",
+        "type R = RH\nextern readBody: R -> string = .read()\nlet f r = readBody r",
     )
     .unwrap();
     assert!(py.contains("return r.read()"), "{py}");
@@ -92,7 +92,7 @@ fn instance_method_extern_lowers_to_a_method_call() {
 #[test]
 fn instance_method_extern_passes_remaining_args() {
     let py = pyfun::compile(
-        "type C = CH\nextern ex: C -> string -> C = .execute\nlet f c = ex c \"select 1\"",
+        "type C = CH\nextern ex: C -> string -> C = .execute()\nlet f c = ex c \"select 1\"",
     )
     .unwrap();
     assert!(py.contains("c.execute(\"select 1\")"), "{py}");
@@ -103,11 +103,22 @@ fn instance_method_receiver_only_partial_is_the_bound_method() {
     // Applying just the receiver yields the Python bound method — the curried
     // partial with no `functools.partial` wrapper.
     let py = pyfun::compile(
-        "type C = CH\nextern ex: C -> string -> C = .execute\nlet g c = ex c",
+        "type C = CH\nextern ex: C -> string -> C = .execute()\nlet g c = ex c",
     )
     .unwrap();
     assert!(py.contains("return c.execute"), "{py}");
     assert!(!py.contains("functools.partial"), "{py}");
+}
+
+#[test]
+fn instance_property_extern_reads_the_attribute() {
+    // `= .scheme` (no `()`) reads the attribute — no call.
+    let py = pyfun::compile(
+        "type U = UH\nextern scheme: U -> string = .scheme\nlet f u = scheme u",
+    )
+    .unwrap();
+    assert!(py.contains("return u.scheme"), "{py}");
+    assert!(!py.contains("u.scheme("), "{py}");
 }
 
 #[test]

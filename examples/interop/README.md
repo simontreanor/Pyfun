@@ -44,11 +44,12 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **Homogeneous decode is free.** A JSON array → `List a`, a flat object → `Map string a`.
   Both lower 1:1 to the Python list/dict they already are.
 - **Stateful/OOP libraries.** Model each opaque object as a nullary phantom ADT
-  (`type Conn = ConnH`) and call methods with an **instance-method extern**: a target
-  starting with a dot (`extern execute: Conn -> string -> Cursor = .execute`) treats the
-  first argument as the receiver, so `execute conn sql` lowers to `conn.execute(sql)`. No
-  class is named or imported, inherited/delegated methods work, and `execute conn` is the
-  bound method `conn.execute` (currying for free).
+  (`type Conn = ConnH`) and reach its members with an **instance-access extern** — a target
+  starting with a dot, treating the first argument as the receiver. `= .execute()` (trailing
+  `()` = call) is a method, so `execute conn sql` lowers to `conn.execute(sql)`; `= .scheme`
+  (no `()`) is a property read, so `scheme url` lowers to `url.scheme`. No class is named or
+  imported, inherited/delegated members work, and `execute conn` is the bound method
+  `conn.execute` (currying for free).
 - **Heterogeneous decode into your ADTs.** Don't cast the whole object — pull each field
   (`operator.getitem`), coerce it (`int`/`str`), wrap each step in `try`, and compose on
   the `result {}` railway so the first bad field short-circuits to `Error`. See
@@ -72,10 +73,9 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   or response body needs a named `type`. (Tracked separately.)
 - **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`).
   **Fixed:** submodule imports — `urllib.parse.quote` now emits `import urllib.parse` (maximal
-  lowercase-initial prefix, stopping before a capitalized class); and instance methods —
-  `= .method` calls on the receiver, reaching inherited/delegated methods and legacy lowercase
-  classes (`urllib.response.addinfourl.read`), which is why the HTTP entry now runs on stdlib
-  `urllib` offline. **Remaining:** a **nullary** Python function can't be called
-  (`gettempdir ()` passes unit as an argument); a dotted target on a **builtin type**
-  (`bytes.decode`) tries to `import bytes`; and reading a plain object **property**
-  (`response.text`, `.status_code`) — the no-call sibling of the instance-method form.
+  lowercase-initial prefix, stopping before a capitalized class); and instance access —
+  `= .method()` calls on the receiver and `= .attr` reads a property, reaching inherited/delegated
+  members and legacy lowercase classes (`urllib.response.addinfourl.read`), which is why the HTTP
+  entry now runs on stdlib `urllib` offline. **Remaining:** a **nullary** Python function can't be
+  called (`gettempdir ()` passes unit as an argument); and a dotted target on a **builtin type**
+  (`bytes.decode`) tries to `import bytes`.
