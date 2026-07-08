@@ -39,6 +39,13 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
   `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
   date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
+- **Multi-line union layout** (S) — a sum type must be written on one logical line
+  (`type T = A | B | C`; a leading `|` is fine inline: `type T = | A | B | C`). The F#/ML
+  bar-per-line layout — `type T =` then indented `| A` / `| B` on their own lines — doesn't parse
+  (`expected constructor name, found start of an indented block`): the offside lexer opens an indented
+  block after `=`, and `parse_type_decl` reads the constructor list only from the declaration line.
+  Purely cosmetic (no type-system effect) — wants the union parser to also consume newline-separated
+  `|` arms under the `=`, the layout most ML users reach for first.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
