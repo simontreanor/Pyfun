@@ -6,9 +6,10 @@
 # NOTE: unlike the other cookbook entries this one is CHECK-VALID rather than
 # offline-runnable — it calls the third-party `requests`/`httpx` against the network.
 # The point it showcases is a *compile-time* guarantee anyway: Pyfun infers effects
-# and won't let you lie about them. (Why not a stdlib HTTP client? `urllib.request` /
-# `http.client` live in submodules the extern importer doesn't yet load — see the
-# cookbook README's limits.)
+# and won't let you lie about them. (Why not a stdlib HTTP client now that submodule
+# imports work? `urllib.request.urlopen` imports fine, but *reading* the response is a
+# method on the legacy lowercase class `urllib.response.addinfourl`, which the import
+# heuristic and unbound-method trick don't yet reach — see the cookbook README's limits.)
 
 type Response = RespH
 

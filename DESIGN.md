@@ -226,8 +226,16 @@ extern pure cbrt : float -> float = math.cbrt   # dotted path; module auto-impor
 Pyfun type. Type variables are bare lowercase identifiers (as in `type` declarations) and are
 generalized, so `show : a -> string` is polymorphic. The optional `= a.b.c` clause is the dotted
 Python target; omitted, it defaults to the Pyfun name (the prelude convention). A reference lowers
-directly to its target (`math.cbrt`), and any module prefix of a *used* extern is emitted as an
-`import` (deduplicated, sorted). Arity is the number of leading arrows, so partial application of an
+directly to its target (`math.cbrt`), and the module prefix of a *used* extern is emitted as an
+`import` (deduplicated, sorted). The dotted target mixes a module path with an attribute path, and
+only its shape separates them, so the emitted import follows PEP 8 (packages lowercase, classes
+capitalized): it is the **maximal leading run of lowercase-initial segments** before the final
+referenced name — always at least the top-level package. Thus `urllib.request.urlopen` imports the
+submodule `urllib.request`, while `sqlite3.Connection.execute` imports only `sqlite3` (`Connection`
+is a class attribute, not a submodule). The one shape this can't see through is a *lowercase*
+attribute that is a value rather than a submodule (`sys.stdout.write`, or the legacy lowercase class
+`urllib.response.addinfourl`); such a target is reached through a small Python-side wrapper instead
+(the remaining "Extern FFI reach" backlog). Arity is the number of leading arrows, so partial application of an
 extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still
 type-checked at the boundary (`cbrt "x"` is rejected) — but only against the *declared* type; Pyfun
 trusts the annotation, which is where the §4 "effectful/unsafe at the boundary" relaxation bites.
