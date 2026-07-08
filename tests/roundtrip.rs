@@ -227,6 +227,15 @@ const PROGRAMS: &[&str] = &[
     "extern show: a -> string = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
+    // A dotted target inside a submodule (imported as the submodule at lowering).
+    "extern quote: string -> string = urllib.parse.quote",
+    // Instance-method externs (`= .method`): the target is called on the first
+    // argument. Includes the case where the method name equals the Pyfun name,
+    // which must still print the leading `.` to round-trip.
+    "extern readBody: a -> string = .read",
+    "extern read: a -> string = .read",
+    "extern execute: a -> string -> b = .execute",
+    "extern jsonBody: a -> b = .json",
     // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
     // as written, so single, multi, and argument-position annotations roundtrip.
     "extern fetch: string ->{async} string = httpx.get",

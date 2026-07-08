@@ -342,15 +342,18 @@ impl Parser {
         let name = self.parse_ident("extern name")?;
         self.expect(&Tok::Colon, "`:`")?;
         let ty = self.parse_type()?;
-        // Optional `= a.b.c` Python target; defaults to the Pyfun name.
-        let target = if self.eat(&Tok::Eq) {
+        // Optional `= a.b.c` Python target; defaults to the Pyfun name. A leading
+        // `.` (`= .read`) marks the instance-method form: the target is a method
+        // path called on the first argument (the receiver).
+        let (target, receiver) = if self.eat(&Tok::Eq) {
+            let receiver = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
             while self.eat(&Tok::Dot) {
                 segs.push(self.parse_ident("Python attribute")?);
             }
-            segs
+            (segs, receiver)
         } else {
-            vec![name.clone()]
+            (vec![name.clone()], false)
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
@@ -359,6 +362,7 @@ impl Parser {
             name,
             ty,
             target,
+            receiver,
             span,
         })
     }

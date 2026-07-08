@@ -159,7 +159,10 @@ fn print_extern(decl: &ExternDecl) -> String {
     s.push_str(&decl.name);
     s.push_str(": ");
     s.push_str(&print_type(&decl.ty));
-    if decl.target != [decl.name.clone()] {
+    if decl.receiver {
+        s.push_str(" = .");
+        s.push_str(&decl.target.join("."));
+    } else if decl.target != [decl.name.clone()] {
         s.push_str(" = ");
         s.push_str(&decl.target.join("."));
     }

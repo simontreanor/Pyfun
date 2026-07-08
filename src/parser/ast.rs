@@ -128,6 +128,12 @@ pub struct ExternDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub target: Vec<String>,
+    /// Instance-method form (`= .read`): `target` is a method/attribute path called
+    /// on the first argument as the receiver — `read resp` lowers to `resp.read()`,
+    /// `execute conn sql` to `conn.execute(sql)`. Sidesteps naming (and importing)
+    /// the receiver's class, and reaches inherited/delegated methods the unbound
+    /// `Class.method` form cannot (`DESIGN.md` §6).
+    pub receiver: bool,
     pub span: NodeSpan,
 }
 
