@@ -44,14 +44,14 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   README — but together they decide how many popular libraries wrap cleanly. **Submodule imports are
   now fixed** (`extern_import` emits the maximal lowercase-initial prefix, so `urllib.request.urlopen`
   imports `urllib.request` while `sqlite3.Connection.execute` stops at `sqlite3` — `DESIGN.md` §6).
-  Remaining: (1) a **nullary** Python callable can't be invoked — `f : unit -> a` lowers `f ()` to
-  `f(None)`, not `f()`; needs a zero-arg calling convention for a `unit` domain; (2) a dotted target on
-  a **builtin type** (`bytes.decode`) emits `import bytes` and fails — recognize builtins; (3) object
-  **properties/attributes** — and the mirror of the import heuristic, a *lowercase* attribute that is a
-  value or legacy lowercase class (`sys.stdout.write`, `urllib.response.addinfourl`) — aren't reachable:
-  the unbound-method trick only calls real methods, and the import heuristic mis-reads a lowercase class
-  as a submodule. An attribute-getter extern form (or `operator.attrgetter` sugar) plus an explicit
-  module/attribute boundary marker in the target syntax would round these out. `DESIGN.md` §6.
+  **Instance methods now fixed too** — the `= .method` extern form calls the method on its first
+  argument (`resp.read()`), reaching inherited/delegated methods and legacy lowercase classes
+  (`urllib.response.addinfourl.read`) without naming or importing the class. Remaining: (1) a **nullary**
+  Python callable can't be invoked — `f : unit -> a` lowers `f ()` to `f(None)`, not `f()`; needs a
+  zero-arg calling convention for a `unit` domain; (2) a dotted target on a **builtin type**
+  (`bytes.decode`) emits `import bytes` and fails — recognize builtins; (3) reading a plain object
+  **property** (`response.text`, `.status_code`) — the no-call sibling of the instance-method form
+  (`= .text` reading `resp.text`, or `operator.attrgetter` sugar). `DESIGN.md` §6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 

@@ -3,23 +3,24 @@
 #   pyfun run examples/interop/sqlite_query.pyfun
 #
 # `sqlite3` is stdlib (no install) and OOP: you call methods on a Connection/Cursor
-# object. Pyfun `extern`s are free, curried functions with a dotted Python target —
-# not methods — so two patterns bridge the gap:
+# object. Two Pyfun patterns bridge that:
 #
 #   1. Opaque handle types. A Connection/Cursor is a Python object Pyfun never looks
-#      inside, so we model each as a nullary phantom ADT (`type Conn = ConnH`). It is
-#      only ever passed along; its lone constructor is never built or matched.
-#   2. Unbound-method externs. A method `conn.execute(sql)` is the unbound function
-#      `sqlite3.Connection.execute(conn, sql)` — a plain dotted target whose first
-#      parameter is the receiver. So `execute conn sql` calls the method, curried.
+#      inside, so we model each as a nullary phantom ADT (`type Conn = ConnH`) — only
+#      ever passed along, never constructed or matched.
+#   2. Instance-method externs (`= .method`). A method `conn.execute(sql)` is an
+#      extern whose target starts with a dot: the first argument is the receiver.
+#      So `execute conn sql` lowers to `conn.execute(sql)` — no need to name (or
+#      import) the `sqlite3.Connection` class, and inherited methods work too.
 
 type Conn = ConnH
 type Cursor = CursorH
 
-# Each extern is impure (io) — the boundary default. `sqlite3` auto-imports.
+# `connect` is a plain dotted extern (a module function); `execute`/`fetchall` are
+# instance methods. All are `io` by the boundary default. `sqlite3` auto-imports.
 extern connect: string -> Conn = sqlite3.connect
-extern execute: Conn -> string -> Cursor = sqlite3.Connection.execute
-extern fetchall: Cursor -> List a = sqlite3.Cursor.fetchall
+extern execute: Conn -> string -> Cursor = .execute
+extern fetchall: Cursor -> List a = .fetchall
 
 # Set up an in-memory database. `let _ = e` discards the cursor a DDL/DML call
 # returns; the effect still happens.
@@ -34,13 +35,14 @@ let decodeRow r =
   match r:
     case (x, sq): x
 
+# `execute db` on its own is the Python bound method `db.execute` — the curried
+# partial, for free. Here we apply it fully.
 let rows = fetchall (execute db "select x, x * x from t order by x")
 let total = List.fold (fun acc r -> acc + decodeRow r) 0 rows
 
 print rows                               # [(1, 1), (2, 4), (3, 9)]
 print total                              # 6
 
-# The frontier here is ergonomic, not fundamental: the phantom handles and unbound
-# `Type.method` targets are boilerplate a future "typed façade" could hide, and
-# heterogeneous rows come back as mixed-type tuples the checker trusts but can't
-# see into (the same untyped-boundary caveat as JSON).
+# The remaining frontier is ergonomic: heterogeneous rows come back as mixed-type
+# tuples the checker trusts but can't see into (the same untyped-boundary caveat as
+# JSON), and reading a plain object *property* isn't expressible yet (only methods).

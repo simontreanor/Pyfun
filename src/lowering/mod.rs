@@ -170,6 +170,9 @@ struct Lowerer {
     /// `extern` name → its dotted Python target path (e.g. `["math", "sqrt"]`).
     /// A reference to one lowers to the target rather than the Pyfun name.
     extern_targets: std::collections::HashMap<String, Vec<String>>,
+    /// Names of instance-method externs (`= .read`): `target` is a method path
+    /// invoked on the first argument — `read resp` lowers to `resp.read()`.
+    receiver_externs: HashSet<String>,
     /// Python modules an *used* extern needs imported (the first segment of a
     /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
     needed_imports: BTreeSet<String>,
@@ -251,6 +254,7 @@ impl Lowerer {
         field_to_record.insert("errorKind".to_string(), "Exception".to_string());
         field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
+        let mut receiver_externs = HashSet::new();
         let mut user_defs = HashSet::new();
         let mut ap_uses = std::collections::HashMap::new();
         for item in &module.items {
@@ -260,6 +264,9 @@ impl Lowerer {
                     // prelude: it is the number of leading arrows in the type.
                     arities.insert(decl.name.clone(), arrow_arity(&decl.ty));
                     extern_targets.insert(decl.name.clone(), decl.target.clone());
+                    if decl.receiver {
+                        receiver_externs.insert(decl.name.clone());
+                    }
                 }
                 Item::Let(binding) => {
                     user_defs.insert(binding.name.clone());
@@ -368,6 +375,7 @@ impl Lowerer {
             record_fields,
             field_to_record,
             extern_targets,
+            receiver_externs,
             needed_imports: BTreeSet::new(),
             user_defs,
             needed_list_helpers: BTreeSet::new(),
@@ -447,12 +455,19 @@ impl Lowerer {
                 // reference it as `mathx.sqrt` (`DESIGN.md` §6.1).
                 Item::Extern(decl) => {
                     if self.project_mode {
-                        if let Some(module) = extern_import(&decl.target) {
-                            self.needed_imports.insert(module);
-                        }
+                        let value = if decl.receiver {
+                            // An instance-method extern binds to a receiver-taking
+                            // lambda so dependent modules can reference it.
+                            receiver_lambda(&decl.target, arrow_arity(&decl.ty))
+                        } else {
+                            if let Some(module) = extern_import(&decl.target) {
+                                self.needed_imports.insert(module);
+                            }
+                            dotted_path(&decl.target)
+                        };
                         code.push(PyStmt::Assign {
                             target: decl.name.clone(),
-                            value: dotted_path(&decl.target),
+                            value,
                         });
                     }
                 }
@@ -1178,6 +1193,46 @@ impl Lowerer {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
 
+        // An instance-method extern (`= .read`) applies as `recv.method(args)`: the
+        // first argument is the receiver, the rest are the method's arguments.
+        if let ExprKind::Var(name) = &head.kind
+            && !locals.contains(name)
+            && self.receiver_externs.contains(name)
+        {
+            let method = self.extern_targets[name].clone();
+            let arity = self.arities.get(name).copied();
+            let mut stmts = Vec::new();
+            let mut arg_vals = Vec::with_capacity(args_ast.len());
+            for arg in &args_ast {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                arg_vals.push(arg_val);
+            }
+            // A bare (unapplied) reference becomes a receiver-taking lambda.
+            if arg_vals.is_empty() {
+                return Ok((stmts, receiver_lambda(&method, arity.unwrap_or(1))));
+            }
+            let recv = arg_vals.remove(0);
+            let head_expr = attr_path(recv, &method);
+            // The method itself takes one fewer argument than the extern's arity.
+            let method_arity = arity.map(|k| k.saturating_sub(1));
+            let call = if arg_vals.is_empty() {
+                match method_arity {
+                    // A nullary method: call it now (`resp.read()`).
+                    Some(0) => PyExpr::Call {
+                        func: Box::new(head_expr),
+                        args: vec![],
+                    },
+                    // Receiver-only partial: the bound method *is* the partial
+                    // (`execute conn` → `conn.execute`).
+                    _ => head_expr,
+                }
+            } else {
+                self.build_call(head_expr, method_arity, arg_vals)
+            };
+            return Ok((stmts, call));
+        }
+
         let arity = match &head.kind {
             // A bare reference to a sibling member inside a module — its arity is
             // registered under the qualified name (`Geometry.area`).
@@ -1241,6 +1296,14 @@ impl Lowerer {
         // (extern routing), so skip rerouting in that case. Module members
         // (`List.map`, …) are field-access nodes, routed in `lower_value`, not here.
         if !locals.contains(name) && !self.user_defs.contains(name) {
+            // A bare reference to an instance-method extern becomes a
+            // receiver-taking lambda (`read` → `lambda r: r.read()`); applied
+            // references are handled directly in `lower_application`.
+            if self.receiver_externs.contains(name) {
+                let arity = self.arities.get(name).copied().unwrap_or(1);
+                let method = self.extern_targets[name].clone();
+                return receiver_lambda(&method, arity);
+            }
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
             if let Some(target) = self.extern_targets.get(name).cloned() {
@@ -2303,6 +2366,35 @@ fn dotted_path(segments: &[String]) -> PyExpr {
         };
     }
     expr
+}
+
+/// `base.seg1.seg2…` — attribute access down a path (empty path returns `base`).
+fn attr_path(base: PyExpr, segs: &[String]) -> PyExpr {
+    segs.iter().fold(base, |value, seg| PyExpr::Attribute {
+        value: Box::new(value),
+        attr: seg.clone(),
+    })
+}
+
+/// A receiver-taking lambda for a bare reference to an instance-method extern of
+/// the given `arity` (counting the receiver): `lambda r: r.read()` for a nullary
+/// method, `lambda r, a: r.method(a)` for one that takes an argument. The lambda
+/// is n-ary in its trailing parameters, matching Pyfun's collapse of full
+/// application to a direct call.
+fn receiver_lambda(method: &[String], arity: usize) -> PyExpr {
+    let recv = "_pf_recv".to_string();
+    let args: Vec<String> = (1..arity.max(1)).map(|i| format!("_pf_a{i}")).collect();
+    let head = attr_path(PyExpr::Name(recv.clone()), method);
+    let body = PyExpr::Call {
+        func: Box::new(head),
+        args: args.iter().cloned().map(PyExpr::Name).collect(),
+    };
+    let mut params = vec![recv];
+    params.extend(args);
+    PyExpr::Lambda {
+        params,
+        body: Box::new(body),
+    }
 }
 
 /// The Python module a referenced `extern` target must import, or `None` for a

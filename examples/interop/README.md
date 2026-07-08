@@ -1,14 +1,11 @@
 # Interop cookbook
 
 Short Pyfun programs that call **well-known Python libraries** and show what Pyfun's
-typed, effect-tracked boundary adds to the calling code. Most run offline with:
+typed, effect-tracked boundary adds to the calling code. All run offline (stdlib only):
 
 ```bash
 pyfun run examples/interop/<name>.pyfun
 ```
-
-(`http_fetch.pyfun` is the exception — it `pyfun check`s offline but needs `requests`
-+ network to `run`; see the table.)
 
 ## The idea: boundary libraries, not engine libraries
 
@@ -36,7 +33,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `json` (stdlib) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, via `result {}` railway composition (KeyError/ValueError → `Error`) |
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
-| [`http_fetch.pyfun`](./http_fetch.pyfun) | `requests`/`httpx` | check-only | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error) |
+| [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
 
 ## Reusable patterns (all verified against the current compiler)
 
@@ -47,8 +44,11 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **Homogeneous decode is free.** A JSON array → `List a`, a flat object → `Map string a`.
   Both lower 1:1 to the Python list/dict they already are.
 - **Stateful/OOP libraries.** Model each opaque object as a nullary phantom ADT
-  (`type Conn = ConnH`) and call methods through their **unbound** form
-  (`sqlite3.Connection.execute` invoked as `execute conn sql`).
+  (`type Conn = ConnH`) and call methods with an **instance-method extern**: a target
+  starting with a dot (`extern execute: Conn -> string -> Cursor = .execute`) treats the
+  first argument as the receiver, so `execute conn sql` lowers to `conn.execute(sql)`. No
+  class is named or imported, inherited/delegated methods work, and `execute conn` is the
+  bound method `conn.execute` (currying for free).
 - **Heterogeneous decode into your ADTs.** Don't cast the whole object — pull each field
   (`operator.getitem`), coerce it (`int`/`str`), wrap each step in `try`, and compose on
   the `result {}` railway so the first bad field short-circuits to `Error`. See
@@ -71,12 +71,11 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
 - **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`).
-  **Fixed:** submodule imports — a target like `urllib.parse.quote` now emits
-  `import urllib.parse` (the importer takes the maximal lowercase-initial prefix, stopping
-  before a capitalized class). **Remaining:** a **nullary** Python function can't be called
+  **Fixed:** submodule imports — `urllib.parse.quote` now emits `import urllib.parse` (maximal
+  lowercase-initial prefix, stopping before a capitalized class); and instance methods —
+  `= .method` calls on the receiver, reaching inherited/delegated methods and legacy lowercase
+  classes (`urllib.response.addinfourl.read`), which is why the HTTP entry now runs on stdlib
+  `urllib` offline. **Remaining:** a **nullary** Python function can't be called
   (`gettempdir ()` passes unit as an argument); a dotted target on a **builtin type**
-  (`bytes.decode`) tries to `import bytes`; and **attributes** — object properties
-  (`response.text`, `.status_code`) and *lowercase* attributes/legacy classes
-  (`urllib.response.addinfourl`) — aren't reachable (the unbound-method trick calls only real
-  methods, and the import heuristic reads a lowercase class as a submodule). The HTTP entry
-  therefore still uses `requests` (its response read would hit the attribute limit).
+  (`bytes.decode`) tries to `import bytes`; and reading a plain object **property**
+  (`response.text`, `.status_code`) — the no-call sibling of the instance-method form.
