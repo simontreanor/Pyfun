@@ -1,11 +1,14 @@
 # Interop cookbook
 
-Short, runnable Pyfun programs that call **well-known Python libraries** and show what
-Pyfun's typed, effect-tracked boundary adds to the calling code. Each file runs with:
+Short Pyfun programs that call **well-known Python libraries** and show what Pyfun's
+typed, effect-tracked boundary adds to the calling code. Most run offline with:
 
 ```bash
 pyfun run examples/interop/<name>.pyfun
 ```
+
+(`http_fetch.pyfun` is the exception — it `pyfun check`s offline but needs `requests`
++ network to `run`; see the table.)
 
 ## The idea: boundary libraries, not engine libraries
 
@@ -27,14 +30,13 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 
 ## Entries
 
-| File | Library | Shows |
-|------|---------|-------|
-| [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.tryFind` lookup |
-| [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `json` (stdlib) | **the headline** — decode a heterogeneous object into your own record, totally, via `result {}` railway composition (KeyError/ValueError → `Error`) |
-| [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
-
-Planned: `http_fetch` (`requests`/`httpx` — `io`/`->{async}` effects, typed responses),
-`read_files` (`pathlib` — `io` effects).
+| File | Library | Runs offline | Shows |
+|------|---------|:---:|-------|
+| [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | ✅ | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.tryFind` lookup |
+| [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `json` (stdlib) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, via `result {}` railway composition (KeyError/ValueError → `Error`) |
+| [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
+| [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
+| [`http_fetch.pyfun`](./http_fetch.pyfun) | `requests`/`httpx` | check-only | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error) |
 
 ## Reusable patterns (all verified against the current compiler)
 
@@ -51,6 +53,9 @@ Planned: `http_fetch` (`requests`/`httpx` — `io`/`->{async}` effects, typed re
   (`operator.getitem`), coerce it (`int`/`str`), wrap each step in `try`, and compose on
   the `result {}` railway so the first bad field short-circuits to `Error`. See
   `json_to_adt.pyfun`; this is the shape a decoder-combinator library would generalize.
+- **Effects for free.** A plain `extern` is `io`; the checker infers and propagates it, so
+  any function touching the boundary is `io` with no annotation, and `let pure` over it is
+  a compile error. Override the boundary default with `->{async}` for async libraries.
 
 ## Honest limits (the frontier these examples expose)
 
@@ -65,3 +70,10 @@ Planned: `http_fetch` (`requests`/`httpx` — `io`/`->{async}` effects, typed re
   wrapper library would pull in the deferred package manager).
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
+- **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`): the
+  importer emits only the *first* dotted segment (`import urllib`), so a target in a
+  **submodule** (`urllib.request.urlopen`, `http.client`) fails at runtime — which is why
+  the HTTP entry uses `requests`, not stdlib; a **nullary** Python function can't be called
+  (`gettempdir ()` passes unit as an argument); a dotted target on a **builtin type**
+  (`bytes.decode`) tries to `import bytes`; and object **properties** (`response.text`,
+  `.status_code`) aren't reachable by the unbound-method trick (only real methods are).

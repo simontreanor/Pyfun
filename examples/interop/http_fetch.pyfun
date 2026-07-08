@@ -1,0 +1,43 @@
+# Interop cookbook — HTTP: inferred effects (io / async), the Pyfun differentiator.
+#
+#   pyfun check examples/interop/http_fetch.pyfun     # type/effect-checks offline
+#   pyfun run   examples/interop/http_fetch.pyfun     # needs `requests`+`httpx` + network
+#
+# NOTE: unlike the other cookbook entries this one is CHECK-VALID rather than
+# offline-runnable — it calls the third-party `requests`/`httpx` against the network.
+# The point it showcases is a *compile-time* guarantee anyway: Pyfun infers effects
+# and won't let you lie about them. (Why not a stdlib HTTP client? `urllib.request` /
+# `http.client` live in submodules the extern importer doesn't yet load — see the
+# cookbook README's limits.)
+
+type Response = RespH
+
+# A plain `extern` is `io` at the boundary. `requests.get` therefore contributes an
+# `io` effect wherever it is called — no annotation required.
+extern get: string -> Response = requests.get
+# `.json()` is a real method (unbound-method trick); it returns a raw parsed value,
+# the same opaque handle json_to_adt.pyfun decodes into a typed record.
+extern getJson: Response -> a = requests.Response.json
+
+# `fetch` calls `get`, so the compiler INFERS `fetch : string -> Result Response
+# Exception` and that it performs `io` — impurity propagates outward automatically.
+# `try` makes a failed request an `Error` value instead of a raised exception.
+let fetch url = try (get url)
+
+# The effect is a checked guarantee, not documentation. Uncommenting this is a
+# compile error — "`cached` is declared `pure` but performs `io`" — because `pure`
+# forbids the `io` that `get` introduces:
+#
+#   let pure cached url = get url
+#
+# Async is a distinct effect. Annotating an extern arrow `->{async}` (overriding the
+# default `io`) marks `httpx.get` as performing `async`; any caller inherits it, so it
+# could not sit inside a `let pure` either. Async CEs (`async { let! r = … }`) then
+# compose these exactly as `result {}` composes the `Result`-returning steps elsewhere.
+extern getAsync: string ->{async} Response = httpx.get
+let fetchAsync url = getAsync url
+
+# Full application collapses to a direct n-ary Python call — `fetch "https://…"`
+# lowers to `requests.get("https://…")` wrapped in try/except, no currying overhead.
+let example = fetch "https://example.com"
+let exampleJson = Result.map getJson example    # Result a Exception, decode next
