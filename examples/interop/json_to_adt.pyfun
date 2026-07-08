@@ -1,0 +1,65 @@
+# Interop cookbook — JSON → your ADTs: total, railway-style decoding. THE showcase.
+#
+#   pyfun run examples/interop/json_to_adt.pyfun
+#
+# `json_decode.pyfun` shows homogeneous JSON (array→List, flat object→Map). The real
+# functional-programming lesson is decoding a *heterogeneous* object into your own
+# typed record — "parse, don't validate" — and doing it totally, so bad input is a
+# value you handle rather than an exception that unwinds the program.
+#
+# The naive cast (`extern parseUser: string -> User = json.loads`) type-checks but
+# CRASHES, because `json` returns a subscript-access `dict` and a Pyfun record is an
+# attribute-access class. The fix is a small decoder: pull each field explicitly and
+# coerce it, composing the steps on the Result "railway".
+
+# `Json` is an opaque handle over a raw parsed Python value — Pyfun never looks
+# inside it; the accessors below do. `parse` auto-imports `json`.
+type Json = JHandle
+extern parse: string -> Json = json.loads
+
+# Field/element access and scalar coercion, each a typed view over a Python builtin.
+# `operator.getitem d k` is `d[k]`; `list x` explodes a JSON array into its elements;
+# `int`/`str` coerce a scalar. `operator` and `json` auto-import.
+extern field: Json -> string -> Json = operator.getitem
+extern items: Json -> List Json = list
+extern asStr: Json -> string = str
+extern asInt: Json -> int = int
+
+type User = { name: string, age: int, roles: List string }
+
+# Railway decoding with the `result {}` computation expression (an F# showcase
+# feature). Each field is a *total* step: `try (…)` catches a missing key (KeyError)
+# or a bad coercion (ValueError) into `Result … Exception`. `let!` short-circuits on
+# the first `Error`, so `decodeUser` returns `Result User Exception` — one decoded
+# record, or the exact exception that stopped it. No field access can crash the caller.
+let decodeUser j =
+  result {
+    let! name = try (asStr (field j "name"))
+    let! age = try (asInt (field j "age"))
+    let! roles = try (List.map asStr (items (field j "roles")))
+    return User { name = name, age = age, roles = roles }
+  }
+
+# Consuming the result is an exhaustive `match` — the compiler makes you handle both
+# outcomes. `Exception` exposes `errorKind` (the Python class name) and `errorMessage`.
+let describe r =
+  match r:
+    case Ok u: f"""{u.name} ({u.age}): {String.join ", " u.roles}"""
+    case Error e: f"decode failed: {e.errorKind}"
+
+# A well-formed object decodes to a typed `User`, array field and all.
+print (describe (decodeUser (parse """{"name": "ada", "age": 36, "roles": ["admin", "dev"]}""")))
+# A missing field short-circuits — no crash, a value describing the failure.
+print (describe (decodeUser (parse """{"name": "bob", "age": 40}""")))
+# A bad coercion (age is a non-numeric string) is caught the same way.
+print (describe (decodeUser (parse """{"name": "cy", "age": "old", "roles": []}""")))
+
+# Output:
+#   ada (36): admin, dev
+#   decode failed: KeyError
+#   decode failed: ValueError
+#
+# The accessors + `try` + `result {}` here are exactly the shape a decoder-combinator
+# library would generalize (`Decode.field "age" Decode.int`, à la Elm/`elm/json`) —
+# but the whole pattern already works today with no compiler support, on the one
+# library every Python programmer has imported.

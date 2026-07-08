@@ -1,0 +1,46 @@
+# Interop cookbook — sqlite3: a stateful, method-based library, reached from Pyfun.
+#
+#   pyfun run examples/interop/sqlite_query.pyfun
+#
+# `sqlite3` is stdlib (no install) and OOP: you call methods on a Connection/Cursor
+# object. Pyfun `extern`s are free, curried functions with a dotted Python target —
+# not methods — so two patterns bridge the gap:
+#
+#   1. Opaque handle types. A Connection/Cursor is a Python object Pyfun never looks
+#      inside, so we model each as a nullary phantom ADT (`type Conn = ConnH`). It is
+#      only ever passed along; its lone constructor is never built or matched.
+#   2. Unbound-method externs. A method `conn.execute(sql)` is the unbound function
+#      `sqlite3.Connection.execute(conn, sql)` — a plain dotted target whose first
+#      parameter is the receiver. So `execute conn sql` calls the method, curried.
+
+type Conn = ConnH
+type Cursor = CursorH
+
+# Each extern is impure (io) — the boundary default. `sqlite3` auto-imports.
+extern connect: string -> Conn = sqlite3.connect
+extern execute: Conn -> string -> Cursor = sqlite3.Connection.execute
+extern fetchall: Cursor -> List a = sqlite3.Cursor.fetchall
+
+# Set up an in-memory database. `let _ = e` discards the cursor a DDL/DML call
+# returns; the effect still happens.
+let db = connect ":memory:"
+let _ = execute db "create table t (x int)"
+let _ = execute db "insert into t values (1), (2), (3)"
+
+# A query yields rows as Pyfun tuples. Selecting two columns gives 2-tuples, which
+# destructure with an ordinary tuple pattern (Pyfun has no 1-tuples, so a real
+# multi-column row is the natural shape). `decodeRow` turns each row into typed data.
+let decodeRow r =
+  match r:
+    case (x, sq): x
+
+let rows = fetchall (execute db "select x, x * x from t order by x")
+let total = List.fold (fun acc r -> acc + decodeRow r) 0 rows
+
+print rows                               # [(1, 1), (2, 4), (3, 9)]
+print total                              # 6
+
+# The frontier here is ergonomic, not fundamental: the phantom handles and unbound
+# `Type.method` targets are boilerplate a future "typed façade" could hide, and
+# heterogeneous rows come back as mixed-type tuples the checker trusts but can't
+# see into (the same untyped-boundary caveat as JSON).
