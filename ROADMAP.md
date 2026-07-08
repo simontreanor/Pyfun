@@ -39,17 +39,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
   `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
   date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
-- **Extern FFI reach** (M) — related boundary gaps surfaced by the `examples/interop/` cookbook
-  (dogfooding real Python libraries). None blocks the showcase — each has a workaround noted in that
-  README — but together they decide how many popular libraries wrap cleanly. **Submodule imports are
-  now fixed** (`extern_import` emits the maximal lowercase-initial prefix, so `urllib.request.urlopen`
-  imports `urllib.request` while `sqlite3.Connection.execute` stops at `sqlite3` — `DESIGN.md` §6).
-  **Instance access now fixed too** — the `= .method()` extern form calls a method on its first argument
-  (`resp.read()`) and `= .attr` reads a property (`url.scheme`), reaching inherited/delegated members and
-  legacy lowercase classes (`urllib.response.addinfourl.read`) without naming or importing the class.
-  Remaining: (1) a **nullary** Python callable can't be invoked — `f : unit -> a` lowers `f ()` to
-  `f(None)`, not `f()`; needs a zero-arg calling convention for a `unit` domain; (2) a dotted target on a
-  **builtin type** (`bytes.decode`) emits `import bytes` and fails — recognize builtins. `DESIGN.md` §6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 

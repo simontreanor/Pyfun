@@ -122,6 +122,23 @@ fn instance_property_extern_reads_the_attribute() {
 }
 
 #[test]
+fn nullary_extern_lowers_to_a_zero_arg_call() {
+    // `unit -> a` applied to `()` is a zero-argument Python call, not `f(None)`.
+    let py = pyfun::compile("extern now: unit -> float = time.time\nlet t = now ()").unwrap();
+    assert!(py.contains("t = time.time()"), "{py}");
+    assert!(!py.contains("time.time(None)"), "{py}");
+    assert!(py.contains("import time"), "{py}");
+}
+
+#[test]
+fn extern_on_builtin_type_imports_nothing() {
+    // A dotted target rooted at a builtin type is always in scope — no `import`.
+    let py = pyfun::compile("extern up: string -> string = str.upper\nlet r = up \"hi\"").unwrap();
+    assert!(py.contains("r = str.upper(\"hi\")"), "{py}");
+    assert!(!py.contains("import str"), "{py}");
+}
+
+#[test]
 fn extern_on_class_method_imports_only_the_module() {
     // A capitalized segment is a class attribute, not a submodule, so the import
     // stops before it: `sqlite3.Connection.execute` imports `sqlite3`, not

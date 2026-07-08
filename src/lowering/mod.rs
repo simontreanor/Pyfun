@@ -173,6 +173,9 @@ struct Lowerer {
     /// Instance-access externs (`= .read()` / `= .text`) → whether the target is a
     /// method call or a bare property read on the first argument (the receiver).
     receiver_externs: std::collections::HashMap<String, Receiver>,
+    /// Externs with a `unit` domain (`unit -> a`, e.g. `time.time`): a *nullary*
+    /// Python callable, applied to `()` as a zero-argument call (`time.time()`).
+    nullary_externs: HashSet<String>,
     /// Python modules an *used* extern needs imported (the first segment of a
     /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
     needed_imports: BTreeSet<String>,
@@ -255,6 +258,7 @@ impl Lowerer {
         field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
         let mut receiver_externs = std::collections::HashMap::new();
+        let mut nullary_externs = HashSet::new();
         let mut user_defs = HashSet::new();
         let mut ap_uses = std::collections::HashMap::new();
         for item in &module.items {
@@ -266,6 +270,9 @@ impl Lowerer {
                     extern_targets.insert(decl.name.clone(), decl.target.clone());
                     if let Some(kind) = decl.receiver {
                         receiver_externs.insert(decl.name.clone(), kind);
+                    }
+                    if is_unit_domain(&decl.ty) {
+                        nullary_externs.insert(decl.name.clone());
                     }
                 }
                 Item::Let(binding) => {
@@ -376,6 +383,7 @@ impl Lowerer {
             field_to_record,
             extern_targets,
             receiver_externs,
+            nullary_externs,
             needed_imports: BTreeSet::new(),
             user_defs,
             needed_list_helpers: BTreeSet::new(),
@@ -459,6 +467,13 @@ impl Lowerer {
                             // An instance-access extern binds to a receiver-taking
                             // lambda so dependent modules can reference it.
                             receiver_lambda(&decl.target, arrow_arity(&decl.ty), kind)
+                        } else if is_unit_domain(&decl.ty) {
+                            // A nullary extern binds to a lambda that ignores its
+                            // unit argument, so a cross-module `Mod.now ()` works.
+                            if let Some(module) = extern_import(&decl.target) {
+                                self.needed_imports.insert(module);
+                            }
+                            nullary_lambda(&decl.target)
                         } else {
                             if let Some(module) = extern_import(&decl.target) {
                                 self.needed_imports.insert(module);
@@ -1243,6 +1258,37 @@ impl Lowerer {
             return Ok((stmts, result));
         }
 
+        // A nullary extern (`unit -> a`) applied to `()` is a zero-argument Python
+        // call: `now ()` → `time.time()`, never `time.time(None)`. The unit argument
+        // is evaluated for any effects but dropped from the call.
+        if let ExprKind::Var(name) = &head.kind
+            && !locals.contains(name)
+            && self.nullary_externs.contains(name)
+        {
+            let target = self.extern_targets[name].clone();
+            if let Some(module) = extern_import(&target) {
+                self.needed_imports.insert(module);
+            }
+            let mut stmts = Vec::new();
+            let mut arg_vals = Vec::with_capacity(args_ast.len());
+            for arg in &args_ast {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                arg_vals.push(arg_val);
+            }
+            // Drop the leading unit argument; call the target with no arguments.
+            let base = PyExpr::Call {
+                func: Box::new(dotted_path(&target)),
+                args: vec![],
+            };
+            // Any further arguments (a `unit -> b -> c` extern) apply to the result.
+            let result = arg_vals.into_iter().skip(1).fold(base, |f, a| PyExpr::Call {
+                func: Box::new(f),
+                args: vec![a],
+            });
+            return Ok((stmts, result));
+        }
+
         let arity = match &head.kind {
             // A bare reference to a sibling member inside a module — its arity is
             // registered under the qualified name (`Geometry.area`).
@@ -1314,6 +1360,16 @@ impl Lowerer {
                 let arity = self.arities.get(name).copied().unwrap_or(1);
                 let member = self.extern_targets[name].clone();
                 return receiver_lambda(&member, arity, kind);
+            }
+            // A bare reference to a nullary extern is a unit-taking lambda that
+            // ignores its argument (`now` → `lambda *_: time.time()`); applied
+            // references are handled directly in `lower_application`.
+            if self.nullary_externs.contains(name) {
+                let target = self.extern_targets[name].clone();
+                if let Some(module) = extern_import(&target) {
+                    self.needed_imports.insert(module);
+                }
+                return nullary_lambda(&target);
             }
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
@@ -2365,6 +2421,22 @@ pub fn arrow_arity(ty: &TypeExpr) -> usize {
     }
 }
 
+/// Whether an `extern`'s first parameter is `unit` — a *nullary* Python callable
+/// (`unit -> a`, e.g. `time.time`). Applying it to `()` must emit a zero-argument
+/// Python call (`time.time()`), not pass `None` (`time.time(None)`).
+fn is_unit_domain(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Fun(domain, _, _)
+        if matches!(domain.as_ref(),
+            TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty()))
+}
+
+/// Python builtin *type* names — available without an `import`, so a dotted extern
+/// target rooted at one (`bytes.decode`, `int.from_bytes`) must not emit an import.
+const PY_BUILTIN_TYPES: &[&str] = &[
+    "bool", "int", "float", "complex", "str", "bytes", "bytearray", "memoryview", "list", "tuple",
+    "dict", "set", "frozenset", "range", "slice", "object", "type",
+];
+
 /// Build a Python expression from a dotted path: `["math", "sqrt"]` → `math.sqrt`,
 /// a single segment → a bare name.
 fn dotted_path(segments: &[String]) -> PyExpr {
@@ -2415,6 +2487,19 @@ fn receiver_lambda(member: &[String], arity: usize, kind: Receiver) -> PyExpr {
     }
 }
 
+/// A lambda for a bare reference to a nullary extern: `lambda *_: time.time()`. The
+/// `*_` swallows the unit argument Pyfun passes at a `unit -> a` call site, so the
+/// value works however it is later applied.
+fn nullary_lambda(target: &[String]) -> PyExpr {
+    PyExpr::Lambda {
+        params: vec!["*_pf_a".to_string()],
+        body: Box::new(PyExpr::Call {
+            func: Box::new(dotted_path(target)),
+            args: vec![],
+        }),
+    }
+}
+
 /// The Python module a referenced `extern` target must import, or `None` for a
 /// bare builtin (`str`, a single segment — nothing to import).
 ///
@@ -2429,8 +2514,11 @@ fn receiver_lambda(member: &[String], arity: usize, kind: Receiver) -> PyExpr {
 /// class. The lone assumption it can't see through is a *lowercase attribute* that
 /// is a value rather than a submodule (`sys.stdout.write`); such a target must be
 /// reached through a small Python-side wrapper instead (`DESIGN.md` §6).
+///
+/// A target rooted at a builtin *type* (`bytes.decode`, `int.from_bytes`) imports
+/// nothing — those names are always in scope.
 fn extern_import(target: &[String]) -> Option<String> {
-    if target.len() < 2 {
+    if target.len() < 2 || PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
         return None;
     }
     let prefix = &target[..target.len() - 1];
