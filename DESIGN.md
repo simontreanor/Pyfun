@@ -232,10 +232,13 @@ only its shape separates them, so the emitted import follows PEP 8 (packages low
 capitalized): it is the **maximal leading run of lowercase-initial segments** before the final
 referenced name — always at least the top-level package. Thus `urllib.request.urlopen` imports the
 submodule `urllib.request`, while `sqlite3.Connection.execute` imports only `sqlite3` (`Connection`
-is a class attribute, not a submodule). The one shape this can't see through is a *lowercase*
-attribute that is a value rather than a submodule (`sys.stdout.write`, or the legacy lowercase class
-`urllib.response.addinfourl`); such a target is reached through a small Python-side wrapper instead
-(the remaining "Extern FFI reach" backlog). Arity is the number of leading arrows, so partial application of an
+is a class attribute, not a submodule); a target rooted at a builtin type (`str.upper`,
+`int.from_bytes`) imports nothing, since those names are always in scope. The one shape the heuristic
+can't see through is a *lowercase* attribute that is a value rather than a submodule
+(`sys.stdout.write`, or the legacy lowercase class `urllib.response.addinfourl`) — reach those through
+the instance-access form below or a small Python-side wrapper. A **nullary** extern (`unit -> a`,
+e.g. `time.time`) applied to `()` lowers to a zero-argument call (`time.time()`), not `time.time(None)`
+— the unit argument is evaluated for effects but dropped. Arity is the number of leading arrows, so partial application of an
 extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still
 type-checked at the boundary (`cbrt "x"` is rejected) — but only against the *declared* type; Pyfun
 trusts the annotation, which is where the §4 "effectful/unsafe at the boundary" relaxation bites.

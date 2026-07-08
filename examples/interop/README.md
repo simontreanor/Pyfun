@@ -66,16 +66,15 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   footgun to avoid, not a wall: the field-by-field decoder in `json_to_adt.pyfun` is the
   right way, and it composes cleanly. The gap is only the *ergonomics* of a reusable
   decoder-combinator library (which a package manager, deferred, would let us ship).
-- **Handle boilerplate.** Phantom types and unbound `Type.method` targets are repetitive;
-  a future "typed façade" module could hide them (kept out of scope here — a shipped
-  wrapper library would pull in the deferred package manager).
+- **Handle boilerplate.** The opaque phantom handle types (`type Conn = ConnH`) are repetitive;
+  a future "typed façade" module could hide them (kept out of scope here — a shipped wrapper
+  library would pull in the deferred package manager).
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
-- **Extern FFI rough edges surfaced while building these** (tracked in `ROADMAP.md`).
-  **Fixed:** submodule imports — `urllib.parse.quote` now emits `import urllib.parse` (maximal
-  lowercase-initial prefix, stopping before a capitalized class); and instance access —
-  `= .method()` calls on the receiver and `= .attr` reads a property, reaching inherited/delegated
-  members and legacy lowercase classes (`urllib.response.addinfourl.read`), which is why the HTTP
-  entry now runs on stdlib `urllib` offline. **Remaining:** a **nullary** Python function can't be
-  called (`gettempdir ()` passes unit as an argument); and a dotted target on a **builtin type**
-  (`bytes.decode`) tries to `import bytes`.
+
+The extern-FFI *reach* rough edges these examples first surfaced have all been closed — submodule
+imports (`urllib.parse.quote` → `import urllib.parse`), instance access (`= .method()` calls and
+`= .attr` property reads, reaching inherited/delegated members and legacy lowercase classes like
+`urllib.response.addinfourl.read`, which is why the HTTP entry runs on stdlib `urllib` offline),
+nullary calls (`unit -> a` applied to `()` → `time.time()`), and dotted targets on builtin types
+(`str.upper`, `int.from_bytes` — no spurious `import`). See `DESIGN.md` §6.
