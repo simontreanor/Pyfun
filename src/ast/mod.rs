@@ -8,8 +8,8 @@
 
 use crate::parser::ast::{
     ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
-    InterpPart, Item, LetBinding, MatchArm, Module, Pattern, TypeDecl, TypeDeclKind, TypeExpr,
-    UnitExpr, VariantDecl,
+    InterpPart, Item, LetBinding, MatchArm, Module, Pattern, Receiver, TypeDecl, TypeDeclKind,
+    TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -159,12 +159,21 @@ fn print_extern(decl: &ExternDecl) -> String {
     s.push_str(&decl.name);
     s.push_str(": ");
     s.push_str(&print_type(&decl.ty));
-    if decl.receiver {
-        s.push_str(" = .");
-        s.push_str(&decl.target.join("."));
-    } else if decl.target != [decl.name.clone()] {
-        s.push_str(" = ");
-        s.push_str(&decl.target.join("."));
+    match decl.receiver {
+        Some(Receiver::Method) => {
+            s.push_str(" = .");
+            s.push_str(&decl.target.join("."));
+            s.push_str("()");
+        }
+        Some(Receiver::Property) => {
+            s.push_str(" = .");
+            s.push_str(&decl.target.join("."));
+        }
+        None if decl.target != [decl.name.clone()] => {
+            s.push_str(" = ");
+            s.push_str(&decl.target.join("."));
+        }
+        None => {}
     }
     s
 }

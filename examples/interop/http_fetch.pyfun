@@ -13,11 +13,11 @@ type Response = RespH
 
 # `urllib.request.urlopen` is a plain dotted extern — `io` by the boundary default,
 # and the submodule imports correctly (`import urllib.request`). Reading the body is
-# an *instance method* (`= .read`): `readBody r` lowers to `r.read()`, which reaches
-# the method even though it lives on a base class of the response, not the response
-# type itself. `codecs.decode` turns the bytes into text.
+# an *instance method* (`= .read()` — trailing `()` marks a call): `readBody r` lowers
+# to `r.read()`, which reaches the method even though it lives on a base class of the
+# response, not the response type itself. `codecs.decode` turns the bytes into text.
 extern urlopen: string -> Response = urllib.request.urlopen
-extern readBody: Response -> a = .read
+extern readBody: Response -> a = .read()
 extern decode: a -> string -> string = codecs.decode
 
 # `fetch` calls `io` externs, so the compiler INFERS it is `io` and propagates that
@@ -33,6 +33,17 @@ let describe r =
 
 print (describe (fetch "data:text/plain,hello%20pyfun"))   # ok: hello pyfun
 print (describe (fetch "://malformed"))                    # failed: ValueError
+
+# Reading a plain *attribute/property* is the sibling form: a dotted target with no
+# `()` (`= .scheme`) reads `url.scheme` rather than calling it. `urllib.parse.urlparse`
+# returns a ParseResult whose parts are attributes — pure string parsing, no network.
+type Url = UrlH
+extern urlparse: string -> Url = urllib.parse.urlparse
+extern scheme: Url -> string = .scheme
+extern path: Url -> string = .path
+
+let u = urlparse "https://example.com/data.json"
+print (f"{scheme u} {path u}")                             # https /data.json
 
 # Async is a distinct effect. Annotating an extern arrow `->{async}` (overriding the
 # default `io`) marks an async client as performing `async`; a caller inherits it, so

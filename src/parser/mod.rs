@@ -40,7 +40,7 @@ use ast::{
     ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl,
     FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding, MatchArm, Module,
     NodeSpan,
-    Param, Pattern, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    Param, Pattern, Receiver, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -343,17 +343,28 @@ impl Parser {
         self.expect(&Tok::Colon, "`:`")?;
         let ty = self.parse_type()?;
         // Optional `= a.b.c` Python target; defaults to the Pyfun name. A leading
-        // `.` (`= .read`) marks the instance-method form: the target is a method
-        // path called on the first argument (the receiver).
+        // `.` marks an instance-access form on the first argument (the receiver):
+        // `= .read()` calls the method (`resp.read()`), `= .text` reads the
+        // attribute/property (`resp.text`) — trailing `()` is the "call" marker.
         let (target, receiver) = if self.eat(&Tok::Eq) {
-            let receiver = self.eat(&Tok::Dot);
+            let dotted = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
             while self.eat(&Tok::Dot) {
                 segs.push(self.parse_ident("Python attribute")?);
             }
+            let receiver = if dotted {
+                if self.eat(&Tok::LParen) {
+                    self.expect(&Tok::RParen, "`)`")?;
+                    Some(Receiver::Method)
+                } else {
+                    Some(Receiver::Property)
+                }
+            } else {
+                None
+            };
             (segs, receiver)
         } else {
-            (vec![name.clone()], false)
+            (vec![name.clone()], None)
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
