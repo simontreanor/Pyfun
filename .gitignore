@@ -18,8 +18,10 @@ __pycache__/
 /local/
 
 # Network Rail example: generated compile output + rendered report (the source
-# .pyfun / .py helper / sample fixture are committed; these are regenerated).
+# .pyfun files / nr_stream.py helper / sample fixture are committed; these are
+# regenerated).
 examples/interop/network-rail/chippenham.py
+examples/interop/network-rail/chippenham_fast.py
 examples/interop/network-rail/chippenham-routes.md
 
 # Editor / OS
