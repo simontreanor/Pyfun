@@ -178,6 +178,11 @@ const PROGRAMS: &[&str] = &[
     "type Shape =\n  | Circle float\n  | Rect float float\n  | Square float",
     // A record body may likewise sit on the next indented line.
     "type Point =\n  { x: int, y: int }",
+    // Opaque handle types (`extern type`): no body, optional type parameters. They
+    // print back with the `extern type` keyword and no `=`.
+    "extern type Conn",
+    "extern type Ref a",
+    "extern type Pair a b",
     // List literals: empty, simple, nested, and compound elements.
     "let xs = [1, 2, 3]",
     "let e = []",

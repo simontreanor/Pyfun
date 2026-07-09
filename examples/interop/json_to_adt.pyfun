@@ -13,8 +13,9 @@
 # coerce it, composing the steps on the Result "railway".
 
 # `Json` is an opaque handle over a raw parsed Python value — Pyfun never looks
-# inside it; the accessors below do. `parse` auto-imports `json`.
-type Json = JHandle
+# inside it; the accessors below do. `extern type` declares a handle with no
+# constructor. `parse` auto-imports `json`.
+extern type Json
 extern parse: string -> Json = json.loads
 
 # Field/element access and scalar coercion, each a typed view over a Python builtin.

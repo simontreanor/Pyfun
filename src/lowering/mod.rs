@@ -305,6 +305,8 @@ impl Lowerer {
                         }
                         record_fields.insert(decl.name.clone(), names);
                     }
+                    // An opaque handle type erases — no constructor, no class.
+                    TypeDeclKind::Opaque => {}
                 },
                 // A module's members register their arity under the qualified name
                 // (`Geometry.area`), matching how `Field` heads are looked up.
@@ -447,6 +449,8 @@ impl Lowerer {
                             order: Some(0),
                         });
                     }
+                    // An opaque handle type erases — it emits no Python class.
+                    TypeDeclKind::Opaque => {}
                 }
             }
         }

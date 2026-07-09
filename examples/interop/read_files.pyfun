@@ -7,9 +7,10 @@
 # propagates it (no annotation needed), and `try` turns a missing-file exception into
 # a `Result` you must handle. This file runs offline and cleans up after itself.
 
-# `pathlib.Path(str)` builds a path; the rest are unbound methods on `pathlib.Path`
-# (see sqlite_query.pyfun for the pattern). Each is `io` by the boundary default.
-type Path = PathH
+# `Path` is an opaque handle (`extern type` — no constructor). `pathlib.Path(str)`
+# builds one; the rest are unbound methods on `pathlib.Path` (see sqlite_query.pyfun
+# for the pattern). Each is `io` by the boundary default.
+extern type Path
 extern toPath: string -> Path = pathlib.Path
 extern writeText: Path -> string -> int = pathlib.Path.write_text
 extern readText: Path -> string = pathlib.Path.read_text

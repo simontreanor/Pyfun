@@ -1575,6 +1575,9 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                     );
                 }
             }
+            // An opaque handle type has no constructors or fields — its name and
+            // arity were registered in pass 1, and nothing more is needed here.
+            TypeDeclKind::Opaque => {}
         }
     }
 

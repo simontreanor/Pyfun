@@ -43,9 +43,10 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   exception into a value; `match` forces you to handle `Error`.
 - **Homogeneous decode is free.** A JSON array → `List a`, a flat object → `Map string a`.
   Both lower 1:1 to the Python list/dict they already are.
-- **Stateful/OOP libraries.** Model each opaque object as a nullary phantom ADT
-  (`type Conn = ConnH`) and reach its members with an **instance-access extern** — a target
-  starting with a dot, treating the first argument as the receiver. `= .execute()` (trailing
+- **Stateful/OOP libraries.** Declare each opaque object as an **`extern type`**
+  (`extern type Conn`) — a typed handle with no constructor — and reach its members with an
+  **instance-access extern** — a target starting with a dot, treating the first argument as
+  the receiver. `= .execute()` (trailing
   `()` = call) is a method, so `execute conn sql` lowers to `conn.execute(sql)`; `= .scheme`
   (no `()`) is a property read, so `scheme url` lowers to `url.scheme`. No class is named or
   imported, inherited/delegated members work, and `execute conn` is the bound method
@@ -66,9 +67,10 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   footgun to avoid, not a wall: the field-by-field decoder in `json_to_adt.pyfun` is the
   right way, and it composes cleanly. The gap is only the *ergonomics* of a reusable
   decoder-combinator library (which a package manager, deferred, would let us ship).
-- **Handle boilerplate.** The opaque phantom handle types (`type Conn = ConnH`) are repetitive;
-  a future "typed façade" module could hide them (kept out of scope here — a shipped wrapper
-  library would pull in the deferred package manager).
+- **Handle boilerplate.** Each opaque object still needs its own one-line `extern type Conn`
+  declaration. That is now a single honest line (was the phantom-ADT `type Conn = ConnH`); a
+  future "typed façade" module could bundle a library's handles + methods together, but that
+  would pull in the deferred package manager, so it is kept out of scope here.
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
 
