@@ -15,7 +15,11 @@ ecosystem students rarely touch again. Pyfun keeps them in Python, with no new r
 package manager, and compiles to Python they can read, so every concept stays visible in the code
 they already understand.
 
-Install it with **Python 3.12+**:
+**▶ [Try it in your browser](https://simontreanor.github.io/Pyfun/)** — no install: write Pyfun,
+watch it compile to readable Python live, and hit Run to execute it (the compiler runs as
+WebAssembly, the Python runs in CPython-via-WASM).
+
+Or install it with **Python 3.12+**:
 
 ```bash
 pip install pyfun-lang
