@@ -427,6 +427,7 @@ impl Lowerer {
                         name: ap_case_class(&case),
                         fields: (0..arity).map(|i| format!("_{i}")).collect(),
                         order: None,
+                        record: false,
                     });
                 }
             }
@@ -442,6 +443,7 @@ impl Lowerer {
                                 name: py_ctor_name(&variant.name),
                                 fields,
                                 order: Some(index),
+                                record: false,
                             });
                         }
                     }
@@ -451,6 +453,7 @@ impl Lowerer {
                             name: decl.name.clone(),
                             fields: fields.iter().map(|f| f.name.clone()).collect(),
                             order: Some(0),
+                            record: true,
                         });
                     }
                     // An opaque handle type erases — it emits no Python class.
@@ -2638,11 +2641,13 @@ fn result_prelude() -> Vec<PyStmt> {
             name: "Ok".to_string(),
             fields: vec!["_0".to_string()],
             order: Some(0),
+            record: false,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
             fields: vec!["_0".to_string()],
             order: Some(1),
+            record: false,
         },
     ]
 }
@@ -2656,6 +2661,7 @@ fn exception_prelude() -> Vec<PyStmt> {
         name: "_Exception".to_string(),
         fields: vec!["errorKind".to_string(), "errorMessage".to_string()],
         order: None,
+        record: false,
     }]
 }
 
@@ -2670,11 +2676,13 @@ fn option_prelude() -> Vec<PyStmt> {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
             order: Some(1),
+            record: false,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
             fields: vec![],
             order: Some(0),
+            record: false,
         },
     ]
 }

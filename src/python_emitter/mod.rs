@@ -71,6 +71,11 @@ pub enum PyStmt {
         name: String,
         fields: Vec<String>,
         order: Option<usize>,
+        /// A **record** (named-field product) vs a sum **variant** / builtin
+        /// (positional). Records derive ordering from `@dataclass(order=True)`
+        /// (Python compares the field tuple); variants need a cross-variant
+        /// ordering key, so they use `@functools.total_ordering` + `_pf_order_key`.
+        record: bool,
     },
 }
 
@@ -272,6 +277,24 @@ impl PyBinOp {
 /// Render a module to Python source text.
 pub fn emit(module: &PyModule) -> String {
     let mut out = String::new();
+    // ADTs/records lower to `@dataclass` classes; sum variants also use
+    // `@functools.total_ordering`. Emit the imports they need once, at the top,
+    // whenever the module defines any such class (this is the single choke-point,
+    // so single-file, per-project-module, and the shared runtime all get them).
+    let classes: Vec<&PyStmt> = module
+        .body
+        .iter()
+        .filter(|s| matches!(s, PyStmt::ClassDef { .. }))
+        .collect();
+    if !classes.is_empty() {
+        line(&mut out, 0, "from dataclasses import dataclass");
+        let needs_total_ordering = classes.iter().any(|s| {
+            matches!(s, PyStmt::ClassDef { order: Some(_), record: false, .. })
+        });
+        if needs_total_ordering {
+            line(&mut out, 0, "from functools import total_ordering");
+        }
+    }
     emit_block(&module.body, 0, &mut out);
     out
 }
@@ -378,38 +401,55 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             name,
             fields,
             order,
-        } => emit_class(name, fields, *order, depth, out),
+            record,
+        } => emit_class(name, fields, *order, *record, depth, out),
     }
 }
 
-fn emit_class(name: &str, fields: &[String], order: Option<usize>, depth: usize, out: &mut String) {
-    line(out, depth, &format!("class {name}:"));
-    // `__match_args__` is a tuple of the positional field names; a single-element
-    // tuple needs a trailing comma.
-    let names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
-    let trailing = if fields.len() == 1 { "," } else { "" };
-    line(
-        out,
-        depth + 1,
-        &format!("__match_args__ = ({}{trailing})", names.join(", ")),
-    );
+/// Emit an ADT variant / record / builtin data class as a **frozen dataclass**.
+///
+/// `@dataclass(frozen=True)` generates `__init__`, `__eq__`, `__hash__`, and
+/// `__match_args__` from the field annotations — and `frozen` makes the value
+/// immutable, matching Pyfun's semantics (the old hand-rolled classes were mutable).
+/// A positional `__repr__` is kept (so a value prints the way it was constructed,
+/// `Circle(2.0)`, not `Circle(_0=2.0)`), so the dataclass-generated one is suppressed
+/// with `repr=False`. Ordering (`DESIGN.md` §7.1): a **record** compares its field
+/// tuple, which `@dataclass(order=True)` already does; a sum **variant** needs a
+/// cross-variant key `(index, fields…)`, so it defines `_pf_order_key` + `__lt__` and
+/// lets `@functools.total_ordering` derive the other three. The checker gates
+/// comparison to a single orderable type, so `other` is always a sibling — no
+/// `isinstance` guard needed.
+fn emit_class(
+    name: &str,
+    fields: &[String],
+    order: Option<usize>,
+    record: bool,
+    depth: usize,
+    out: &mut String,
+) {
+    // A sum variant / builtin carries its own cross-variant ordering key; a record
+    // gets ordering directly from the dataclass.
+    let variant_ordered = order.is_some() && !record;
 
-    let params = std::iter::once("self".to_string())
-        .chain(fields.iter().cloned())
-        .collect::<Vec<_>>()
-        .join(", ");
-    line(out, depth + 1, &format!("def __init__({params}):"));
-    if fields.is_empty() {
-        line(out, depth + 2, "pass");
-    } else {
-        for f in fields {
-            line(out, depth + 2, &format!("self.{f} = {f}"));
-        }
+    if variant_ordered {
+        line(out, depth, "@total_ordering");
+    }
+    let mut args = vec!["frozen=True".to_string()];
+    if order.is_some() && record {
+        args.push("order=True".to_string());
+    }
+    args.push("repr=False".to_string());
+    line(out, depth, &format!("@dataclass({})", args.join(", ")));
+    line(out, depth, &format!("class {name}:"));
+
+    // Fields as annotations, so the dataclass recognizes them (`object` = any value;
+    // the Pyfun type is erased). A field-less variant has no annotations — its body
+    // is the methods below, which is a valid non-empty suite.
+    for f in fields {
+        line(out, depth + 1, &format!("{f}: object"));
     }
 
-    // `__repr__` so values print readably (`Some(1)`, `Red`, `Ok("x")`) instead
-    // of `<Some object at 0x…>`. Fields use `!r` so nested values and strings are
-    // shown quoted.
+    // Positional `__repr__` (matches the constructor form: `Some(1)`, `Red`, `Ok("x")`).
     line(out, depth + 1, "def __repr__(self):");
     if fields.is_empty() {
         line(out, depth + 2, &format!("return {}", string_literal(name)));
@@ -422,44 +462,14 @@ fn emit_class(name: &str, fields: &[String], order: Option<usize>, depth: usize,
         line(out, depth + 2, &format!("return f\"{name}({parts})\""));
     }
 
-    // Structural `__eq__` so `==` compares by constructor + fields (recursively),
-    // not object identity — matching FP expectations and Pyfun's equality typing.
-    line(out, depth + 1, "def __eq__(self, other):");
-    if fields.is_empty() {
-        line(out, depth + 2, "return type(self) is type(other)");
-    } else {
+    if variant_ordered {
+        let variant_index = order.unwrap();
+        line(out, depth + 1, "def __lt__(self, other):");
         line(
             out,
             depth + 2,
-            "return type(self) is type(other) and self.__dict__ == other.__dict__",
+            "return self._pf_order_key() < other._pf_order_key()",
         );
-    }
-
-    // Structural `__hash__`, consistent with `__eq__` (equal values hash equally):
-    // a tuple of the type and the field values. Defining `__eq__` otherwise makes a
-    // class unhashable in Python, so without this an ADT/record could not be a `Set`
-    // element or `Map` key. A field whose value is itself unhashable raises at hash
-    // time — the same way Python rejects an unhashable key.
-    line(out, depth + 1, "def __hash__(self):");
-    if fields.is_empty() {
-        line(out, depth + 2, "return hash(type(self))");
-    } else {
-        let parts = std::iter::once("type(self)".to_string())
-            .chain(fields.iter().map(|f| format!("self.{f}")))
-            .collect::<Vec<_>>()
-            .join(", ");
-        line(out, depth + 2, &format!("return hash(({parts}))"));
-    }
-
-    // Structural ordering (`DESIGN.md` §7.1) for user sum types / records: compare by
-    // an ordering key `(variant_index, field0, field1, …)`. The variant index sorts
-    // by constructor declaration order and — as the tuple's first element — decides
-    // any cross-variant comparison before Python reaches the differently-shaped field
-    // tails; same-variant comparisons fall through to the fields, recursing via
-    // Python's own `<`. The type checker gates comparison to a single orderable type,
-    // so `other` is always a sibling of `self` (same `_pf_order_key`) — no
-    // `isinstance`/`NotImplemented` guard is needed.
-    if let Some(variant_index) = order {
         let key = std::iter::once(variant_index.to_string())
             .chain(fields.iter().map(|f| format!("self.{f}")))
             .collect::<Vec<_>>()
@@ -468,19 +478,6 @@ fn emit_class(name: &str, fields: &[String], order: Option<usize>, depth: usize,
         let trailing = if fields.is_empty() { "," } else { "" };
         line(out, depth + 1, "def _pf_order_key(self):");
         line(out, depth + 2, &format!("return ({key}{trailing})"));
-        for (method, op) in [
-            ("__lt__", "<"),
-            ("__le__", "<="),
-            ("__gt__", ">"),
-            ("__ge__", ">="),
-        ] {
-            line(out, depth + 1, &format!("def {method}(self, other):"));
-            line(
-                out,
-                depth + 2,
-                &format!("return self._pf_order_key() {op} other._pf_order_key()"),
-            );
-        }
     }
 }
 

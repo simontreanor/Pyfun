@@ -141,17 +141,16 @@ print (report [1.0, 2.0, 3.0, 4.0])
 `pyfun compile` turns that into Python you'd be happy to have written by hand:
 
 ```python
+from dataclasses import dataclass
 import statistics
 
+@dataclass(frozen=True, order=True, repr=False)
 class Summary:
-    __match_args__ = ('n', 'mean', 'stdev')
-    def __init__(self, n, mean, stdev):
-        self.n = n
-        self.mean = mean
-        self.stdev = stdev
+    n: object
+    mean: object
+    stdev: object
     def __repr__(self):
         return f"Summary({self.n!r}, {self.mean!r}, {self.stdev!r})"
-    # ...structural __eq__/__hash__/ordering elided...
 
 def summarize(xs):
     return Summary(len(xs), statistics.mean(xs), statistics.stdev(xs))
@@ -171,7 +170,8 @@ n=4 mean=2.5 sd=1.2909944487358056
 Notice what the compiler does:
 
 - **No wrapper layer.** `statistics.mean(xs)` is called directly. `List` *is* a Python `list`,
-  and a Pyfun record *is* a plain class. There is no runtime, no VM, no marshalling.
+  and a record or ADT variant *is* a **frozen `@dataclass`** — so `frozen=True` even enforces in the
+  Python the immutability Pyfun promises. There is no runtime, no VM, no marshalling.
 - **Effects tracked across the boundary.** A bare `extern` is `io` at full application, so it
   can't be called from a `let pure`. Mark it `pure` (like `statistics.mean`) and it composes into
   pure code. You can even annotate other effect labels: `extern fetch: string ->{async} string = httpx.get`.

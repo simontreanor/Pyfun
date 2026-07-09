@@ -902,12 +902,14 @@ constraint with polymorphic literals (step b).
    types (its type params substituted by the actual arguments) with a **visiting-set recursion guard**
    (keyed on the full `(name, args)`, so a recursive occurrence terminates while `List a` vs `List (List
    a)` stay distinct) — and the deferred-var mechanism still flows a late-resolved `comparison 'a` through
-   this path via the `unify` hook. Codegen: each user variant/record class gets `__lt__`/`__le__`/`__gt__`/
-   `__ge__` comparing an ordering key `(variant_index, field0, …)` (the variant index — declaration order —
-   is the tuple's first element, so a cross-variant comparison short-circuits before the differently-shaped
-   field tails; tuples and lists need *no* codegen since Python tuples/lists already compare
-   lexicographically). The type
-   checker gates comparison to one orderable type, so no `isinstance`/`NotImplemented` guard is emitted.
+   this path via the `unify` hook. Codegen (§8.3): a **record** derives ordering from
+   `@dataclass(order=True)`, which compares its field tuple. A sum **variant** needs a cross-variant key,
+   so it defines `_pf_order_key` → `(variant_index, field0, …)` and one `__lt__`, and `@functools.total_ordering`
+   derives `__le__`/`__gt__`/`__ge__`; the variant index (declaration order) is the key's first element, so a
+   cross-variant comparison short-circuits before the differently-shaped field tails. Tuples and lists need
+   *no* codegen (Python compares them lexicographically already). The type checker gates comparison to one
+   orderable type, so no `isinstance`/`NotImplemented` guard is emitted, and the methods are emitted
+   always-on (not on-demand) so comparison stays sound across separately-compiled modules.
    **Not orderable:** `Set`/`Map` (no natural element-wise order) and `Async`/`Seq`/`Exception` —
    comparing them is a type error. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
    equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
@@ -1420,10 +1422,19 @@ Decisions:
    the other). This is *lightweight optics* — the readability win of a lens for nested update without the
    HKT/type-class machinery full optics need (which is a non-goal). `RecordUpdate` carries `Vec<FieldUpdate
    { path, value }>`; the pretty-printer re-emits `a.b`, so it round-trips.
-5. **Lowering reuses the ADT class machinery** (§5). A record type becomes a Python class with its real
-   field names, `__match_args__`, structural `__eq__`/`__hash__`, `__repr__`. `Point { x = 1, y = 2 }`
-   lowers to the positional call `Point(1, 2)` in declared field order — i.e. the *tag erases into the
-   class name it already denotes*, so codegen is unchanged from today.
+5. **Lowering reuses the ADT class machinery** (§5). A record type — like every ADT variant — becomes a
+   **frozen `@dataclass`**: the decorator generates `__init__`, structural `__eq__`/`__hash__`, and
+   `__match_args__` from the field annotations (each field is annotated `object` — the Pyfun type is
+   erased), and `frozen=True` makes the value immutable, matching Pyfun's semantics (the hand-rolled
+   classes it replaced were mutable). A positional `__repr__` is kept (so a value prints the way it was
+   written, `Point(1, 2)` / `Circle(2.0)`, not `Point(x=1, y=2)`), so the dataclass repr is suppressed
+   with `repr=False`. Ordering (§7.1) is where records and sum variants differ: a **record** compares its
+   field tuple, which `@dataclass(order=True)` already provides; a sum **variant** needs a cross-variant
+   key `(index, fields…)`, so it defines `_pf_order_key` + `__lt__` and lets `@functools.total_ordering`
+   derive the other three. This is emitted uniformly (`python_emitter::emit_class`), always-on rather than
+   on-demand, so it stays sound across separately-compiled modules (a type compared in another module still
+   has its comparison methods). `Point { x = 1, y = 2 }` lowers to the positional call `Point(1, 2)` in
+   declared field order — the *tag erases into the class name it already denotes*.
 6. **Syntax disambiguation.** `{` participates in three constructs; the rule is now cleaner because bare
    expression-position literals are gone:
    - A `{` immediately after `=` in a `type` declaration is a **record-type body**.
