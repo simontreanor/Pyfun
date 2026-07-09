@@ -445,7 +445,12 @@ fn emit_class(
     if order.is_some() && record {
         args.push("order=True".to_string());
     }
-    args.push("repr=False".to_string());
+    // A record uses the dataclass-generated repr (`Point(x=1, y=2)`, which names the
+    // fields); a sum variant / builtin keeps a positional one (`Circle(2.0)`, matching
+    // the constructor form `Circle 2.0`), so it suppresses the generated repr.
+    if !record {
+        args.push("repr=False".to_string());
+    }
     line(out, depth, &format!("@dataclass({})", args.join(", ")));
     line(out, depth, &format!("class {name}:"));
 
@@ -457,17 +462,19 @@ fn emit_class(
         line(out, depth + 1, &format!("{f}: {ty}"));
     }
 
-    // Positional `__repr__` (matches the constructor form: `Some(1)`, `Red`, `Ok("x")`).
-    line(out, depth + 1, "def __repr__(self):");
-    if fields.is_empty() {
-        line(out, depth + 2, &format!("return {}", string_literal(name)));
-    } else {
-        let parts = fields
-            .iter()
-            .map(|f| format!("{{self.{f}!r}}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        line(out, depth + 2, &format!("return f\"{name}({parts})\""));
+    if !record {
+        // Positional `__repr__` (matches the constructor form: `Some(1)`, `Red`, `Ok("x")`).
+        line(out, depth + 1, "def __repr__(self):");
+        if fields.is_empty() {
+            line(out, depth + 2, &format!("return {}", string_literal(name)));
+        } else {
+            let parts = fields
+                .iter()
+                .map(|f| format!("{{self.{f}!r}}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            line(out, depth + 2, &format!("return f\"{name}({parts})\""));
+        }
     }
 
     if variant_ordered {

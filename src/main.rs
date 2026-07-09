@@ -98,7 +98,7 @@ fn check(path: &str) -> ExitCode {
     if has_imports(&module) {
         return check_project(path);
     }
-    let (errors, _types, holes) = pyfun::types::check_collecting(&module);
+    let (errors, _types, holes, _ordered) = pyfun::types::check_collecting(&module);
     if errors.is_empty() && holes.is_empty() {
         eprintln!("ok: no type errors");
         return ExitCode::SUCCESS;

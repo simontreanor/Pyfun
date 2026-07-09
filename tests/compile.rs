@@ -1262,9 +1262,10 @@ fn adt_classes_get_structural_hash() {
 
 #[test]
 fn adt_classes_get_derived_ordering() {
-    // Each user variant class gets `<`/`<=`/`>`/`>=` keyed on
-    // `(variant_index, fields…)`; the index sorts by declaration order.
-    let py = pyfun::compile("type Color = Red | Green | Blue\nlet x = Red").unwrap();
+    // A *compared* user variant class gets `<`/`<=`/`>`/`>=` keyed on
+    // `(variant_index, fields…)`; the index sorts by declaration order. (Ordering is
+    // emitted on demand — the `Red < Green` here is what makes `Color` orderable.)
+    let py = pyfun::compile("type Color = Red | Green | Blue\nlet x = Red < Green").unwrap();
     assert!(py.contains("def _pf_order_key(self):"), "{py}");
     assert!(py.contains("def __lt__(self, other):"), "{py}");
     assert!(
@@ -1278,23 +1279,35 @@ fn adt_classes_get_derived_ordering() {
 }
 
 #[test]
+fn ordering_is_emitted_only_when_a_type_is_compared() {
+    // On-demand ordering (`DESIGN.md` §7.1): a sum type that is only matched/constructed,
+    // never compared, sheds `_pf_order_key`/`__lt__`/`@total_ordering` entirely.
+    let py = pyfun::compile("type Color = Red | Green | Blue\nlet x = Red").unwrap();
+    assert!(py.contains("class Red:"), "{py}");
+    assert!(!py.contains("_pf_order_key"), "no ordering when uncompared: {py}");
+    assert!(!py.contains("total_ordering"), "no import when uncompared: {py}");
+}
+
+#[test]
 fn payload_variant_order_key_includes_fields() {
-    let py =
-        pyfun::compile("type Shape = Circle float | Rect float float\nlet x = Circle 1.0").unwrap();
+    let py = pyfun::compile(
+        "type Shape = Circle float | Rect float float\nlet c = Circle 1.0 < Rect 0.0 0.0",
+    )
+    .unwrap();
     assert!(py.contains("return (0, self._0)"), "Circle: {py}");
     assert!(py.contains("return (1, self._0, self._1)"), "Rect: {py}");
 }
 
 #[test]
 fn builtin_option_and_result_get_ordering_but_exception_does_not() {
-    // `Some`/`None_`/`Ok`/`Error` derive ordering (like a user sum type); the
-    // reserved `Exception` record (the `try` payload) does not.
-    let py = pyfun::compile("let x = Some 1").unwrap();
+    // `Some`/`None_`/`Ok`/`Error` derive ordering like a user sum type *when compared*;
+    // the reserved `Exception` record (the `try` payload) never does.
+    let py = pyfun::compile("let x = Some 1 < Some 2").unwrap();
     assert!(py.contains("class Some:"), "{py}");
     assert!(py.contains("_pf_order_key"), "Option gets ordering: {py}");
     let py = pyfun::compile("let x = try (Some 1)").unwrap();
     assert!(py.contains("class _Exception:"), "{py}");
-    // The Exception class has no ordering key (only Some/None_ do here).
+    // The Exception class has no ordering key.
     assert!(
         !py.contains("(0, self.errorKind"),
         "Exception gets no ordering: {py}"
@@ -1339,9 +1352,10 @@ fn e2e_sort_records_and_tuples() {
         let pts = List.sort [Point { x = 2, y = 0 }, Point { x = 1, y = 9 }, Point { x = 1, y = 3 }]
         let tups = List.sort [(1, 3), (1, 2), (0, 9)]
         ",
-        // Records sort field-by-field; tuples lexicographically.
+        // Records sort field-by-field; tuples lexicographically. A record's repr names
+        // its fields (the dataclass default), `Point(x=1, y=3)`.
         &[
-            ("pts", "[Point(1, 3), Point(1, 9), Point(2, 0)]"),
+            ("pts", "[Point(x=1, y=3), Point(x=1, y=9), Point(x=2, y=0)]"),
             ("tups", "[(0, 9), (1, 2), (1, 3)]"),
         ],
     );
@@ -1360,18 +1374,31 @@ fn e2e_sort_a_recursive_type() {
 }
 
 #[test]
-fn record_lowers_to_frozen_ordered_dataclass() {
+fn record_lowers_to_frozen_dataclass() {
     let py =
         pyfun::compile("type Point = { x: int, y: int }\nlet p = Point { y = 4, x = 3 }").unwrap();
-    // A record is a frozen dataclass; `order=True` derives structural comparison from
-    // the field tuple (a record needs no cross-variant key, unlike a sum variant).
-    // Concrete field types are annotated with their Python type (not `object`).
-    assert!(py.contains("@dataclass(frozen=True, order=True"), "{py}");
+    // A record is a frozen dataclass with Python-typed field annotations. It keeps the
+    // dataclass-generated repr (named fields), so no custom `__repr__` is emitted.
+    assert!(py.contains("@dataclass(frozen=True"), "{py}");
     assert!(py.contains("class Point:"), "{py}");
     assert!(py.contains("x: int"), "{py}");
     assert!(py.contains("y: int"), "{py}");
+    assert!(!py.contains("def __repr__"), "records use the dataclass repr: {py}");
     // The literal is reordered to the declared field order for a positional call.
     assert!(py.contains("p = Point(3, 4)"), "{py}");
+    // Uncompared here, so no `order=True` (ordering is on demand, `DESIGN.md` §7.1).
+    assert!(!py.contains("order=True"), "no ordering when uncompared: {py}");
+}
+
+#[test]
+fn a_compared_record_gets_order_true() {
+    // Comparing a record makes it orderable via `@dataclass(order=True)` (field-tuple
+    // compare) — no cross-variant key needed, unlike a sum variant.
+    let py = pyfun::compile(
+        "type Point = { x: int, y: int }\nlet a = Point { x = 1, y = 2 } < Point { x = 1, y = 3 }",
+    )
+    .unwrap();
+    assert!(py.contains("@dataclass(frozen=True, order=True"), "{py}");
 }
 
 #[test]

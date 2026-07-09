@@ -830,7 +830,7 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _schemes, _exports, _records, _measures, _holes) =
+    let (errors, _types, _schemes, _exports, _records, _measures, _holes, _ordered) =
         run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
@@ -885,7 +885,7 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes, types, records, (measures, measure_aliases), _holes) =
+    let (errors, _types, schemes, types, records, (measures, measure_aliases), _holes, _ordered) =
         run(module, false, imports);
     (
         errors,
@@ -907,7 +907,7 @@ pub fn check_module_collecting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports) {
-    let (errors, types, schemes, tys, records, (measures, measure_aliases), _holes) =
+    let (errors, types, schemes, tys, records, (measures, measure_aliases), _holes, _ordered) =
         run(module, true, imports);
     (
         errors,
@@ -929,7 +929,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
-    let (errors, types, _schemes, _exports, _records, _measures, holes) =
+    let (errors, types, _schemes, _exports, _records, _measures, holes, _ordered) =
         run(module, true, imports);
     (errors, types, holes)
 }
@@ -939,10 +939,12 @@ pub fn check_collecting_with_imports(
 /// error list alongside a span→type table resolved against the final substitution.
 /// Unlike [`check`], this never short-circuits to `Err` — the hover table is useful
 /// even for a module that has type errors elsewhere.
-pub fn check_collecting(module: &Module) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
-    let (errors, types, _schemes, _exports, _records, _measures, holes) =
+pub fn check_collecting(
+    module: &Module,
+) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>, HashSet<String>) {
+    let (errors, types, _schemes, _exports, _records, _measures, holes, ordered) =
         run(module, true, &HashMap::new());
-    (errors, types, holes)
+    (errors, types, holes, ordered)
 }
 
 /// Shared core of [`check`] / [`check_collecting`] / [`check_module`]. When
@@ -961,6 +963,8 @@ type RunResult = (
     Vec<(String, RecordInfo)>,
     ExportedMeasures,
     Vec<Hole>,
+    // User type names the program compares (need ordering methods emitted).
+    HashSet<String>,
 );
 
 /// This module's own measures, for its export interface: base names and derived
@@ -1223,6 +1227,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         })
         .collect();
 
+    let ordered = std::mem::take(&mut inf.ordered);
     (
         errors,
         types,
@@ -1231,6 +1236,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         exported_records,
         exported_measures,
         holes,
+        ordered,
     )
 }
 
@@ -3369,6 +3375,13 @@ struct Infer {
     num_subst: HashMap<u32, NumRef>,
     /// Type variables carrying the `comparison` constraint (from `< > <= >=`).
     ord: HashSet<u32>,
+    /// The names of user sum types / records the program actually **compares** (via
+    /// `< <= > >=` / `List.sort` / `min` / `max`), collected at [`Self::require_ord_rec`]
+    /// — the single site where the checker *proves* a type needs ordering. Lowering emits
+    /// the comparison methods only for these (`DESIGN.md` §7.1); an ADT that is only
+    /// matched, never sorted, sheds them. Complete by construction: every ordering site
+    /// funnels through `require_ord`.
+    ordered: HashSet<String>,
     /// Resolution of effect variables.
     eff_subst: HashMap<u32, Effect>,
     /// The effect accumulated for the expression currently being inferred. Saved
@@ -3722,6 +3735,9 @@ impl Infer {
                 if !is_user {
                     return Err(unsupported(&applied));
                 }
+                // This user type is compared somewhere, so it needs ordering methods
+                // emitted (the recursion below records nested types it depends on too).
+                self.ordered.insert(name.clone());
                 // Recursion guard (and memo): a re-visited type is satisfied.
                 if !visiting.insert(show(&applied)) {
                     return Ok(());

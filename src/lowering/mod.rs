@@ -44,11 +44,37 @@ impl std::fmt::Display for LowerError {
     }
 }
 
+/// Which user sum types / records get their comparison methods emitted (`DESIGN.md`
+/// §7.1) — a type only needs `__lt__`/`_pf_order_key` (or, for a record,
+/// `@dataclass(order=True)`) where the program actually compares it.
+pub enum OrderPolicy {
+    /// Order every user type — the sound default for a multi-file project, where a
+    /// type declared in one module may be compared in another, separately-compiled one.
+    All,
+    /// Order only these types — a single-file compile sees the whole program, so it can
+    /// emit ordering exactly where a type is compared and shed it everywhere else.
+    OnDemand(HashSet<String>),
+}
+
+impl OrderPolicy {
+    fn needs(&self, type_name: &str) -> bool {
+        match self {
+            OrderPolicy::All => true,
+            OrderPolicy::OnDemand(set) => set.contains(type_name),
+        }
+    }
+}
+
 /// Lower a whole (single-file) module to a Python module — the `Option`/`Result`
 /// classes are inlined, the original behavior.
-pub fn lower(module: &Module, float_literals: &HashSet<Span>) -> Result<PyModule, LowerError> {
+pub fn lower(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+) -> Result<PyModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.float_literals = float_literals.clone();
+    lowerer.order = order;
     lowerer.lower_module(module)
 }
 
@@ -129,8 +155,10 @@ pub fn lower_in_project(
 /// `None_`/`_Exception` classes every project module imports, so those values are
 /// `isinstance`-compatible across files (`DESIGN.md` §6.1).
 pub fn runtime_module() -> PyModule {
-    let mut body = result_prelude();
-    body.extend(option_prelude());
+    // The shared runtime is a project artifact (multi-file), so it always carries the
+    // comparison methods — a `Result`/`Option` may be compared in any importing module.
+    let mut body = result_prelude(true);
+    body.extend(option_prelude(true));
     body.extend(exception_prelude());
     PyModule { body }
 }
@@ -218,6 +246,10 @@ struct Lowerer {
     /// module can reference it as `mathx.sqrt` (`DESIGN.md` §6.1); single-file
     /// lowering keeps externs fully erased (references inline to their dotted target).
     project_mode: bool,
+    /// Which user types get comparison methods emitted (`DESIGN.md` §7.1). `All` for a
+    /// project (sound across separate compilation); `OnDemand` for a single file (only
+    /// the types the program actually compares).
+    order: OrderPolicy,
     /// Stack of enclosing *function* scopes (one frame of bound names per nested
     /// function; empty at module level). Used to classify a captured-and-reassigned
     /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
@@ -401,6 +433,8 @@ impl Lowerer {
             imported_nullary_ctors: HashSet::new(),
             use_runtime: false,
             project_mode: false,
+            // Default to the sound multi-file policy; single-file `lower` overrides it.
+            order: OrderPolicy::All,
             fn_local_stack: Vec::new(),
             tmp_counter: 0,
             fn_counter: 0,
@@ -434,10 +468,13 @@ impl Lowerer {
                 }
             }
             if let Item::Type(decl) = item {
+                // Ordering methods are emitted only where the program compares this type
+                // (`DESIGN.md` §7.1); `order` is `Some(rank)` then, `None` otherwise.
+                let ordered = self.order.needs(&decl.name);
                 match &decl.kind {
                     TypeDeclKind::Sum(variants) => {
                         // The variant's declaration index is its ordering rank, so a
-                        // user sum type derives structural `<` (`DESIGN.md` §7.1).
+                        // compared sum type derives structural `<`.
                         for (index, variant) in variants.iter().enumerate() {
                             let fields =
                                 (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
@@ -445,7 +482,7 @@ impl Lowerer {
                                 name: py_ctor_name(&variant.name),
                                 fields,
                                 field_types: variant.fields.iter().map(py_annotation).collect(),
-                                order: Some(index),
+                                order: ordered.then_some(index),
                                 record: false,
                             });
                         }
@@ -456,7 +493,7 @@ impl Lowerer {
                             name: decl.name.clone(),
                             fields: fields.iter().map(|f| f.name.clone()).collect(),
                             field_types: fields.iter().map(|f| py_annotation(&f.ty)).collect(),
-                            order: Some(0),
+                            order: ordered.then_some(0),
                             record: true,
                         });
                     }
@@ -564,7 +601,7 @@ impl Lowerer {
                     names: vec!["Ok".to_string(), "Error".to_string()],
                 });
             } else {
-                body.extend(result_prelude());
+                body.extend(result_prelude(self.order.needs("Result")));
             }
         }
         if self.needs_option {
@@ -574,7 +611,7 @@ impl Lowerer {
                     names: vec!["Some".to_string(), "None_".to_string()],
                 });
             } else {
-                body.extend(option_prelude());
+                body.extend(option_prelude(self.order.needs("Option")));
             }
         }
         if self.needs_exception {
@@ -2661,22 +2698,22 @@ fn py_annotation(ty: &crate::parser::ast::TypeExpr) -> String {
 }
 
 /// The `Ok`/`Error` classes backing the `result` computation expression.
-fn result_prelude() -> Vec<PyStmt> {
-    // Ordered `Ok < Error` (Ok is variant 0), so `Result a e` derives ordering
-    // like a user sum type when its payloads are orderable.
+fn result_prelude(ordered: bool) -> Vec<PyStmt> {
+    // Ordered `Ok < Error` (Ok is variant 0) when the program compares `Result` values
+    // (§7.1); otherwise the comparison methods are omitted like any never-sorted type.
     vec![
         PyStmt::ClassDef {
             name: "Ok".to_string(),
             fields: vec!["_0".to_string()],
             field_types: vec!["object".to_string()],
-            order: Some(0),
+            order: ordered.then_some(0),
             record: false,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
             fields: vec!["_0".to_string()],
             field_types: vec!["object".to_string()],
-            order: Some(1),
+            order: ordered.then_some(1),
             record: false,
         },
     ]
@@ -2699,22 +2736,22 @@ fn exception_prelude() -> Vec<PyStmt> {
 /// The `Some`/`None_` classes backing the built-in `Option` type (`None` is mangled
 /// to dodge the Python keyword). Structural `__eq__`/`__repr__`/`__match_args__` come
 /// from `emit_class`, like any data constructor.
-fn option_prelude() -> Vec<PyStmt> {
-    // Ordered `None < Some` (None is variant 0), so `Option a` derives ordering
-    // like a user sum type when `a` is orderable.
+fn option_prelude(ordered: bool) -> Vec<PyStmt> {
+    // Ordered `None < Some` (None is variant 0) when the program compares `Option`
+    // values (§7.1); otherwise the comparison methods are omitted.
     vec![
         PyStmt::ClassDef {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
             field_types: vec!["object".to_string()],
-            order: Some(1),
+            order: ordered.then_some(1),
             record: false,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
             fields: vec![],
             field_types: vec![],
-            order: Some(0),
+            order: ordered.then_some(0),
             record: false,
         },
     ]

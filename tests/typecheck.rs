@@ -2579,7 +2579,7 @@ fn a_user_definition_shadows_the_prelude_combinators() {
 /// The holes reported for `source` (their `name`, resolved `ty`).
 fn holes_of(source: &str) -> Vec<(Option<String>, String)> {
     let module = pyfun::parse(source).expect("parse");
-    let (_errors, _types, holes) = pyfun::types::check_collecting(&module);
+    let (_errors, _types, holes, _ordered) = pyfun::types::check_collecting(&module);
     holes.into_iter().map(|h| (h.name, h.ty)).collect()
 }
 
@@ -2619,7 +2619,7 @@ fn a_hole_blocks_compilation() {
 /// The valid hole fits reported for the (single) hole in `source`.
 fn fits_of(source: &str) -> Vec<String> {
     let module = pyfun::parse(source).expect("parse");
-    let (_e, _t, holes) = pyfun::types::check_collecting(&module);
+    let (_e, _t, holes, _ordered) = pyfun::types::check_collecting(&module);
     assert_eq!(holes.len(), 1, "expected exactly one hole");
     holes.into_iter().next().unwrap().fits
 }
@@ -2652,7 +2652,7 @@ fn an_unconstrained_hole_lists_no_fits() {
 /// The refinement fits (functions applied to holes) reported for the single hole.
 fn refinements_of(source: &str) -> Vec<String> {
     let module = pyfun::parse(source).expect("parse");
-    let (_e, _t, holes) = pyfun::types::check_collecting(&module);
+    let (_e, _t, holes, _ordered) = pyfun::types::check_collecting(&module);
     assert_eq!(holes.len(), 1, "expected exactly one hole");
     holes.into_iter().next().unwrap().refinements
 }
