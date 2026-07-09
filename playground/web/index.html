@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pyfun Playground</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>Pyfun <span>Playground</span></h1>
+    <p>
+      Write Pyfun on the left; the readable Python it compiles to appears on the right —
+      type-checked live by the real compiler, running in your browser via WebAssembly.
+      No server, no runtime library.
+    </p>
+  </header>
+
+  <main>
+    <section class="pane">
+      <div class="pane-label">Pyfun</div>
+      <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
+      <div id="diagnostics"></div>
+    </section>
+    <section class="pane">
+      <div class="pane-label">Compiled Python</div>
+      <pre id="output"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <a href="https://github.com/simontreanor/Pyfun">GitHub</a>
+    &middot; <code>pip install pyfun-lang</code>
+    &middot; the compiler on this page <em>is</em> the WebAssembly it loaded
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
