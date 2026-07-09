@@ -584,8 +584,10 @@ no enforced visibility. All four shaping decisions were taken deliberately:
 - **All public.** Every top-level binding is exported; no `pub` keyword — Python has no enforced private
   (`_underscore` is convention only). Visibility control is **deferred**.
 - **Implicit recursion** (landed — slice 0, independent of the rest): a *function* binding (`let f x =
-  …`) is in scope in its own body, like Python's `def` — no `rec` keyword. A plain value binding still cannot
-  self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in Python). Mechanism:
+  …`) is in scope in its own body, like Python's `def` — no `rec` keyword (an F#/ML `let rec f x = …` is
+  rejected with a hint to drop `rec`, rather than silently binding a function named `rec`). A plain value
+  binding still cannot self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in
+  Python). Mechanism:
   pre-bind `f : α` (fresh) before inferring the body, unify, then generalize (standard monomorphic-
   recursion HM); lowering is unchanged (Python functions are already recursive). **Mutual recursion**
   (landed) extends this to *groups*: `run` builds the dependency graph among top-level `let` bindings
