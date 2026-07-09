@@ -2747,7 +2747,76 @@ fn decode_pipeline_is_pure() {
     assert!(py.contains("_pf_dec_decode_string"), "{py}");
 }
 
+// ---------- interop cookbook examples (regression guard on the showcase) ----------
+//
+// Each `examples/interop/*.pyfun` is a public-facing showcase whose file comments
+// commit to an exact stdout. These run the actual files end-to-end and pin that
+// output, so a compiler change can't silently break the samples a newcomer reads.
+
+#[test]
+fn e2e_example_json_decode() {
+    run_example("json_decode.pyfun", &["6.5", "0.0", "9.5", "0.0"]);
+}
+
+#[test]
+fn e2e_example_json_to_adt() {
+    run_example(
+        "json_to_adt.pyfun",
+        &[
+            "ada (36): admin, dev",
+            "decode failed (KeyError): 'roles'",
+            "decode failed (ValueError): expected an int, got str",
+            "decode failed (JSONDecodeError): Expecting value: line 1 column 1 (char 0)",
+        ],
+    );
+}
+
+#[test]
+fn e2e_example_sqlite_query() {
+    run_example("sqlite_query.pyfun", &["[(1, 1), (2, 4), (3, 9)]", "6"]);
+}
+
+#[test]
+fn e2e_example_read_files() {
+    run_example(
+        "read_files.pyfun",
+        &[
+            "hello from pyfun",
+            "(could not read no_such_file.txt: FileNotFoundError)",
+        ],
+    );
+}
+
+#[test]
+fn e2e_example_http_fetch() {
+    run_example(
+        "http_fetch.pyfun",
+        &["ok: hello pyfun", "failed: ValueError", "https /data.json"],
+    );
+}
+
 // ---------- helpers ----------
+
+/// Compile the interop example `name` from `examples/interop/`, run the emitted
+/// Python, and assert its stdout is exactly `expected` (one entry per printed line).
+/// Skipped (not failed) when no interpreter is on PATH, like the other e2e tests.
+fn run_example(name: &str, expected: &[&str]) {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping {name} e2e: no python interpreter found");
+        return;
+    };
+    let path = format!("{}/examples/interop/{name}", env!("CARGO_MANIFEST_DIR"));
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let program =
+        pyfun::compile(&source).unwrap_or_else(|e| panic!("compiling {name} failed: {e}"));
+    let stdout = run_python(&python, &program);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines, expected,
+        "stdout drift in {name}\nfull stdout:\n{stdout}"
+    );
+}
 
 /// Compile `source`, then run the emitted Python and assert that each named
 /// top-level binding stringifies (`str(...)`) to the expected value.
