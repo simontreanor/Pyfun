@@ -1365,12 +1365,32 @@ fn record_lowers_to_frozen_ordered_dataclass() {
         pyfun::compile("type Point = { x: int, y: int }\nlet p = Point { y = 4, x = 3 }").unwrap();
     // A record is a frozen dataclass; `order=True` derives structural comparison from
     // the field tuple (a record needs no cross-variant key, unlike a sum variant).
+    // Concrete field types are annotated with their Python type (not `object`).
     assert!(py.contains("@dataclass(frozen=True, order=True"), "{py}");
     assert!(py.contains("class Point:"), "{py}");
-    assert!(py.contains("x: object"), "{py}");
-    assert!(py.contains("y: object"), "{py}");
+    assert!(py.contains("x: int"), "{py}");
+    assert!(py.contains("y: int"), "{py}");
     // The literal is reordered to the declared field order for a positional call.
     assert!(py.contains("p = Point(3, 4)"), "{py}");
+}
+
+#[test]
+fn dataclass_fields_get_python_type_annotations() {
+    // Concrete builtins map to their Python type; a type variable / user type / Option
+    // maps to `object` (mapping a user type name would risk a forward reference).
+    let py = pyfun::compile(
+        "type Opt a = None2 | Has a\n\
+         type Rec = { count: int, ratio: float, label: string, tags: List string, maybe: Opt int }\n\
+         let r = Rec { count = 1, ratio = 2.0, label = \"x\", tags = [], maybe = None2 }",
+    )
+    .unwrap();
+    assert!(py.contains("count: int"), "{py}");
+    assert!(py.contains("ratio: float"), "{py}");
+    assert!(py.contains("label: str"), "{py}");
+    assert!(py.contains("tags: list"), "{py}");
+    assert!(py.contains("maybe: object"), "user-typed field is object: {py}");
+    // A generic ADT payload (`Has a`) is also `object`.
+    assert!(py.contains("_0: object"), "{py}");
 }
 
 #[test]

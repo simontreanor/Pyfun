@@ -1424,8 +1424,10 @@ Decisions:
    { path, value }>`; the pretty-printer re-emits `a.b`, so it round-trips.
 5. **Lowering reuses the ADT class machinery** (§5). A record type — like every ADT variant — becomes a
    **frozen `@dataclass`**: the decorator generates `__init__`, structural `__eq__`/`__hash__`, and
-   `__match_args__` from the field annotations (each field is annotated `object` — the Pyfun type is
-   erased), and `frozen=True` makes the value immutable, matching Pyfun's semantics (the hand-rolled
+   `__match_args__` from the field annotations (each field is annotated with its Python type where that
+   maps to a concrete builtin — `int`/`float`/`str`/`list`/… — else `object`, e.g. for a type variable, a
+   user ADT, `Option`, or a function; a user type *name* is never emitted, to avoid a forward reference),
+   and `frozen=True` makes the value immutable, matching Pyfun's semantics (the hand-rolled
    classes it replaced were mutable). A positional `__repr__` is kept (so a value prints the way it was
    written, `Point(1, 2)` / `Circle(2.0)`, not `Point(x=1, y=2)`), so the dataclass repr is suppressed
    with `repr=False`. Ordering (§7.1) is where records and sum variants differ: a **record** compares its

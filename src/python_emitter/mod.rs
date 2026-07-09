@@ -70,6 +70,11 @@ pub enum PyStmt {
     ClassDef {
         name: String,
         fields: Vec<String>,
+        /// The Python type annotation for each field (parallel to `fields`), e.g.
+        /// `"int"`/`"float"`/`"str"`/`"list"`, or `"object"` when the Pyfun type
+        /// doesn't map to a concrete builtin (a type variable, a user ADT, `Option`,
+        /// a function). Dataclass requires an annotation; the value is erased anyway.
+        field_types: Vec<String>,
         order: Option<usize>,
         /// A **record** (named-field product) vs a sum **variant** / builtin
         /// (positional). Records derive ordering from `@dataclass(order=True)`
@@ -400,9 +405,10 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::ClassDef {
             name,
             fields,
+            field_types,
             order,
             record,
-        } => emit_class(name, fields, *order, *record, depth, out),
+        } => emit_class(name, fields, field_types, *order, *record, depth, out),
     }
 }
 
@@ -422,6 +428,7 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
 fn emit_class(
     name: &str,
     fields: &[String],
+    field_types: &[String],
     order: Option<usize>,
     record: bool,
     depth: usize,
@@ -442,11 +449,12 @@ fn emit_class(
     line(out, depth, &format!("@dataclass({})", args.join(", ")));
     line(out, depth, &format!("class {name}:"));
 
-    // Fields as annotations, so the dataclass recognizes them (`object` = any value;
-    // the Pyfun type is erased). A field-less variant has no annotations — its body
-    // is the methods below, which is a valid non-empty suite.
-    for f in fields {
-        line(out, depth + 1, &format!("{f}: object"));
+    // Fields as annotations, so the dataclass recognizes them. The annotation is the
+    // field's Python type where it maps to a concrete builtin (`int`/`float`/`str`/
+    // `list`/…), else `object` — the value is erased either way. A field-less variant
+    // has no annotations; its body is the methods below (a valid non-empty suite).
+    for (f, ty) in fields.iter().zip(field_types) {
+        line(out, depth + 1, &format!("{f}: {ty}"));
     }
 
     // Positional `__repr__` (matches the constructor form: `Some(1)`, `Red`, `Ok("x")`).

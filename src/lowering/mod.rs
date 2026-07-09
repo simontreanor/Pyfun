@@ -426,6 +426,8 @@ impl Lowerer {
                     classes.push(PyStmt::ClassDef {
                         name: ap_case_class(&case),
                         fields: (0..arity).map(|i| format!("_{i}")).collect(),
+                        // The captured values can be any type — no concrete annotation.
+                        field_types: vec!["object".to_string(); arity],
                         order: None,
                         record: false,
                     });
@@ -442,6 +444,7 @@ impl Lowerer {
                             classes.push(PyStmt::ClassDef {
                                 name: py_ctor_name(&variant.name),
                                 fields,
+                                field_types: variant.fields.iter().map(py_annotation).collect(),
                                 order: Some(index),
                                 record: false,
                             });
@@ -452,6 +455,7 @@ impl Lowerer {
                         classes.push(PyStmt::ClassDef {
                             name: decl.name.clone(),
                             fields: fields.iter().map(|f| f.name.clone()).collect(),
+                            field_types: fields.iter().map(|f| py_annotation(&f.ty)).collect(),
                             order: Some(0),
                             record: true,
                         });
@@ -2632,6 +2636,30 @@ fn call1(name: &str, arg: PyExpr) -> PyExpr {
     }
 }
 
+/// The Python type annotation for a record/variant field, for its emitted `@dataclass`
+/// field. A concrete builtin maps to its Python type (`int`/`float`/`str`/`list`/…);
+/// anything else — a type variable, a user ADT/record, `Option`/`Result`, a function —
+/// maps to `object`. The annotation only lets the dataclass recognize the field (the
+/// value is erased), and mapping a user type *name* here would risk a forward reference.
+fn py_annotation(ty: &crate::parser::ast::TypeExpr) -> String {
+    use crate::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Con(name, _, args) => match (name.as_str(), args.len()) {
+            ("int", 0) => "int",
+            ("float", 0) => "float",
+            ("bool", 0) => "bool",
+            ("string", 0) => "str",
+            ("List", 1) => "list",
+            ("Set", 1) => "set",
+            ("Map", 2) => "dict",
+            _ => "object",
+        }
+        .to_string(),
+        TypeExpr::Tuple(_) => "tuple".to_string(),
+        TypeExpr::Fun(..) => "object".to_string(),
+    }
+}
+
 /// The `Ok`/`Error` classes backing the `result` computation expression.
 fn result_prelude() -> Vec<PyStmt> {
     // Ordered `Ok < Error` (Ok is variant 0), so `Result a e` derives ordering
@@ -2640,12 +2668,14 @@ fn result_prelude() -> Vec<PyStmt> {
         PyStmt::ClassDef {
             name: "Ok".to_string(),
             fields: vec!["_0".to_string()],
+            field_types: vec!["object".to_string()],
             order: Some(0),
             record: false,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
             fields: vec!["_0".to_string()],
+            field_types: vec!["object".to_string()],
             order: Some(1),
             record: false,
         },
@@ -2660,6 +2690,7 @@ fn exception_prelude() -> Vec<PyStmt> {
     vec![PyStmt::ClassDef {
         name: "_Exception".to_string(),
         fields: vec!["errorKind".to_string(), "errorMessage".to_string()],
+        field_types: vec!["str".to_string(), "str".to_string()],
         order: None,
         record: false,
     }]
@@ -2675,12 +2706,14 @@ fn option_prelude() -> Vec<PyStmt> {
         PyStmt::ClassDef {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
+            field_types: vec!["object".to_string()],
             order: Some(1),
             record: false,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
             fields: vec![],
+            field_types: vec![],
             order: Some(0),
             record: false,
         },
