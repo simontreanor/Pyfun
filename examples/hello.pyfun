@@ -188,12 +188,15 @@ let small =
     yield 3
   }
 
-#   async {} — lowered to a Python coroutine (async def / await).
+#   async {} — lowered to a Python coroutine (async def / await). A coroutine must be
+#   awaited somewhere, so run one to a value with an `extern` over `asyncio.run`.
+extern runAsync: Async a -> a = asyncio.run
 let computed =
   async {
     let! x = async { return 20 }
     return x + 1
   }
+print (runAsync computed)          # 21
 
 # User-defined CE builders: any in-file `module` providing `bind`/`return_` (and
 # `yield_`/`combine`/`delay`/… for sequence builders) is a builder. `Maybe { … }`
