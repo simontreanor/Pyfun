@@ -621,6 +621,19 @@ fn reports_errors_for_malformed_input() {
 }
 
 #[test]
+fn let_rec_is_rejected_with_a_helpful_hint() {
+    // Pyfun has no `rec` keyword (functions are implicitly recursive). The F#/ML
+    // `let rec f x = …` would otherwise silently define a function named `rec`; we
+    // catch it and point at the fix.
+    let err = parse("let rec f x = x").unwrap_err();
+    assert!(err.message().contains("`rec` is not a keyword"), "{}", err.message());
+    // A binding genuinely named `rec` with no params is still fine (a plain value).
+    assert!(parse("let rec = 1").is_ok());
+    // …and so is the corrected form.
+    assert!(parse("let f x = x").is_ok());
+}
+
+#[test]
 fn doc_comment_attaches_to_the_following_declaration() {
     // `## …` lines at column 0 join (with `\n`) onto the next top-level
     // `let`/`type`/`extern`; the printer re-emits them, one `## ` line each.

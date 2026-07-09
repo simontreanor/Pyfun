@@ -673,6 +673,19 @@ impl Parser {
         while let Tok::Ident(_) = self.peek() {
             params.push(self.parse_param()?);
         }
+        // `let rec f x = …` is F#/ML muscle memory: Pyfun has no `rec` keyword — a
+        // function binding is already recursive in its own body (like a Python `def`,
+        // `DESIGN.md` §"Implicit recursion"). Left alone this would silently define a
+        // function *named* `rec` with parameters `f x`, then fail downstream with a
+        // baffling `unbound name f`. Catch the shape and say so.
+        if name == "rec" && !params.is_empty() {
+            return Err(ParseError {
+                message: "`rec` is not a keyword in Pyfun — a `let` function is already \
+                          recursive in its own body, so drop `rec` (write `let f x = …`)"
+                    .to_string(),
+                span: name_span.span(),
+            });
+        }
         if is_discard && !params.is_empty() {
             return Err(self.error("a discard binding `_` cannot take parameters"));
         }
