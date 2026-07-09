@@ -37,9 +37,9 @@ let area s =
 ```console
 $ pyfun check shapes.pyfun
 error: non-exhaustive match: `Rect _ _` is not matched
- --> 4:3
+ --> 5:3
   |
-4 |   match s:
+5 |   match s:
   |   ^^^^^^^^
 ```
 
@@ -108,7 +108,7 @@ checks mandatory.
 | **Missing `case`** | silently falls through, returns `None` | **exhaustiveness error** with a concrete missing-case witness |
 | **Mutation** | everything is mutable, everywhere | immutable by default; `let mut` + `<-` is opt-in and tracked |
 | **Side effects** | invisible | **inferred and tracked**; `let pure` is a compile-checked promise |
-| **Units / dimensions** | a comment and a prayer | `10<N> / 2<m^2> : float<Pa>`, checked and then erased |
+| **Units / dimensions** | a comment and a prayer | `100<m> / 10<s> : float<m/s>`, checked and then erased |
 | **Runtime** | CPython | **CPython**: Pyfun *is* Python once compiled |
 
 **Why not just `mypy`/`pyright`?** They're a gradual, optional overlay: unsound by design, never
