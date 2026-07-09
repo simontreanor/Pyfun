@@ -44,6 +44,32 @@ error: non-exhaustive match: `Rect _ _` is not matched
 > units, and match exhaustiveness **before a single line of Python is emitted**, then hands you
 > code you can read, diff, and ship.
 
+And when it compiles, the output *is* the point. There's no runtime library to ship and nothing to
+read around — your `match` becomes Python's `match`/`case`, one for one:
+
+```fsharp
+let grade score =
+  match score:
+    case s if s >= 90: "A"
+    case s if s >= 80: "B"
+    case _: "C"
+```
+
+```python
+# exactly what `pyfun compile` emits — no wrappers, no runtime:
+def grade(score):
+    match score:
+        case s if s >= 90:
+            return "A"
+        case s if s >= 80:
+            return "B"
+        case _:
+            return "C"
+```
+
+A Pyfun `List` is a Python `list`, a record is a plain class, and `extern` calls a real library
+directly ([fuller example below](#type-checked-python-interop)).
+
 ---
 
 ## Made for the classroom
@@ -179,6 +205,26 @@ let area s =
     case Rect w h: w * h
 # forget a case and the compiler reports the missing witness, e.g. `Rect _ _ is not matched`
 ```
+
+**Decode untrusted JSON into typed data, totally.** `json.loads` hands back an untyped dict that
+explodes three layers downstream. The built-in Elm-style `Decode` module turns JSON into your own
+records — a missing field or wrong type is a value you handle, never an `AttributeError` an hour later:
+
+```fsharp
+type User = { name: string, age: int }
+
+let user =
+  Decode.map2 (fun name age -> User { name = name, age = age })
+    (Decode.field "name" Decode.string)
+    (Decode.field "age" Decode.int)
+
+# Decode.decodeString user : string -> Result User Exception
+#   good input   -> Ok (a typed User)
+#   missing/bad  -> Error (a value describing exactly what was wrong)
+```
+
+The [`examples/interop/`](https://github.com/simontreanor/Pyfun/blob/main/examples/interop) cookbook
+calls `json`, `sqlite3`, `pathlib`, and `urllib` this way — typed and effect-tracked at the boundary.
 
 **Pipelines, currying, composition.** F#'s `|>`, `<|`, `>>`, `<<`, and operator sections `(+)`:
 
