@@ -1,0 +1,16 @@
+[package]
+name = "pyfun-playground"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Browser playground for Pyfun — the compiler built to WebAssembly. Not published."
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+# The core compiler (dependency-free) plus the one binding this shim needs.
+[dependencies]
+pyfun = { path = ".." }
+wasm-bindgen = "0.2"

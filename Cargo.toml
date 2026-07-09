@@ -8,6 +8,14 @@ authors = ["Simon Treanor"]
 license = "Apache-2.0"
 repository = "https://github.com/simontreanor/Pyfun"
 
+# The `pyfun` compiler crate stays dependency-free. The WASM playground is a separate
+# workspace member that depends on `wasm-bindgen`; `default-members` keeps bare
+# `cargo build` / `cargo test` scoped to the compiler, so normal workflows are
+# unchanged and the playground is built explicitly with wasm-pack.
+[workspace]
+members = ["playground"]
+default-members = ["."]
+
 # Phase 1 is intentionally dependency-free (pure std): lexer + parser + AST + pretty-printer.
 # clap (CLI), an LSP crate, etc. arrive in later phases — see DESIGN.md.
 [dependencies]
