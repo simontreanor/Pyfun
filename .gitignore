@@ -1,7 +1,8 @@
 # Rust / Cargo
 /target
 # Secondary target dir used while the LSP server holds a lock on /target.
-/target-test
+# Unanchored so nested crates (e.g. a wasm-pack build under playground/) are covered too.
+target-test/
 
 # Cargo.lock is committed for binaries (this crate ships a `pyfun` bin).
 
