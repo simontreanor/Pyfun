@@ -60,25 +60,28 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `PyExpr::CallKw` variant (emitter), and kwarg injection at the two extern call sites in lowering (the
   general and receiver-method paths). Fits the trusted-contract boundary — the programmer still signs the
   signature. `DESIGN.md` §6.
-- **Performance-directed lowering — defunctionalize hot folds/pipelines** (L) — today `Seq.fold f init xs`
-  lowers to `functools.reduce(f, xs, init)` (a Python call per element) and a `Seq.map`/`filter`/`fold`
-  chain to nested lazy `map`/`filter`/`islice` (a call per element per stage), so a hot loop pays call
-  overhead and immutable-accumulator churn a hand-written Python `for` loop doesn't. The
-  `examples/interop/network-rail` pair measures it: the pure-Pyfun `Seq.fold` over ~20M lines runs ~15x
-  slower than the equivalent native Python loop — and that gap is entirely a *lowering-shape* artifact
-  (per-element calls, a `match`-destructure + rebuild of the tuple accumulator each iteration, an O(n²)
-  `List.concat` append), not anything fundamental. This is the **same defunctionalization instinct the
-  compiler already applies to currying** (fully-applied calls collapse to direct `f(a, b)`, closures only
-  for real partial application; `DESIGN.md` §5–6), extended to iteration.
+- **Performance-directed lowering — in-place accumulation + defunctionalize hot folds** (L) — the
+  `examples/interop/network-rail` pair measures the cost of naive lowering: the pure-Pyfun `Seq.fold` over
+  the ~660k-line feed runs ~15x slower than the equivalent native-Python loop. **Profiling (2026-07-09)
+  pinpoints the culprit, and it is *not* call overhead:** `Map.add` lowers to
+  `dict(list(m.items()) + [[k, v]])` — a full O(n) dict copy *per insert* — so building the ~12k-entry
+  tiploc map inside the fold is O(n²), and cProfile put `_pf_map_add` at **87% of runtime**.
+  `List.concat`/`Set.add` share the shape. The per-element `functools.reduce` / `_pf_str_contains` call
+  overhead is real but secondary. A hand-written prototype of the fix — a mutable accumulator so
+  `Map.add`→`m[k] = v` and `List.concat`→`xs.append(e)` — ran **24.6x faster with byte-identical output**.
+  The instinct is the one the compiler already applies to currying (fully-applied calls collapse to direct
+  `f(a, b)`; `DESIGN.md` §5–6), extended to iteration.
 
-  Tiered plan, readable wins first. **(1)** Recognize `Seq.fold`/`Seq.iter` with an *inlinable* folder
-  (lambda literal or small local) and emit an imperative `for` loop with the body spliced in; when `init`
-  is a tuple threaded *linearly* (a fold accumulator always is), split it into **mutable locals** the body
-  updates in place (`d[k] = v`, `xs.append(e)`) instead of rebuilding — this alone should recover most of
-  the network-rail gap, since the result is essentially the Python the helper hand-wrote. **(2)** Stream-
-  fuse `map`/`filter`/`take`/`fold` pipelines into a single loop (deforestation) so no intermediate
-  iterators are built. **(3)** Micro-opts (hoist method lookups out of loops, etc.) — gated, since they
-  erode the line-to-line source correspondence Pyfun's *readable-output* promise depends on.
+  Tiered plan, biggest measured win first. **(1) In-place linear accumulation** (the 24x). When a
+  `Seq.fold`/`List.fold` threads its accumulator *linearly* (a fold's acc always does) and updates it only
+  via copy-returning collection ops (`Map.add`/`List.concat`/`Set.add`), inline the folder into a `for`
+  loop and rewrite those ops to in-place mutation of a mutable local (`m[k] = v`, `xs.append(e)`). (A
+  persistent-map/HAMT `Map` would kill the O(n²) generally, even outside folds, but is more work and still
+  loses to a bare `dict` on this pattern.) **(2)** Splice the folder body inline to drop the residual
+  per-element call overhead. **(3)** Stream-fuse `map`/`filter`/`take`/`fold` pipelines into one loop
+  (deforestation) so no intermediate iterators are built. **(4)** Gated micro-opts (hoist method lookups
+  out of loops), since they erode the line-to-line source correspondence Pyfun's *readable-output* promise
+  depends on.
 
   The hard parts are the enabling analyses, not the emission: an **inlinability** check on the folder, a
   **linearity/aliasing** check to license in-place accumulator mutation soundly (a fold's acc qualifies; a
@@ -92,8 +95,8 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   that is plenty. It **complements, not replaces, the `extern` boundary**: better lowering raises the floor
   so the pure version is viable more often, while a genuinely hot inner loop still belongs behind an
   `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
-  that already exists." Scope narrowly to start (tier 1, `Seq.fold`/`iter`), measure against the
-  network-rail example, and let that decide whether tier 2 earns its keep.
+  that already exists." Tier 1 is already measured (24.6x on the example, output-identical) and clearly
+  earns its keep — start there; tiers 2–4 are incremental and can be judged as they land.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
