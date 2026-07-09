@@ -39,6 +39,18 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 - **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
   `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
   date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
+- **`extern` stub generator** (L) — a `pyfun stub <module.pyi>` tool that reads a Python type stub (PEP 484
+  `.pyi`) and emits a *starting-point* `.pyfun` `extern` file: an `extern type` handle per class, an
+  `extern` signature per function/method (instance methods as the `= .method()` receiver form, §6). Cuts the
+  mechanical bulk of wrapping a library and complements the deferred façade/package-manager story below
+  (generate bindings, refine, publish once, `import` many). **Explicitly a scaffold, not an oracle:** a
+  `.pyi` cannot express what Pyfun most wants — effects (`io`/`async`), units, ADT/`Result` totality — and
+  hints are frequently absent or `Any`, so every generated arrow would be `io`-by-default and every unmapped
+  type an opaque `extern type` or an open `-> a` for the human to tighten (cf. widening the HTTP body to a
+  named `Bytes` handle in `examples/interop/http_fetch.pyfun`). This keeps the trusted-contract model (§4):
+  the tool proposes a signature, the programmer still signs it. Needs a small dependency-free `.pyi`-subset
+  parser. Note it does **not** remove extern annotations — the boundary contract is the one place Pyfun asks
+  for types on purpose; the generator only drafts them. `DESIGN.md` §6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
