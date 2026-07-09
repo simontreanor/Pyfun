@@ -72,11 +72,18 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   The instinct is the one the compiler already applies to currying (fully-applied calls collapse to direct
   `f(a, b)`; `DESIGN.md` §5–6), extended to iteration.
 
-  Tiered plan, biggest measured win first. **(1) In-place linear accumulation** (the 24x). When a
+  Tiered plan, biggest measured win first. **(1) In-place linear accumulation — LANDED (Tier A).** When a
   `Seq.fold`/`List.fold` threads its accumulator *linearly* (a fold's acc always does) and updates it only
-  via copy-returning collection ops (`Map.add`/`List.concat`/`Set.add`), inline the folder into a `for`
-  loop and rewrite those ops to in-place mutation of a mutable local (`m[k] = v`, `xs.append(e)`). (A
-  persistent-map/HAMT `Map` would kill the O(n²) generally, even outside folds, but is more work and still
+  via copy-returning collection ops (`Map.add`/`List.concat`/`Set.add`), the folder is inlined into a `for`
+  loop and those ops are rewritten to in-place mutation of a mutable local (`m[k] = v`, `xs.append(e)`).
+  Shipped as `src/lowering/fold_loop.rs` (hooked in `lower_application`, default-on with a `PYFUN_NO_FOLD_OPT`
+  kill switch; `DESIGN.md` §5.1): a two-phase, side-effect-free syntactic analysis (P1–P11 of the design
+  memo) that also inlines the folder body (tier 2, below), so it subsumes item (2) for the qualifying shape.
+  The `network-rail` `scan` now emits the mutable-accumulator loop with **byte-identical output** to the
+  `reduce` form (differential-gated). *Tier B deferral:* local named folders (e.g. `dedupLegs`'s inner
+  `step`), chained updates in one slot, fresh-reset slots (`(Map.empty, runs)`), `Map.remove`/`Set.remove`
+  (`m.pop`/`s.discard`), and defensive-copy `Var` inits — each rejects and falls back to `_pf_fold` today.
+  (A persistent-map/HAMT `Map` would kill the O(n²) generally, even outside folds, but is more work and still
   loses to a bare `dict` on this pattern.) **(2)** Splice the folder body inline to drop the residual
   per-element call overhead. **(3)** Stream-fuse `map`/`filter`/`take`/`fold` pipelines into one loop
   (deforestation) so no intermediate iterators are built. **(4)** Gated micro-opts (hoist method lookups

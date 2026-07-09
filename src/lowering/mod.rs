@@ -24,6 +24,8 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+mod fold_loop;
+
 use crate::lexer::Span;
 
 use crate::parser::ast::{
@@ -210,6 +212,15 @@ struct Lowerer {
     /// Names of top-level `let` bindings, so a user definition shadows a seeded
     /// name (prelude/extern/list helper) at lowering instead of being rerouted.
     user_defs: HashSet<String>,
+    /// Bodies of top-level, non-`mut`, 2-parameter `let` bindings (params + body),
+    /// so a named folder passed to `Seq.fold`/`List.fold` can be inlined by the
+    /// in-place linear-accumulation pass (`src/lowering/fold_loop.rs`, `DESIGN.md`
+    /// §5). Only 2-ary defs are recorded (the folder arity).
+    top_fn_defs: HashMap<String, (Vec<Param>, Expr)>,
+    /// Whether the in-place linear-fold optimization is enabled. Defaults to on;
+    /// the `PYFUN_NO_FOLD_OPT` environment variable turns it off (a kill switch for
+    /// differential testing — the rejected path is byte-identical to no-opt).
+    fold_opt: bool,
     /// List-prelude helpers actually referenced, emitted on demand (like the
     /// `Result` prelude). Stored as the Python helper names (e.g. `_pf_map`).
     needed_list_helpers: BTreeSet<&'static str>,
@@ -295,6 +306,7 @@ impl Lowerer {
         let mut receiver_externs = std::collections::HashMap::new();
         let mut nullary_externs = HashSet::new();
         let mut user_defs = HashSet::new();
+        let mut top_fn_defs: HashMap<String, (Vec<Param>, Expr)> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
         for item in &module.items {
             match item {
@@ -325,6 +337,25 @@ impl Lowerer {
                     };
                     if let Some(k) = arity {
                         arities.insert(binding.name.clone(), k);
+                    }
+                    // Record the body of a top-level, non-`mut`, 2-parameter binding
+                    // so the fold-loop pass can inline it as a named folder. The
+                    // 2-ary shape is either two `let` parameters or a bare
+                    // `let f = fun a x -> …`.
+                    if !binding.mutable {
+                        let folder = if binding.params.len() == 2 {
+                            Some((binding.params.clone(), binding.value.clone()))
+                        } else if binding.params.is_empty()
+                            && let ExprKind::Fn { params, body } = &binding.value.kind
+                            && params.len() == 2
+                        {
+                            Some((params.clone(), (**body).clone()))
+                        } else {
+                            None
+                        };
+                        if let Some(fb) = folder {
+                            top_fn_defs.insert(binding.name.clone(), fb);
+                        }
                     }
                 }
                 Item::Type(decl) => match &decl.kind {
@@ -423,6 +454,11 @@ impl Lowerer {
             nullary_externs,
             needed_imports: BTreeSet::new(),
             user_defs,
+            top_fn_defs,
+            // Default the optimization on; `PYFUN_NO_FOLD_OPT` (any value) disables
+            // it. Read once per module lowering — cheap, and covers every entry
+            // point (`compile`/`run`/project/tests) for differential testing.
+            fold_opt: std::env::var_os("PYFUN_NO_FOLD_OPT").is_none(),
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             needed_combinators: BTreeSet::new(),
@@ -657,11 +693,18 @@ impl Lowerer {
     ) -> Result<(), LowerError> {
         if binding.params.is_empty() {
             let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
+            // A binding whose value already *is* the (already-assigned) target — an
+            // in-place fold whose accumulator slot is named like the binding
+            // (`let m = List.fold (fun m x -> …)`) — would emit a no-op `m = m`.
+            // Suppress it: the hoisted statements have already bound the name.
+            let redundant = !stmts.is_empty() && matches!(&value, PyExpr::Name(n) if n == name);
             out.append(&mut stmts);
-            out.push(PyStmt::Assign {
-                target: name.to_string(),
-                value,
-            });
+            if !redundant {
+                out.push(PyStmt::Assign {
+                    target: name.to_string(),
+                    value,
+                });
+            }
         } else {
             // A nested function captures the enclosing locals (Python closures),
             // so they count as locals when resolving names in its body.
@@ -1261,6 +1304,19 @@ impl Lowerer {
     fn lower_application(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
+
+        // Tier-1 in-place linear accumulation (`DESIGN.md` §5): a qualifying
+        // fully-applied `Seq.fold`/`List.fold` inlines to a `for`-loop over a
+        // mutable accumulator. On any doubt the analysis returns `None` and we fall
+        // through to the byte-identical `_pf_fold` lowering below.
+        if self.fold_opt
+            && args_ast.len() == 3
+            && crate::types::qualified_name(head)
+                .is_some_and(|q| q == "Seq.fold" || q == "List.fold")
+            && let Some(result) = self.try_lower_fold_loop(&args_ast, locals)?
+        {
+            return Ok(result);
+        }
 
         // An instance-access extern applies to a receiver: `= .read()` calls
         // `recv.read(args)`, `= .text` reads `recv.text`. The first argument is the
