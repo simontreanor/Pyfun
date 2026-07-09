@@ -1203,13 +1203,29 @@ fn exhaustive_match_without_wildcard_keeps_a_runtime_guard() {
 }
 
 #[test]
-fn adt_lowers_to_classes_with_match_args() {
+fn adt_lowers_to_frozen_dataclasses() {
     // A user-defined ADT (Option/Some/None are now built-in, so use a fresh type).
+    // Each variant is a frozen dataclass — the decorator generates __init__/__eq__/
+    // __hash__/__match_args__ from the field annotations, and `frozen` makes the value
+    // immutable (matching Pyfun). The import is emitted once.
     let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
+    assert!(py.contains("from dataclasses import dataclass"), "{py}");
+    assert!(py.contains("@dataclass(frozen=True"), "{py}");
     assert!(py.contains("class Has:"), "{py}");
-    assert!(py.contains("__match_args__ = ('_0',)"), "{py}");
+    assert!(py.contains("_0: object"), "{py}"); // the field the dataclass derives from
     assert!(py.contains("class Empty:"), "{py}");
     assert!(py.contains("x = Has(1)"), "{py}");
+}
+
+#[test]
+fn adt_match_args_work_positionally() {
+    // The dataclass-generated __match_args__ lets `case Has(v)` bind positionally.
+    run_and_check(
+        "type Opt a = Empty | Has a\n\
+         let unwrap o =\n  match o:\n    case Has v: v\n    case Empty: 0\n\
+         let r = unwrap (Has 7)",
+        &[("r", "7")],
+    );
 }
 
 #[test]
@@ -1223,24 +1239,25 @@ fn adt_classes_get_a_repr() {
 
 #[test]
 fn adt_classes_get_structural_eq() {
-    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
-    assert!(py.contains("def __eq__(self, other):"), "{py}");
-    assert!(
-        py.contains("type(self) is type(other) and self.__dict__ == other.__dict__"),
-        "{py}"
+    // `==` compares by constructor + fields (the dataclass __eq__), not identity.
+    run_and_check(
+        "type Opt a = Empty | Has a\nlet a = Has 1 == Has 1\nlet b = Has 1 == Has 2",
+        &[("a", "True"), ("b", "False")],
     );
 }
 
 #[test]
 fn adt_classes_get_structural_hash() {
-    // A `__hash__` consistent with `__eq__` (type + fields) so ADTs/records can be
-    // `Set` elements / `Map` keys — defining `__eq__` alone would make them
-    // unhashable in Python.
-    let py = pyfun::compile("type Opt a = Empty | Has a\nlet x = Has 1").unwrap();
-    assert!(py.contains("def __hash__(self):"), "{py}");
-    // Nullary hashes the type; a field hashes (type, field).
-    assert!(py.contains("return hash(type(self))"), "{py}");
-    assert!(py.contains("return hash((type(self), self._0))"), "{py}");
+    // Structural `__hash__` (from the frozen dataclass) so ADTs are `Set` elements /
+    // `Map` keys — defining `__eq__` alone would make them unhashable in Python.
+    run_and_check(
+        "type Color = Red | Green | Blue\n\
+         let s = Set.ofList [Red, Red, Green]\n\
+         let n = Set.len s\n\
+         let hasRed = Set.contains Red s\n\
+         let hasBlue = Set.contains Blue s",
+        &[("n", "2"), ("hasRed", "True"), ("hasBlue", "False")],
+    );
 }
 
 #[test]
@@ -1343,12 +1360,15 @@ fn e2e_sort_a_recursive_type() {
 }
 
 #[test]
-fn record_lowers_to_class_with_named_fields() {
+fn record_lowers_to_frozen_ordered_dataclass() {
     let py =
         pyfun::compile("type Point = { x: int, y: int }\nlet p = Point { y = 4, x = 3 }").unwrap();
+    // A record is a frozen dataclass; `order=True` derives structural comparison from
+    // the field tuple (a record needs no cross-variant key, unlike a sum variant).
+    assert!(py.contains("@dataclass(frozen=True, order=True"), "{py}");
     assert!(py.contains("class Point:"), "{py}");
-    assert!(py.contains("__match_args__ = ('x', 'y')"), "{py}");
-    assert!(py.contains("def __init__(self, x, y):"), "{py}");
+    assert!(py.contains("x: object"), "{py}");
+    assert!(py.contains("y: object"), "{py}");
     // The literal is reordered to the declared field order for a positional call.
     assert!(py.contains("p = Point(3, 4)"), "{py}");
 }
