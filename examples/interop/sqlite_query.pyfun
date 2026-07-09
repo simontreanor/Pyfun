@@ -6,16 +6,16 @@
 # object. Two Pyfun patterns bridge that:
 #
 #   1. Opaque handle types. A Connection/Cursor is a Python object Pyfun never looks
-#      inside, so we model each as a nullary phantom ADT (`type Conn = ConnH`) — only
-#      ever passed along, never constructed or matched.
+#      inside, so we declare each as an `extern type` — a typed handle with no
+#      constructor, only ever passed along, never built or matched.
 #   2. Instance-method externs (`= .method()`). A method `conn.execute(sql)` is an
 #      extern whose target starts with a dot and ends with `()` (the "call" marker):
 #      the first argument is the receiver. So `execute conn sql` lowers to
 #      `conn.execute(sql)` — no need to name (or import) the `sqlite3.Connection`
 #      class, and inherited methods work too.
 
-type Conn = ConnH
-type Cursor = CursorH
+extern type Conn
+extern type Cursor
 
 # `connect` is a plain dotted extern (a module function); `execute`/`fetchall` are
 # instance methods. All are `io` by the boundary default. `sqlite3` auto-imports.

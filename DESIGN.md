@@ -254,6 +254,18 @@ erased to nothing themselves; only their reference sites and imports survive low
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
 `extern` type syntax can't yet express.
 
+**Opaque handle types (`extern type`).** A Python object Pyfun never looks inside — a `sqlite3`
+connection, a `pathlib.Path`, an HTTP response — needs a Pyfun type only so it can cross the `extern`
+boundary and be passed between calls. `extern type Conn` (optionally parameterized, `extern type Ref a`)
+declares exactly that: a nominal type name with an arity but **no constructors, no fields, and no
+runtime representation**. It registers like any user type (so `extern connect : string -> Conn` checks),
+but has no way to be built or `match`ed — it is only ever produced and consumed by externs — and it
+**erases** at lowering, emitting no Python class. This replaces the phantom-ADT idiom it supersedes
+(`type Conn = ConnH`, a nullary sum whose sole constructor existed only to be never used): the one-liner
+carries the intent ("opaque, don't look inside"), drops the throwaway constructor that could be
+mistakenly applied, and emits nothing. Parsing is disambiguated by lookahead — `extern type …` is the
+handle form, `extern name : …` the value form.
+
 **Instance-access externs (`= .member`).** A leading dot marks the target as a *member path applied to
 the first argument* — the receiver — rather than a module-qualified free function. Trailing `()` is the
 "call" marker that separates the two forms: a **method** `= .read()` lowers `read resp` to `resp.read()`

@@ -255,6 +255,10 @@ impl Parser {
         match self.peek() {
             Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
+            // `extern type Conn` declares an opaque handle type; `extern name : …` a value.
+            Tok::Extern if *self.peek2() == Tok::Type => {
+                Ok(Item::Type(self.parse_extern_type()?))
+            }
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
             Tok::Import => self.parse_import(),
@@ -374,6 +378,32 @@ impl Parser {
             ty,
             target,
             receiver,
+            span,
+        })
+    }
+
+    /// `extern type Conn` (or `extern type Ref a`) — an opaque handle type: a nominal
+    /// type name with type parameters but no constructors. It only crosses the `extern`
+    /// boundary, so there is no body — the phantom-ADT idiom `type Conn = ConnH` shrinks
+    /// to one line, with no spurious constructor to misuse.
+    fn parse_extern_type(&mut self) -> Result<TypeDecl, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Extern, "`extern`")?;
+        self.expect(&Tok::Type, "`type`")?;
+        let name_start = self.cur_start();
+        let name = self.parse_upper_ident("type name")?;
+        let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
+        let mut params = Vec::new();
+        while let Tok::Ident(_) = self.peek() {
+            params.push(self.parse_ident("type parameter")?);
+        }
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(TypeDecl {
+            doc: None,
+            name,
+            name_span,
+            params,
+            kind: TypeDeclKind::Opaque,
             span,
         })
     }

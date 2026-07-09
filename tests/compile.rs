@@ -80,6 +80,30 @@ fn extern_in_submodule_imports_the_submodule() {
 }
 
 #[test]
+fn extern_type_declares_an_opaque_handle_and_emits_no_class() {
+    // `extern type` registers a nominal type usable in extern signatures but erases
+    // at lowering — no Python class, no constructor.
+    let py = pyfun::compile(
+        "extern type Conn\nextern connect: string -> Conn = sqlite3.connect\nlet db = connect \":memory:\"",
+    )
+    .unwrap();
+    assert!(py.contains("db = sqlite3.connect(\":memory:\")"), "{py}");
+    assert!(!py.contains("class Conn"), "{py}");
+    assert!(!py.contains("ConnH"), "{py}");
+}
+
+#[test]
+fn extern_type_replaces_the_phantom_adt_in_the_instance_extern_pattern() {
+    // The opaque-handle idiom works end-to-end with instance-method externs.
+    let py = pyfun::compile(
+        "extern type C\nextern ex: C -> string -> C = .execute()\nlet f c = ex c \"select 1\"",
+    )
+    .unwrap();
+    assert!(py.contains("c.execute(\"select 1\")"), "{py}");
+    assert!(!py.contains("class C"), "{py}");
+}
+
+#[test]
 fn instance_method_extern_lowers_to_a_method_call() {
     // `= .read()` calls the method on the first argument (the receiver).
     let py = pyfun::compile(

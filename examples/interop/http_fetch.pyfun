@@ -9,7 +9,7 @@
 # entry showcases is Pyfun's differentiator: effects are inferred and can't be lied
 # about.
 
-type Response = RespH
+extern type Response
 
 # `urllib.request.urlopen` is a plain dotted extern — `io` by the boundary default,
 # and the submodule imports correctly (`import urllib.request`). Reading the body is
@@ -37,7 +37,7 @@ print (describe (fetch "://malformed"))                    # failed: ValueError
 # Reading a plain *attribute/property* is the sibling form: a dotted target with no
 # `()` (`= .scheme`) reads `url.scheme` rather than calling it. `urllib.parse.urlparse`
 # returns a ParseResult whose parts are attributes — pure string parsing, no network.
-type Url = UrlH
+extern type Url
 extern urlparse: string -> Url = urllib.parse.urlparse
 extern scheme: Url -> string = .scheme
 extern path: Url -> string = .path

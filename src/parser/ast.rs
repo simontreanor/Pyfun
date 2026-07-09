@@ -182,6 +182,12 @@ pub enum TypeDeclKind {
     Sum(Vec<VariantDecl>),
     /// `{ x: t, y: t }` — a record (named-field product type).
     Record(Vec<FieldDecl>),
+    /// `extern type Conn` — an opaque nominal type with no constructors: a typed
+    /// handle over a Python object Pyfun never looks inside. Registers a type name
+    /// (and its arity) but emits no Python class and has no way to be constructed or
+    /// matched — it only ever crosses the `extern` boundary. Replaces the phantom-ADT
+    /// idiom `type Conn = ConnH` (`DESIGN.md` §6).
+    Opaque,
 }
 
 /// One constructor of a sum [`TypeDecl`], e.g. `Cons a (List a)`.
