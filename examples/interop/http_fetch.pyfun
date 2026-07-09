@@ -1,29 +1,17 @@
-# Interop cookbook — HTTP: inferred effects (io / async), the Pyfun differentiator.
+# urllib — HTTP with effects (io / async) inferred and impossible to lie about.
 #
 #   pyfun run examples/interop/http_fetch.pyfun
 #
-# This fetches over stdlib `urllib` and runs offline: the example URLs are `data:`
-# URLs so there is no network dependency, but the *identical* code works against
-# `http(s)://` URLs — and `requests`/`httpx` wrap the same way (`requests.get` is a
-# plain dotted extern; `.json()`/`.text` are instance methods/properties). What this
-# entry showcases is Pyfun's differentiator: effects are inferred and can't be lied
-# about.
+# Runs offline (the URLs are `data:` URLs, no network), but the identical code works
+# against http(s):// — and requests/httpx wrap the same way. The differentiator on
+# show: effects are inferred, and a `let pure` over an `io` call is a compile error.
 
 extern type Response
-
-# `urllib.request.urlopen` is a plain dotted extern — `io` by the boundary default,
-# and the submodule imports correctly (`import urllib.request`). Reading the body is
-# an *instance method* (`= .read()` — trailing `()` marks a call): `readBody r` lowers
-# to `r.read()`, which reaches the method even though it lives on a base class of the
-# response, not the response type itself. `codecs.decode` turns the bytes into text.
-extern urlopen: string -> Response = urllib.request.urlopen
-extern readBody: Response -> a = .read()
+extern urlopen: string -> Response = urllib.request.urlopen  # imports urllib.request
+extern readBody: Response -> a = .read()                     # resp.read() — a method
 extern decode: a -> string -> string = codecs.decode
 
-# `fetch` calls `io` externs, so the compiler INFERS it is `io` and propagates that
-# outward — no annotation. `try` makes a bad URL an `Error` value, not a crash.
-# Writing `let pure fetch …` would be rejected: "`fetch` is declared `pure` but
-# performs `io`". That is the effect guarantee — purity is checked, not hoped for.
+# `fetch` calls `io` externs, so it is inferred `io`; `try` makes a bad URL an `Error`.
 let fetch url = try (decode (readBody (urlopen url)) "utf-8")
 
 let describe r =
@@ -34,9 +22,8 @@ let describe r =
 print (describe (fetch "data:text/plain,hello%20pyfun"))   # ok: hello pyfun
 print (describe (fetch "://malformed"))                    # failed: ValueError
 
-# Reading a plain *attribute/property* is the sibling form: a dotted target with no
-# `()` (`= .scheme`) reads `url.scheme` rather than calling it. `urllib.parse.urlparse`
-# returns a ParseResult whose parts are attributes — pure string parsing, no network.
+# The sibling of a method extern is a *property* read: `= .attr` with no `()`.
+# `urlparse` returns a value whose parts are attributes — pure string parsing.
 extern type Url
 extern urlparse: string -> Url = urllib.parse.urlparse
 extern scheme: Url -> string = .scheme
@@ -45,9 +32,6 @@ extern path: Url -> string = .path
 let u = urlparse "https://example.com/data.json"
 print (f"{scheme u} {path u}")                             # https /data.json
 
-# Async is a distinct effect. Annotating an extern arrow `->{async}` (overriding the
-# default `io`) marks an async client as performing `async`; a caller inherits it, so
-# it could not sit inside a `let pure` either. Uncalled here, so it erases — calling
-# it would make its caller `async`, composed by an `async { let! r = … }` CE exactly
-# as `result {}` composes the `Result`-returning steps in json_to_adt.pyfun.
+# Async is a distinct effect: an `->{async}` extern arrow (overriding the `io`
+# default) marks an async client, and a caller inherits `async`. Uncalled here.
 extern getAsync: string ->{async} Response = httpx.get

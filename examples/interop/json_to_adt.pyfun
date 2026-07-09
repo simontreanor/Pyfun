@@ -1,14 +1,12 @@
-# Interop cookbook — JSON → your ADTs with the built-in Decode module. THE showcase.
+# Decode (built-in) — JSON into your own typed records, totally. THE showcase.
 #
 #   pyfun run examples/interop/json_to_adt.pyfun
 #
-# The functional-programming lesson every language teaches on JSON is "parse, don't
-# validate": turn untrusted, dynamically-typed input into your *own* typed data at the
-# edge, so the rest of the program is total and can't be fed a wrong shape. Pyfun ships
-# an Elm-style `Decode` module that does exactly this — a `Decoder a` is a pure, total
-# recipe, and `Decode.decodeString` runs it over a JSON string to yield
-# `Result a Exception`. Bad input is a value you handle, never an exception that
-# unwinds the program.
+# The lesson every language teaches on JSON is "parse, don't validate": turn untrusted,
+# dynamically-typed input into your *own* typed data at the edge, so the rest of the
+# program can't be fed a wrong shape. Pyfun ships an Elm-style `Decode` module — a
+# `Decoder a` is a pure, total recipe, and `Decode.decodeString` runs it over a JSON
+# string to yield `Result a Exception`. Bad input is a value you handle, never a crash.
 
 type User = { name: string, age: int, roles: List string }
 
@@ -45,10 +43,9 @@ print (describe (Decode.decodeString userDecoder """not json at all"""))
 #   decode failed (ValueError): expected an int, got str
 #   decode failed (JSONDecodeError): Expecting value: line 1 column 1 (char 0)
 #
-# The whole pipeline is PURE (no `io`): `Decode.decodeString` is a pure function of its
-# input, so a `let pure` over it type-checks — the curated module knows JSON parsing has
-# no side effects, where the raw `extern json.loads` boundary (json_decode.pyfun) is
-# conservatively `io`. More combinators: `Decode.map`/`map2`/`map4`, `Decode.nullable`
-# (JSON null → `Option`), `Decode.oneOf` (first decoder that succeeds — decode a union),
-# `Decode.andThen` (a decoder that depends on an already-decoded value), `Decode.succeed`
-# /`Decode.fail`.
+# The whole pipeline is PURE (no `io`) — a `let pure` over `Decode.decodeString` type-
+# checks, because the curated module knows JSON parsing has no side effects (the raw
+# `extern json.loads` boundary in json_decode.pyfun is conservatively `io`). More
+# combinators: `Decode.map`/`map2`/`map4`, `Decode.nullable` (JSON null → `Option`),
+# `Decode.oneOf` (first decoder that succeeds — decode a union), `Decode.andThen`
+# (a decoder chosen from an already-decoded value), `Decode.succeed`/`Decode.fail`.

@@ -1,45 +1,27 @@
-# Interop cookbook — JSON: an untyped, throwing boundary becomes typed, total data.
+# json — an untyped, throwing boundary becomes typed, total data.
 #
 #   pyfun run examples/interop/json_decode.pyfun
 #
-# `json.loads` is the archetypal Python boundary: it returns dynamically-typed
-# values and *raises* on malformed input. An `extern` gives it a Pyfun type at the
-# call site, and `try` turns the exception into a `Result` — so a parse failure is
-# a value you must handle, never a crash. This is the "parse, don't validate"
-# lesson, using a library every Python programmer already reaches for.
+# "Parse, don't validate": give `json.loads` a Pyfun type at the call site, and `try`
+# turns its exceptions into a `Result` you must handle — a parse failure is a value,
+# never a crash. (For decoding into your own records, see json_to_adt.pyfun.)
 
-# A JSON array of homogeneous values decodes directly to a `List`; a flat JSON
-# object of homogeneous values decodes to a `Map`. The `= json.loads` dotted
-# target auto-imports `json`; the boundary is effectful, so both are `io`.
+# A JSON array of one type decodes to a `List`; a flat object to a `Map`. `= json.loads`
+# auto-imports `json`; the boundary is effectful, so both are `io`.
 extern parseFloats: string -> List float = json.loads
 extern parseScores: string -> Map string float = json.loads
 
-# `try (parseFloats s)` : Result (List float) Exception. A malformed string is an
-# `Error` carrying the caught exception, not an exception that unwinds the program.
+# `try` catches a malformed string into `Error`; the `match` forces you to handle it.
 let sumJson s =
   match try (parseFloats s):
     case Ok xs: List.fold (+) 0.0 xs
     case Error e: 0.0
 
-let good = sumJson "[1.0, 2.0, 3.5]"     # 6.5
-let bad = sumJson "[1.0, oops]"          # 0.0  (json.JSONDecodeError caught)
-
-# Object lookup stays total: `Map.tryFind` returns `Option`, so a missing key is
-# `None`, not a `KeyError`. The JSON literal is a triple-quoted string (no escaping
-# of the inner double-quotes needed).
+# Object lookup stays total, too: `Map.tryFind` returns `Option`, so a missing key
+# is `None`, not a `KeyError`.
 let scores = parseScores """{"ada": 9.5, "alan": 8.0}"""
-let ada = Option.withDefault 0.0 (Map.tryFind "ada" scores)      # 9.5
-let nobody = Option.withDefault 0.0 (Map.tryFind "grace" scores)  # 0.0
 
-print good                               # 6.5
-print bad                                # 0.0
-print ada                                # 9.5
-print nobody                             # 0.0
-
-# The honest frontier: a *heterogeneous* object (`{"name": "ada", "age": 36}`)
-# does NOT safely cast to a Pyfun record. `json.loads` returns a Python `dict`
-# (subscript access), whereas a Pyfun record lowers to a class (attribute access),
-# so `extern parseUser: string -> User = json.loads` type-checks but raises
-# `AttributeError: 'dict' object has no attribute 'name'` at runtime. Decoding into
-# an ADT uses the built-in Elm-style `Decode` module — see `json_to_adt.pyfun`, the
-# headline example — not the raw cast.
+print (sumJson "[1.0, 2.0, 3.5]")                             # 6.5
+print (sumJson "[1.0, oops]")                                 # 0.0  (JSONDecodeError caught)
+print (Option.withDefault 0.0 (Map.tryFind "ada" scores))    # 9.5
+print (Option.withDefault 0.0 (Map.tryFind "grace" scores))  # 0.0

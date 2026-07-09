@@ -1,25 +1,19 @@
-# Interop cookbook — pathlib: file I/O, with effects inferred and failure made total.
+# pathlib — file I/O, with effects inferred and failure made total.
 #
 #   pyfun run examples/interop/read_files.pyfun
 #
-# `pathlib` is stdlib file I/O — the plainest kind of side effect. Two Pyfun features
-# show up here for free: the compiler *infers* that these calls are `io` and
-# propagates it (no annotation needed), and `try` turns a missing-file exception into
-# a `Result` you must handle. This file runs offline and cleans up after itself.
+# The compiler infers these calls are `io` and propagates it outward with no
+# annotation, and `try` turns a missing-file error into a `Result`. Runs offline
+# and cleans up after itself.
 
-# `Path` is an opaque handle (`extern type` — no constructor). `pathlib.Path(str)`
-# builds one; the rest are unbound methods on `pathlib.Path` (see sqlite_query.pyfun
-# for the pattern). Each is `io` by the boundary default.
 extern type Path
 extern toPath: string -> Path = pathlib.Path
 extern writeText: Path -> string -> int = pathlib.Path.write_text
 extern readText: Path -> string = pathlib.Path.read_text
 extern unlink: Path -> unit = pathlib.Path.unlink
 
-# `roundTrip` calls `io` externs, so the compiler infers `roundTrip : string -> unit`
-# is itself `io` — impurity propagates outward with no annotation. Writing
-# `let pure roundTrip …` would be rejected: "`roundTrip` is declared `pure` but
-# performs `io`". That is the effect guarantee — purity is checked, not hoped for.
+# `roundTrip` calls `io` externs, so it is inferred `io` too — a `let pure roundTrip`
+# would be a compile error. Purity is checked, not hoped for.
 let roundTrip name =
   let p = toPath name
   let _ = writeText p "hello from pyfun"
@@ -27,8 +21,7 @@ let roundTrip name =
   let _ = unlink p
   back
 
-# Reading a missing file is total: `try` catches the FileNotFoundError into `Error`,
-# so a bad path yields a value describing the failure rather than crashing.
+# Reading a missing file is total: `try` catches FileNotFoundError into `Error`.
 let readOrNote name =
   match try (readText (toPath name)):
     case Ok s: s
