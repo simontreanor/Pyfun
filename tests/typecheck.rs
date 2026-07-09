@@ -21,6 +21,33 @@ fn assert_error_contains(source: &str, needle: &str) {
 // ---------- well-typed programs ----------
 
 #[test]
+fn decode_module_types_a_record_decoder() {
+    // The headline: field decoders fan into a record via `map3`, run totally.
+    assert!(
+        pyfun::check(
+            "type P = { name: string, age: int, tags: List string }\n\
+             let d =\n  Decode.map3 (fun name age tags -> P { name = name, age = age, tags = tags })\n    (Decode.field \"name\" Decode.string)\n    (Decode.field \"age\" Decode.int)\n    (Decode.field \"tags\" (Decode.list Decode.string))\n\
+             let r = Decode.decodeString d \"{}\""
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn decode_map4_does_not_corrupt_let_polymorphism() {
+    // `Decode.map4` quantifies five type vars (ids 0..4); `RESERVED_VARS` must keep
+    // fresh inference ids past them, or a seeded bound var aliases a fresh one and a
+    // let-polymorphic value stops instantiating freshly (regression guard).
+    assert!(
+        pyfun::check(
+            "let id x = x\nlet n = id 1\nlet s = id \"hi\"\n\
+             let d = Decode.map4 (fun a b c e -> a) Decode.int Decode.int Decode.int Decode.int"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn accepts_basic_and_curried_functions() {
     assert!(pyfun::check("let add a b = a + b\nlet r = add 1 2").is_ok());
 }

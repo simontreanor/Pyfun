@@ -49,6 +49,9 @@ pub enum PyStmt {
     Match { subject: PyExpr, cases: Vec<PyCase> },
     /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
     RaiseRuntimeError(String),
+    /// `raise <expr>` — a general raise (a constructed exception or a re-raised
+    /// binding). Used by the `Decode` prelude's strict primitives.
+    Raise(PyExpr),
     /// `try: body except [ExcType [as name]]: handler` — a single except clause
     /// (bare when `exc_type` is `None`; binds the caught exception to `binding` when
     /// present). Used by `String.toInt`'s total parse and by `try e` (`DESIGN.md` §6).
@@ -214,6 +217,9 @@ pub enum PyBinOp {
     /// `x in container` — membership, used by the collection prelude
     /// (`set_contains`/`map_contains`). Comparison-precedence, like in Python.
     In,
+    /// `x is y` — identity, used by the `Decode` prelude's `nullable` (`v is None`).
+    /// Comparison-precedence, like in Python.
+    Is,
 }
 
 impl PyBinOp {
@@ -237,6 +243,7 @@ impl PyBinOp {
             PyBinOp::And => "and",
             PyBinOp::Or => "or",
             PyBinOp::In => "in",
+            PyBinOp::Is => "is",
         }
     }
 
@@ -252,7 +259,8 @@ impl PyBinOp {
             | PyBinOp::Gt
             | PyBinOp::Le
             | PyBinOp::Ge
-            | PyBinOp::In => 5,
+            | PyBinOp::In
+            | PyBinOp::Is => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv | PyBinOp::Mod => 20,
             // `**` binds tighter than unary minus (Neg = 30), as in Python.
@@ -349,6 +357,7 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
                 &format!("raise RuntimeError({})", string_literal(message)),
             );
         }
+        PyStmt::Raise(value) => line(out, depth, &format!("raise {}", expr(value))),
         PyStmt::Try {
             body,
             exc_type,

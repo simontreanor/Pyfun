@@ -2687,6 +2687,66 @@ fn e2e_active_pattern_match_in_value_position() {
     );
 }
 
+#[test]
+fn e2e_decode_primitives_and_totality() {
+    // `Decode.decodeString` runs a decoder over JSON text totally: a good parse is
+    // `Ok`, a type mismatch or malformed input is `Error` (here folded to a default).
+    run_and_check(
+        "let ok = Result.withDefault 0 (Decode.decodeString Decode.int \"42\")\n\
+         let wrongType = Result.withDefault (0 - 1) (Decode.decodeString Decode.int \"\\\"x\\\"\")\n\
+         let boolNotInt = Result.withDefault (0 - 1) (Decode.decodeString Decode.int \"true\")\n\
+         let intAsFloat = Result.withDefault 0.0 (Decode.decodeString Decode.float \"3\")\n\
+         let malformed = Result.isError (Decode.decodeString Decode.bool \"not json\")",
+        &[
+            ("ok", "42"),
+            ("wrongType", "-1"),
+            ("boolNotInt", "-1"),
+            ("intAsFloat", "3.0"),
+            ("malformed", "True"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_decode_record_via_map_and_field() {
+    // The headline: decode a heterogeneous object into your own record, totally.
+    run_and_check(
+        "type Pair = { name: string, age: int }\n\
+         let dec =\n  Decode.map2 (fun name age -> Pair { name = name, age = age })\n    (Decode.field \"name\" Decode.string)\n    (Decode.field \"age\" Decode.int)\n\
+         let good =\n  match Decode.decodeString dec \"\"\"{\"name\": \"ada\", \"age\": 36}\"\"\":\n    case Ok p: p.name\n    case Error e: \"?\"\n\
+         let missing = Result.isError (Decode.decodeString dec \"\"\"{\"name\": \"bob\"}\"\"\")",
+        &[("good", "ada"), ("missing", "True")],
+    );
+}
+
+#[test]
+fn e2e_decode_list_nullable_oneof_andthen() {
+    run_and_check(
+        "let nums = Result.withDefault [] (Decode.decodeString (Decode.list Decode.int) \"[1, 2, 3]\")\n\
+         let flex = Decode.oneOf [Decode.string, Decode.map String.fromInt Decode.int]\n\
+         let fromStr = Result.withDefault \"?\" (Decode.decodeString flex \"\\\"hi\\\"\")\n\
+         let fromInt = Result.withDefault \"?\" (Decode.decodeString flex \"7\")\n\
+         let n = Result.withDefault (0 - 1) (Decode.decodeString (Decode.oneOf []) \"1\")",
+        &[
+            ("nums", "[1, 2, 3]"),
+            ("fromStr", "hi"),
+            ("fromInt", "7"),
+            ("n", "-1"),
+        ],
+    );
+}
+
+#[test]
+fn decode_pipeline_is_pure() {
+    // Decoders are a pure sublanguage, so `let pure` over `decodeString` is accepted
+    // (unlike a raw `json.loads` extern, which is `io` at the boundary).
+    let py = pyfun::compile(
+        "let pure parse s = Decode.decodeString Decode.int s\nlet r = parse \"1\"",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_dec_decode_string"), "{py}");
+}
+
 // ---------- helpers ----------
 
 /// Compile `source`, then run the emitted Python and assert that each named

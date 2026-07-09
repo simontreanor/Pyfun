@@ -402,6 +402,30 @@ lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a n
 from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
 Python `datetime` `extern`).
 
+**JSON decoding — the `Decode` module (implemented).** An Elm-style (`elm/json`) decoder-combinator
+library over an opaque built-in `Decoder a`, module-qualified like the others (single source of truth
+`types::DECODE_PRELUDE` + `seed_decode_prelude`). It is the batteries-included form of the "parse, don't
+validate" pattern: instead of casting an untyped `dict` into a record (which type-checks but crashes,
+since `json` yields subscript-access dicts and a Pyfun record is an attribute-access class), you build a
+**decoder** — a total recipe — and run it with `Decode.decodeString : Decoder a -> string ->
+Result a Exception`, so malformed input is a value you `match`, never a crash. Primitives
+`Decode.string`/`int`/`float`/`bool` are **strict** (a JSON number does not decode as a string;
+`Decode.int` rejects a JSON bool — a Python `bool` is an `int` subclass — while `Decode.float` accepts a
+JSON int); structure combinators `Decode.field name dec`, `Decode.list dec`, `Decode.nullable dec` (JSON
+`null` → `Option`); and composition `Decode.map`/`map2`/`map3`/`map4` (the fan-in that builds a record
+from several field decoders at once), `Decode.andThen` (a decoder chosen from an already-decoded value),
+`Decode.oneOf` (first decoder that succeeds — decode a union), `Decode.succeed`/`Decode.fail`. **Every
+arrow is `pure`** — decoders are a pure, total sublanguage, so composing *and running* them introduces no
+effect even though the runner parses JSON; a `let pure` over `Decode.decodeString` type-checks, where the
+raw `extern json.loads` boundary is conservatively `io`. Representation: a `Decoder a` is a Python callable
+`parsed -> a` that **raises** on a shape/type mismatch (the `Decoder` type erases, no runtime class); the
+combinators build such callables (closures), and `decodeString` runs one inside `try`, catching any raise
+into `Ok`/`Error(_Exception(kind, message))` exactly like the `try e` boundary form. Lowering routes each
+member to an emitted `_pf_dec_*` helper (built from the IR, not string-spliced — the strict primitives use
+the new general `PyStmt::Raise` node and the `is` comparison for `null`). The generalized decoder story
+(user-registered combinators, a `Value` type for already-parsed data) is deferred; the shipped set already
+covers records, lists, options, and unions.
+
 **String interpolation — `f"..."` (implemented).** Python-style interpolated strings: an `f` prefix
 (adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
 holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a
