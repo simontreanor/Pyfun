@@ -1,0 +1,220 @@
+# Direct trains from a station, grouped by destination — a Network Rail
+# SCHEDULE feed turned into a readable Markdown timetable.
+#
+#   cargo run -- compile examples/interop/network-rail/chippenham.pyfun \
+#       -o examples/interop/network-rail/chippenham.py
+#   PYTHONPATH=examples/interop/network-rail \
+#       python examples/interop/network-rail/chippenham.py
+#
+# This is the boundary-vs-engine interop pattern at scale. The "Daily all-TOC
+# snapshot" is newline-delimited JSON — one schedule object per line, ~3 GB
+# uncompressed. `nr_stream.py` streams it entirely on the Python side (gzip-
+# aware, single pass, and a substring prefilter so json.loads runs only on the
+# handful of lines that mention Chippenham); only those runs cross the `extern`
+# boundary. Everything below is the typed, total engine: it decides what counts
+# as a public call, slices each route downstream of Chippenham, treats every
+# reachable station as a destination, dedups identical patterns, title-cases the
+# names, and emits Markdown.
+#
+# Runs out of the box against the bundled `sample.ndjson` (a small synthetic
+# fixture). To run against the real feed, register at
+# https://opendata.nationalrail.co.uk / the Network Rail data feeds, then point
+# `dataFile` below at your snapshot (a plain `.json` or a `.json.gz` — the
+# boundary streams the gzip directly).
+#
+# STP caveat: counts reflect the day-of-week pattern of permanent + new
+# schedules minus full cancellations (stp "C"), deduped by (departure,
+# destination) to avoid overlay double-counting. A specific calendar date may
+# differ.
+
+extern scan: string -> ( (Map string string)
+                       , (List ( string, string, string
+                               , (List (string, string, string)) )) )
+       = nr_stream.scan
+
+extern writeUtf8: string -> string -> int = nr_stream.write_utf8
+
+type Stop = { tiploc: string, arr: string, dep: string }
+type Run  = { uid: string, days: string, stp: string, stops: List Stop }
+type Leg  = { dest: string, finalDest: string, rdays: string, depMin: int, arrMin: int, jt: int, via: List string }
+
+let dataFile = "examples/interop/network-rail/sample.ndjson"
+let outFile  = "examples/interop/network-rail/chippenham-routes.md"
+
+# --- shape the raw tuples from the boundary into typed records ---
+let toStop t =
+  match t:
+    case (tp, a, d): Stop { tiploc = tp, arr = a, dep = d }
+
+let toRun r =
+  match r:
+    case (uid, days, stp, stops):
+      Run { uid = uid, days = days, stp = stp, stops = List.map toStop stops }
+
+# A stop is a public calling point iff it advertises a public time (passing
+# points carry neither a public arrival nor departure).
+let calls s = (s.arr != "" and s.arr != "0000") or (s.dep != "" and s.dep != "0000")
+
+# "HHMM" -> minutes since midnight (-1 if unparseable).
+let toMin hhmm =
+  match (String.toInt (String.slice 0 2 hhmm), String.toInt (String.slice 2 4 hhmm)):
+    case (Some h, Some m): h * 60 + m
+    case _: -1
+
+# minutes -> "HH:MM"
+let fmt2 n = if n < 10 then f"0{n}" else f"{n}"
+let showTime m = f"{fmt2 (m // 60)}:{fmt2 (m % 60)}"
+
+# Journey time in minutes, wrapping past midnight.
+let jtime dep arr =
+  let d = arr - dep
+  if d < 0 then d + 1440 else d
+
+# The train's public departure from Chippenham + the stops after it, or None if
+# the train only passes Chippenham or terminates there.
+let fromChippenham stops =
+  match stops:
+    case []: None
+    case [s, *rest]:
+      if s.tiploc == "CHIPNHM" and calls s then Some (s.dep, rest)
+      else fromChippenham rest
+
+# The last stop of a schedule — the train's final destination.
+let lastTiploc stops =
+  match stops:
+    case []: ""
+    case [s]: s.tiploc
+    case [_, *rest]: lastTiploc rest
+
+# One leg per downstream calling point; `via` accumulates the intermediate
+# calling points (TIPLOCs) reached before the current one; `term` is the train's
+# final destination, carried onto every leg so a through service can be flagged.
+let walkLegs days term depM via stops =
+  match stops:
+    case []: []
+    case [s, *rest]:
+      if calls s then
+        let arrM = toMin s.arr
+        let onward = List.concat via [s.tiploc]
+        if arrM < 0 then walkLegs days term depM onward rest
+        else
+          let leg = Leg { dest = s.tiploc, finalDest = term, rdays = days, depMin = depM,
+                          arrMin = arrM, jt = jtime depM arrM, via = via }
+          List.concat [leg] (walkLegs days term depM onward rest)
+      else walkLegs days term depM via rest
+
+# All direct-service legs contributed by one schedule (none if cancelled).
+let legsOfRun r =
+  if r.stp == "C" then []
+  else
+    match fromChippenham r.stops:
+      case None: []
+      case Some (chippDep, downstream):
+        let depM = toMin chippDep
+        if depM < 0 then []
+        else walkLegs r.days (lastTiploc downstream) depM [] downstream
+
+# --- day filter, dedup, grouping ---
+let runsOn day days = String.slice day (day + 1) days == "1"
+
+let dedupLegs legs =
+  let step acc leg =
+    match acc:
+      case (seen, out):
+        let k = f"{leg.depMin}|{leg.dest}"
+        match Map.tryFind k seen:
+          case Some _: (seen, out)
+          case None: (Map.add k true seen, List.concat out [leg])
+  match List.fold step (Map.empty, []) legs:
+    case (_, out): out
+
+let groupByDest acc leg =
+  Map.add leg.dest (List.concat (Option.withDefault [] (Map.tryFind leg.dest acc)) [leg]) acc
+
+# insertion sort of legs by departure (per-destination lists are small)
+let insertByDep leg sorted =
+  match sorted:
+    case []: [leg]
+    case [x, *rest]:
+      if leg.depMin <= x.depMin then List.concat [leg] sorted
+      else List.concat [x] (insertByDep leg rest)
+
+let sortLegs legs = List.fold (fun acc l -> insertByDep l acc) [] legs
+
+# --- min / max over an int list (groups are always non-empty) ---
+let minOf xs =
+  match xs:
+    case []: 0
+    case [x]: x
+    case [x, *rest]:
+      let m = minOf rest
+      if x < m then x else m
+
+let maxOf xs =
+  match xs:
+    case []: 0
+    case [x]: x
+    case [x, *rest]:
+      let m = maxOf rest
+      if x > m then x else m
+
+# --- title-casing (feed descriptions are UPPERCASE) ---
+# Uppercase the first *alphabetic* char in a char list, leave the rest. The test
+# `String.upper c != c` is true only for a lowercase letter (punctuation/digits
+# are unchanged by upper), so "(south" capitalizes the s, not the "(".
+let capFirst chars =
+  match chars:
+    case []: []
+    case [c, *rest]:
+      if String.upper c != c then List.concat [String.upper c] rest
+      else List.concat [c] (capFirst rest)
+
+let capWord w = String.join "" (capFirst (String.toList w))
+# Split on spaces then hyphens so "weston-super-mare" -> "Weston-Super-Mare".
+let titleHyphen w = String.join "-" (List.map capWord (String.split "-" w))
+let titleCase name = String.join " " (List.map titleHyphen (String.split " " (String.lower name)))
+
+# --- rendering (Markdown) ---
+let nameOf names tp = titleCase (Option.withDefault tp (Map.tryFind tp names))
+let plural n word = if n == 1 then f"{n} {word}" else f"{n} {word}s"
+let rangeStr lo hi = if lo == hi then f"{lo} min" else f"{lo}-{hi} min"
+
+let renderService names leg =
+  let stopStr =
+    match leg.via:
+      case []: "direct"
+      case _:
+        let viaStr = String.join ", " (List.map (nameOf names) leg.via)
+        f"via {viaStr}"
+  let onward = if leg.dest == leg.finalDest then "" else f" _(to {nameOf names leg.finalDest})_"
+  f"- **{showTime leg.depMin} → {showTime leg.arrMin}** · {leg.jt} min · {stopStr}{onward}"
+
+let renderGroup names g =
+  match g:
+    case (dest, legs):
+      let times = List.map (fun l -> l.jt) legs
+      let tr = plural (List.len legs) "train"
+      let header = f"### {nameOf names dest} — {tr}, {rangeStr (minOf times) (maxOf times)}"
+      let lines = String.join "\n" (List.map (renderService names) (sortLegs legs))
+      f"{header}\n\n{lines}"
+
+let daySection names label day allLegs =
+  let legs = dedupLegs (List.filter (fun l -> runsOn day l.rdays) allLegs)
+  let pairs = List.map (fun g -> match g: case (dest, ls): (nameOf names dest, renderGroup names g))
+                       (Map.toList (List.fold groupByDest Map.empty legs))
+  let body = String.join "\n\n" (List.map (fun p -> match p: case (nm, txt): txt) (List.sort pairs))
+  f"## {label}\n\n{body}"
+
+let buildReport names raw =
+  let allLegs = List.fold (fun acc r -> List.concat acc (legsOfRun r)) [] (List.map toRun raw)
+  let intro = "# Direct services from Chippenham\n\n_Every station reachable directly (no change) from Chippenham, grouped by destination, in departure order. Counts reflect the weekly day-of-week pattern of permanent + new schedules minus cancellations; a specific date may differ._"
+  let wd = daySection names "Monday–Friday (representative day: Tuesday)" 1 allLegs
+  let sa = daySection names "Saturday" 5 allLegs
+  let su = daySection names "Sunday" 6 allLegs
+  String.join "\n\n" [intro, wd, sa, su]
+
+let _ =
+  match scan dataFile:
+    case (names, raw): writeUtf8 outFile (buildReport names raw)
+
+print (f"Wrote Markdown direct Chippenham services to {outFile}")
