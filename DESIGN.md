@@ -170,6 +170,37 @@ applied functions each need a *stable* Python representation. That representatio
 contract — emitted code and interop both depend on it — so changing it is a breaking change, not
 an implementation detail.
 
+### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`) — Tier 1 (implemented)
+
+The immutable-style collections (`§6`) rebuild a fresh container on every step, so a fold that
+builds a collection by repeated `Map.add`/`List.concat`/`Set.add` is quadratic (each step copies the
+whole accumulator). A **performance-directed lowering pass** (`src/lowering/fold_loop.rs`, hooked in
+`lower_application`, defaulting on; the `PYFUN_NO_FOLD_OPT` env var is a kill switch for differential
+testing) recognizes the common case and rewrites `functools.reduce(f, xs, acc)` into a `for`-loop
+over a **mutable** accumulator, turning the copy-returning ops into in-place mutations
+(`Map.add`→`m[k]=v`, `List.concat`→`.append`/`.extend`, `Set.add`→`.add`), collapsing the build to
+linear. This adds two Python-IR nodes: `PyStmt::For` and `PyStmt::SubscriptAssign`.
+
+**Soundness is the whole game.** The rewrite is observable only through a *retained reference* to a
+mutated container, so the pass is a set of conservative **syntactic** proof obligations on the AST,
+checked with no side effects on the lowerer (a rejected fold falls through to the byte-identical
+`_pf_fold` lowering — verified by a differential gate that byte-compares both variants' output on the
+`network-rail` example). A fold qualifies only when: it is a fully-applied `Seq.fold`/`List.fold`
+(exactly 3 args); the folder is a 2-ary lambda literal or a **top-level** named `let` (an inlinable
+body, not a `mut`/extern/imported member/parameter); the accumulator is a fresh literal collection or
+a flat tuple of them (a `Var` init is rejected — it may be read after the fold); every slot is
+threaded **position-preservingly** (no swap, no duplication, no cross-slot storage, no closure
+capture, no escape to a user function — retention is unknowable, so reject); reads of a slot use a
+whitelist of ops that return scalars or fresh copies; and inlining is capture-safe (the folder's free
+variables and introduced binders are disjoint from every enclosing Python frame; rejected inside an
+in-file `module`). Read-before-mutate and effect order are preserved by lowering every op argument
+(hoisting non-atomic ones to temps) **before** emitting the mutations. When in doubt, reject. The
+folder is always pure (an effectful folder does not typecheck against `fold`'s scheme), so the only
+ordering hazard is a value dependency between slots, which the hoisting handles. Full preconditions
+(P1–P11) live in the design memo the pass was built from. Tier B (local named folders, chained
+updates in one slot, fresh-reset slots, `Map.remove`/`Set.remove`, defensive-copy `Var` inits) is
+deferred (`ROADMAP.md`).
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the
@@ -312,8 +343,10 @@ comparison a => List a -> List a` is O(n log n) (`sorted`, so it carries the `co
 ADT ordering is out of scope); and `find : (a ->{e} bool) -> List a ->{e} Option a` is O(n),
 **first-match/lazy** (`next(map(Some, filter …))`) and effect-polymorphic like `filter`. There is
 deliberately **no cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal); and
-because the ops are immutable-style, building a list by repeated `concat` is O(n²), so construction
-stays `map`/`fold`/comprehension/`Seq`. `get`/`find` return the built-in `Option` (setting `needs_option`),
+because the ops are immutable-style, building a list by repeated `concat` is *nominally* O(n²) —
+though a `Seq.fold`/`List.fold` that builds a collection linearly is recognized and lowered to an
+in-place loop (§5.1), so the idiomatic `fold`-with-`concat`/`Map.add` construction runs in linear
+time; construction otherwise stays `map`/`fold`/comprehension/`Seq`. `get`/`find` return the built-in `Option` (setting `needs_option`),
 and `get` introduced a `PyExpr::Subscript` node.
 
 **Tuples — the structural product (implemented).** `(a, b, c)` is a tuple: an anonymous, **structural**

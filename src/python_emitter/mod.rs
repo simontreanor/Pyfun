@@ -24,6 +24,21 @@ pub enum PyStmt {
     Global(Vec<String>),
     /// `target = value`
     Assign { target: String, value: PyExpr },
+    /// `obj[index] = value` — subscript assignment (a distinct target shape from
+    /// [`Assign`], whose target is a bare name). Emitted by the in-place linear-fold
+    /// optimization (`Map.add` at a fold tail → `m[k] = v`; `DESIGN.md` §5).
+    SubscriptAssign {
+        obj: PyExpr,
+        index: PyExpr,
+        value: PyExpr,
+    },
+    /// `for target in iter: body` — a `for`-loop over a single iteration variable.
+    /// Emitted by the in-place linear-fold optimization (`DESIGN.md` §5).
+    For {
+        target: String,
+        iter: PyExpr,
+        body: Vec<PyStmt>,
+    },
     /// `return value`
     Return(PyExpr),
     /// A bare expression evaluated for its (side) effect.
@@ -331,6 +346,22 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::Global(names) => line(out, depth, &format!("global {}", names.join(", "))),
         PyStmt::Assign { target, value } => {
             line(out, depth, &format!("{target} = {}", expr(value)));
+        }
+        PyStmt::SubscriptAssign { obj, index, value } => {
+            line(
+                out,
+                depth,
+                &format!(
+                    "{}[{}] = {}",
+                    emit_expr(obj, 100),
+                    emit_expr(index, 0),
+                    expr(value)
+                ),
+            );
+        }
+        PyStmt::For { target, iter, body } => {
+            line(out, depth, &format!("for {target} in {}:", expr(iter)));
+            emit_block(body, depth + 1, out);
         }
         PyStmt::Return(value) => line(out, depth, &format!("return {}", expr(value))),
         PyStmt::Expr(value) => line(out, depth, &expr(value)),

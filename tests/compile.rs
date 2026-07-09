@@ -2970,3 +2970,270 @@ fn run_python(python: &str, program: &str) -> String {
     );
     String::from_utf8(output.stdout).expect("python stdout is utf-8")
 }
+
+// ---------- Tier-1 in-place linear fold (DESIGN.md §5) ----------
+//
+// Positive tests assert the loop form is emitted (`for ` present, `_pf_fold`
+// absent) and, via e2e, that the value is correct. Adversarial tests assert the
+// SAFE fallback is emitted (`_pf_fold` present, no in-place mutation) and still
+// computes the copy-semantics value — these are the soundness net.
+
+/// Assert `source` falls back to the `_pf_fold` helper (the fold-loop pass
+/// rejected it), emits no in-place list mutation, and still computes `expected`.
+fn assert_fold_fallback(source: &str, expected: &[(&str, &str)]) {
+    let py = pyfun::compile(source).unwrap_or_else(|e| panic!("compile failed: {e}\n{source}"));
+    assert!(
+        py.contains("_pf_fold"),
+        "expected the _pf_fold fallback (rejected fold), got:\n{py}"
+    );
+    assert!(
+        !py.contains(".append(") && !py.contains(".extend("),
+        "unexpected in-place mutation in a rejected fold:\n{py}"
+    );
+    run_and_check(source, expected);
+}
+
+#[test]
+fn fold_opt_tuple_named_folder_lowers_to_loop() {
+    let src = r#"type Cmd = Put int int | Push int | Skip
+let step acc c =
+  match acc:
+    case (m, xs):
+      match c:
+        case Put k v: (Map.add k v m, xs)
+        case Push n: (m, List.concat xs [n])
+        case Skip: acc
+let run cmds = List.fold step (Map.empty, []) cmds"#;
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for c in cmds:"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    assert!(py.contains("m[k] = v"), "{py}");
+    assert!(py.contains("xs.append(n)"), "{py}");
+    assert!(py.contains("return (m, xs)"), "{py}");
+}
+
+#[test]
+fn e2e_fold_opt_tuple_named_folder() {
+    let src = r#"type Cmd = Put int int | Push int | Skip
+let step acc c =
+  match acc:
+    case (m, xs):
+      match c:
+        case Put k v: (Map.add k v m, xs)
+        case Push n: (m, List.concat xs [n])
+        case Skip: acc
+let run cmds = List.fold step (Map.empty, []) cmds
+let out = match run [Put 1 10, Push 2, Skip, Put 3 30, Push 4]: case (m, xs): (Map.toList m, xs)"#;
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "([(1, 10), (3, 30)], [2, 4])")]);
+}
+
+#[test]
+fn fold_opt_single_map_lambda_lowers_to_subscript_assign() {
+    let src = "let m = List.fold (fun m x -> Map.add x (x * 2) m) Map.empty [1, 2, 3]";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for x in [1, 2, 3]:"), "{py}");
+    assert!(py.contains("m[x] ="), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    // The redundant `m = m` self-assign is suppressed.
+    assert!(!py.contains("m = m"), "{py}");
+}
+
+#[test]
+fn e2e_fold_opt_single_map_lambda() {
+    let src = "let m = List.fold (fun m x -> Map.add x (x * 2) m) Map.empty [1, 2, 3]\n\
+               let out = Map.toList m";
+    run_and_check(src, &[("out", "[(1, 2), (2, 4), (3, 6)]")]);
+}
+
+#[test]
+fn fold_opt_cross_slot_read_is_hoisted_before_mutation() {
+    // P7: a later slot reads an earlier slot (`Map.len m`); the read must be
+    // hoisted to a temp BEFORE the `m[x] = x` mutation so it sees the old value.
+    let src = r#"let step acc x =
+  match acc:
+    case (m, log): (Map.add x x m, List.concat log [Map.len m])
+let r = List.fold step (Map.empty, []) [1, 2, 3]"#;
+    let py = pyfun::compile(src).unwrap();
+    let temp = py.find("= len(m)").expect("hoisted len(m) temp");
+    let mutate = py.find("m[x] = x").expect("m[x] = x mutation");
+    assert!(
+        temp < mutate,
+        "read must be hoisted before the mutation:\n{py}"
+    );
+}
+
+#[test]
+fn e2e_fold_opt_cross_slot_read() {
+    let src = r#"let step acc x =
+  match acc:
+    case (m, log): (Map.add x x m, List.concat log [Map.len m])
+let r = List.fold step (Map.empty, []) [1, 2, 3]
+let out = match r: case (m, log): (Map.toList m, log)"#;
+    run_and_check(src, &[("out", "([(1, 1), (2, 2), (3, 3)], [0, 1, 2])")]);
+}
+
+#[test]
+fn fold_opt_extend_form() {
+    let src = "let acc = List.fold (fun acc x -> List.concat acc [x, x]) [] [1, 2]";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains(".extend("), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+}
+
+#[test]
+fn e2e_fold_opt_extend_form() {
+    let src = "let acc = List.fold (fun acc x -> List.concat acc [x, x]) [] [1, 2]\n\
+               let out = acc";
+    run_and_check(src, &[("out", "[1, 1, 2, 2]")]);
+}
+
+#[test]
+fn e2e_fold_opt_seq_fold_and_piped_form() {
+    let src = "let s = Seq.fold (fun m x -> Map.add x x m) Map.empty (Seq.range 0 3)\n\
+               let p = [1, 2, 3] |> List.fold (fun a x -> List.concat a [x]) []\n\
+               let so = Map.toList s";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "both folds qualify:\n{py}");
+    run_and_check(
+        src,
+        &[("so", "[(0, 0), (1, 1), (2, 2)]"), ("p", "[1, 2, 3]")],
+    );
+}
+
+#[test]
+fn fold_opt_nonatomic_key_is_hoisted() {
+    // A non-atomic key expression is hoisted to a temp before the subscript
+    // assignment (P7). (An effectful folder cannot typecheck against `List.fold`,
+    // so the effect-ordering half of P7 is unreachable; this covers the value
+    // dependency half.)
+    let src = "let step m x = Map.add (x + 1) x m\n\
+               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+    let py = pyfun::compile(src).unwrap();
+    let temp = py.find("= x + 1").expect("hoisted key temp");
+    let mutate = py.find("] = x").expect("subscript assign");
+    assert!(temp < mutate, "key must hoist before the mutation:\n{py}");
+    run_and_check(src, &[("out", "[(2, 1), (3, 2), (4, 3)]")]);
+}
+
+// ----- adversarial: each must fall back to `_pf_fold` and stay correct -----
+
+#[test]
+fn fold_reject_named_init_binding() {
+    // A1: init is a named binding read after the fold — mutating it would corrupt.
+    let src = "let seed = Map.empty\n\
+               let grown = List.fold (fun m x -> Map.add x x m) seed [1, 2]\n\
+               let a = Map.len seed\n\
+               let b = Map.len grown";
+    assert_fold_fallback(src, &[("a", "0"), ("b", "2")]);
+}
+
+#[test]
+fn fold_reject_component_stored_into_other_slot() {
+    // A2: a slot stored into the other slot (retention) — snapshots must differ.
+    let src = r#"let g acc x =
+  match acc:
+    case (names, log): (Map.add x x names, List.concat log [names])
+let out = match List.fold g (Map.empty, []) [1, 2]: case (m, log): (Map.len m, List.map Map.len log)"#;
+    assert_fold_fallback(src, &[("out", "(2, [0, 1])")]);
+}
+
+#[test]
+fn fold_reject_swapped_slots() {
+    // A3: slots returned swapped.
+    let src = "let h acc x = match acc: case (a, b): (b, a)\n\
+               let out = List.fold h (0, 100) [1, 2, 3]";
+    assert_fold_fallback(src, &[("out", "(100, 0)")]);
+}
+
+#[test]
+fn fold_reject_same_slot_twice() {
+    // A4: one slot returned in two positions.
+    let src = r#"let dup acc x = match acc: case (m, n): (Map.add x x m, m)
+let out = match List.fold dup (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.toList a, Map.toList b)"#;
+    assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], [(1, 1)])")]);
+}
+
+#[test]
+fn fold_reject_closure_capture() {
+    // A5: a slot captured in a closure stored into the accumulator.
+    let src = r#"let cap acc x =
+  match acc:
+    case (m, fs): (Map.add x x m, List.concat fs [fun u -> Map.len m])
+let out = match List.fold cap (Map.empty, []) [1, 2]: case (m, fs): List.map (fun f -> f 0) fs"#;
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[0, 1]")]);
+}
+
+#[test]
+fn fold_reject_acc_escapes_to_user_function() {
+    // A6: the accumulator is passed to a user function (the sortLegs shape).
+    let src = "let ins x acc = List.concat [x] acc\n\
+               let rev xs = List.fold (fun acc x -> ins x acc) [] xs\n\
+               let out = rev [1, 2, 3]";
+    assert_fold_fallback(src, &[("out", "[3, 2, 1]")]);
+}
+
+#[test]
+fn fold_reject_acc_in_nontail_nonwhitelisted_position() {
+    // A7: the accumulator used as a non-whitelisted read (a `List.contains` needle).
+    let src = "let k acc x = if List.contains acc [[]] then acc else List.concat acc [x]\n\
+               let out = List.fold k [] [1, 2, 3]";
+    assert_fold_fallback(src, &[("out", "[]")]);
+}
+
+#[test]
+fn fold_reject_fresh_reset_slot() {
+    // A8: a slot reset to a fresh container mid-fold (punted).
+    let src = r#"let rf acc x = match acc: case (m, n): if x == 0 then (Map.empty, n) else (Map.add x x m, n)
+let out = match List.fold rf (Map.empty, 0) [0, 1, 2]: case (m, n): (Map.toList m, n)"#;
+    assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], 0)")]);
+}
+
+#[test]
+fn fold_reject_free_var_capture_at_site() {
+    // A9: a named folder's free var is shadowed by a call-site local.
+    let src = "let base = 10\n\
+               let addb acc x = List.concat acc [x + base]\n\
+               let usefn n =\n  \
+                 let base = 99\n  \
+                 List.fold addb [] [1]\n\
+               let out = usefn 0";
+    assert_fold_fallback(src, &[("out", "[11]")]);
+}
+
+#[test]
+fn fold_reject_wildcard_slot() {
+    // A wildcard destructure slot has no name to thread.
+    let src = r#"let w acc x = match acc: case (m, _): (Map.add x x m, Map.empty)
+let out = match List.fold w (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.toList a, Map.toList b)"#;
+    assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], [])")]);
+}
+
+#[test]
+fn fold_reject_inside_in_file_module() {
+    // Name mangling inside an in-file module would apply inconsistently (P8).
+    let src = "module M =\n  \
+                 let scan xs = List.fold (fun m x -> Map.add x x m) Map.empty xs\n\
+               let r = Map.len (M.scan [1, 2, 3])";
+    assert_fold_fallback(src, &[("r", "3")]);
+}
+
+#[test]
+fn fold_reject_partial_application() {
+    // A partially-applied fold (2 args) is not fully applied — falls through.
+    let src = "let f a b = a + b\n\
+               let g = List.fold f\n\
+               let out = g 0 [1, 2, 3]";
+    assert_fold_fallback(src, &[("out", "6")]);
+}
+
+#[test]
+fn fold_reject_folder_is_a_parameter() {
+    // The folder is a parameter (no inlinable body).
+    let src = "let foldWith f = List.fold f Map.empty [1, 2, 3]\n\
+               let out = Map.len (foldWith (fun m x -> Map.add x x m))";
+    assert_fold_fallback(src, &[("out", "3")]);
+}
