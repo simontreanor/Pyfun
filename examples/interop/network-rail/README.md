@@ -2,9 +2,9 @@
 
 Turn the Network Rail **"Daily all-TOC snapshot"** (the national rail SCHEDULE
 feed) into a readable list of every train you can catch from a station, grouped
-by destination. This is Pyfun's **boundary-vs-engine** interop pattern at scale:
-a big, messy, untyped data source is streamed and shape-extracted on the Python
-side, and the interesting domain logic is a typed, total Pyfun program.
+by destination. It's an interop showcase that takes the **boundary-vs-engine**
+pattern to its limit: even the streaming boundary is Pyfun — there is **no Python
+helper module**, just `extern` bindings to `open` / `gzip.open` / `pathlib`.
 
 ## Run it
 
@@ -12,13 +12,11 @@ Out of the box it runs against the bundled `sample.ndjson` (a small synthetic
 fixture — no data download or account needed):
 
 ```sh
-cargo run -- compile examples/interop/network-rail/chippenham.pyfun \
-    -o examples/interop/network-rail/chippenham.py
-PYTHONPATH=examples/interop/network-rail \
-    python examples/interop/network-rail/chippenham.py
+cargo run -- run examples/interop/network-rail/chippenham.pyfun
 ```
 
-It writes `chippenham-routes.md`. Against the sample that looks like:
+(or `cargo run -- compile … -o out.py && python out.py`). It writes
+`chippenham-routes.md`, which against the sample looks like:
 
 ```markdown
 ## Monday–Friday (representative day: Tuesday)
@@ -42,30 +40,32 @@ terminus. Output is split into weekday / Saturday / Sunday sections.
 The real snapshot is newline-delimited JSON, ~3 GB uncompressed (≈40 MB gzip),
 one schedule object per line. Register for the data feeds
 (<https://opendata.nationalrail.co.uk> / Network Rail data feeds), download a
-`SCHEDULE` "all-TOC full" snapshot, and point `dataFile` in `chippenham.pyfun`
-at it — a plain `.json` **or** a `.json.gz` (the boundary streams the gzip
-directly, so you needn't decompress it). Recompile and run; it finishes in a few
-seconds because the Python side substring-prefilters before it ever calls
-`json.loads`.
+`SCHEDULE` "all-TOC full" snapshot, and point `dataFile` in `chippenham.pyfun` at
+it — the **exact** filename, a plain `.json` **or** a `.json.gz` (a `.gz` is
+detected by extension and streamed without decompressing). Expect a minute or two
+on the full feed: it streams in constant memory, but the ~20-million-line loop
+runs through Pyfun's `Seq.fold` rather than a native Python loop.
 
-To list a different station, change the `CHIPNHM` TIPLOC in both
-`chippenham.pyfun` (the `fromChippenham` guard) and `nr_stream.py` (the `CHIPP`
-prefilter constant).
+To list a different station, change the `CHIPNHM` TIPLOC in the `fromChippenham`
+guard and the `ingest` prefilter.
 
-## How it works
+## How it works — all in one `.pyfun`
 
-- **`nr_stream.py`** (the boundary) — streams the file one line at a time,
-  gzip-aware, skips lines that don't mention the station with a cheap substring
-  test *before* paying for `json.loads`, and returns only `(tiploc_name_map,
-  matching_runs)`. Memory stays flat regardless of file size; only a few hundred
-  runs cross the `extern` boundary.
-- **`chippenham.pyfun`** (the engine) — decides what counts as a *public* call
-  (passing points carry no public time), slices each schedule downstream of the
-  station, treats **every reachable calling point** as a destination (so a
-  Chippenham→Penzance train also counts as a direct service to Bath Spa),
-  dedups identical patterns, title-cases the UPPERCASE feed names, and renders
-  Markdown. It's ordinary Pyfun — records, `match`, `List`/`Map`/`String`/
-  `Option`, and inferred effects — no per-feature compiler support.
+- **The stream** — `open`/`gzip.open` return a file object, which Pyfun consumes
+  directly as a lazy `Seq string` of lines (`extern openText : string -> string ->
+  Seq string = builtins.open`). `Seq.fold` reduces it in constant memory, so file
+  size doesn't matter. A substring prefilter (`String.contains`) skips JSON
+  parsing on the lines that can't match.
+- **The decode** — the `Decode` module (Elm-style, "parse, don't validate") turns
+  each surviving line into typed tuples: no dictionary-poking, and a malformed
+  line is a caught `Error`, not a crash.
+- **The engine** — public-call detection, downstream slicing, any-calling-point
+  destinations (so a Chippenham→Penzance train also counts as a direct service to
+  Bath Spa), dedup, title-casing, and Markdown rendering — ordinary Pyfun over
+  records, `match`, and `List`/`Map`/`Seq`/`String`/`Option`.
+
+No keyword-argument support is needed at the `extern` boundary: `open`'s mode and
+`write_text`'s encoding are ordinary positional arguments (`… "rt"`, `… "utf-8"`).
 
 ## Notes
 
@@ -73,9 +73,8 @@ prefilter constant).
   deliberately ignored, which is exactly what makes these no-change journeys.
 - **STP caveat.** Counts reflect the day-of-week pattern of permanent + new
   schedules minus full cancellations (`CIF_stp_indicator == "C"`), deduped by
-  (departure, destination) to avoid short-term-plan overlays double-counting. A
-  specific calendar date can differ (an overlay or cancellation applies only on
-  certain dates); resolving against a real date is left as an exercise.
+  (departure, destination). A specific calendar date can differ. A full snapshot
+  is all `Create` records, so transaction type isn't checked.
 - **The bundled fixture is synthetic**, not real feed data — it avoids any
   redistribution question and is built to exercise every branch (a passing-only
   Chippenham, a train terminating there, a mid-route passing point, a deduped

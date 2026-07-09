@@ -1,38 +1,36 @@
-# Direct trains from a station, grouped by destination — a Network Rail
-# SCHEDULE feed turned into a readable Markdown timetable.
+# Direct trains from a station, grouped by destination — a Network Rail SCHEDULE
+# feed turned into a readable Markdown timetable, with NO Python helper: the file
+# is streamed, parsed, and rendered entirely in Pyfun.
 #
-#   cargo run -- compile examples/interop/network-rail/chippenham.pyfun \
-#       -o examples/interop/network-rail/chippenham.py
-#   PYTHONPATH=examples/interop/network-rail \
-#       python examples/interop/network-rail/chippenham.py
+#   cargo run -- run examples/interop/network-rail/chippenham.pyfun
 #
-# This is the boundary-vs-engine interop pattern at scale. The "Daily all-TOC
-# snapshot" is newline-delimited JSON — one schedule object per line, ~3 GB
-# uncompressed. `nr_stream.py` streams it entirely on the Python side (gzip-
-# aware, single pass, and a substring prefilter so json.loads runs only on the
-# handful of lines that mention Chippenham); only those runs cross the `extern`
-# boundary. Everything below is the typed, total engine: it decides what counts
-# as a public call, slices each route downstream of Chippenham, treats every
-# reachable station as a destination, dedups identical patterns, title-cases the
-# names, and emits Markdown.
+# This is the boundary-vs-engine interop pattern taken to its limit — even the
+# streaming boundary is Pyfun. The file object from `open`/`gzip.open` is consumed
+# as a lazy `Seq string`, so a ~3 GB NDJSON snapshot streams in constant memory; a
+# substring prefilter skips JSON parsing on the lines that can't match; and the
+# `Decode` module turns each surviving line into typed data — no dict-poking, no
+# bespoke Python. `open`'s mode and `write_text`'s encoding are passed as ordinary
+# positional arguments, so no keyword-argument support is needed at the boundary.
 #
-# Runs out of the box against the bundled `sample.ndjson` (a small synthetic
-# fixture). To run against the real feed, register at
-# https://opendata.nationalrail.co.uk / the Network Rail data feeds, then point
-# `dataFile` below at your snapshot (a plain `.json` or a `.json.gz` — the
-# boundary streams the gzip directly).
+# Runs out of the box against the bundled `sample.ndjson`. For the real feed
+# (register at https://opendata.nationalrail.co.uk / Network Rail data feeds),
+# point `dataFile` at your snapshot — the EXACT filename, `.json` or `.json.gz`
+# (a `.gz` is detected by extension and streamed without decompressing).
 #
-# STP caveat: counts reflect the day-of-week pattern of permanent + new
-# schedules minus full cancellations (stp "C"), deduped by (departure,
-# destination) to avoid overlay double-counting. A specific calendar date may
-# differ.
+# Performance: driving the ~20M-line loop through `Seq.fold` is correctness- and
+# clarity-first, not throughput-first — expect a minute or two on the full feed
+# (a native Python loop is faster, but that puts the hot path back in Python).
+#
+# STP caveat: counts reflect the day-of-week pattern of permanent + new schedules
+# minus full cancellations (stp "C"), deduped by (departure, destination). A
+# specific calendar date may differ. A full snapshot is all `Create` records, so
+# transaction type isn't checked.
 
-extern scan: string -> ( (Map string string)
-                       , (List ( string, string, string
-                               , (List (string, string, string)) )) )
-       = nr_stream.scan
-
-extern writeUtf8: string -> string -> int = nr_stream.write_utf8
+extern openText : string -> string -> Seq string = builtins.open
+extern gzipText : string -> string -> Seq string = gzip.open
+extern type Path
+extern toPath : string -> Path = pathlib.Path
+extern writeText : Path -> string -> string -> int = pathlib.Path.write_text
 
 type Stop = { tiploc: string, arr: string, dep: string }
 type Run  = { uid: string, days: string, stp: string, stops: List Stop }
@@ -41,7 +39,52 @@ type Leg  = { dest: string, finalDest: string, rdays: string, depMin: int, arrMi
 let dataFile = "examples/interop/network-rail/sample.ndjson"
 let outFile  = "examples/interop/network-rail/chippenham-routes.md"
 
-# --- shape the raw tuples from the boundary into typed records ---
+# --- streaming boundary, in Pyfun: the file object is a lazy Seq of lines ---
+let lines path =
+  if String.endsWith ".gz" path then gzipText path "rt" else openText path "rt"
+
+# --- decode the relevant lines into typed data (parse, don't validate) ---
+let optStr key = Decode.oneOf [Decode.field key Decode.string, Decode.succeed ""]
+
+let tipDec =
+  Decode.field "TiplocV1"
+    (Decode.map2 (fun c n -> (c, n))
+      (Decode.field "tiploc_code" Decode.string)
+      (optStr "tps_description"))
+
+let stopDec =
+  Decode.map3 (fun t a d -> (t, a, d))
+    (Decode.field "tiploc_code" Decode.string)
+    (optStr "public_arrival")
+    (optStr "public_departure")
+
+let schedDec =
+  Decode.field "JsonScheduleV1"
+    (Decode.map4 (fun uid days stp stops -> (uid, days, stp, stops))
+      (Decode.field "CIF_train_uid" Decode.string)
+      (optStr "schedule_days_runs")
+      (optStr "CIF_stp_indicator")
+      (Decode.field "schedule_segment" (Decode.field "schedule_location" (Decode.list stopDec))))
+
+# Fold the lazy line Seq into (tiploc names, Chippenham-calling runs). A cheap
+# substring test skips JSON parsing on the millions of lines that can't match —
+# the same prefilter the Python did, now in Pyfun and in constant memory.
+let ingest acc line =
+  match acc:
+    case (names, runs):
+      if String.contains "TiplocV1" line then
+        match Decode.decodeString tipDec line:
+          case Ok (c, n): (Map.add c n names, runs)
+          case Error _: acc
+      else if String.contains "JsonScheduleV1" line and String.contains "CHIPNHM" line then
+        match Decode.decodeString schedDec line:
+          case Ok r: (names, List.concat runs [r])
+          case Error _: acc
+      else acc
+
+let scan path = Seq.fold ingest (Map.empty, []) (lines path)
+
+# --- shape the decoded tuples into typed records ---
 let toStop t =
   match t:
     case (tp, a, d): Stop { tiploc = tp, arr = a, dep = d }
@@ -51,27 +94,21 @@ let toRun r =
     case (uid, days, stp, stops):
       Run { uid = uid, days = days, stp = stp, stops = List.map toStop stops }
 
-# A stop is a public calling point iff it advertises a public time (passing
-# points carry neither a public arrival nor departure).
+# A stop is a public calling point iff it advertises a public time.
 let calls s = (s.arr != "" and s.arr != "0000") or (s.dep != "" and s.dep != "0000")
 
-# "HHMM" -> minutes since midnight (-1 if unparseable).
 let toMin hhmm =
   match (String.toInt (String.slice 0 2 hhmm), String.toInt (String.slice 2 4 hhmm)):
     case (Some h, Some m): h * 60 + m
     case _: -1
 
-# minutes -> "HH:MM"
 let fmt2 n = if n < 10 then f"0{n}" else f"{n}"
 let showTime m = f"{fmt2 (m // 60)}:{fmt2 (m % 60)}"
 
-# Journey time in minutes, wrapping past midnight.
 let jtime dep arr =
   let d = arr - dep
   if d < 0 then d + 1440 else d
 
-# The train's public departure from Chippenham + the stops after it, or None if
-# the train only passes Chippenham or terminates there.
 let fromChippenham stops =
   match stops:
     case []: None
@@ -79,16 +116,12 @@ let fromChippenham stops =
       if s.tiploc == "CHIPNHM" and calls s then Some (s.dep, rest)
       else fromChippenham rest
 
-# The last stop of a schedule — the train's final destination.
 let lastTiploc stops =
   match stops:
     case []: ""
     case [s]: s.tiploc
     case [_, *rest]: lastTiploc rest
 
-# One leg per downstream calling point; `via` accumulates the intermediate
-# calling points (TIPLOCs) reached before the current one; `term` is the train's
-# final destination, carried onto every leg so a through service can be flagged.
 let walkLegs days term depM via stops =
   match stops:
     case []: []
@@ -103,7 +136,6 @@ let walkLegs days term depM via stops =
           List.concat [leg] (walkLegs days term depM onward rest)
       else walkLegs days term depM via rest
 
-# All direct-service legs contributed by one schedule (none if cancelled).
 let legsOfRun r =
   if r.stp == "C" then []
   else
@@ -114,7 +146,6 @@ let legsOfRun r =
         if depM < 0 then []
         else walkLegs r.days (lastTiploc downstream) depM [] downstream
 
-# --- day filter, dedup, grouping ---
 let runsOn day days = String.slice day (day + 1) days == "1"
 
 let dedupLegs legs =
@@ -131,7 +162,6 @@ let dedupLegs legs =
 let groupByDest acc leg =
   Map.add leg.dest (List.concat (Option.withDefault [] (Map.tryFind leg.dest acc)) [leg]) acc
 
-# insertion sort of legs by departure (per-destination lists are small)
 let insertByDep leg sorted =
   match sorted:
     case []: [leg]
@@ -141,7 +171,6 @@ let insertByDep leg sorted =
 
 let sortLegs legs = List.fold (fun acc l -> insertByDep l acc) [] legs
 
-# --- min / max over an int list (groups are always non-empty) ---
 let minOf xs =
   match xs:
     case []: 0
@@ -160,8 +189,8 @@ let maxOf xs =
 
 # --- title-casing (feed descriptions are UPPERCASE) ---
 # Uppercase the first *alphabetic* char in a char list, leave the rest. The test
-# `String.upper c != c` is true only for a lowercase letter (punctuation/digits
-# are unchanged by upper), so "(south" capitalizes the s, not the "(".
+# `String.upper c != c` is true only for a lowercase letter, so "(south"
+# capitalizes the s, not the "(".
 let capFirst chars =
   match chars:
     case []: []
@@ -170,7 +199,6 @@ let capFirst chars =
       else List.concat [c] (capFirst rest)
 
 let capWord w = String.join "" (capFirst (String.toList w))
-# Split on spaces then hyphens so "weston-super-mare" -> "Weston-Super-Mare".
 let titleHyphen w = String.join "-" (List.map capWord (String.split "-" w))
 let titleCase name = String.join " " (List.map titleHyphen (String.split " " (String.lower name)))
 
@@ -195,8 +223,8 @@ let renderGroup names g =
       let times = List.map (fun l -> l.jt) legs
       let tr = plural (List.len legs) "train"
       let header = f"### {nameOf names dest} — {tr}, {rangeStr (minOf times) (maxOf times)}"
-      let lines = String.join "\n" (List.map (renderService names) (sortLegs legs))
-      f"{header}\n\n{lines}"
+      let body = String.join "\n" (List.map (renderService names) (sortLegs legs))
+      f"{header}\n\n{body}"
 
 let daySection names label day allLegs =
   let legs = dedupLegs (List.filter (fun l -> runsOn day l.rdays) allLegs)
@@ -215,6 +243,6 @@ let buildReport names raw =
 
 let _ =
   match scan dataFile:
-    case (names, raw): writeUtf8 outFile (buildReport names raw)
+    case (names, raw): writeText (toPath outFile) (buildReport names raw) "utf-8"
 
 print (f"Wrote Markdown direct Chippenham services to {outFile}")
