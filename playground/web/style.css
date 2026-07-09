@@ -53,8 +53,51 @@ main {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
-  padding: 8px 14px;
+  padding: 6px 10px 6px 14px;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+}
+
+#run {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--bg);
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+#run:hover:not(:disabled) { filter: brightness(1.1); }
+#run:disabled { background: var(--border); color: var(--muted); cursor: default; }
+
+#run-output {
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 45%;
+  color: var(--fg);
+  background: rgba(126, 231, 135, 0.04);
+}
+#run-output.run-error { color: var(--err); background: rgba(255, 123, 114, 0.06); }
+#run-output::before {
+  content: "output";
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
 }
 
 #editor {
