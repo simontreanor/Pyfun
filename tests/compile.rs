@@ -2862,6 +2862,22 @@ fn e2e_example_http_fetch() {
     );
 }
 
+#[test]
+fn example_network_rail_compiles() {
+    // The Network Rail example lives in a subdir with a Python helper + a bundled
+    // sample and writes a file rather than printing, so it doesn't fit the stdout-
+    // pinning `run_example` harness. Guard the part a compiler change can break:
+    // its type-check and lowering.
+    let path = format!(
+        "{}/examples/interop/network-rail/chippenham.pyfun",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let source =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    pyfun::compile(&source)
+        .unwrap_or_else(|e| panic!("network-rail chippenham.pyfun must compile: {e}"));
+}
+
 // ---------- helpers ----------
 
 /// Compile the interop example `name` from `examples/interop/`, run the emitted
