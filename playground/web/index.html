@@ -39,8 +39,8 @@
     &middot; the compiler on this page <em>is</em> the WebAssembly it loaded
   </footer>
 
-  <!-- Pyodide loader (small); the ~10 MB runtime downloads lazily on the first Run. -->
-  <script src="https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.js"></script>
+  <!-- Pyodide runs in a Web Worker (see pyodide-worker.js), off the main thread, so the
+       UI never janks while the ~10 MB runtime loads or code executes. -->
   <script type="module" src="./app.js"></script>
 </body>
 </html>

@@ -89,39 +89,45 @@ editor.addEventListener("input", () => {
   timer = setTimeout(render, 150);
 });
 
-// --- Pyodide (CPython in the browser), loaded lazily on the first Run ---
+// --- Pyodide runs in a Web Worker (pyodide-worker.js), off the main thread, so loading
+// the ~10 MB runtime and executing code never freeze the UI. ---
 
-const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/";
-let pyodidePromise = null;
+let worker = null;
+let runSeq = 0;
+const pending = new Map();
 
-function ensurePyodide() {
-  if (!pyodidePromise) {
-    pyodidePromise = globalThis.loadPyodide({ indexURL: PYODIDE_URL });
+function ensureWorker() {
+  if (!worker) {
+    // A module worker (it `import`s Pyodide's .mjs), resolved relative to this module so
+    // it works at any base path (e.g. /Pyfun/).
+    worker = new Worker(new URL("./pyodide-worker.js", import.meta.url), { type: "module" });
+    worker.onmessage = (event) => {
+      const { id, out, err } = event.data;
+      const resolve = pending.get(id);
+      if (resolve) {
+        pending.delete(id);
+        resolve({ out, err });
+      }
+    };
+    worker.onerror = (e) => {
+      for (const resolve of pending.values()) {
+        resolve({ out: "", err: "worker failed to start: " + (e.message || e) });
+      }
+      pending.clear();
+    };
   }
-  return pyodidePromise;
+  return worker;
 }
 
-// Run `code` and return { out, err }: captured stdout+stderr, and the Python traceback
-// if it raised. Each run uses a fresh namespace so module state can't leak between runs;
-// stdout is redirected to a StringIO (version-proof, no Pyodide-specific stream API).
-async function runPython(code) {
-  const pyodide = await ensurePyodide();
-  pyodide.runPython(`
-import sys, io
-__pf_buf = io.StringIO()
-__pf_saved = (sys.stdout, sys.stderr)
-sys.stdout = sys.stderr = __pf_buf
-`);
-  let err = null;
-  try {
-    await pyodide.runPythonAsync(code, { globals: pyodide.toPy({}) });
-  } catch (e) {
-    err = String(e.message || e);
-  } finally {
-    pyodide.runPython("sys.stdout, sys.stderr = __pf_saved");
-  }
-  const out = pyodide.runPython("__pf_buf.getvalue()");
-  return { out, err };
+// Send `code` to the worker and resolve with { out, err }. The UI disables Run while a
+// run is outstanding, so at most one is in flight — but each carries an id anyway.
+function runInWorker(code) {
+  const w = ensureWorker();
+  const id = ++runSeq;
+  return new Promise((resolve) => {
+    pending.set(id, resolve);
+    w.postMessage({ id, code });
+  });
 }
 
 runBtn.addEventListener("click", async () => {
@@ -129,12 +135,12 @@ runBtn.addEventListener("click", async () => {
   const code = lastPython;
   runOutput.hidden = false;
   runOutput.classList.remove("run-error");
-  runOutput.textContent = pyodidePromise
+  runOutput.textContent = worker
     ? "running…"
     : "loading Python runtime… (first run downloads ~10 MB, then it's cached)";
   runBtn.disabled = true;
   try {
-    const { out, err } = await runPython(code);
+    const { out, err } = await runInWorker(code);
     if (err) {
       runOutput.textContent = (out ? out + "\n" : "") + err;
       runOutput.classList.add("run-error");
