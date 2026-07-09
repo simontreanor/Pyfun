@@ -60,6 +60,40 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `PyExpr::CallKw` variant (emitter), and kwarg injection at the two extern call sites in lowering (the
   general and receiver-method paths). Fits the trusted-contract boundary — the programmer still signs the
   signature. `DESIGN.md` §6.
+- **Performance-directed lowering — defunctionalize hot folds/pipelines** (L) — today `Seq.fold f init xs`
+  lowers to `functools.reduce(f, xs, init)` (a Python call per element) and a `Seq.map`/`filter`/`fold`
+  chain to nested lazy `map`/`filter`/`islice` (a call per element per stage), so a hot loop pays call
+  overhead and immutable-accumulator churn a hand-written Python `for` loop doesn't. The
+  `examples/interop/network-rail` pair measures it: the pure-Pyfun `Seq.fold` over ~20M lines runs ~15x
+  slower than the equivalent native Python loop — and that gap is entirely a *lowering-shape* artifact
+  (per-element calls, a `match`-destructure + rebuild of the tuple accumulator each iteration, an O(n²)
+  `List.concat` append), not anything fundamental. This is the **same defunctionalization instinct the
+  compiler already applies to currying** (fully-applied calls collapse to direct `f(a, b)`, closures only
+  for real partial application; `DESIGN.md` §5–6), extended to iteration.
+
+  Tiered plan, readable wins first. **(1)** Recognize `Seq.fold`/`Seq.iter` with an *inlinable* folder
+  (lambda literal or small local) and emit an imperative `for` loop with the body spliced in; when `init`
+  is a tuple threaded *linearly* (a fold accumulator always is), split it into **mutable locals** the body
+  updates in place (`d[k] = v`, `xs.append(e)`) instead of rebuilding — this alone should recover most of
+  the network-rail gap, since the result is essentially the Python the helper hand-wrote. **(2)** Stream-
+  fuse `map`/`filter`/`take`/`fold` pipelines into a single loop (deforestation) so no intermediate
+  iterators are built. **(3)** Micro-opts (hoist method lookups out of loops, etc.) — gated, since they
+  erode the line-to-line source correspondence Pyfun's *readable-output* promise depends on.
+
+  The hard parts are the enabling analyses, not the emission: an **inlinability** check on the folder, a
+  **linearity/aliasing** check to license in-place accumulator mutation soundly (a fold's acc qualifies; a
+  captured/aliased value does not), and preserved effect ordering. Falls back to today's `reduce`/lazy-
+  combinator lowering whenever those don't hold, so it is strictly additive. Lives in `src/lowering` (see
+  the `_pf_fold` helper and the `Seq.*` cases).
+
+  Framing / ceiling: unlike F# — whose elegant `Seq` pipelines lean on the .NET **JIT** to become fast IL
+  at runtime — Pyfun targets un-JIT'd CPython, so *the compiler must be the AOT optimizer itself*. That
+  caps the target at "as fast as idiomatic hand-written Python," never F#-on-.NET; for merely-warm loops
+  that is plenty. It **complements, not replaces, the `extern` boundary**: better lowering raises the floor
+  so the pure version is viable more often, while a genuinely hot inner loop still belongs behind an
+  `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
+  that already exists." Scope narrowly to start (tier 1, `Seq.fold`/`iter`), measure against the
+  network-rail example, and let that decide whether tier 2 earns its keep.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
