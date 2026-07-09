@@ -191,6 +191,9 @@ struct Lowerer {
     /// Standard combinators (`id`/`const`/`ignore`/`flip`) actually referenced,
     /// emitted on demand by [`combinator_prelude`] as `_pf_*` helpers.
     needed_combinators: BTreeSet<&'static str>,
+    /// `Decode`-module helpers actually referenced (e.g. `_pf_dec_field`), emitted on
+    /// demand by [`decode_prelude`] as `_pf_dec_*` functions.
+    needed_decode_helpers: BTreeSet<&'static str>,
     /// Spans of value-position integer *literals* that inference resolved to
     /// `float` (e.g. the `7` in `let x = 7` used later as `x + 1.5`). Such a
     /// literal is emitted as a Python float (`7.0`) so the runtime value matches
@@ -391,6 +394,7 @@ impl Lowerer {
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             needed_combinators: BTreeSet::new(),
+            needed_decode_helpers: BTreeSet::new(),
             float_literals: HashSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
@@ -582,6 +586,8 @@ impl Lowerer {
         body.extend(collection_prelude(&self.needed_collection_helpers));
         // Standard-combinator helpers referenced by the program.
         body.extend(combinator_prelude(&self.needed_combinators));
+        // Decode-module helpers referenced by the program.
+        body.extend(decode_prelude(&self.needed_decode_helpers));
         body.extend(classes);
         body.extend(code);
         Ok(PyModule { body })
@@ -1443,6 +1449,13 @@ impl Lowerer {
         }
     }
 
+    /// Flag a `Decode`-module helper as needed and route a reference to it. The
+    /// helper is an emitted `_pf_dec_*` function ([`decode_prelude`]).
+    fn decode_helper(&mut self, helper: &'static str) -> PyExpr {
+        self.needed_decode_helpers.insert(helper);
+        PyExpr::Name(helper.to_string())
+    }
+
     /// Lower a built-in module member (`List.map`, `Set.empty`, `Map.tryFind`, …) to
     /// the Python it routes to: a bare builtin name (`len`/`set`/`list`), a fresh
     /// empty container (`set()`/`dict()`), or an emitted `_pf_*` helper (recorded so
@@ -1635,6 +1648,36 @@ impl Lowerer {
             "Format.grouped" => coll(self, "_pf_fmt_grouped"),
             "Format.padLeft" => coll(self, "_pf_fmt_pad_left"),
             "Format.padRight" => coll(self, "_pf_fmt_pad_right"),
+            // Decode — JSON decoder combinators. Each member is (or builds) a Python
+            // callable `parsed_json -> value` that raises on mismatch; `decodeString`
+            // parses + runs one and catches into a `Result`. Routed to emitted
+            // `_pf_dec_*` helpers (recorded so they are defined). `nullable` builds
+            // `Some`/`None_`; `decodeString` builds `Ok`/`Error`/`_Exception` and
+            // needs `json` — so flag the corresponding preludes/imports.
+            "Decode.string" => self.decode_helper("_pf_dec_string"),
+            "Decode.int" => self.decode_helper("_pf_dec_int"),
+            "Decode.float" => self.decode_helper("_pf_dec_float"),
+            "Decode.bool" => self.decode_helper("_pf_dec_bool"),
+            "Decode.field" => self.decode_helper("_pf_dec_field"),
+            "Decode.list" => self.decode_helper("_pf_dec_list"),
+            "Decode.nullable" => {
+                self.needs_option = true;
+                self.decode_helper("_pf_dec_nullable")
+            }
+            "Decode.map" => self.decode_helper("_pf_dec_map"),
+            "Decode.map2" => self.decode_helper("_pf_dec_map2"),
+            "Decode.map3" => self.decode_helper("_pf_dec_map3"),
+            "Decode.map4" => self.decode_helper("_pf_dec_map4"),
+            "Decode.succeed" => self.decode_helper("_pf_dec_succeed"),
+            "Decode.fail" => self.decode_helper("_pf_dec_fail"),
+            "Decode.andThen" => self.decode_helper("_pf_dec_and_then"),
+            "Decode.oneOf" => self.decode_helper("_pf_dec_one_of"),
+            "Decode.decodeString" => {
+                self.needs_result = true;
+                self.needs_exception = true;
+                self.needed_imports.insert("json".to_string());
+                self.decode_helper("_pf_dec_decode_string")
+            }
             // A user module member (`Geometry.area`). An imported *file* module
             // lowers to Python attribute access on the imported module
             // (`geometry.area`, with `import geometry` hoisted); an in-file
@@ -2673,6 +2716,249 @@ fn combinator_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 },
             ),
             other => unreachable!("unknown combinator helper {other}"),
+        })
+        .collect()
+}
+
+/// The `Decode`-module helper definitions actually referenced (`DESIGN.md` §6). A
+/// `Decoder a` is represented at runtime as a plain Python callable `parsed -> a`
+/// that **raises** on a type/shape mismatch; the combinators build new such callables
+/// (closures), and `_pf_dec_decode_string` parses a JSON string and *runs* one inside
+/// `try`, catching any raise into a `Result` (`Ok`/`Error(_Exception(...))`). The
+/// primitives are strict — `_pf_dec_int` rejects a JSON bool (a Python `bool` is an
+/// `int` subclass) and `_pf_dec_float` accepts an int — so "parse, don't validate"
+/// actually validates. Built from the IR, emitted in sorted helper-name order.
+fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+    let name = |n: &str| PyExpr::Name(n.to_string());
+    let str_ = |s: &str| PyExpr::Str(s.to_string());
+    let int = PyExpr::Int;
+    let call = |f: PyExpr, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(f),
+        args,
+    };
+    // `f(args...)` where `f` is a bare name.
+    let calln = |f: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Name(f.to_string())),
+        args,
+    };
+    let attr = |v: PyExpr, a: &str| PyExpr::Attribute {
+        value: Box::new(v),
+        attr: a.to_string(),
+    };
+    let sub = |v: PyExpr, i: PyExpr| PyExpr::Subscript {
+        value: Box::new(v),
+        index: Box::new(i),
+    };
+    let binop = |op: PyBinOp, l: PyExpr, r: PyExpr| PyExpr::BinOp {
+        op,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let not_ = |e: PyExpr| PyExpr::Not(Box::new(e));
+    let ret = |e: PyExpr| PyStmt::Return(e);
+    let raise_ = |e: PyExpr| PyStmt::Raise(e);
+    // `if test: body` (no else) — the strict primitives fall through to a `raise`.
+    let if_ = |test: PyExpr, body: Vec<PyStmt>| PyStmt::If {
+        test,
+        body,
+        orelse: vec![],
+    };
+    let def = |n: &str, params: &[&str], body: Vec<PyStmt>| PyStmt::FuncDef {
+        name: n.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body,
+        is_async: false,
+    };
+    // A decoder *factory*: an outer function that closes over its arguments and
+    // returns the inner `go(v)` decoder callable.
+    let factory = |n: &str, params: &[&str], go_body: Vec<PyStmt>| {
+        def(
+            n,
+            params,
+            vec![def("go", &["v"], go_body), PyStmt::Return(name("go"))],
+        )
+    };
+    // A strict primitive `def _pf_dec_<t>(v): if <test>: return v; raise ValueError(...)`.
+    // `noun` is the full article + type ("a string", "an int") for the error message.
+    let primitive = |n: &str, noun: &str, test: PyExpr, ok: PyExpr| {
+        def(
+            n,
+            &["v"],
+            vec![
+                if_(test, vec![PyStmt::Return(ok)]),
+                raise_(calln(
+                    "ValueError",
+                    vec![binop(
+                        PyBinOp::Add,
+                        PyExpr::Str(format!("expected {noun}, got ")),
+                        attr(calln("type", vec![name("v")]), "__name__"),
+                    )],
+                )),
+            ],
+        )
+    };
+    // `isinstance(v, <ty>)`.
+    let isinst = |ty: PyExpr| calln("isinstance", vec![name("v"), ty]);
+    // `f(da(v), db(v), …)` — apply a fan-in function to each decoder run on `v`.
+    let fan_in = |fields: &[&str]| {
+        call(
+            name("f"),
+            fields
+                .iter()
+                .map(|d| call(name(d), vec![name("v")]))
+                .collect(),
+        )
+    };
+    used.iter()
+        .map(|&helper| match helper {
+            // Primitives — strict about the parsed JSON type.
+            "_pf_dec_string" => primitive("_pf_dec_string", "a string", isinst(name("str")), name("v")),
+            // A JSON bool is a Python `bool`, an `int` subclass — exclude it.
+            "_pf_dec_int" => primitive(
+                "_pf_dec_int",
+                "an int",
+                binop(PyBinOp::And, isinst(name("int")), not_(isinst(name("bool")))),
+                name("v"),
+            ),
+            // Accept a JSON int or float (but not bool); normalize to a Python float.
+            "_pf_dec_float" => primitive(
+                "_pf_dec_float",
+                "a float",
+                binop(
+                    PyBinOp::And,
+                    isinst(PyExpr::Tuple(vec![name("int"), name("float")])),
+                    not_(isinst(name("bool"))),
+                ),
+                calln("float", vec![name("v")]),
+            ),
+            "_pf_dec_bool" => primitive("_pf_dec_bool", "a bool", isinst(name("bool")), name("v")),
+            // Decode.field name dec -> go(v) = dec(v[name]), guarded to a JSON object.
+            "_pf_dec_field" => factory(
+                "_pf_dec_field",
+                &["name", "dec"],
+                vec![
+                    if_(
+                        not_(isinst(name("dict"))),
+                        vec![raise_(calln("ValueError", vec![str_("expected a JSON object")]))],
+                    ),
+                    ret(call(name("dec"), vec![sub(name("v"), name("name"))])),
+                ],
+            ),
+            // Decode.list dec -> go(v) = list(map(dec, v)), guarded to a JSON array.
+            "_pf_dec_list" => factory(
+                "_pf_dec_list",
+                &["dec"],
+                vec![
+                    if_(
+                        not_(isinst(name("list"))),
+                        vec![raise_(calln("ValueError", vec![str_("expected a JSON array")]))],
+                    ),
+                    ret(calln("list", vec![calln("map", vec![name("dec"), name("v")])])),
+                ],
+            ),
+            // Decode.nullable dec -> None_() when JSON null, else Some(dec(v)).
+            "_pf_dec_nullable" => factory(
+                "_pf_dec_nullable",
+                &["dec"],
+                vec![ret(PyExpr::IfExp {
+                    body: Box::new(calln("None_", vec![])),
+                    test: Box::new(binop(PyBinOp::Is, name("v"), PyExpr::NoneLit)),
+                    orelse: Box::new(calln("Some", vec![call(name("dec"), vec![name("v")])])),
+                })],
+            ),
+            // Decode.map f dec -> f(dec(v)).
+            "_pf_dec_map" => factory(
+                "_pf_dec_map",
+                &["f", "dec"],
+                vec![ret(call(name("f"), vec![call(name("dec"), vec![name("v")])]))],
+            ),
+            // Decode.map2/3/4 — fan several decoders into one n-ary function.
+            "_pf_dec_map2" => factory("_pf_dec_map2", &["f", "da", "db"], vec![ret(fan_in(&["da", "db"]))]),
+            "_pf_dec_map3" => factory(
+                "_pf_dec_map3",
+                &["f", "da", "db", "dc"],
+                vec![ret(fan_in(&["da", "db", "dc"]))],
+            ),
+            "_pf_dec_map4" => factory(
+                "_pf_dec_map4",
+                &["f", "da", "db", "dc", "dd"],
+                vec![ret(fan_in(&["da", "db", "dc", "dd"]))],
+            ),
+            // Decode.succeed x -> a decoder that ignores its input.
+            "_pf_dec_succeed" => factory("_pf_dec_succeed", &["x"], vec![ret(name("x"))]),
+            // Decode.fail msg -> a decoder that always raises.
+            "_pf_dec_fail" => factory(
+                "_pf_dec_fail",
+                &["msg"],
+                vec![raise_(calln("ValueError", vec![name("msg")]))],
+            ),
+            // Decode.andThen f dec -> f(dec(v))(v): pick the next decoder from the value.
+            "_pf_dec_and_then" => factory(
+                "_pf_dec_and_then",
+                &["f", "dec"],
+                vec![ret(call(
+                    call(name("f"), vec![call(name("dec"), vec![name("v")])]),
+                    vec![name("v")],
+                ))],
+            ),
+            // Decode.oneOf decs -> the first decoder that does not raise (recursive so
+            // no `for`-loop IR node is needed).
+            "_pf_dec_one_of" => factory(
+                "_pf_dec_one_of",
+                &["decs"],
+                vec![
+                    def(
+                        "_try",
+                        &["i"],
+                        vec![
+                            if_(
+                                binop(PyBinOp::Ge, name("i"), calln("len", vec![name("decs")])),
+                                vec![raise_(calln(
+                                    "ValueError",
+                                    vec![str_("Decode.oneOf: no decoder matched")],
+                                ))],
+                            ),
+                            PyStmt::Try {
+                                body: vec![ret(call(sub(name("decs"), name("i")), vec![name("v")]))],
+                                exc_type: Some("Exception".to_string()),
+                                binding: None,
+                                handler: vec![ret(call(
+                                    name("_try"),
+                                    vec![binop(PyBinOp::Add, name("i"), int(1))],
+                                ))],
+                            },
+                        ],
+                    ),
+                    ret(call(name("_try"), vec![int(0)])),
+                ],
+            ),
+            // Decode.decodeString dec s -> Ok(dec(json.loads(s))) / Error(_Exception(...)).
+            "_pf_dec_decode_string" => def(
+                "_pf_dec_decode_string",
+                &["dec", "s"],
+                vec![PyStmt::Try {
+                    body: vec![ret(calln(
+                        "Ok",
+                        vec![call(
+                            name("dec"),
+                            vec![call(attr(name("json"), "loads"), vec![name("s")])],
+                        )],
+                    ))],
+                    exc_type: Some("Exception".to_string()),
+                    binding: Some("e".to_string()),
+                    handler: vec![ret(calln(
+                        "Error",
+                        vec![calln(
+                            "_Exception",
+                            vec![
+                                attr(calln("type", vec![name("e")]), "__name__"),
+                                calln("str", vec![name("e")]),
+                            ],
+                        )],
+                    ))],
+                }],
+            ),
+            other => unreachable!("unknown decode helper {other}"),
         })
         .collect()
 }

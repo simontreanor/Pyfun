@@ -1366,7 +1366,7 @@ const BUILTIN_CTORS: &[&str] = &["Ok", "Error", "Some", "None"];
 /// Built-in and reserved type names.
 const BUILTIN_TYPES: &[&str] = &[
     "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List", "Set", "Map",
-    "Option",
+    "Option", "Decoder",
 ];
 
 /// Pyfun keywords (and contextual builder/CE words) offered as completions.

@@ -41,5 +41,5 @@ print nobody                             # 0.0
 # (subscript access), whereas a Pyfun record lowers to a class (attribute access),
 # so `extern parseUser: string -> User = json.loads` type-checks but raises
 # `AttributeError: 'dict' object has no attribute 'name'` at runtime. Decoding into
-# an ADT needs a small field-by-field decoder (a `Json` value type + accessors) —
-# a natural next cookbook entry, not something the raw cast gives you for free.
+# an ADT uses the built-in Elm-style `Decode` module — see `json_to_adt.pyfun`, the
+# headline example — not the raw cast.

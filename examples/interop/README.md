@@ -30,7 +30,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | File | Library | Runs offline | Shows |
 |------|---------|:---:|-------|
 | [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | ✅ | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.tryFind` lookup |
-| [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `json` (stdlib) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, via `result {}` railway composition (KeyError/ValueError → `Error`) |
+| [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `Decode` (built-in) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, with the Elm-style built-in `Decode` module (`Decode.map3` + `Decode.field`); the whole pipeline is *pure* |
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
@@ -51,10 +51,15 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   (no `()`) is a property read, so `scheme url` lowers to `url.scheme`. No class is named or
   imported, inherited/delegated members work, and `execute conn` is the bound method
   `conn.execute` (currying for free).
-- **Heterogeneous decode into your ADTs.** Don't cast the whole object — pull each field
-  (`operator.getitem`), coerce it (`int`/`str`), wrap each step in `try`, and compose on
-  the `result {}` railway so the first bad field short-circuits to `Error`. See
-  `json_to_adt.pyfun`; this is the shape a decoder-combinator library would generalize.
+- **Heterogeneous decode into your ADTs.** Don't cast the whole object — build a
+  **decoder** with the built-in `Decode` module and run it with `Decode.decodeString :
+  Decoder a -> string -> Result a Exception`. `Decode.field "age" Decode.int` pulls and
+  strictly decodes a field; `Decode.map3`/`map2`/`map4` fan several field decoders into
+  one that builds your record; `Decode.list`/`nullable`/`oneOf`/`andThen` cover arrays,
+  optional/`null`, unions, and value-dependent shapes. The first bad field
+  short-circuits to `Error`, and the whole pipeline is **pure** (a `let pure` over it
+  type-checks). See `json_to_adt.pyfun` — this is Elm's `elm/json`, on the one library
+  every Python programmer has imported.
 - **Effects for free.** A plain `extern` is `io`; the checker infers and propagates it, so
   any function touching the boundary is `io` with no annotation, and `let pure` over it is
   a compile error. Override the boundary default with `->{async}` for async libraries.
@@ -64,9 +69,10 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **No raw cast into records.** `extern parseUser: string -> User = json.loads`
   type-checks but crashes (`'dict' object has no attribute 'name'`) — `json` returns a
   Python `dict` (subscript), a Pyfun record lowers to a class (attribute). This is a
-  footgun to avoid, not a wall: the field-by-field decoder in `json_to_adt.pyfun` is the
-  right way, and it composes cleanly. The gap is only the *ergonomics* of a reusable
-  decoder-combinator library (which a package manager, deferred, would let us ship).
+  footgun to avoid, not a wall: the built-in `Decode` module (`json_to_adt.pyfun`) is the
+  right way, and it composes cleanly and totally. The residual gap is only the *generalized*
+  decoder story — user-registered combinators and a `Value` type for already-parsed data —
+  which is deferred; the shipped set already covers records, lists, options, and unions.
 - **Handle boilerplate.** Each opaque object still needs its own one-line `extern type Conn`
   declaration. That is now a single honest line (was the phantom-ADT `type Conn = ConnH`); a
   future "typed façade" module could bundle a library's handles + methods together, but that

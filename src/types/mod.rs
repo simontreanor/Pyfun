@@ -484,6 +484,36 @@ pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
     ("padRight", 3),
 ];
 
+/// The `Decode` module (`DESIGN.md` §6): Elm-style JSON decoder combinators over the
+/// opaque built-in `Decoder a`. A `Decoder a` is a pure, total recipe that turns
+/// untrusted JSON into your own typed data — "parse, don't validate" for the one
+/// library every Python programmer imports. `Decode.decodeString` runs a decoder over
+/// a JSON string and yields `Result a Exception`, so malformed input is a value you
+/// must handle, never a crash. Single source of truth shared with [`seed_decode_prelude`]
+/// (schemes) and lowering (arities + emitted `_pf_dec_*` helpers). Every arrow is
+/// **pure**: decoders are a pure sublanguage, so the whole pipeline stays effect-free.
+/// The `map2`/`map3`/`map4` fan-in combinators build a record (or any value) from
+/// several field decoders at once. Nullary `string`/`int`/`float`/`bool` are the
+/// primitive decoders (arity 0 — decoder *values*).
+pub const DECODE_PRELUDE: &[(&str, usize)] = &[
+    ("string", 0),
+    ("int", 0),
+    ("float", 0),
+    ("bool", 0),
+    ("field", 2),
+    ("list", 1),
+    ("nullable", 1),
+    ("map", 2),
+    ("map2", 3),
+    ("map3", 4),
+    ("map4", 5),
+    ("succeed", 1),
+    ("fail", 1),
+    ("andThen", 2),
+    ("oneOf", 1),
+    ("decodeString", 2),
+];
+
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
 /// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
 /// no parser change was needed); the checker and lowering recognize a base that is
@@ -491,7 +521,7 @@ pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
 pub const MODULES: &[&str] = &[
-    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format",
+    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode",
 ];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
@@ -505,6 +535,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Seq", SEQ_PRELUDE),
     ("String", STRING_PRELUDE),
     ("Format", FORMAT_PRELUDE),
+    ("Decode", DECODE_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -1379,6 +1410,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
     seed_map_prelude(&mut env);
     seed_string_prelude(&mut env);
     seed_format_prelude(&mut env);
+    seed_decode_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
     seed_seq_prelude(&mut env);
@@ -2219,11 +2251,13 @@ fn expand_first_column(matrix: &[Vec<Pattern>]) -> Vec<Vec<Pattern>> {
 }
 
 /// The number of variable ids reserved for built-in schemes: `Ok`/`Error` use
-/// type vars 0 and 1, and the prelude numerics use unit var [`PRELUDE_UVAR`] (2)
-/// and `num` var [`PRELUDE_NUMVAR`] (3). Inference must start allocating fresh ids
-/// past this so a freshly allocated (and later bound) variable can't alias a
-/// seeded bound var and corrupt it via a substitution.
-const RESERVED_VARS: u32 = 4;
+/// type vars 0 and 1, the prelude numerics use unit var [`PRELUDE_UVAR`] (2) and
+/// `num` var [`PRELUDE_NUMVAR`] (3), and the widest seeded scheme — `Decode.map4`,
+/// whose function argument `a -> b -> c -> d -> e` quantifies five type vars — uses
+/// type var 4. Inference must start allocating fresh ids past **all** of these so a
+/// freshly allocated (and later bound) variable can't alias a seeded bound var and
+/// corrupt it via a substitution (this bit once `map4` was added — see its scheme).
+const RESERVED_VARS: u32 = 5;
 
 /// Seed the prelude functions ([`PRELUDE`]) into the global environment. These are
 /// thin typed views over Python builtins (`DESIGN.md` §6): `print` is effectful
@@ -2702,6 +2736,113 @@ fn seed_format_prelude(env: &mut Env) {
     env.insert("Format.padRight".to_string(), cscheme(pad()));
 }
 
+/// Seed the `Decode` module ([`DECODE_PRELUDE`]) — Elm-style JSON decoder combinators
+/// over the opaque `Decoder a`. Every arrow is **pure**: decoders are a pure, total
+/// sublanguage, so composing and running them (`decodeString : Decoder a -> string ->
+/// Result a Exception`) never introduces an effect, even though the runner parses JSON
+/// at the boundary. The function argument to `map`/`map2`/… is likewise a pure arrow,
+/// which is what keeps the whole pipeline pure and sound.
+fn seed_decode_prelude(env: &mut Env) {
+    let dec = |t: Ty| Ty::Con("Decoder".to_string(), vec![t]);
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    let result = |a: Ty, e: Ty| Ty::Con("Result".to_string(), vec![a, e]);
+    let exception = || Ty::Con("Exception".to_string(), vec![]);
+    let str_ = || Ty::Str;
+    let int = || Ty::Int(Unit::dimensionless());
+    let float = || Ty::Float(Unit::dimensionless());
+    let pf = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let v = Ty::Var;
+    let scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, s: Scheme| {
+        env.insert(format!("Decode.{member}"), s);
+    };
+    // Primitive decoders — nullary decoder *values*, each strict about its JSON type.
+    put("string", scheme(vec![], dec(str_())));
+    put("int", scheme(vec![], dec(int())));
+    put("float", scheme(vec![], dec(float())));
+    put("bool", scheme(vec![], dec(Ty::Bool)));
+    // Structure.
+    // Decode.field name dec : pull one object field, then decode it.
+    put("field", scheme(vec![0], pf(str_(), pf(dec(v(0)), dec(v(0))))));
+    // Decode.list dec : a JSON array of homogeneous values.
+    put("list", scheme(vec![0], pf(dec(v(0)), dec(list(v(0))))));
+    // Decode.nullable dec : JSON null -> None, otherwise Some (decoded).
+    put("nullable", scheme(vec![0], pf(dec(v(0)), dec(opt(v(0))))));
+    // Combinators.
+    // Decode.map f dec : transform the decoded value.
+    put(
+        "map",
+        scheme(vec![0, 1], pf(pf(v(0), v(1)), pf(dec(v(0)), dec(v(1))))),
+    );
+    // Decode.map2 f da db : combine two decoders (the fan-in that builds records).
+    put(
+        "map2",
+        scheme(
+            vec![0, 1, 2],
+            pf(
+                pf(v(0), pf(v(1), v(2))),
+                pf(dec(v(0)), pf(dec(v(1)), dec(v(2)))),
+            ),
+        ),
+    );
+    // Decode.map3 f da db dc.
+    put(
+        "map3",
+        scheme(
+            vec![0, 1, 2, 3],
+            pf(
+                pf(v(0), pf(v(1), pf(v(2), v(3)))),
+                pf(dec(v(0)), pf(dec(v(1)), pf(dec(v(2)), dec(v(3))))),
+            ),
+        ),
+    );
+    // Decode.map4 f da db dc dd.
+    put(
+        "map4",
+        scheme(
+            vec![0, 1, 2, 3, 4],
+            pf(
+                pf(v(0), pf(v(1), pf(v(2), pf(v(3), v(4))))),
+                pf(
+                    dec(v(0)),
+                    pf(dec(v(1)), pf(dec(v(2)), pf(dec(v(3)), dec(v(4))))),
+                ),
+            ),
+        ),
+    );
+    // Decode.succeed x : a decoder that ignores its input and yields `x`.
+    put("succeed", scheme(vec![0], pf(v(0), dec(v(0)))));
+    // Decode.fail msg : a decoder that always fails with `msg`.
+    put("fail", scheme(vec![0], pf(str_(), dec(v(0)))));
+    // Decode.andThen f dec : chain a decoder that depends on the decoded value.
+    put(
+        "andThen",
+        scheme(
+            vec![0, 1],
+            pf(pf(v(0), dec(v(1))), pf(dec(v(0)), dec(v(1)))),
+        ),
+    );
+    // Decode.oneOf decs : the first decoder in the list that succeeds.
+    put("oneOf", scheme(vec![0], pf(list(dec(v(0))), dec(v(0)))));
+    // Decode.decodeString dec s : run a decoder over a JSON string, totally.
+    put(
+        "decodeString",
+        scheme(
+            vec![0],
+            pf(dec(v(0)), pf(str_(), result(v(0), exception()))),
+        ),
+    );
+}
+
 /// Seed the `Map` module ([`MAP_PRELUDE`]) — pure functions over `Map k v`
 /// (key var 0, value var 1), under qualified keys (`Map.add`).
 fn seed_map_prelude(env: &mut Env) {
@@ -2989,6 +3130,10 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     // `Option a` — the built-in optional type (constructors `Some`/`None`), seeded
     // like `Result`. Reserved, so a user `type Option` is an error.
     decls.type_arity.insert("Option".to_string(), 1);
+    // `Decoder a` — the opaque JSON-decoder type of the `Decode` module. No
+    // constructors and no runtime class (it erases to a Python callable); built
+    // purely from `Decode.*`. Reserved, so a user `type Decoder` is an error.
+    decls.type_arity.insert("Decoder".to_string(), 1);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(
