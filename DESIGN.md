@@ -908,8 +908,11 @@ constraint with polymorphic literals (step b).
    derives `__le__`/`__gt__`/`__ge__`; the variant index (declaration order) is the key's first element, so a
    cross-variant comparison short-circuits before the differently-shaped field tails. Tuples and lists need
    *no* codegen (Python compares them lexicographically already). The type checker gates comparison to one
-   orderable type, so no `isinstance`/`NotImplemented` guard is emitted, and the methods are emitted
-   always-on (not on-demand) so comparison stays sound across separately-compiled modules.
+   orderable type, so no `isinstance`/`NotImplemented` guard is emitted. Ordering is emitted **on-demand**:
+   `require_ord` (the single site that proves a type needs comparison) records the type's name, and lowering
+   emits the methods only for those — so an ADT that is only matched, never sorted, carries none of this.
+   A single-file compile sees the whole program, so this is exact and sound; a multi-file project falls back
+   to always-on (a type may be compared in another, separately-compiled module).
    **Not orderable:** `Set`/`Map` (no natural element-wise order) and `Async`/`Seq`/`Exception` —
    comparing them is a type error. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
    equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
@@ -1428,14 +1431,17 @@ Decisions:
    maps to a concrete builtin — `int`/`float`/`str`/`list`/… — else `object`, e.g. for a type variable, a
    user ADT, `Option`, or a function; a user type *name* is never emitted, to avoid a forward reference),
    and `frozen=True` makes the value immutable, matching Pyfun's semantics (the hand-rolled
-   classes it replaced were mutable). A positional `__repr__` is kept (so a value prints the way it was
-   written, `Point(1, 2)` / `Circle(2.0)`, not `Point(x=1, y=2)`), so the dataclass repr is suppressed
-   with `repr=False`. Ordering (§7.1) is where records and sum variants differ: a **record** compares its
+   classes it replaced were mutable). A **record** keeps the dataclass-generated `repr` (`Point(x=1, y=2)`,
+   naming its fields); a sum **variant** / builtin gets a positional `__repr__` instead (`Circle(2.0)`,
+   matching the constructor form `Circle 2.0`), suppressing the generated one with `repr=False`. Ordering
+   (§7.1) differs the same way: a **record** compares its
    field tuple, which `@dataclass(order=True)` already provides; a sum **variant** needs a cross-variant
    key `(index, fields…)`, so it defines `_pf_order_key` + `__lt__` and lets `@functools.total_ordering`
-   derive the other three. This is emitted uniformly (`python_emitter::emit_class`), always-on rather than
-   on-demand, so it stays sound across separately-compiled modules (a type compared in another module still
-   has its comparison methods). `Point { x = 1, y = 2 }` lowers to the positional call `Point(1, 2)` in
+   derive the other three. Both are **on-demand** (`python_emitter::emit_class` + the `OrderPolicy` a
+   single-file compile collects from `require_ord`): emitted only for a type the program actually compares,
+   so an ADT that is only matched sheds them. A multi-file project falls back to always-on (sound across
+   separate compilation, where a type may be compared in another module). `Point { x = 1, y = 2 }` lowers
+   to the positional call `Point(1, 2)` in
    declared field order — the *tag erases into the class name it already denotes*.
 6. **Syntax disambiguation.** `{` participates in three constructs; the rule is now cleaner because bare
    expression-position literals are gone:

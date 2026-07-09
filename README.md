@@ -148,13 +148,11 @@ print (report [1.0, 2.0, 3.0, 4.0])
 from dataclasses import dataclass
 import statistics
 
-@dataclass(frozen=True, order=True, repr=False)
+@dataclass(frozen=True)
 class Summary:
     n: int
     mean: float
     stdev: float
-    def __repr__(self):
-        return f"Summary({self.n!r}, {self.mean!r}, {self.stdev!r})"
 
 def summarize(xs):
     return Summary(len(xs), statistics.mean(xs), statistics.stdev(xs))
