@@ -6,10 +6,13 @@
 # against http(s):// — and requests/httpx wrap the same way. The differentiator on
 # show: effects are inferred, and a `let pure` over an `io` call is a compile error.
 
+# Each boundary value is a tracked opaque handle — even the raw bytes — so the
+# compiler follows them through the pipeline instead of trusting an open `-> a`.
 extern type Response
+extern type Bytes
 extern urlopen: string -> Response = urllib.request.urlopen  # imports urllib.request
-extern readBody: Response -> a = .read()                     # resp.read() — a method
-extern decode: a -> string -> string = codecs.decode
+extern readBody: Response -> Bytes = .read()                 # resp.read() — a method
+extern decode: Bytes -> string -> string = codecs.decode
 
 # `fetch` calls `io` externs, so it is inferred `io`; `try` makes a bad URL an `Error`.
 let fetch url = try (decode (readBody (urlopen url)) "utf-8")
