@@ -146,9 +146,9 @@ import statistics
 
 @dataclass(frozen=True, order=True, repr=False)
 class Summary:
-    n: object
-    mean: object
-    stdev: object
+    n: int
+    mean: float
+    stdev: float
     def __repr__(self):
         return f"Summary({self.n!r}, {self.mean!r}, {self.stdev!r})"
 
