@@ -2876,6 +2876,15 @@ fn example_network_rail_compiles() {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
     pyfun::compile(&source)
         .unwrap_or_else(|e| panic!("network-rail chippenham.pyfun must compile: {e}"));
+    // The Python-helper variant (same engine, nr_stream.py boundary) too.
+    let fast = format!(
+        "{}/examples/interop/network-rail/chippenham_fast.pyfun",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let fast_src =
+        std::fs::read_to_string(&fast).unwrap_or_else(|e| panic!("cannot read {fast}: {e}"));
+    pyfun::compile(&fast_src)
+        .unwrap_or_else(|e| panic!("network-rail chippenham_fast.pyfun must compile: {e}"));
 }
 
 // ---------- helpers ----------
