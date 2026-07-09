@@ -7,6 +7,11 @@ typed, effect-tracked boundary adds to the calling code. All run offline (stdlib
 pyfun run examples/interop/<name>.pyfun
 ```
 
+**Start with [`json_to_adt.pyfun`](./json_to_adt.pyfun)** — decoding untrusted JSON into
+your own typed records is the clearest, most relatable win. The rest cover databases,
+files, and HTTP. Each file is self-contained and heavily annotated; the framing,
+reusable patterns, and honest limits below give the bigger picture.
+
 ## The idea: boundary libraries, not engine libraries
 
 Popular Python libraries split in two, and only one kind showcases Pyfun:
