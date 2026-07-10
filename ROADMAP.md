@@ -110,10 +110,15 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `_pf_*` call (`DESIGN.md` §5.2) — proved the point when measured on **wall-clock**: same example compiled
   both ways, back to back, it saved ~3% (~0.4s), not 6s. Lever A is worth keeping (a real, if small,
   speedup, and *more readable* output), but the lesson is the bigger takeaway: **confirm a hot-small-function
-  profile line against wall-clock before believing it.** The ~1.3x pure-vs-native gap is therefore *not* call
-  overhead and remains unattributed — it needs a fresh wall-clock profile (candidate: the `Decode`
-  interpreter on the ~12k matched lines), which is what the decoder-specialization sketch below would target
-  *if* that profile bears it out.
+  profile line against wall-clock before believing it.** A **wall-clock ablation + a direct instrumented
+  measurement of the real `Decode` path** (2026-07-10) then located the rest: of a ~14s run (current
+  machine, ~2x its earlier state), **read+gunzip is ~5.7s and the substring prefilter is ~5.9s** — scanning
+  ~4500-char lines for an absent token, ~half the run each, and **both shared with the helper**; `json.loads`
+  is ~0.5s; and **the entire `Decode` path (json parse + interpreter) is ~1.3s, ~10% of wall.** So the
+  ~1.3x is *not* decode-bound: it nets to a small residual (the interpreter's overhead over the helper's
+  dict access, ~0.6s) on top of a run dominated by IO + substring scanning the helper pays too. The genuine
+  dominant cost, if one ever cared, is that shared prefilter (huge lines) — inherent to the workload, not a
+  Pyfun-vs-Python gap.
 
   **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
   builds a runtime decoder *value* and interprets it over `json.loads` output per line. When the decoder is
@@ -127,9 +132,9 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   decode-heavy workloads.
 
   Same caveat as the fold entry: optional, diminishing-returns, reserve the boundary for genuinely-hot
-  loops. With the inline-predicate lever landed, this decoder pass is the remaining piece — but it is
-  *minor* for network-rail (the prefilter means `Decode` runs on only ~12k of 660k lines), so it earns its
-  keep on decode-heavy workloads, not this one. `DESIGN.md` §5.2/§6.
+  loops. **For network-rail it is now measured out**: `Decode` is ~1.3s / ~10% of wall (see above), so this
+  pass could shave ~0.8s at most and would not touch the IO/prefilter-dominated bulk — it earns its keep on
+  *decode-heavy* workloads, not this one. `DESIGN.md` §5.2/§6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
