@@ -134,7 +134,22 @@ pub struct ExternDecl {
     /// importing) the receiver's class, and reaches inherited/delegated members the
     /// unbound `Class.member` form cannot.
     pub receiver: Option<Receiver>,
+    /// Fixed Python keyword arguments pinned on the target (`DESIGN.md` §6), from a
+    /// `(kw = lit, …)` suffix on the `= …` clause. Appended to every emitted call
+    /// (`open(path, mode="rt", encoding="utf-8")`); empty when absent. Purely a
+    /// lowering concern — invisible to the Pyfun type (the arrow type is unchanged).
+    pub kwargs: Vec<(String, ExternArg)>,
     pub span: NodeSpan,
+}
+
+/// A literal value pinned as a keyword argument on an `extern` target. Only the
+/// literal forms Python needs at the boundary — no Pyfun expressions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExternArg {
+    Str(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
 }
 
 /// How an instance-access `extern` (`= .member`) uses its first argument.

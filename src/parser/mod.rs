@@ -37,7 +37,8 @@ pub mod ast;
 
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
-    ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternDecl,
+    ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternArg,
+    ExternDecl,
     FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding, MatchArm, Module,
     NodeSpan,
     Param, Pattern, Receiver, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
@@ -350,15 +351,24 @@ impl Parser {
         // `.` marks an instance-access form on the first argument (the receiver):
         // `= .read()` calls the method (`resp.read()`), `= .text` reads the
         // attribute/property (`resp.text`) — trailing `()` is the "call" marker.
-        let (target, receiver) = if self.eat(&Tok::Eq) {
+        // A trailing `(kw = lit, …)` pins fixed Python keyword arguments on the
+        // target, appended to every emitted call (`open(path, encoding="utf-8")`).
+        let (target, receiver, kwargs) = if self.eat(&Tok::Eq) {
             let dotted = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
             while self.eat(&Tok::Dot) {
                 segs.push(self.parse_ident("Python attribute")?);
             }
+            // Parentheses (present in all three receiver forms) may hold pinned
+            // keyword arguments. For a leading-dot target they also mark the method
+            // form; an empty `()` stays the bare method marker.
+            let (has_parens, kwargs) = if matches!(self.peek(), Tok::LParen) {
+                (true, self.parse_extern_kwargs()?)
+            } else {
+                (false, Vec::new())
+            };
             let receiver = if dotted {
-                if self.eat(&Tok::LParen) {
-                    self.expect(&Tok::RParen, "`)`")?;
+                if has_parens {
                     Some(Receiver::Method)
                 } else {
                     Some(Receiver::Property)
@@ -366,9 +376,9 @@ impl Parser {
             } else {
                 None
             };
-            (segs, receiver)
+            (segs, receiver, kwargs)
         } else {
-            (vec![name.clone()], None)
+            (vec![name.clone()], None, Vec::new())
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
@@ -378,8 +388,80 @@ impl Parser {
             ty,
             target,
             receiver,
+            kwargs,
             span,
         })
+    }
+
+    /// Parse a `( kw = lit , … )` keyword-argument suffix on an `extern` target,
+    /// with the opening `(` at the cursor. Each `kw` is a lowercase identifier and
+    /// each `lit` a string / int (optionally negated) / float / bool literal — the
+    /// only forms Python needs pinned at the boundary. Rejects a duplicate keyword
+    /// and a non-literal value with a clear diagnostic. An empty `()` yields no
+    /// kwargs (its only role is then the receiver-method marker).
+    fn parse_extern_kwargs(&mut self) -> Result<Vec<(String, ExternArg)>, ParseError> {
+        self.expect(&Tok::LParen, "`(`")?;
+        let mut kwargs: Vec<(String, ExternArg)> = Vec::new();
+        while !matches!(self.peek(), Tok::RParen) {
+            let key_span = self.span();
+            let key = self.parse_ident("keyword-argument name")?;
+            if kwargs.iter().any(|(k, _)| *k == key) {
+                return Err(ParseError {
+                    message: format!("duplicate keyword argument `{key}`"),
+                    span: key_span,
+                });
+            }
+            self.expect(&Tok::Eq, "`=`")?;
+            let value = self.parse_extern_arg()?;
+            kwargs.push((key, value));
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        self.expect(&Tok::RParen, "`)`")?;
+        Ok(kwargs)
+    }
+
+    /// Parse a single pinned keyword-argument literal: a string, an int (with an
+    /// optional leading unary minus), a float (likewise), or a bool.
+    fn parse_extern_arg(&mut self) -> Result<ExternArg, ParseError> {
+        // A leading `-` negates the following numeric literal.
+        if self.eat(&Tok::Minus) {
+            return match self.peek().clone() {
+                Tok::Int(n) => {
+                    self.bump();
+                    Ok(ExternArg::Int(-n))
+                }
+                Tok::Float(f) => {
+                    self.bump();
+                    Ok(ExternArg::Float(-f))
+                }
+                _ => Err(self.error("expected a numeric literal after `-`")),
+            };
+        }
+        match self.peek().clone() {
+            Tok::Str(s) => {
+                self.bump();
+                Ok(ExternArg::Str(s))
+            }
+            Tok::Int(n) => {
+                self.bump();
+                Ok(ExternArg::Int(n))
+            }
+            Tok::Float(f) => {
+                self.bump();
+                Ok(ExternArg::Float(f))
+            }
+            Tok::True => {
+                self.bump();
+                Ok(ExternArg::Bool(true))
+            }
+            Tok::False => {
+                self.bump();
+                Ok(ExternArg::Bool(false))
+            }
+            _ => Err(self.error("expected a string, number, or bool literal")),
+        }
     }
 
     /// `extern type Conn` (or `extern type Ref a`) — an opaque handle type: a nominal

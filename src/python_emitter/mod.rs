@@ -172,6 +172,13 @@ pub enum PyExpr {
         func: Box<PyExpr>,
         args: Vec<PyExpr>,
     },
+    /// `func(args..., kw=v, ...)` — a call with pinned keyword arguments, from an
+    /// `extern` target that fixes Python kwargs (`open(path, encoding="utf-8")`).
+    CallKw {
+        func: Box<PyExpr>,
+        args: Vec<PyExpr>,
+        kwargs: Vec<(String, PyExpr)>,
+    },
     /// `body if test else orelse`
     IfExp {
         body: Box<PyExpr>,
@@ -657,6 +664,11 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         PyExpr::Call { func, args } => {
             let args: Vec<String> = args.iter().map(expr).collect();
             format!("{}({})", emit_expr(func, 100), args.join(", "))
+        }
+        PyExpr::CallKw { func, args, kwargs } => {
+            let mut parts: Vec<String> = args.iter().map(expr).collect();
+            parts.extend(kwargs.iter().map(|(k, v)| format!("{k}={}", expr(v))));
+            format!("{}({})", emit_expr(func, 100), parts.join(", "))
         }
         PyExpr::IfExp { body, test, orelse } => {
             format!(

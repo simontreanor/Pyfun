@@ -7,9 +7,9 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternDecl, FieldDecl, FieldInit,
-    InterpPart, Item, LetBinding, MatchArm, Module, Pattern, Receiver, TypeDecl, TypeDeclKind,
-    TypeExpr, UnitExpr, VariantDecl,
+    ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternArg, ExternDecl, FieldDecl,
+    FieldInit, InterpPart, Item, LetBinding, MatchArm, Module, Pattern, Receiver, TypeDecl,
+    TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -168,21 +168,48 @@ fn print_extern(decl: &ExternDecl) -> String {
     s.push_str(&print_type(&decl.ty));
     match decl.receiver {
         Some(Receiver::Method) => {
+            // The parens are the method marker; they also carry any pinned kwargs.
             s.push_str(" = .");
             s.push_str(&decl.target.join("."));
-            s.push_str("()");
+            s.push_str(&print_extern_kwargs(&decl.kwargs));
         }
         Some(Receiver::Property) => {
+            // A property read takes no call, hence no kwargs.
             s.push_str(" = .");
             s.push_str(&decl.target.join("."));
         }
-        None if decl.target != [decl.name.clone()] => {
+        // An ordinary target prints its `= …` clause when the Python name differs
+        // from the Pyfun name, or when kwargs pin something that must round-trip.
+        None if decl.target != [decl.name.clone()] || !decl.kwargs.is_empty() => {
             s.push_str(" = ");
             s.push_str(&decl.target.join("."));
+            if !decl.kwargs.is_empty() {
+                s.push_str(&print_extern_kwargs(&decl.kwargs));
+            }
         }
         None => {}
     }
     s
+}
+
+/// Print the pinned keyword arguments of an `extern` target as `(kw=lit, …)`.
+/// Empty kwargs still print `()` so a receiver-method marker round-trips; the
+/// caller decides whether to emit it (a property never does).
+fn print_extern_kwargs(kwargs: &[(String, ExternArg)]) -> String {
+    let parts: Vec<String> = kwargs
+        .iter()
+        .map(|(k, v)| format!("{k}={}", print_extern_arg(v)))
+        .collect();
+    format!("({})", parts.join(", "))
+}
+
+fn print_extern_arg(arg: &ExternArg) -> String {
+    match arg {
+        ExternArg::Str(s) => print_string(s),
+        ExternArg::Int(n) => n.to_string(),
+        ExternArg::Float(f) => format!("{f:?}"),
+        ExternArg::Bool(b) => b.to_string(),
+    }
 }
 
 fn print_field_decl(field: &FieldDecl) -> String {

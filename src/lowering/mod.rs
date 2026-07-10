@@ -29,8 +29,9 @@ mod fold_loop;
 use crate::lexer::Span;
 
 use crate::parser::ast::{
-    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, FieldInit, FieldUpdate,
-    InterpPart, Item, LetBinding, Module, Param, Pattern, Receiver, TypeDeclKind, TypeExpr,
+    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternArg, FieldInit,
+    FieldUpdate, InterpPart, Item, LetBinding, Module, Param, Pattern, Receiver, TypeDeclKind,
+    TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPattern, PyStmt};
 
@@ -206,6 +207,11 @@ struct Lowerer {
     /// Externs with a `unit` domain (`unit -> a`, e.g. `time.time`): a *nullary*
     /// Python callable, applied to `()` as a zero-argument call (`time.time()`).
     nullary_externs: HashSet<String>,
+    /// `extern` name → its pinned Python keyword arguments (already lowered to their
+    /// `PyExpr` literals), appended to every emitted call (`open(path,
+    /// encoding="utf-8")`). Under-application routes them through
+    /// `functools.partial` so they are never dropped (`DESIGN.md` §6).
+    extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>>,
     /// Python modules an *used* extern needs imported (the first segment of a
     /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
     needed_imports: BTreeSet<String>,
@@ -305,6 +311,8 @@ impl Lowerer {
         let mut extern_targets = std::collections::HashMap::new();
         let mut receiver_externs = std::collections::HashMap::new();
         let mut nullary_externs = HashSet::new();
+        let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>> =
+            std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
         let mut top_fn_defs: HashMap<String, (Vec<Param>, Expr)> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
@@ -320,6 +328,14 @@ impl Lowerer {
                     }
                     if is_unit_domain(&decl.ty) {
                         nullary_externs.insert(decl.name.clone());
+                    }
+                    if !decl.kwargs.is_empty() {
+                        let lowered = decl
+                            .kwargs
+                            .iter()
+                            .map(|(k, v)| (k.clone(), lower_extern_arg(v)))
+                            .collect();
+                        extern_kwargs.insert(decl.name.clone(), lowered);
                     }
                 }
                 Item::Let(binding) => {
@@ -452,6 +468,7 @@ impl Lowerer {
             extern_targets,
             receiver_externs,
             nullary_externs,
+            extern_kwargs,
             needed_imports: BTreeSet::new(),
             user_defs,
             top_fn_defs,
@@ -551,22 +568,36 @@ impl Lowerer {
                 // reference it as `mathx.sqrt` (`DESIGN.md` §6.1).
                 Item::Extern(decl) => {
                     if self.project_mode {
+                        // Any pinned keyword arguments (already lowered in `new`).
+                        let kwargs = self.extern_kwargs.get(&decl.name).cloned().unwrap_or_default();
                         let value = if let Some(kind) = decl.receiver {
                             // An instance-access extern binds to a receiver-taking
                             // lambda so dependent modules can reference it.
-                            receiver_lambda(&decl.target, arrow_arity(&decl.ty), kind)
+                            receiver_lambda(&decl.target, arrow_arity(&decl.ty), kind, kwargs)
                         } else if is_unit_domain(&decl.ty) {
                             // A nullary extern binds to a lambda that ignores its
                             // unit argument, so a cross-module `Mod.now ()` works.
                             if let Some(module) = extern_import(&decl.target) {
                                 self.needed_imports.insert(module);
                             }
-                            nullary_lambda(&decl.target)
+                            nullary_lambda(&decl.target, kwargs)
                         } else {
                             if let Some(module) = extern_import(&decl.target) {
                                 self.needed_imports.insert(module);
                             }
-                            dotted_path(&decl.target)
+                            // A plain extern with pinned kwargs binds to a
+                            // `functools.partial` that carries them; otherwise to the
+                            // bare dotted target.
+                            if kwargs.is_empty() {
+                                dotted_path(&decl.target)
+                            } else {
+                                self.build_call_kw(
+                                    dotted_path(&decl.target),
+                                    Some(arrow_arity(&decl.ty)),
+                                    vec![],
+                                    kwargs,
+                                )
+                            }
                         };
                         code.push(PyStmt::Assign {
                             target: decl.name.clone(),
@@ -1327,6 +1358,9 @@ impl Lowerer {
         {
             let member = self.extern_targets[name].clone();
             let arity = self.arities.get(name).copied();
+            // A method extern may pin fixed Python kwargs (`= .write_text(encoding=…)`);
+            // a property never does (the parser forbids parens on it).
+            let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
             let mut stmts = Vec::new();
             let mut arg_vals = Vec::with_capacity(args_ast.len());
             for arg in &args_ast {
@@ -1334,9 +1368,10 @@ impl Lowerer {
                 stmts.extend(arg_stmts);
                 arg_vals.push(arg_val);
             }
-            // A bare (unapplied) reference becomes a receiver-taking lambda.
+            // A bare (unapplied) reference becomes a receiver-taking lambda (which
+            // pins any kwargs itself, `lambda r, a: r.write_text(a, encoding=…)`).
             if arg_vals.is_empty() {
-                return Ok((stmts, receiver_lambda(&member, arity.unwrap_or(1), kind)));
+                return Ok((stmts, receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs)));
             }
             let recv = arg_vals.remove(0);
             let accessed = attr_path(recv, &member);
@@ -1346,6 +1381,13 @@ impl Lowerer {
                     func: Box::new(f),
                     args: vec![a],
                 }),
+                // A method extern with pinned kwargs routes every arity through
+                // `build_call_kw` so the kwargs are appended (full/over) or carried
+                // by `functools.partial` (receiver-only / method-partial) — never lost.
+                Receiver::Method if !kwargs.is_empty() => {
+                    let method_arity = arity.map(|k| k.saturating_sub(1));
+                    self.build_call_kw(accessed, method_arity, arg_vals, kwargs)
+                }
                 Receiver::Method => {
                     // The method itself takes one fewer argument than the arity.
                     let method_arity = arity.map(|k| k.saturating_sub(1));
@@ -1386,10 +1428,18 @@ impl Lowerer {
                 stmts.extend(arg_stmts);
                 arg_vals.push(arg_val);
             }
-            // Drop the leading unit argument; call the target with no arguments.
-            let base = PyExpr::Call {
-                func: Box::new(dotted_path(&target)),
-                args: vec![],
+            // Drop the leading unit argument; call the target with no arguments
+            // (plus any pinned kwargs, `time.time()` → `f(tz=…)`).
+            let base = match self.extern_kwargs.get(name).cloned() {
+                Some(kwargs) => PyExpr::CallKw {
+                    func: Box::new(dotted_path(&target)),
+                    args: vec![],
+                    kwargs,
+                },
+                None => PyExpr::Call {
+                    func: Box::new(dotted_path(&target)),
+                    args: vec![],
+                },
             };
             // Any further arguments (a `unit -> b -> c` extern) apply to the result.
             let result = arg_vals.into_iter().skip(1).fold(base, |f, a| PyExpr::Call {
@@ -1397,6 +1447,32 @@ impl Lowerer {
                 args: vec![a],
             });
             return Ok((stmts, result));
+        }
+
+        // A plain (non-receiver, non-nullary) extern that pins fixed Python kwargs:
+        // `openText path` → `builtins.open(path, mode="rt", encoding="utf-8")`.
+        // Full/over-application appends the kwargs to the direct call; under-
+        // application carries them through `functools.partial` (`build_call_kw`), so
+        // a partial or bare reference never silently drops them (`DESIGN.md` §6).
+        if let ExprKind::Var(name) = &head.kind
+            && !locals.contains(name)
+            && !self.user_defs.contains(name)
+            && let Some(kwargs) = self.extern_kwargs.get(name).cloned()
+        {
+            let target = self.extern_targets[name].clone();
+            let arity = self.arities.get(name).copied();
+            if let Some(module) = extern_import(&target) {
+                self.needed_imports.insert(module);
+            }
+            let mut stmts = Vec::new();
+            let mut arg_vals = Vec::with_capacity(args_ast.len());
+            for arg in &args_ast {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                arg_vals.push(arg_val);
+            }
+            let call = self.build_call_kw(dotted_path(&target), arity, arg_vals, kwargs);
+            return Ok((stmts, call));
         }
 
         let arity = match &head.kind {
@@ -1469,7 +1545,8 @@ impl Lowerer {
             if let Some(kind) = self.receiver_externs.get(name).copied() {
                 let arity = self.arities.get(name).copied().unwrap_or(1);
                 let member = self.extern_targets[name].clone();
-                return receiver_lambda(&member, arity, kind);
+                let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
+                return receiver_lambda(&member, arity, kind, kwargs);
             }
             // A bare reference to a nullary extern is a unit-taking lambda that
             // ignores its argument (`now` → `lambda *_: time.time()`); applied
@@ -1479,7 +1556,20 @@ impl Lowerer {
                 if let Some(module) = extern_import(&target) {
                     self.needed_imports.insert(module);
                 }
-                return nullary_lambda(&target);
+                let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
+                return nullary_lambda(&target, kwargs);
+            }
+            // A bare reference to a plain extern that pins kwargs carries them via
+            // `functools.partial` (`openText` → `functools.partial(builtins.open,
+            // mode="rt", encoding="utf-8")`), so the kwargs survive later
+            // application. Applied references are handled in `lower_application`.
+            if let Some(kwargs) = self.extern_kwargs.get(name).cloned() {
+                let target = self.extern_targets[name].clone();
+                if let Some(module) = extern_import(&target) {
+                    self.needed_imports.insert(module);
+                }
+                let arity = self.arities.get(name).copied();
+                return self.build_call_kw(dotted_path(&target), arity, vec![], kwargs);
             }
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
@@ -2504,6 +2594,63 @@ impl Lowerer {
         }
     }
 
+    /// Like [`Self::build_call`] but for an `extern` whose target pins fixed Python
+    /// keyword arguments. The pinned `kwargs` ride along at every arity:
+    /// full/over-application appends them to the direct call (`f(a, kw=v)`); under-
+    /// application hands them to `functools.partial` (`functools.partial(f, a,
+    /// kw=v)`), so a later application supplies the remaining positional arguments
+    /// and the kwargs are never dropped.
+    fn build_call_kw(
+        &mut self,
+        head: PyExpr,
+        arity: Option<usize>,
+        args: Vec<PyExpr>,
+        kwargs: Vec<(String, PyExpr)>,
+    ) -> PyExpr {
+        let n = args.len();
+        match arity {
+            Some(k) if n < k => {
+                // Partial application: `functools.partial` carries the positional
+                // args *and* the pinned keyword args.
+                self.needs_functools = true;
+                let mut partial_args = Vec::with_capacity(n + 1);
+                partial_args.push(head);
+                partial_args.extend(args);
+                PyExpr::CallKw {
+                    func: Box::new(PyExpr::Attribute {
+                        value: Box::new(PyExpr::Name("functools".to_string())),
+                        attr: "partial".to_string(),
+                    }),
+                    args: partial_args,
+                    kwargs,
+                }
+            }
+            Some(k) if n > k => {
+                // Over-application: full (kw-carrying) call, then apply the rest.
+                let mut rest = args;
+                let first = rest.drain(..k).collect();
+                let mut call = PyExpr::CallKw {
+                    func: Box::new(head),
+                    args: first,
+                    kwargs,
+                };
+                for extra in rest {
+                    call = PyExpr::Call {
+                        func: Box::new(call),
+                        args: vec![extra],
+                    };
+                }
+                call
+            }
+            // Exact arity, or unknown arity (treated as n-ary).
+            _ => PyExpr::CallKw {
+                func: Box::new(head),
+                args,
+                kwargs,
+            },
+        }
+    }
+
     fn fresh_tmp(&mut self) -> String {
         let name = format!("_pf_t{}", self.tmp_counter);
         self.tmp_counter += 1;
@@ -2584,6 +2731,20 @@ const PY_BUILTIN_TYPES: &[&str] = &[
     "dict", "set", "frozenset", "range", "slice", "object", "type",
 ];
 
+/// Lower a pinned `extern` keyword-argument literal to its Python IR expression.
+/// A negative int/float is emitted as a `Neg` of the magnitude, matching how the
+/// emitter renders unary minus (`compresslevel=-1`).
+fn lower_extern_arg(arg: &ExternArg) -> PyExpr {
+    match arg {
+        ExternArg::Str(s) => PyExpr::Str(s.clone()),
+        ExternArg::Int(n) if *n < 0 => PyExpr::Neg(Box::new(PyExpr::Int(-n))),
+        ExternArg::Int(n) => PyExpr::Int(*n),
+        ExternArg::Float(f) if *f < 0.0 => PyExpr::Neg(Box::new(PyExpr::Float(-f))),
+        ExternArg::Float(f) => PyExpr::Float(*f),
+        ExternArg::Bool(b) => PyExpr::Bool(*b),
+    }
+}
+
 /// Build a Python expression from a dotted path: `["math", "sqrt"]` → `math.sqrt`,
 /// a single segment → a bare name.
 fn dotted_path(segments: &[String]) -> PyExpr {
@@ -2611,8 +2772,14 @@ fn attr_path(base: PyExpr, segs: &[String]) -> PyExpr {
 /// (`lambda r: r.text`); a method calls it (`lambda r: r.read()`, or
 /// `lambda r, a: r.method(a)` when it takes arguments). The method lambda is n-ary
 /// in its trailing parameters, matching Pyfun's collapse of full application to a
-/// direct call.
-fn receiver_lambda(member: &[String], arity: usize, kind: Receiver) -> PyExpr {
+/// direct call. Any pinned `kwargs` are appended to the method call (`lambda r, a:
+/// r.write_text(a, encoding="utf-8")`); a property takes no call, so it has none.
+fn receiver_lambda(
+    member: &[String],
+    arity: usize,
+    kind: Receiver,
+    kwargs: Vec<(String, PyExpr)>,
+) -> PyExpr {
     let recv = "_pf_recv".to_string();
     let accessed = attr_path(PyExpr::Name(recv.clone()), member);
     if kind == Receiver::Property {
@@ -2622,9 +2789,18 @@ fn receiver_lambda(member: &[String], arity: usize, kind: Receiver) -> PyExpr {
         };
     }
     let args: Vec<String> = (1..arity.max(1)).map(|i| format!("_pf_a{i}")).collect();
-    let body = PyExpr::Call {
-        func: Box::new(accessed),
-        args: args.iter().cloned().map(PyExpr::Name).collect(),
+    let call_args: Vec<PyExpr> = args.iter().cloned().map(PyExpr::Name).collect();
+    let body = if kwargs.is_empty() {
+        PyExpr::Call {
+            func: Box::new(accessed),
+            args: call_args,
+        }
+    } else {
+        PyExpr::CallKw {
+            func: Box::new(accessed),
+            args: call_args,
+            kwargs,
+        }
     };
     let mut params = vec![recv];
     params.extend(args);
@@ -2636,14 +2812,23 @@ fn receiver_lambda(member: &[String], arity: usize, kind: Receiver) -> PyExpr {
 
 /// A lambda for a bare reference to a nullary extern: `lambda *_: time.time()`. The
 /// `*_` swallows the unit argument Pyfun passes at a `unit -> a` call site, so the
-/// value works however it is later applied.
-fn nullary_lambda(target: &[String]) -> PyExpr {
-    PyExpr::Lambda {
-        params: vec!["*_pf_a".to_string()],
-        body: Box::new(PyExpr::Call {
+/// value works however it is later applied. Any pinned `kwargs` are appended.
+fn nullary_lambda(target: &[String], kwargs: Vec<(String, PyExpr)>) -> PyExpr {
+    let body = if kwargs.is_empty() {
+        PyExpr::Call {
             func: Box::new(dotted_path(target)),
             args: vec![],
-        }),
+        }
+    } else {
+        PyExpr::CallKw {
+            func: Box::new(dotted_path(target)),
+            args: vec![],
+            kwargs,
+        }
+    };
+    PyExpr::Lambda {
+        params: vec!["*_pf_a".to_string()],
+        body: Box::new(body),
     }
 }
 

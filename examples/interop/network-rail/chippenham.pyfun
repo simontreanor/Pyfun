@@ -10,8 +10,8 @@
 # substring prefilter skips JSON parsing on the lines that can't match; and the
 # `Decode` module turns each surviving line into typed data — no dict-poking, no
 # bespoke Python. `open`/`gzip.open`'s mode + encoding and `write_text`'s encoding
-# are passed as positional arguments (no `extern` keyword-args needed — though for
-# `encoding` that means a filler positional to reach it; see the externs below).
+# are pinned as `extern` keyword arguments (see the externs below), so the Python
+# call carries `encoding="utf-8"` without any positional filler.
 #
 # Runs out of the box against the bundled `sample.ndjson`. For the real feed
 # (register at https://opendata.nationalrail.co.uk / Network Rail data feeds),
@@ -27,16 +27,15 @@
 # specific calendar date may differ. A full snapshot is all `Create` records, so
 # transaction type isn't checked.
 
-# The extra `int`/`string` params are `open`'s `buffering` / `gzip.open`'s
-# `compresslevel`, passed positionally only so we can reach `encoding` (the arg
-# after them) — reading UTF-8 instead of the platform locale (cp1252 on Windows)
-# is both correct for the feed and ~5s faster on the full file. This positional
-# filler is exactly the ergonomics the deferred `extern` keyword-args would fix.
-extern openText : string -> string -> int -> string -> Seq string = builtins.open
-extern gzipText : string -> string -> int -> string -> Seq string = gzip.open
+# `mode="rt"` opens the file as text and `encoding="utf-8"` reads UTF-8 instead of
+# the platform locale (cp1252 on Windows) — both correct for the feed and ~5s
+# faster on the full file. Pinning them as `extern` keyword arguments reaches
+# `encoding` (a keyword-only / deep-positional arg) with no positional filler.
+extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")
+extern gzipText : string -> Seq string = gzip.open(mode="rt", encoding="utf-8")
 extern type Path
 extern toPath : string -> Path = pathlib.Path
-extern writeText : Path -> string -> string -> int = pathlib.Path.write_text
+extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8")
 
 type Stop = { tiploc: string, arr: string, dep: string }
 type Run  = { uid: string, days: string, stp: string, stops: List Stop }
@@ -47,7 +46,7 @@ let outFile  = "examples/interop/network-rail/chippenham-routes.md"
 
 # --- streaming boundary, in Pyfun: the file object is a lazy Seq of lines ---
 let lines path =
-  if String.endsWith ".gz" path then gzipText path "rt" 9 "utf-8" else openText path "rt" (-1) "utf-8"
+  if String.endsWith ".gz" path then gzipText path else openText path
 
 # --- decode the relevant lines into typed data (parse, don't validate) ---
 let optStr key = Decode.oneOf [Decode.field key Decode.string, Decode.succeed ""]
@@ -249,6 +248,6 @@ let buildReport names raw =
 
 let _ =
   match scan dataFile:
-    case (names, raw): writeText (toPath outFile) (buildReport names raw) "utf-8"
+    case (names, raw): writeText (toPath outFile) (buildReport names raw)
 
 print (f"Wrote Markdown direct Chippenham services to {outFile}")
