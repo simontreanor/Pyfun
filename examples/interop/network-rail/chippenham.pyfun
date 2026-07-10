@@ -9,8 +9,9 @@
 # as a lazy `Seq string`, so a ~3 GB NDJSON snapshot streams in constant memory; a
 # substring prefilter skips JSON parsing on the lines that can't match; and the
 # `Decode` module turns each surviving line into typed data — no dict-poking, no
-# bespoke Python. `open`'s mode and `write_text`'s encoding are passed as ordinary
-# positional arguments, so no keyword-argument support is needed at the boundary.
+# bespoke Python. `open`/`gzip.open`'s mode + encoding and `write_text`'s encoding
+# are passed as positional arguments (no `extern` keyword-args needed — though for
+# `encoding` that means a filler positional to reach it; see the externs below).
 #
 # Runs out of the box against the bundled `sample.ndjson`. For the real feed
 # (register at https://opendata.nationalrail.co.uk / Network Rail data feeds),
@@ -26,8 +27,13 @@
 # specific calendar date may differ. A full snapshot is all `Create` records, so
 # transaction type isn't checked.
 
-extern openText : string -> string -> Seq string = builtins.open
-extern gzipText : string -> string -> Seq string = gzip.open
+# The extra `int`/`string` params are `open`'s `buffering` / `gzip.open`'s
+# `compresslevel`, passed positionally only so we can reach `encoding` (the arg
+# after them) — reading UTF-8 instead of the platform locale (cp1252 on Windows)
+# is both correct for the feed and ~5s faster on the full file. This positional
+# filler is exactly the ergonomics the deferred `extern` keyword-args would fix.
+extern openText : string -> string -> int -> string -> Seq string = builtins.open
+extern gzipText : string -> string -> int -> string -> Seq string = gzip.open
 extern type Path
 extern toPath : string -> Path = pathlib.Path
 extern writeText : Path -> string -> string -> int = pathlib.Path.write_text
@@ -41,7 +47,7 @@ let outFile  = "examples/interop/network-rail/chippenham-routes.md"
 
 # --- streaming boundary, in Pyfun: the file object is a lazy Seq of lines ---
 let lines path =
-  if String.endsWith ".gz" path then gzipText path "rt" else openText path "rt"
+  if String.endsWith ".gz" path then gzipText path "rt" 9 "utf-8" else openText path "rt" (-1) "utf-8"
 
 # --- decode the relevant lines into typed data (parse, don't validate) ---
 let optStr key = Decode.oneOf [Decode.field key Decode.string, Decode.succeed ""]
