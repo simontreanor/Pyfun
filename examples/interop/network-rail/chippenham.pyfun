@@ -10,7 +10,7 @@
 # substring prefilter skips JSON parsing on the lines that can't match; and the
 # `Decode` module turns each surviving line into typed data — no dict-poking, no
 # bespoke Python. `open`/`gzip.open`'s mode + encoding and `write_text`'s encoding
-# are pinned as `extern` keyword arguments (see the externs below), so the Python
+# + newline are pinned as `extern` keyword arguments (see the externs below), so the Python
 # call carries `encoding="utf-8"` without any positional filler.
 #
 # Runs out of the box against the bundled `sample.ndjson`. For the real feed
@@ -35,7 +35,7 @@ extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-
 extern gzipText : string -> Seq string = gzip.open(mode="rt", encoding="utf-8")
 extern type Path
 extern toPath : string -> Path = pathlib.Path
-extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8")
+extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8", newline="\n")
 
 type Stop = { tiploc: string, arr: string, dep: string }
 type Run  = { uid: string, days: string, stp: string, stops: List Stop }
