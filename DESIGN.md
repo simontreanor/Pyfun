@@ -216,7 +216,10 @@ form is value-identical to the helper (differential-gated on `network-rail`, byt
 Anything short of full arity (a partial application like `String.contains "x"`, or a bare value
 reference) is **not** matched and falls through to the helper unchanged, so `List.map (String.contains
 "x") xs` still works. This is a rare win-win: `"CHIPNHM" in line` is both faster (one fewer call per
-invocation — the example makes ~1.87M) and more readable than `_pf_str_contains("CHIPNHM", line)`.
+invocation) and more readable than `_pf_str_contains("CHIPNHM", line)` — though the readability is the
+larger benefit: measured wall-clock the call-elimination is small (~3% on the `network-rail` example; a
+cProfile line that *looked* like ~6s was mostly the profiler's own per-call overhead on a ~1.87M-call
+trivial function, not real runtime — see `ROADMAP.md`).
 (`List`/`Set`/`Map.len` are not in this set: they already lower to a bare `len`, so a fully-applied call
 is already `len(xs)` with no helper in between.)
 
