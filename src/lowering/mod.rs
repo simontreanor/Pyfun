@@ -1349,6 +1349,20 @@ impl Lowerer {
             return Ok(result);
         }
 
+        // Inline fully-applied pure 1:1 stdlib helpers (`ROADMAP.md` Lever A,
+        // `DESIGN.md` §6): a fully-applied call to a pure, total one-liner wrapper
+        // over a Python idiom emits that idiom directly (`needle in s`) instead of a
+        // `_pf_*` helper call — one fewer function call per invocation and more
+        // readable. Partial application / a bare value reference is deliberately NOT
+        // matched here (arity is exact), so it falls through to the helper below —
+        // `List.map (String.contains "x") xs` keeps working via `_pf_str_contains`.
+        if let ExprKind::Field { .. } = &head.kind
+            && let Some(q) = crate::types::qualified_name(head)
+            && let Some(result) = self.try_inline_stdlib(&q, &args_ast, locals)?
+        {
+            return Ok(result);
+        }
+
         // An instance-access extern applies to a receiver: `= .read()` calls
         // `recv.read(args)`, `= .text` reads `recv.text`. The first argument is the
         // receiver; for a method the rest are its arguments.
@@ -1514,6 +1528,77 @@ impl Lowerer {
         }
 
         Ok((stmts, self.build_call(head_val, arity, arg_vals)))
+    }
+
+    /// Lever A (`ROADMAP.md`): inline a fully-applied pure 1:1 stdlib helper to the
+    /// Python idiom it wraps (`String.contains n s` → `n in s`) instead of emitting a
+    /// `_pf_*` helper call. Returns `Some(lowered)` only when `qualified` is one of
+    /// the inlinable members AND the call supplies its exact arity (partial
+    /// application returns `None`, so the caller falls back to the helper). The
+    /// argument order matches each helper body verbatim — see `list_prelude`,
+    /// `collection_prelude`, `string_prelude` — so this can never invert operands.
+    /// `List`/`Set`/`Map.len` are *not* here: they already lower to a bare `len`, so
+    /// a fully-applied call is already `len(xs)` with no helper in between.
+    fn try_inline_stdlib(
+        &mut self,
+        qualified: &str,
+        args_ast: &[&Expr],
+        locals: &HashSet<String>,
+    ) -> Result<Option<(Vec<PyStmt>, PyExpr)>, LowerError> {
+        // Required arity for each inlinable member; anything else (a partial
+        // application) is left to the helper path.
+        let arity = match qualified {
+            "String.contains" | "String.startsWith" | "String.endsWith" | "List.contains"
+            | "Set.contains" | "Map.contains" => 2,
+            "List.isEmpty" => 1,
+            _ => return Ok(None),
+        };
+        if args_ast.len() != arity {
+            return Ok(None);
+        }
+        // Lower the argument expressions once, hoisting any statements they produce.
+        let mut stmts = Vec::new();
+        let mut vals = Vec::with_capacity(args_ast.len());
+        for arg in args_ast {
+            let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+            stmts.extend(arg_stmts);
+            vals.push(arg_val);
+        }
+        // `x in container` via `Compare` (comparison precedence + parenthesization
+        // for free). `a`, `b` are consumed in helper-body order.
+        let membership = |a: PyExpr, b: PyExpr| PyExpr::Compare {
+            left: Box::new(a),
+            ops: vec![PyBinOp::In],
+            comparators: vec![b],
+        };
+        // `recv.method(arg)`.
+        let method = |recv: PyExpr, m: &str, arg: PyExpr| PyExpr::Call {
+            func: Box::new(PyExpr::Attribute {
+                value: Box::new(recv),
+                attr: m.to_string(),
+            }),
+            args: vec![arg],
+        };
+        let mut it = vals.into_iter();
+        let a = it.next().unwrap();
+        let value = match qualified {
+            // `_pf_str_contains(sub, s) -> sub in s`
+            "String.contains" => membership(a, it.next().unwrap()),
+            // `_pf_str_starts_with(pre, s) -> s.startswith(pre)`
+            "String.startsWith" => method(it.next().unwrap(), "startswith", a),
+            // `_pf_str_ends_with(suf, s) -> s.endswith(suf)`
+            "String.endsWith" => method(it.next().unwrap(), "endswith", a),
+            // `_pf_list_contains(x, xs) -> x in xs`
+            "List.contains" => membership(a, it.next().unwrap()),
+            // `_pf_set_contains(x, s) -> x in s`
+            "Set.contains" => membership(a, it.next().unwrap()),
+            // `_pf_map_contains(k, m) -> k in m`
+            "Map.contains" => membership(a, it.next().unwrap()),
+            // `_pf_is_empty(xs) -> len(xs) == 0`, inlined to the equivalent `not xs`.
+            "List.isEmpty" => PyExpr::Not(Box::new(a)),
+            _ => unreachable!("try_inline_stdlib arity gate admitted {qualified}"),
+        };
+        Ok(Some((stmts, value)))
     }
 
     /// Lower a variable reference, special-casing data constructors: a nullary

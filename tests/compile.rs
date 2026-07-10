@@ -306,8 +306,10 @@ fn set_functions_lower_to_emitted_helpers() {
     let py = pyfun::compile("let r = Set.contains 1 (Set.add 1 (Set.ofList [2]))").unwrap();
     assert!(py.contains("def _pf_set_add(x, s):"), "{py}");
     assert!(py.contains("return s.union([x])"), "{py}");
-    assert!(py.contains("def _pf_set_contains(x, s):"), "{py}");
-    assert!(py.contains("return x in s"), "{py}");
+    // `Set.contains` is a fully-applied pure predicate, so it inlines to `x in s`
+    // (Lever A) rather than emitting the `_pf_set_contains` helper.
+    assert!(py.contains("r = 1 in _pf_set_add(1, set([2]))"), "{py}");
+    assert!(!py.contains("_pf_set_contains"), "contains inlined: {py}");
     // `Set.ofList` is a bare builtin, no helper.
     assert!(py.contains("set([2])"), "{py}");
 }
@@ -570,6 +572,121 @@ fn e2e_string_slice_and_index_of() {
     );
 }
 
+// ---------- Lever A: inline fully-applied pure stdlib predicates ----------
+
+#[test]
+fn stdlib_predicates_inline_when_fully_applied() {
+    let py = pyfun::compile(
+        "let a s = String.contains \"x\" s
+         let b s = String.startsWith \"x\" s
+         let c s = String.endsWith \"x\" s
+         let d xs = List.contains 3 xs
+         let e s = Set.contains 3 s
+         let g m = Map.contains 3 m
+         let h xs = List.isEmpty xs",
+    )
+    .unwrap();
+    // The idiom is emitted directly, not a `_pf_*` helper call. Argument order
+    // matches each helper body (`sub in s`, `s.startswith(pre)`, …).
+    assert!(py.contains("return \"x\" in s"), "String.contains: {py}");
+    assert!(py.contains("return s.startswith(\"x\")"), "startsWith: {py}");
+    assert!(py.contains("return s.endswith(\"x\")"), "endsWith: {py}");
+    assert!(py.contains("return 3 in xs"), "List.contains: {py}");
+    assert!(py.contains("return 3 in s"), "Set.contains: {py}");
+    assert!(py.contains("return 3 in m"), "Map.contains: {py}");
+    assert!(py.contains("return not xs"), "List.isEmpty: {py}");
+    // None of the inlined helpers are defined, since nothing references them.
+    assert!(!py.contains("_pf_str_contains"), "no contains helper: {py}");
+    assert!(!py.contains("_pf_str_starts_with"), "no startsWith helper: {py}");
+    assert!(!py.contains("_pf_str_ends_with"), "no endsWith helper: {py}");
+    assert!(!py.contains("_pf_list_contains"), "no list-contains helper: {py}");
+    assert!(!py.contains("_pf_set_contains"), "no set-contains helper: {py}");
+    assert!(!py.contains("_pf_map_contains"), "no map-contains helper: {py}");
+    assert!(!py.contains("_pf_is_empty"), "no isEmpty helper: {py}");
+}
+
+#[test]
+fn inlined_membership_parenthesizes_correctly() {
+    // `and` binds looser than `in`, so no parens; `not` is looser still.
+    let py = pyfun::compile(
+        "let f s = String.contains \"a\" s and String.contains \"b\" s
+         let g s = if String.contains \"a\" s then 1 else 0",
+    )
+    .unwrap();
+    assert!(py.contains("return \"a\" in s and \"b\" in s"), "and: {py}");
+    assert!(py.contains("if \"a\" in s:"), "if-guard: {py}");
+}
+
+#[test]
+fn stdlib_predicate_partial_application_falls_back_to_helper() {
+    // A bare partial (one arg of two) is NOT inlined — it still routes through the
+    // `_pf_str_contains` helper via `functools.partial`, so `List.map`/`filter`
+    // over the partial keeps working.
+    let py = pyfun::compile(
+        "let f = String.contains \"x\"
+         let r = List.filter f [\"xy\", \"ab\"]",
+    )
+    .unwrap();
+    assert!(py.contains("def _pf_str_contains(sub, s):"), "helper defined: {py}");
+    assert!(
+        py.contains("f = functools.partial(_pf_str_contains, \"x\")"),
+        "partial routes to helper: {py}"
+    );
+}
+
+#[test]
+fn e2e_inlined_stdlib_predicates() {
+    // Value + argument-order correctness of every inlined idiom.
+    run_and_check(
+        "
+        let a = String.contains \"lo\" \"hello\"
+        let b = String.contains \"hello\" \"lo\"
+        let c = String.startsWith \"he\" \"hello\"
+        let d = String.startsWith \"lo\" \"hello\"
+        let e = String.endsWith \"lo\" \"hello\"
+        let f = String.endsWith \"he\" \"hello\"
+        let g = List.contains 3 [1, 2, 3]
+        let h = List.contains 9 [1, 2, 3]
+        let i = Set.contains 2 (Set.ofList [1, 2, 3])
+        let j = Map.contains 1 (Map.ofList [(1, \"a\")])
+        let k = Map.contains 9 (Map.ofList [(1, \"a\")])
+        let l = List.isEmpty (List.filter (fun x -> x > 9) [1, 2, 3])
+        let m = List.isEmpty [1, 2]
+        ",
+        &[
+            ("a", "True"),
+            ("b", "False"),
+            ("c", "True"),
+            ("d", "False"),
+            ("e", "True"),
+            ("f", "False"),
+            ("g", "True"),
+            ("h", "False"),
+            ("i", "True"),
+            ("j", "True"),
+            ("k", "False"),
+            ("l", "True"),
+            ("m", "False"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_stdlib_predicate_partial_application() {
+    // The fallback path computes the right value: a partial applied later, and a
+    // partial handed to `List.filter`, both go through the helper.
+    run_and_check(
+        "
+        let f = String.contains \"lo\"
+        let a = f \"hello\"
+        let b = f \"hi\"
+        let r = List.filter (String.contains \"a\") [\"cat\", \"dog\", \"bat\"]
+        let n = List.len r
+        ",
+        &[("a", "True"), ("b", "False"), ("n", "2")],
+    );
+}
+
 #[test]
 fn exponentiation_lowers_right_assoc() {
     let py = pyfun::compile("let a = 2.0 ** 3.0 ** 2.0\nlet b = -2.0 ** 2.0").unwrap();
@@ -805,8 +922,13 @@ fn list_completeness_ops_lower_to_helpers() {
         py.contains("Some(xs[i]) if 0 <= i < len(xs) else None_()"),
         "{py}"
     );
-    assert!(py.contains("len(xs) == 0"), "{py}"); // isEmpty
-    assert!(py.contains("return x in xs"), "{py}"); // contains
+    // isEmpty / contains are fully-applied pure predicates: they inline (Lever A)
+    // to `not xs` / `x in xs` instead of the `_pf_is_empty` / `_pf_list_contains`
+    // helpers.
+    assert!(py.contains("b = not [1]"), "isEmpty inlined: {py}");
+    assert!(py.contains("c = 2 in [1, 2]"), "contains inlined: {py}");
+    assert!(!py.contains("_pf_is_empty"), "{py}");
+    assert!(!py.contains("_pf_list_contains"), "{py}");
     assert!(py.contains("return xs + ys"), "{py}"); // concat
     assert!(py.contains("return sorted(xs)"), "{py}"); // sort
 }
@@ -1141,8 +1263,10 @@ fn string_functions_lower_to_builtins_and_helpers() {
     assert!(py.contains("return s.split(sep)"), "{py}");
     assert!(py.contains("def _pf_str_join(sep, xs):"), "{py}");
     assert!(py.contains("return sep.join(xs)"), "{py}");
-    assert!(py.contains("def _pf_str_contains(sub, s):"), "{py}");
-    assert!(py.contains("return sub in s"), "{py}");
+    // `String.contains` is a fully-applied pure predicate: it inlines to `sub in s`
+    // (Lever A), so the `_pf_str_contains` helper is never emitted.
+    assert!(py.contains("has = \"a\" in \"abc\""), "contains inlined: {py}");
+    assert!(!py.contains("_pf_str_contains"), "{py}");
 }
 
 #[test]

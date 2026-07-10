@@ -201,6 +201,25 @@ ordering hazard is a value dependency between slots, which the hoisting handles.
 updates in one slot, fresh-reset slots, `Map.remove`/`Set.remove`, defensive-copy `Var` inits) is
 deferred (`ROADMAP.md`).
 
+### 5.2 Inlining fully-applied pure stdlib predicates (implemented)
+
+Most `§6` stdlib members lower to an emitted `_pf_*` helper (a single callable so partial application
+still works). But a handful are pure, total, **one-liner** wrappers over a Python idiom, and when such
+a member is **fully applied** there is no reason to route through the helper at all — the same
+fully-applied-collapse instinct as the currying rule above. `try_inline_stdlib` (in `lower_application`,
+gated on the head being a module-qualified `Field` and the arg count matching the member's exact arity)
+emits the idiom directly: `String.contains n s`→`n in s`, `String.startsWith p s`→`s.startswith(p)`,
+`String.endsWith`→`s.endswith(…)`, `List`/`Set`/`Map.contains`→`x in xs` (a `PyExpr::Compare` with the
+`In` op, so precedence/parenthesization is free), and `List.isEmpty xs`→`not xs`. The argument order is
+taken verbatim from each helper body — an inverted operand would be a silent miscompile — so the inline
+form is value-identical to the helper (differential-gated on `network-rail`, byte-identical output).
+Anything short of full arity (a partial application like `String.contains "x"`, or a bare value
+reference) is **not** matched and falls through to the helper unchanged, so `List.map (String.contains
+"x") xs` still works. This is a rare win-win: `"CHIPNHM" in line` is both faster (one fewer call per
+invocation — the example makes ~1.87M) and more readable than `_pf_str_contains("CHIPNHM", line)`.
+(`List`/`Set`/`Map.len` are not in this set: they already lower to a bare `len`, so a fully-applied call
+is already `len(xs)` with no helper in between.)
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the

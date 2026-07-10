@@ -99,27 +99,16 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
   that already exists." Tier 1 is already measured (24.6x on the example, output-identical) and clearly
   earns its keep — start there; tiers 2–4 are incremental and can be judged as they land.
-- **Inline pure stdlib predicates + specialize decoders — the *real* levers for the pure-fold residual**
-  (A: S / B: M–L) — after the in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s
-  pure variant sits at ~7s vs the native-Python helper's ~5s (~1.3x). Profiling shows that residual is
-  **not** fold or decode overhead — it is `_pf_str_contains`: **~6s of the ~7s, 1.87M calls**, because
-  `String.contains` lowers to a helper *call* (`def _pf_str_contains(sub, s): return sub in s`) invoked on
-  every one of ~660k lines × the substring checks. Fold tiers 2–4 (above) don't touch this; these two
-  levers do.
+- **Specialize statically-known `Decode` decoders — the remaining lever for the pure-fold residual**
+  (M–L) — after the in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s pure
+  variant sat at ~7s vs the native-Python helper's ~5s (~1.3x). Profiling showed that residual was **not**
+  fold or decode overhead — it was `_pf_str_contains`: ~6s of the ~7s, 1.87M calls, because `String.contains`
+  lowered to a helper *call* invoked on every one of ~660k lines × the substring checks. **The inline-pure-
+  predicate lever that killed that (Lever A) has landed** — fully-applied pure 1:1 stdlib wrappers now emit
+  the Python idiom directly (`"CHIPNHM" in line`, `s.startswith(p)`, `not xs`) instead of a `_pf_*` call, so
+  the 1.87M calls became inline `in` (`DESIGN.md` §5.2). The one lever left is decoder specialization.
 
-  **(A) Inline fully-applied pure 1:1 stdlib helpers** (S, low-risk, *readability-positive*). When a call
-  to a pure, total, one-liner wrapper over a Python idiom is **fully applied**, emit the idiom directly
-  instead of the `_pf_*` call: `String.contains n s`→`n in s`, `String.startsWith`/`endsWith`→
-  `s.startswith`/`endswith(p)`, `List`/`Set`/`Map.contains`→`x in xs`, `List`/`Map`/`Set.len`→`len(xs)`,
-  `List.isEmpty`→`not xs`. This is the exact instinct currying already uses (fully-applied calls collapse to
-  direct form; `DESIGN.md` §5); partial application / value reference falls back to the helper. Needs a
-  fast-path in the module-member lowering (`lower_module_member`) keyed on `qualified_name` + full arity,
-  and a `PyExpr` for Python's `in` (reuse `PyExpr::Compare` with an added `In` op). A rare **win-win**:
-  `"CHIPNHM" in line` is both faster and more readable than `_pf_str_contains("CHIPNHM", line)` — so, unlike
-  fold tier 4, it *improves* the readable-output promise. Alone this should take the bulk of network-rail's
-  residual (the 1.87M calls become inline `in`).
-
-  **(B) Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
+  **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
   builds a runtime decoder *value* and interprets it over `json.loads` output per line. When the decoder is
   a syntactically-known composition of the simple combinators (`field`/`string`/`int`/`list`/`map2–4`/
   `oneOf`/`succeed`), compile it to **direct dict/list access with inline error handling** (`Decode.field
@@ -131,8 +120,9 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   decode-heavy workloads.
 
   Same caveat as the fold entry: optional, diminishing-returns, reserve the boundary for genuinely-hot
-  loops. But if the goal is to narrow *this* example toward the helper, **(A) — not fold tiers 2–4 — is the
-  high-leverage, low-risk first move**. `DESIGN.md` §5/§6.
+  loops. With the inline-predicate lever landed, this decoder pass is the remaining piece — but it is
+  *minor* for network-rail (the prefilter means `Decode` runs on only ~12k of 660k lines), so it earns its
+  keep on decode-heavy workloads, not this one. `DESIGN.md` §5.2/§6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
