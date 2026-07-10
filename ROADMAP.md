@@ -99,14 +99,21 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
   that already exists." Tier 1 is already measured (24.6x on the example, output-identical) and clearly
   earns its keep — start there; tiers 2–4 are incremental and can be judged as they land.
-- **Specialize statically-known `Decode` decoders — the remaining lever for the pure-fold residual**
-  (M–L) — after the in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s pure
-  variant sat at ~7s vs the native-Python helper's ~5s (~1.3x). Profiling showed that residual was **not**
-  fold or decode overhead — it was `_pf_str_contains`: ~6s of the ~7s, 1.87M calls, because `String.contains`
-  lowered to a helper *call* invoked on every one of ~660k lines × the substring checks. **The inline-pure-
-  predicate lever that killed that (Lever A) has landed** — fully-applied pure 1:1 stdlib wrappers now emit
-  the Python idiom directly (`"CHIPNHM" in line`, `s.startswith(p)`, `not xs`) instead of a `_pf_*` call, so
-  the 1.87M calls became inline `in` (`DESIGN.md` §5.2). The one lever left is decoder specialization.
+- **Specialize statically-known `Decode` decoders — the remaining sketched lever** (M–L) — after the
+  in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s pure variant sits at ~7s
+  vs the native-Python helper's ~5s (~1.3x). **A cProfile caution, learned the hard way here:** the profile
+  put `_pf_str_contains` at ~6s / 87% of the run, which *looked* like the residual — but that was a profiler
+  **artifact**. cProfile adds fixed per-call instrumentation, and this trivial O(1) wrapper is called
+  ~1.87M times, so the profiler's own overhead dominated its line; the real work (the `in` itself) is
+  unchanged whether inlined or not. **Inlining it (Lever A — landed)** — fully-applied pure 1:1 stdlib
+  wrappers now emit the Python idiom directly (`"CHIPNHM" in line`, `s.startswith(p)`, `not xs`) instead of a
+  `_pf_*` call (`DESIGN.md` §5.2) — proved the point when measured on **wall-clock**: same example compiled
+  both ways, back to back, it saved ~3% (~0.4s), not 6s. Lever A is worth keeping (a real, if small,
+  speedup, and *more readable* output), but the lesson is the bigger takeaway: **confirm a hot-small-function
+  profile line against wall-clock before believing it.** The ~1.3x pure-vs-native gap is therefore *not* call
+  overhead and remains unattributed — it needs a fresh wall-clock profile (candidate: the `Decode`
+  interpreter on the ~12k matched lines), which is what the decoder-specialization sketch below would target
+  *if* that profile bears it out.
 
   **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
   builds a runtime decoder *value* and interprets it over `json.loads` output per line. When the decoder is
