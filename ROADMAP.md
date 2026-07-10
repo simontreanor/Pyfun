@@ -51,15 +51,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   the tool proposes a signature, the programmer still signs it. Needs a small dependency-free `.pyi`-subset
   parser. Note it does **not** remove extern annotations — the boundary contract is the one place Pyfun asks
   for types on purpose; the generator only drafts them. `DESIGN.md` §6.
-- **Keyword arguments on `extern` bindings** (S) — pin fixed Python kwargs at the boundary, e.g.
-  `extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")`, so a call lowers
-  to `open(path, mode="rt", encoding="utf-8")`. Purely a **readability** win, not a capability: the same is
-  already expressible positionally (`open`'s mode, `write_text`'s encoding *are* positional args), as
-  `examples/interop/network-rail` shows — a bare trailing `"utf-8"` just doesn't self-document the way
-  `encoding="utf-8"` would. Needs: parse `(kw=lit, …)` after the extern target (parser/AST), a
-  `PyExpr::CallKw` variant (emitter), and kwarg injection at the two extern call sites in lowering (the
-  general and receiver-method paths). Fits the trusted-contract boundary — the programmer still signs the
-  signature. `DESIGN.md` §6.
 - **Performance-directed lowering — in-place accumulation + defunctionalize hot folds** (L) — the
   `examples/interop/network-rail` pair measures the cost of naive lowering: the pure-Pyfun `Seq.fold` over
   the ~660k-line feed runs ~15x slower than the equivalent native-Python loop. **Profiling (2026-07-09)

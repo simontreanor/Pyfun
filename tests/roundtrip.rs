@@ -244,6 +244,15 @@ const PROGRAMS: &[&str] = &[
     "extern jsonBody: a -> b = .json()",
     "extern scheme: a -> string = .scheme",
     "extern text: a -> string = .text",
+    // Pinned keyword arguments on an `extern` target (`DESIGN.md` §6): a plain
+    // target, a receiver-method target, multiple kwargs, and int / negative-int /
+    // bool / float literal values all round-trip. The kwargs also force the `= …`
+    // clause to print even when the Python name equals the Pyfun name.
+    "extern openText: string -> Seq string = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
+    "extern writeText: a -> string -> int = .write_text(encoding=\"utf-8\")",
+    "extern connect: string -> a = sqlite3.connect(timeout=5, check_same_thread=false)",
+    "extern gzipOpen: string -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
+    "extern open: string -> a = open(mode=\"rt\")",
     // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
     // as written, so single, multi, and argument-position annotations roundtrip.
     "extern fetch: string ->{async} string = httpx.get",

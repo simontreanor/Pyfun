@@ -176,6 +176,81 @@ fn extern_on_class_method_imports_only_the_module() {
 }
 
 #[test]
+fn extern_kwargs_are_appended_to_the_call() {
+    // A plain extern with pinned kwargs appends them to every call.
+    let py = pyfun::compile(
+        "extern openText : string -> Seq string = builtins.open(mode=\"rt\", encoding=\"utf-8\")\n\
+         let f path = openText path",
+    )
+    .unwrap();
+    assert!(
+        py.contains("return builtins.open(path, mode=\"rt\", encoding=\"utf-8\")"),
+        "{py}"
+    );
+}
+
+#[test]
+fn receiver_method_extern_kwargs_follow_the_positional_args() {
+    // A `= .method(kw=v)` receiver-method extern appends its kwargs after the
+    // positional method arguments.
+    let py = pyfun::compile(
+        "type P = PH\n\
+         extern writeText : P -> string -> int = .write_text(encoding=\"utf-8\")\n\
+         let f p text = writeText p text",
+    )
+    .unwrap();
+    assert!(
+        py.contains("return p.write_text(text, encoding=\"utf-8\")"),
+        "{py}"
+    );
+}
+
+#[test]
+fn extern_kwargs_support_int_negative_bool_and_float_values() {
+    let py = pyfun::compile(
+        "extern g : string -> a = gzip.open(compresslevel=9, buffering=-1, text=true, ratio=2.5)\n\
+         let f path = g path",
+    )
+    .unwrap();
+    assert!(
+        py.contains("gzip.open(path, compresslevel=9, buffering=-1, text=True, ratio=2.5)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn extern_kwargs_partial_application_pins_kwargs_via_functools_partial() {
+    // Under-application (partial or bare) must NOT drop the pinned kwargs: they
+    // ride along on `functools.partial`, so a later application still supplies them.
+    let py = pyfun::compile(
+        "extern openText : string -> int -> Seq string = builtins.open(mode=\"rt\")\n\
+         let bare = openText\n\
+         let partial = openText \"a.txt\"",
+    )
+    .unwrap();
+    assert!(
+        py.contains("bare = functools.partial(builtins.open, mode=\"rt\")"),
+        "{py}"
+    );
+    assert!(
+        py.contains("partial = functools.partial(builtins.open, \"a.txt\", mode=\"rt\")"),
+        "{py}"
+    );
+}
+
+#[test]
+fn e2e_extern_kwargs_produce_observable_output() {
+    // `int` takes a real Python kwarg (`base`); pinning `base=16` proves the kwargs
+    // reach the live call — `parseHex "ff"` evaluates to 255, not a parse error.
+    run_and_check(
+        "extern parseHex : string -> int = int(base=16)\n\
+         let n = parseHex \"ff\"\n\
+         let m = parseHex \"10\"",
+        &[("n", "255"), ("m", "16")],
+    );
+}
+
+#[test]
 fn list_literal_lowers_to_a_python_list() {
     let py = pyfun::compile("let xs = [1, 2, 3]").unwrap();
     assert!(py.contains("xs = [1, 2, 3]"), "{py}");

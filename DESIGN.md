@@ -311,6 +311,24 @@ target — it reaches members that are **inherited or delegated** rather than de
 named class (e.g. `urllib.response.addinfourl.read`, which exists only on an instance). All three target
 forms coexist; the plain dotted form stays right for genuine module functions and staticmethods.
 
+**Pinned keyword arguments (`= target(kw = lit, …)`, implemented).** A trailing `(kw = lit, …)` on an
+extern target pins **fixed Python keyword arguments**, appended to every emitted call:
+`extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")` lowers `openText path`
+to `builtins.open(path, mode="rt", encoding="utf-8")`, and the receiver-method form
+`extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8")` lowers `writeText p text`
+to `p.write_text(text, encoding="utf-8")`. This reaches Python keyword-only / deep-positional arguments
+(such as `open`'s `encoding`) *without* the ugly positional fillers that would otherwise be needed to
+skip past intervening parameters. Each `kw` is a lowercase identifier and each `lit` a string / int
+(optionally negated) / float / bool literal — the only forms the boundary needs; a duplicate keyword or
+a non-literal value is a parse error. The pinned kwargs are **purely a lowering concern**: they never
+appear in the Pyfun arrow type (the type above is still `string -> Seq string`), they are invisible to
+inference and effects, and the parens compose with all three target forms (an empty `()` after a leading
+dot is still just the method marker). The feature is **strictly additive** — an extern with no `(…)`
+behaves exactly as before. Under-application never *drops* the kwargs: a partial or bare reference to a
+kwargs-extern carries them through `functools.partial` (`openText` → `functools.partial(builtins.open,
+mode="rt", encoding="utf-8")`), so a later application still supplies them; only a full (or over-)
+application emits the direct `f(a, kw=v)` call.
+
 **Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
 like Pyfun records and tuples). The big-O is Python's, *not*
