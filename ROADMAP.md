@@ -99,6 +99,40 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
   that already exists." Tier 1 is already measured (24.6x on the example, output-identical) and clearly
   earns its keep — start there; tiers 2–4 are incremental and can be judged as they land.
+- **Inline pure stdlib predicates + specialize decoders — the *real* levers for the pure-fold residual**
+  (A: S / B: M–L) — after the in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s
+  pure variant sits at ~7s vs the native-Python helper's ~5s (~1.3x). Profiling shows that residual is
+  **not** fold or decode overhead — it is `_pf_str_contains`: **~6s of the ~7s, 1.87M calls**, because
+  `String.contains` lowers to a helper *call* (`def _pf_str_contains(sub, s): return sub in s`) invoked on
+  every one of ~660k lines × the substring checks. Fold tiers 2–4 (above) don't touch this; these two
+  levers do.
+
+  **(A) Inline fully-applied pure 1:1 stdlib helpers** (S, low-risk, *readability-positive*). When a call
+  to a pure, total, one-liner wrapper over a Python idiom is **fully applied**, emit the idiom directly
+  instead of the `_pf_*` call: `String.contains n s`→`n in s`, `String.startsWith`/`endsWith`→
+  `s.startswith`/`endswith(p)`, `List`/`Set`/`Map.contains`→`x in xs`, `List`/`Map`/`Set.len`→`len(xs)`,
+  `List.isEmpty`→`not xs`. This is the exact instinct currying already uses (fully-applied calls collapse to
+  direct form; `DESIGN.md` §5); partial application / value reference falls back to the helper. Needs a
+  fast-path in the module-member lowering (`lower_module_member`) keyed on `qualified_name` + full arity,
+  and a `PyExpr` for Python's `in` (reuse `PyExpr::Compare` with an added `In` op). A rare **win-win**:
+  `"CHIPNHM" in line` is both faster and more readable than `_pf_str_contains("CHIPNHM", line)` — so, unlike
+  fold tier 4, it *improves* the readable-output promise. Alone this should take the bulk of network-rail's
+  residual (the 1.87M calls become inline `in`).
+
+  **(B) Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
+  builds a runtime decoder *value* and interprets it over `json.loads` output per line. When the decoder is
+  a syntactically-known composition of the simple combinators (`field`/`string`/`int`/`list`/`map2–4`/
+  `oneOf`/`succeed`), compile it to **direct dict/list access with inline error handling** (`Decode.field
+  "x" Decode.string`→a guarded `d["x"]`, `map3 f a b c`→`f(…)`), deforesting the combinator interpreter;
+  fall back to the interpreter for the dynamic cases (`andThen`, recursion, a decoder passed as a value).
+  The result must be **byte-identical** to the interpreter's `Result` (a wrong-type/missing-field yields the
+  same `Error`) — differential-gate it like the fold pass. NB for network-rail this is *minor* (the
+  substring prefilter means `Decode` runs on only ~12k of 660k lines); it is the right general lever for
+  decode-heavy workloads.
+
+  Same caveat as the fold entry: optional, diminishing-returns, reserve the boundary for genuinely-hot
+  loops. But if the goal is to narrow *this* example toward the helper, **(A) — not fold tiers 2–4 — is the
+  high-leverage, low-risk first move**. `DESIGN.md` §5/§6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
