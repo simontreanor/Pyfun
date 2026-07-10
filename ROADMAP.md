@@ -68,7 +68,11 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   tiploc map inside the fold is O(n²), and cProfile put `_pf_map_add` at **87% of runtime**.
   `List.concat`/`Set.add` share the shape. The per-element `functools.reduce` / `_pf_str_contains` call
   overhead is real but secondary. A hand-written prototype of the fix — a mutable accumulator so
-  `Map.add`→`m[k] = v` and `List.concat`→`xs.append(e)` — ran **24.6x faster with byte-identical output**.
+  `Map.add`→`m[k] = v` and `List.concat`→`xs.append(e)` — ran **24.6x faster with byte-identical output** on
+  the map-build-dominated 100k-line slice. **On the full ~660k-line feed the landed pass measures ~1.5x**
+  (29.5s → 19.6s, byte-identical): the O(n²) build is only ~⅓ of full-file time, the rest being per-line
+  `_pf_str_contains` calls and gzip decode — so 24.6x is the figure when incremental collection-building
+  dominates, not a universal one (the residual per-line call overhead is what tiers 2–3 below target).
   The instinct is the one the compiler already applies to currying (fully-applied calls collapse to direct
   `f(a, b)`; `DESIGN.md` §5–6), extended to iteration.
 
