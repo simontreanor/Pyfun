@@ -11,19 +11,17 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
-- **Fold-pass coverage extensions ("Tier B")** (S–M per slice) — extend the landed in-place accumulation
-  pass (`src/lowering/fold_loop.rs`, mechanics + soundness obligations in `DESIGN.md` §5.1) to fold shapes
-  that today reject and fall back to `_pf_fold`: **local named folders** (network-rail's `dedupLegs` inner
-  `step` is the live instance), **chained updates in one slot**, **fresh-reset slots** (`(Map.empty,
-  runs)`), **`Map.remove`/`Set.remove`** (`m.pop`/`s.discard`), and **defensive-copy `Var` inits**. This is
-  the one perf lever with a proven payoff profile — the O(n²)→O(n) collection-build collapse measured 24.6x
-  where incremental building dominates (~1.5x on the whole network-rail feed), byte-identical output —
-  extended shape by shape behind the same differential gate. Demand-driven: pick up a slice when a real
-  program's hot fold rejects. (A persistent-map/HAMT `Map` would kill the O(n²) generally but still loses
-  to a bare `dict` on this pattern.) The ceiling framing stands and caps all perf work: Pyfun targets
-  un-JIT'd CPython, so the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner
-  loop still belongs behind an `extern` to an already-fast library — the further lowering tiers (general
-  inlining, fusion, micro-opts) were measured out and are now **non-goals** (below).
+- **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
+  folders incl. `dedupLegs`, chained updates, fresh-reset slots with the store-then-reset idiom,
+  `Map.remove`/`Set.remove`, defensive-copy/alias `Var` inits — `DESIGN.md` §5.1), so the known rejecting
+  shapes are covered. What still falls back, honestly: ordered *inserts* (network-rail's `insertByDep` —
+  list slicing/splicing, not an append), folds inside in-file `module`s (P8 mangling), and anything the
+  occurrence discipline can't prove. Pick one up only when a real hot fold rejects on it. (A
+  persistent-map/HAMT `Map` would kill the O(n²) generally but still loses to a bare `dict` on this
+  pattern.) The ceiling framing stands and caps all perf work: Pyfun targets un-JIT'd CPython, so the goal
+  is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs behind an
+  `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain **non-goals**
+  (below).
 - **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive) — assessed 2026-07-13:
   **worth keeping (not a non-goal), gated on a decode-dominated workload.** Unlike the measured-out
   lowering tiers (non-goals, below), this deforests a per-record *interpreter* — `Decode.decodeString`
