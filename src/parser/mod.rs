@@ -143,6 +143,16 @@ impl Parser {
         self.tokens[self.pos].span.start
     }
 
+    /// Whether the cursor sits on a `::` — two **adjacent** `:` tokens (the lexer
+    /// has no compound token for it). Spaced colons (`a : : b`) do not count, so
+    /// the marker prints back exactly as written.
+    fn at_colon_colon(&self) -> bool {
+        *self.peek() == Tok::Colon
+            && *self.peek2() == Tok::Colon
+            && self.pos + 1 < self.tokens.len()
+            && self.tokens[self.pos].span.end == self.tokens[self.pos + 1].span.start
+    }
+
     /// End offset of the most recently consumed token.
     fn prev_end(&self) -> usize {
         if self.pos == 0 {
@@ -353,11 +363,42 @@ impl Parser {
         // attribute/property (`resp.text`) — trailing `()` is the "call" marker.
         // A trailing `(kw = lit, …)` pins fixed Python keyword arguments on the
         // target, appended to every emitted call (`open(path, encoding="utf-8")`).
-        let (target, receiver, kwargs) = if self.eat(&Tok::Eq) {
+        let (target, import_split, receiver, kwargs) = if self.eat(&Tok::Eq) {
             let dotted = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
-            while self.eat(&Tok::Dot) {
-                segs.push(self.parse_ident("Python attribute")?);
+            // Segments continue with `.`; a single `::` may mark where the module
+            // path ends (`datetime::datetime.now` imports `datetime`), overriding
+            // the lowercase-prefix import heuristic (`DESIGN.md` §6).
+            let mut import_split = None;
+            loop {
+                if self.eat(&Tok::Dot) {
+                    segs.push(self.parse_ident("Python attribute")?);
+                } else if self.at_colon_colon() {
+                    let start = self.cur_start();
+                    self.bump();
+                    self.bump();
+                    let span = Span::new(start, self.prev_end());
+                    if dotted {
+                        return Err(ParseError {
+                            message: "`::` marks the module to import, but an \
+                                      instance-access target (leading `.`) has no \
+                                      module path"
+                                .to_string(),
+                            span,
+                        });
+                    }
+                    if import_split.is_some() {
+                        return Err(ParseError {
+                            message: "an extern target may contain `::` at most once"
+                                .to_string(),
+                            span,
+                        });
+                    }
+                    import_split = Some(segs.len());
+                    segs.push(self.parse_ident("Python attribute")?);
+                } else {
+                    break;
+                }
             }
             // Parentheses (present in all three receiver forms) may hold pinned
             // keyword arguments. For a leading-dot target they also mark the method
@@ -376,9 +417,9 @@ impl Parser {
             } else {
                 None
             };
-            (segs, receiver, kwargs)
+            (segs, import_split, receiver, kwargs)
         } else {
-            (vec![name.clone()], None, Vec::new())
+            (vec![name.clone()], None, None, Vec::new())
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
@@ -387,6 +428,7 @@ impl Parser {
             name,
             ty,
             target,
+            import_split,
             receiver,
             kwargs,
             span,
