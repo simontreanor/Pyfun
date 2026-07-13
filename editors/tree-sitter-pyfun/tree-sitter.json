@@ -1,0 +1,27 @@
+{
+  "grammars": [
+    {
+      "name": "pyfun",
+      "camelcase": "Pyfun",
+      "title": "Pyfun",
+      "scope": "source.pyfun",
+      "path": ".",
+      "file-types": ["pyfun"],
+      "injection-regex": "^pyfun$",
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "description": "Pyfun grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Simon Treanor"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/simontreanor/Pyfun"
+    }
+  }
+}
