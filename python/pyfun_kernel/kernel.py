@@ -49,10 +49,21 @@ class Engine:
 
     @staticmethod
     def _binary():
-        exe = os.environ.get("PYFUN_BIN") or shutil.which("pyfun")
+        exe = os.environ.get("PYFUN_BIN")
+        if exe:
+            return exe
+        # Prefer the binary installed alongside this interpreter (the wheel
+        # puts it in Scripts/bin of the same environment) — a stale `pyfun`
+        # elsewhere on PATH may predate the kernel-engine protocol.
+        scripts = "Scripts" if os.name == "nt" else "bin"
+        suffix = ".exe" if os.name == "nt" else ""
+        local = os.path.join(sys.exec_prefix, scripts, "pyfun" + suffix)
+        if os.path.exists(local):
+            return local
+        exe = shutil.which("pyfun")
         if not exe:
             raise EngineError(
-                "cannot find the `pyfun` binary on PATH "
+                "cannot find the `pyfun` binary in this environment or on PATH "
                 "(pip install pyfun-lang); set PYFUN_BIN to override"
             )
         return exe
