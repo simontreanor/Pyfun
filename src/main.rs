@@ -33,6 +33,10 @@ fn main() -> ExitCode {
             help();
             ExitCode::SUCCESS
         }
+        Some("-V") | Some("--version") | Some("version") => {
+            println!("pyfun {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         Some("check") => match args.get(1) {
             Some(path) => check(path),
             None => fail("`check` needs a file path"),
@@ -69,6 +73,7 @@ fn help() {
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
+    eprintln!("  pyfun --version                           print the compiler version");
     eprintln!("  pyfun <file.pyfun>                        shorthand for `compile`");
 }
 
