@@ -251,6 +251,28 @@ trivial function, not real runtime — see `ROADMAP.md`).
 (`List`/`Set`/`Map.len` are not in this set: they already lower to a bare `len`, so a fully-applied call
 is already `len(xs)` with no helper in between.)
 
+### 5.3 Specializing statically-known `Decode` decoders (implemented)
+
+`Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures
+(§6) — and interprets it over `json.loads` output. When `dec` is a **syntactically-known composition**
+of the simple combinators (`string`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
+`succeed`/`fail`/`oneOf`, including through *top-level* `let` decoder names), the pass
+(`src/lowering/decode_spec.rs`, hooked in `lower_application`, default-on with `PYFUN_NO_DECODE_OPT`
+as the differential kill switch) deforests the interpreter into **direct dict/list access with inline
+error handling**: one `try` whose body reads like a hand-written validating parser (`t = v["name"]`,
+`if not isinstance(t, str): raise ValueError(...)`), with the handler folding any raise into
+`Error(_Exception(kind, msg))` exactly like `_pf_dec_decode_string`. The `Result` is
+**byte-identical** to the interpreter's on every input — same `Ok` payload, same error kind and
+message (a missing field is `KeyError` with the key's quoted repr) — differential-gated like the fold
+pass. Faithfulness mechanics: configuration expressions (fan-in functions, `field` names, `succeed`
+values) hoist *outside* the `try` in construction order, matching the interpreter's build-time
+evaluation; every node decodes from a bound temp so a subscript evaluates once; `oneOf` nests
+try/except per alternative, exhausting to the interpreter's exact message. Anything dynamic —
+`andThen`, a decoder passed as a value, a shadowed or cyclic named decoder, a non-literal `oneOf`
+list, an in-file `module` — rejects and falls back to the interpreter unchanged. Measured on a
+decode-dominated workload (400k-object JSON array into records, in-process best-of-5): **2.8x
+end-to-end** including the shared `json.loads`, ~4x on the decode portion itself.
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the

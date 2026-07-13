@@ -24,6 +24,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+mod decode_spec;
 mod fold_loop;
 
 use crate::lexer::Span;
@@ -229,6 +230,11 @@ struct Lowerer {
     /// in-place linear-accumulation pass (`src/lowering/fold_loop.rs`, `DESIGN.md`
     /// §5). Only 2-ary defs are recorded (the folder arity).
     top_fn_defs: HashMap<String, (Vec<Param>, Expr)>,
+    /// Bodies of top-level, non-`mut`, parameterless `let` bindings, so a
+    /// *named decoder* (`let user = Decode.map2 …`) can be classified by the
+    /// decode-specialization pass (`src/lowering/decode_spec.rs`, `DESIGN.md`
+    /// §5.3). Consulted only for names not shadowed by a local.
+    top_val_defs: HashMap<String, Expr>,
     /// The *block-local* counterpart of `top_fn_defs`: 2-ary `let` bindings of the
     /// blocks currently being lowered, so a local named folder (`dedupLegs`'s
     /// inner `step`) can be inlined too. Scope-correct by construction: each block
@@ -242,6 +248,10 @@ struct Lowerer {
     /// the `PYFUN_NO_FOLD_OPT` environment variable turns it off (a kill switch for
     /// differential testing — the rejected path is byte-identical to no-opt).
     fold_opt: bool,
+    /// Whether decode specialization is enabled (`src/lowering/decode_spec.rs`).
+    /// Defaults to on; `PYFUN_NO_DECODE_OPT` turns it off (the differential kill
+    /// switch — the rejected path is the byte-identical interpreter).
+    decode_opt: bool,
     /// List-prelude helpers actually referenced, emitted on demand (like the
     /// `Result` prelude). Stored as the Python helper names (e.g. `_pf_map`).
     needed_list_helpers: BTreeSet<&'static str>,
@@ -331,6 +341,7 @@ impl Lowerer {
             std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
         let mut top_fn_defs: HashMap<String, (Vec<Param>, Expr)> = HashMap::new();
+        let mut top_val_defs: HashMap<String, Expr> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
         for item in &module.items {
             match item {
@@ -372,6 +383,12 @@ impl Lowerer {
                     };
                     if let Some(k) = arity {
                         arities.insert(binding.name.clone(), k);
+                    }
+                    // Record a top-level, non-`mut`, parameterless value binding
+                    // so the decode-specialization pass can classify a *named*
+                    // decoder (`let user = Decode.map2 …`).
+                    if !binding.mutable && binding.params.is_empty() {
+                        top_val_defs.insert(binding.name.clone(), binding.value.clone());
                     }
                     // Record the body of a top-level, non-`mut`, 2-parameter binding
                     // so the fold-loop pass can inline it as a named folder. The
@@ -492,11 +509,13 @@ impl Lowerer {
             needed_imports: BTreeSet::new(),
             user_defs,
             top_fn_defs,
+            top_val_defs,
             local_fn_defs: HashMap::new(),
             // Default the optimization on; `PYFUN_NO_FOLD_OPT` (any value) disables
             // it. Read once per module lowering — cheap, and covers every entry
             // point (`compile`/`run`/project/tests) for differential testing.
             fold_opt: std::env::var_os("PYFUN_NO_FOLD_OPT").is_none(),
+            decode_opt: std::env::var_os("PYFUN_NO_DECODE_OPT").is_none(),
             needed_list_helpers: BTreeSet::new(),
             needed_collection_helpers: BTreeSet::new(),
             needed_combinators: BTreeSet::new(),
@@ -1469,6 +1488,19 @@ impl Lowerer {
             && crate::types::qualified_name(head)
                 .is_some_and(|q| q == "Seq.fold" || q == "List.fold")
             && let Some(result) = self.try_lower_fold_loop(&args_ast, locals)?
+        {
+            return Ok(result);
+        }
+
+        // Decode specialization (`DESIGN.md` §5.3): a fully-applied
+        // `Decode.decodeString` over a statically-known decoder composition
+        // deforests the combinator interpreter into direct dict/list access.
+        // On any doubt the analysis returns `None` and we fall through to the
+        // byte-identical interpreter lowering.
+        if self.decode_opt
+            && args_ast.len() == 2
+            && crate::types::qualified_name(head).is_some_and(|q| q == "Decode.decodeString")
+            && let Some(result) = self.try_lower_decode_spec(&args_ast, locals)?
         {
             return Ok(result);
         }
