@@ -2528,6 +2528,38 @@ fn rejects_extern_redefining_an_existing_name() {
     );
 }
 
+#[test]
+fn rejects_two_split_markers_in_one_target() {
+    // At most one `::` may mark the module boundary.
+    assert_error_contains(
+        "extern f: a -> b = pkg::mod::attr",
+        "an extern target may contain `::` at most once",
+    );
+}
+
+#[test]
+fn rejects_split_marker_in_an_instance_access_target() {
+    // A leading-dot (instance-access) target has no module to import, so `::` is
+    // meaningless there.
+    assert_error_contains(
+        "extern m: a -> b = .method::x",
+        "instance-access target",
+    );
+}
+
+#[test]
+fn rejects_trailing_split_marker_with_nothing_after() {
+    // Something must follow `::` — it falls into the existing attribute error.
+    assert_error_contains("extern f: a -> b = pkg::", "expected Python attribute");
+}
+
+#[test]
+fn spaced_colons_are_not_a_split_marker() {
+    // The marker is two *adjacent* colons; `a : : b` is not one, so the stray first
+    // colon is a parse error rather than a silent split.
+    assert!(pyfun::check("extern now: unit -> a = datetime : : datetime.now").is_err());
+}
+
 // ---------- standard combinators (id / const / ignore / flip) ----------
 
 #[test]

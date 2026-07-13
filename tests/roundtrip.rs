@@ -234,6 +234,13 @@ const PROGRAMS: &[&str] = &[
     "extern pure pow: float -> float -> float = math.pow",
     // A dotted target inside a submodule (imported as the submodule at lowering).
     "extern quote: string -> string = urllib.parse.quote",
+    // Explicit `::` module/attribute split (`DESIGN.md` §6): everything left of
+    // `::` is the module to import, the whole dotted path is the reference. The
+    // printer re-emits the marker at its recorded position, so it round-trips —
+    // bare, with pinned kwargs, and with a multi-segment module side.
+    "extern now: unit -> a = datetime::datetime.now",
+    "extern conn: string -> a = sqlite3::dbapi2.connect(timeout=5)",
+    "extern f: a -> b = a.b::C.d",
     // Instance-access externs. A method (`= .method()`) is called on the first
     // argument; a property (`= .attr`) is read. Includes the case where the member
     // name equals the Pyfun name, which must still print the leading `.` to
