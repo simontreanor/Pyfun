@@ -1842,7 +1842,11 @@ fn format_module_signatures_check() {
                let e = Format.grouped 1234567\n\
                let f = Format.padLeft 6 \"0\" \"42\"\n\
                let g = Format.padRight 6 \".\" \"42\"";
-    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::analyze(src).diagnostics);
+    assert!(
+        pyfun::check(src).is_ok(),
+        "{:?}",
+        pyfun::analyze(src).diagnostics
+    );
 }
 
 #[test]
@@ -2611,35 +2615,30 @@ fn rejects_extern_redefining_an_existing_name() {
 }
 
 #[test]
-fn rejects_two_split_markers_in_one_target() {
-    // At most one `::` may mark the module boundary.
-    assert_error_contains(
-        "extern f: a -> b = pkg::mod::attr",
-        "an extern target may contain `::` at most once",
-    );
+fn extern_import_parses_and_binds_no_pyfun_name() {
+    // `extern import` is purely an import declaration — it puts nothing in the
+    // value environment, so the module name is not referencable as a value.
+    assert!(pyfun::check("extern import datetime").is_ok());
+    assert!(pyfun::check("extern import numpy as np").is_ok());
+    assert!(pyfun::check("extern import datetime\nlet x = datetime").is_err());
 }
 
 #[test]
-fn rejects_split_marker_in_an_instance_access_target() {
-    // A leading-dot (instance-access) target has no module to import, so `::` is
-    // meaningless there.
-    assert_error_contains(
-        "extern m: a -> b = .method::x",
-        "instance-access target",
-    );
+fn rejects_extern_import_without_a_module() {
+    // A module path must follow `extern import`.
+    assert_error_contains("extern import", "expected Python module");
 }
 
 #[test]
-fn rejects_trailing_split_marker_with_nothing_after() {
-    // Something must follow `::` — it falls into the existing attribute error.
-    assert_error_contains("extern f: a -> b = pkg::", "expected Python attribute");
+fn rejects_extern_import_with_a_trailing_dot() {
+    // A dotted path must not end on the dot.
+    assert_error_contains("extern import urllib.", "expected Python module");
 }
 
 #[test]
-fn spaced_colons_are_not_a_split_marker() {
-    // The marker is two *adjacent* colons; `a : : b` is not one, so the stray first
-    // colon is a parse error rather than a silent split.
-    assert!(pyfun::check("extern now: unit -> a = datetime : : datetime.now").is_err());
+fn rejects_extern_import_as_without_an_alias() {
+    // `as` must be followed by the alias name.
+    assert_error_contains("extern import numpy as", "expected import alias");
 }
 
 // ---------- standard combinators (id / const / ignore / flip) ----------
@@ -2788,7 +2787,9 @@ fn refinement_fits_suggest_functions_whose_result_matches() {
     // The structural filter keeps `id`/`const`/`ignore` (which return a bare var)
     // out of refinements — they'd "refine" into every hole otherwise.
     assert!(
-        !refs.iter().any(|r| r.starts_with("id ") || r.starts_with("const ")),
+        !refs
+            .iter()
+            .any(|r| r.starts_with("id ") || r.starts_with("const ")),
         "trivial combinators must be filtered: {refs:?}"
     );
 }

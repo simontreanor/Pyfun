@@ -118,6 +118,8 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                 span: span.span(),
                 kind: SymbolKind::Module,
             }),
+            // An `extern import` binds no Pyfun name — nothing to navigate to.
+            Item::ExternImport { .. } => {}
             // An active pattern's cases behave like constructors — each appears
             // in the outline at its own name span, so go-to-definition on a
             // `case Even:` use lands on the case name in the banana brackets.

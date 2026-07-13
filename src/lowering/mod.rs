@@ -201,10 +201,12 @@ struct Lowerer {
     /// `extern` name → its dotted Python target path (e.g. `["math", "sqrt"]`).
     /// A reference to one lowers to the target rather than the Pyfun name.
     extern_targets: std::collections::HashMap<String, Vec<String>>,
-    /// `extern` name → explicit `::` module split (segment count), for targets
-    /// that override the lowercase-prefix import heuristic (`DESIGN.md` §6).
-    /// Only names whose declaration carried a `::` appear here.
-    extern_import_splits: std::collections::HashMap<String, usize>,
+    /// Declared `extern import` module paths with their optional `as` aliases
+    /// (`DESIGN.md` §6). A used extern target rooted at a declared path — or at
+    /// its alias — imports the module exactly as declared, overriding the
+    /// lowercase-prefix heuristic (which cannot see that `datetime.datetime` is
+    /// a class, not a submodule).
+    extern_module_imports: Vec<(Vec<String>, Option<String>)>,
     /// Instance-access externs (`= .read()` / `= .text`) → whether the target is a
     /// method call or a bare property read on the first argument (the receiver).
     receiver_externs: std::collections::HashMap<String, Receiver>,
@@ -313,7 +315,7 @@ impl Lowerer {
         field_to_record.insert("errorKind".to_string(), "Exception".to_string());
         field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
-        let mut extern_import_splits = std::collections::HashMap::new();
+        let mut extern_module_imports: Vec<(Vec<String>, Option<String>)> = Vec::new();
         let mut receiver_externs = std::collections::HashMap::new();
         let mut nullary_externs = HashSet::new();
         let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>> =
@@ -328,9 +330,6 @@ impl Lowerer {
                     // prelude: it is the number of leading arrows in the type.
                     arities.insert(decl.name.clone(), arrow_arity(&decl.ty));
                     extern_targets.insert(decl.name.clone(), decl.target.clone());
-                    if let Some(split) = decl.import_split {
-                        extern_import_splits.insert(decl.name.clone(), split);
-                    }
                     if let Some(kind) = decl.receiver {
                         receiver_externs.insert(decl.name.clone(), kind);
                     }
@@ -345,6 +344,9 @@ impl Lowerer {
                             .collect();
                         extern_kwargs.insert(decl.name.clone(), lowered);
                     }
+                }
+                Item::ExternImport { path, alias, .. } => {
+                    extern_module_imports.push((path.clone(), alias.clone()));
                 }
                 Item::Let(binding) => {
                     user_defs.insert(binding.name.clone());
@@ -474,7 +476,7 @@ impl Lowerer {
             record_fields,
             field_to_record,
             extern_targets,
-            extern_import_splits,
+            extern_module_imports,
             receiver_externs,
             nullary_externs,
             extern_kwargs,
@@ -569,8 +571,13 @@ impl Lowerer {
         let mut code = Vec::new();
         for item in &module.items {
             match item {
-                // Measures, type declarations, and `import` emit no runtime code.
-                Item::Measure { .. } | Item::Type(_) | Item::Import { .. } => {}
+                // Measures, type declarations, `import`, and `extern import` emit
+                // no runtime code (the latter's Python import is hoisted only when
+                // a target rooted at it is used — `extern_import_spec`).
+                Item::Measure { .. }
+                | Item::Type(_)
+                | Item::Import { .. }
+                | Item::ExternImport { .. } => {}
                 // An `extern` erases in single-file lowering (references inline to
                 // their dotted target). In a *project* it is also bound at top level
                 // (`sqrt = math.sqrt`, `import math` hoisted) so a dependent module can
@@ -578,7 +585,11 @@ impl Lowerer {
                 Item::Extern(decl) => {
                     if self.project_mode {
                         // Any pinned keyword arguments (already lowered in `new`).
-                        let kwargs = self.extern_kwargs.get(&decl.name).cloned().unwrap_or_default();
+                        let kwargs = self
+                            .extern_kwargs
+                            .get(&decl.name)
+                            .cloned()
+                            .unwrap_or_default();
                         let value = if let Some(kind) = decl.receiver {
                             // An instance-access extern binds to a receiver-taking
                             // lambda so dependent modules can reference it.
@@ -586,12 +597,12 @@ impl Lowerer {
                         } else if is_unit_domain(&decl.ty) {
                             // A nullary extern binds to a lambda that ignores its
                             // unit argument, so a cross-module `Mod.now ()` works.
-                            if let Some(module) = extern_import(&decl.target, decl.import_split) {
+                            if let Some(module) = self.extern_import_spec(&decl.target) {
                                 self.needed_imports.insert(module);
                             }
                             nullary_lambda(&decl.target, kwargs)
                         } else {
-                            if let Some(module) = extern_import(&decl.target, decl.import_split) {
+                            if let Some(module) = self.extern_import_spec(&decl.target) {
                                 self.needed_imports.insert(module);
                             }
                             // A plain extern with pinned kwargs binds to a
@@ -1341,6 +1352,31 @@ impl Lowerer {
         Ok((stmts, values))
     }
 
+    /// The import spec a used extern target needs — `"datetime"` or
+    /// `"numpy as np"` — or `None` for a bare builtin. Declared `extern import`s
+    /// are consulted first (`DESIGN.md` §6): an *aliased* declaration matches a
+    /// target rooted at its alias name; an unaliased one matches the longest
+    /// declared path that strictly prefixes the target. Only when no declaration
+    /// matches does the lowercase-prefix heuristic ([`extern_import`]) decide.
+    fn extern_import_spec(&self, target: &[String]) -> Option<String> {
+        let mut best: Option<&(Vec<String>, Option<String>)> = None;
+        for decl in &self.extern_module_imports {
+            let (path, alias) = decl;
+            let hit = match alias {
+                Some(a) => target.first() == Some(a),
+                None => target.len() > path.len() && target.starts_with(path),
+            };
+            if hit && best.is_none_or(|(b, _)| path.len() > b.len()) {
+                best = Some(decl);
+            }
+        }
+        match best {
+            Some((path, Some(a))) => Some(format!("{} as {a}", path.join("."))),
+            Some((path, None)) => Some(path.join(".")),
+            None => extern_import(target),
+        }
+    }
+
     fn lower_application(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
@@ -1394,7 +1430,10 @@ impl Lowerer {
             // A bare (unapplied) reference becomes a receiver-taking lambda (which
             // pins any kwargs itself, `lambda r, a: r.write_text(a, encoding=…)`).
             if arg_vals.is_empty() {
-                return Ok((stmts, receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs)));
+                return Ok((
+                    stmts,
+                    receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs),
+                ));
             }
             let recv = arg_vals.remove(0);
             let accessed = attr_path(recv, &member);
@@ -1441,9 +1480,7 @@ impl Lowerer {
             && self.nullary_externs.contains(name)
         {
             let target = self.extern_targets[name].clone();
-            if let Some(module) =
-                extern_import(&target, self.extern_import_splits.get(name).copied())
-            {
+            if let Some(module) = self.extern_import_spec(&target) {
                 self.needed_imports.insert(module);
             }
             let mut stmts = Vec::new();
@@ -1467,10 +1504,13 @@ impl Lowerer {
                 },
             };
             // Any further arguments (a `unit -> b -> c` extern) apply to the result.
-            let result = arg_vals.into_iter().skip(1).fold(base, |f, a| PyExpr::Call {
-                func: Box::new(f),
-                args: vec![a],
-            });
+            let result = arg_vals
+                .into_iter()
+                .skip(1)
+                .fold(base, |f, a| PyExpr::Call {
+                    func: Box::new(f),
+                    args: vec![a],
+                });
             return Ok((stmts, result));
         }
 
@@ -1486,9 +1526,7 @@ impl Lowerer {
         {
             let target = self.extern_targets[name].clone();
             let arity = self.arities.get(name).copied();
-            if let Some(module) =
-                extern_import(&target, self.extern_import_splits.get(name).copied())
-            {
+            if let Some(module) = self.extern_import_spec(&target) {
                 self.needed_imports.insert(module);
             }
             let mut stmts = Vec::new();
@@ -1651,9 +1689,7 @@ impl Lowerer {
             // references are handled directly in `lower_application`.
             if self.nullary_externs.contains(name) {
                 let target = self.extern_targets[name].clone();
-                if let Some(module) =
-                extern_import(&target, self.extern_import_splits.get(name).copied())
-            {
+                if let Some(module) = self.extern_import_spec(&target) {
                     self.needed_imports.insert(module);
                 }
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
@@ -1665,9 +1701,7 @@ impl Lowerer {
             // application. Applied references are handled in `lower_application`.
             if let Some(kwargs) = self.extern_kwargs.get(name).cloned() {
                 let target = self.extern_targets[name].clone();
-                if let Some(module) =
-                extern_import(&target, self.extern_import_splits.get(name).copied())
-            {
+                if let Some(module) = self.extern_import_spec(&target) {
                     self.needed_imports.insert(module);
                 }
                 let arity = self.arities.get(name).copied();
@@ -1676,9 +1710,7 @@ impl Lowerer {
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
             if let Some(target) = self.extern_targets.get(name).cloned() {
-                if let Some(module) =
-                extern_import(&target, self.extern_import_splits.get(name).copied())
-            {
+                if let Some(module) = self.extern_import_spec(&target) {
                     self.needed_imports.insert(module);
                 }
                 return dotted_path(&target);
@@ -2831,8 +2863,23 @@ fn is_unit_domain(ty: &TypeExpr) -> bool {
 /// Python builtin *type* names — available without an `import`, so a dotted extern
 /// target rooted at one (`bytes.decode`, `int.from_bytes`) must not emit an import.
 const PY_BUILTIN_TYPES: &[&str] = &[
-    "bool", "int", "float", "complex", "str", "bytes", "bytearray", "memoryview", "list", "tuple",
-    "dict", "set", "frozenset", "range", "slice", "object", "type",
+    "bool",
+    "int",
+    "float",
+    "complex",
+    "str",
+    "bytes",
+    "bytearray",
+    "memoryview",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "frozenset",
+    "range",
+    "slice",
+    "object",
+    "type",
 ];
 
 /// Lower a pinned `extern` keyword-argument literal to its Python IR expression.
@@ -2949,17 +2996,13 @@ fn nullary_lambda(target: &[String], kwargs: Vec<(String, PyExpr)>) -> PyExpr {
 /// `urllib.request` (submodule) yet stops at `sqlite3` before the `Connection`
 /// class. The one shape it can't see through is a *lowercase attribute* that is a
 /// value or class rather than a submodule (`sys.stdout.write`,
-/// `datetime.datetime.now`) — for those, an explicit `::` in the target
-/// (`datetime::datetime.now`) supplies `split`, and the marked prefix is imported
-/// **as written** (trusted like the rest of the boundary contract), bypassing the
-/// heuristic and the builtin-type check (`DESIGN.md` §6).
+/// `datetime.datetime.now`) — declare those with an explicit `extern import`
+/// (consulted first, in [`Lowerer::extern_import_spec`]) instead of relying on
+/// this heuristic (`DESIGN.md` §6).
 ///
 /// A target rooted at a builtin *type* (`bytes.decode`, `int.from_bytes`) imports
 /// nothing — those names are always in scope.
-fn extern_import(target: &[String], split: Option<usize>) -> Option<String> {
-    if let Some(n) = split {
-        return Some(target[..n].join("."));
-    }
+fn extern_import(target: &[String]) -> Option<String> {
     if target.len() < 2 || PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
         return None;
     }
@@ -3241,12 +3284,18 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
     used.iter()
         .map(|&helper| match helper {
             // Primitives — strict about the parsed JSON type.
-            "_pf_dec_string" => primitive("_pf_dec_string", "a string", isinst(name("str")), name("v")),
+            "_pf_dec_string" => {
+                primitive("_pf_dec_string", "a string", isinst(name("str")), name("v"))
+            }
             // A JSON bool is a Python `bool`, an `int` subclass — exclude it.
             "_pf_dec_int" => primitive(
                 "_pf_dec_int",
                 "an int",
-                binop(PyBinOp::And, isinst(name("int")), not_(isinst(name("bool")))),
+                binop(
+                    PyBinOp::And,
+                    isinst(name("int")),
+                    not_(isinst(name("bool"))),
+                ),
                 name("v"),
             ),
             // Accept a JSON int or float (but not bool); normalize to a Python float.
@@ -3268,7 +3317,10 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 vec![
                     if_(
                         not_(isinst(name("dict"))),
-                        vec![raise_(calln("ValueError", vec![str_("expected a JSON object")]))],
+                        vec![raise_(calln(
+                            "ValueError",
+                            vec![str_("expected a JSON object")],
+                        ))],
                     ),
                     ret(call(name("dec"), vec![sub(name("v"), name("name"))])),
                 ],
@@ -3280,9 +3332,15 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 vec![
                     if_(
                         not_(isinst(name("list"))),
-                        vec![raise_(calln("ValueError", vec![str_("expected a JSON array")]))],
+                        vec![raise_(calln(
+                            "ValueError",
+                            vec![str_("expected a JSON array")],
+                        ))],
                     ),
-                    ret(calln("list", vec![calln("map", vec![name("dec"), name("v")])])),
+                    ret(calln(
+                        "list",
+                        vec![calln("map", vec![name("dec"), name("v")])],
+                    )),
                 ],
             ),
             // Decode.nullable dec -> None_() when JSON null, else Some(dec(v)).
@@ -3299,10 +3357,17 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
             "_pf_dec_map" => factory(
                 "_pf_dec_map",
                 &["f", "dec"],
-                vec![ret(call(name("f"), vec![call(name("dec"), vec![name("v")])]))],
+                vec![ret(call(
+                    name("f"),
+                    vec![call(name("dec"), vec![name("v")])],
+                ))],
             ),
             // Decode.map2/3/4 — fan several decoders into one n-ary function.
-            "_pf_dec_map2" => factory("_pf_dec_map2", &["f", "da", "db"], vec![ret(fan_in(&["da", "db"]))]),
+            "_pf_dec_map2" => factory(
+                "_pf_dec_map2",
+                &["f", "da", "db"],
+                vec![ret(fan_in(&["da", "db"]))],
+            ),
             "_pf_dec_map3" => factory(
                 "_pf_dec_map3",
                 &["f", "da", "db", "dc"],
@@ -3348,7 +3413,10 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                                 ))],
                             ),
                             PyStmt::Try {
-                                body: vec![ret(call(sub(name("decs"), name("i")), vec![name("v")]))],
+                                body: vec![ret(call(
+                                    sub(name("decs"), name("i")),
+                                    vec![name("v")],
+                                ))],
                                 exc_type: Some("Exception".to_string()),
                                 binding: None,
                                 handler: vec![ret(call(

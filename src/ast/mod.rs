@@ -63,6 +63,10 @@ pub fn print_item(item: &Item) -> String {
             s
         }
         Item::Import { name, .. } => format!("import {name}"),
+        Item::ExternImport { path, alias, .. } => match alias {
+            Some(a) => format!("extern import {} as {a}", path.join(".")),
+            None => format!("extern import {}", path.join(".")),
+        },
         Item::ActivePattern(decl) => {
             format!("{}{}", print_doc(&decl.doc), print_active_pattern(decl))
         }
@@ -180,17 +184,9 @@ fn print_extern(decl: &ExternDecl) -> String {
         }
         // An ordinary target prints its `= …` clause when the Python name differs
         // from the Pyfun name, or when kwargs pin something that must round-trip.
-        // An explicit `::` module split re-emits at its recorded position.
         None if decl.target != [decl.name.clone()] || !decl.kwargs.is_empty() => {
             s.push_str(" = ");
-            match decl.import_split {
-                Some(n) => {
-                    s.push_str(&decl.target[..n].join("."));
-                    s.push_str("::");
-                    s.push_str(&decl.target[n..].join("."));
-                }
-                None => s.push_str(&decl.target.join(".")),
-            }
+            s.push_str(&decl.target.join("."));
             if !decl.kwargs.is_empty() {
                 s.push_str(&print_extern_kwargs(&decl.kwargs));
             }
