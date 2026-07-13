@@ -30,6 +30,34 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
 
+## Verification gaps (things shipped but not exercised locally — missing program, not missing code)
+
+Everything here has a tested core (compiler-side tests, protocol tests, or upstream-docs fidelity);
+what's missing is a run on the real third-party surface, because the program isn't installed on the
+dev machine. Close each by running the listed check once; delete its line when it passes.
+
+- **Neovim** (no `nvim`): the `editors/nvim/` regex syntax + ftdetect/ftplugin have never been loaded,
+  and the `vim.lsp.config` / `vim.lsp.start` snippets in `editors/README.md` are unexercised. Check:
+  open a `.pyfun` file, confirm highlighting + hover. Likewise the **nvim-treesitter** parser
+  registration (compiles `src/parser.c` + `scanner.c` via `:TSInstall pyfun`).
+- **Helix** (no `hx`): the `languages.toml` entry, the `[[grammar]] source = { git, subpath }` fetch
+  of `editors/tree-sitter-pyfun`, and the runtime-queries copy are untested. Check: `hx --grammar
+  fetch && hx --grammar build`, open a file, `:log-open` for LSP.
+- **Emacs** (not installed): the eglot and lsp-mode snippets are unexercised.
+- **PyCharm/IntelliJ** (not installed): the LSP4IJ user-defined-server steps and the TextMate-bundle
+  import of `editors/vscode/` are transcribed from LSP4IJ's docs, not clicked through.
+- **Zed**: named as a Tree-sitter beneficiary but no Zed extension exists — that's a small authored
+  artifact (extension.toml + grammar ref), not just a config; unscoped.
+- **Tree-sitter rendering**: captures are validated with `tree-sitter query`, but no themed
+  highlight render (`tree-sitter highlight` needs a configured theme) and no `test/corpus/` golden
+  trees — the gate is the zero-ERROR parse sweep + compiler-validated `test/stress.pyfun`.
+- **Jupyter kernel**: verified end-to-end via `jupyter_client` on Windows/CPython 3.14, but (a)
+  `python -m pyfun_kernel.install` itself has never run (the e2e wrote its own dev kernelspec), (b)
+  no real JupyterLab/Notebook UI session yet, (c) the engine-death replay path in `kernel.py` is
+  code-reviewed only, (d) KeyboardInterrupt during a long cell untested, (e) macOS/Linux untested.
+  The pip-installed `[jupyter]` extra + `install.py` path should be checked against the first wheel
+  that ships the kernel (v0.0.8).
+
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
 - **Type annotations (`let x : T`, `(x: T)`, return types)** — annotation-free code is a selling point,
