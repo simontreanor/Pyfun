@@ -3041,12 +3041,127 @@ fn guards_are_accepted_in_an_active_pattern_match() {
 }
 
 #[test]
-fn structural_patterns_cannot_mix_with_active_patterns() {
-    // A constructor/list arm beside an active-pattern arm is rejected (MVP shape).
+fn structural_patterns_mix_with_active_patterns() {
+    // A constructor/list arm beside an active-pattern arm is allowed — it
+    // lowers as a one-armed native `match` in the fall-through sequence
+    // (`DESIGN.md` §7.2.1); exhaustiveness stays conservative for the mix.
+    assert!(
+        pyfun::check(
+            "let (|Empty|_|) xs = List.isEmpty xs\n\
+             let f xs =\n  match xs:\n    case Empty: 0\n    case [x]: x\n    case _: 1"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn or_pattern_over_total_cases_is_exhaustive_without_a_wildcard() {
+    // `case Even | Odd:` combines both cases of a total AP into one arm; the
+    // closed case set is covered, so no `_` is needed (usefulness expands the
+    // or-pattern row-wise and `ap_signature` then sees both tags).
+    assert!(
+        pyfun::check(
+            "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+             let f n =\n  match n:\n    case Even | Odd: \"eo\""
+        )
+        .is_ok()
+    );
+    // A total AP with data-carrying cases still combines when both bind `_`.
+    assert!(
+        pyfun::check(
+            "let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)\n\
+             let f n =\n  match n:\n    case Small _ | Big _: 1"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn or_pattern_over_partial_bool_cases_with_params() {
+    // Parameter arguments bind nothing, so `case DivisibleBy 3 | DivisibleBy 5:`
+    // is a legal binder-free or-pattern; partial cases don't close the set, so a
+    // wildcard is still required.
+    assert!(
+        pyfun::check(
+            "let (|DivisibleBy|_|) d n = n % d == 0\n\
+             let f n =\n  match n:\n    case DivisibleBy 3 | DivisibleBy 5: 1\n    case _: 0"
+        )
+        .is_ok()
+    );
     assert_error_contains(
-        "let (|Empty|_|) xs = List.isEmpty xs\n\
-         let f xs =\n  match xs:\n    case Empty: 0\n    case [x]: x\n    case _: 1",
-        "can mix only",
+        "let (|DivisibleBy|_|) d n = n % d == 0\n\
+         let f n =\n  match n:\n    case DivisibleBy 3 | DivisibleBy 5: 1",
+        "non-exhaustive match",
+    );
+}
+
+#[test]
+fn or_pattern_mixing_a_non_active_pattern_alternative_is_rejected() {
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even | 0: 1\n    case _: 2",
+        "an or-pattern using active-pattern cases may combine only active-pattern cases",
+    );
+}
+
+#[test]
+fn or_pattern_with_a_binding_alternative_is_rejected() {
+    // An alternative may not bind — its fields must be `_` (the arm as a whole
+    // is binder-free, since the disjunction can't decide which binder is live).
+    assert_error_contains(
+        "let (|Small|Big|) n = if n < 10 then Small n else Big (n - 10)\n\
+         let f n =\n  match n:\n    case Small x | Big _: 1",
+        "an active-pattern case in an or-pattern cannot bind — use `_` for `Small`'s fields",
+    );
+}
+
+#[test]
+fn nested_or_pattern_of_cases_is_still_rejected() {
+    // An or-pattern of cases is only allowed as the *whole* pattern of an arm;
+    // nesting it under a constructor is still rejected (didn't regress).
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f o =\n  match o:\n    case Some (Even | Odd): 1\n    case _: 0",
+        "whole pattern",
+    );
+}
+
+#[test]
+fn structural_arm_beside_active_pattern_is_witness_accurate() {
+    // `Answer` is a partial bool AP over `Option int`; mixing it with a
+    // structural `case Some x:` leaves `None` uncovered — the diagnostic names
+    // that concrete witness.
+    assert_error_contains(
+        "let (|Answer|_|) o = o == Some 42\n\
+         let f o =\n  match o:\n    case Answer: 1\n    case Some x: x",
+        "non-exhaustive match",
+    );
+    assert_error_contains(
+        "let (|Answer|_|) o = o == Some 42\n\
+         let f o =\n  match o:\n    case Answer: 1\n    case Some x: x",
+        "`None` is not matched",
+    );
+    // Adding the structural completion (`case None:`) makes the match exhaustive
+    // — the structural pair covers `Option int` regardless of the AP arm.
+    assert!(
+        pyfun::check(
+            "let (|Answer|_|) o = o == Some 42\n\
+             let f o =\n  match o:\n    case Answer: 1\n    case Some x: x\n    case None: 0"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn guards_on_structural_arms_beside_active_patterns_are_accepted() {
+    // A guarded structural arm type-checks next to an AP arm; a guarded arm
+    // never counts toward exhaustiveness, so the trailing arms complete it.
+    assert!(
+        pyfun::check(
+            "let (|Answer|_|) o = o == Some 42\n\
+             let f o =\n  match o:\n    case Some x if x > 100: \"big\"\n    case Answer: \"answer\"\n    case _: \"other\""
+        )
+        .is_ok()
     );
 }
 

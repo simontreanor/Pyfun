@@ -11,15 +11,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
-- **Active-pattern flat-match conveniences** (S–M) — the two residual shape rules whose lifting fits the
-  existing fall-through `if`-chain lowering with **no new type-system machinery**, deferred on zero demand
-  (the only AP user outside tests is the `examples/hello.pyfun` showcase): **or-patterns over cases of the
-  same total pattern** (`case Even | Odd:` — a disjunction of already-hoisted tests; binder-free
-  alternatives only) and **structural non-AP arms** beside AP arms (each lowers as one more condition /
-  one-armed native `match` in the chain; exhaustiveness stays conservative, still demanding `_`). Today
-  both have body-duplication or nested-`match` workarounds. Guards + lazy recognizer eval already shipped
-  (`lower_ap_match_seq`). Everything deeper — nesting, nested destructuring, export — is a **non-goal**
-  (below). `DESIGN.md` §7.2.1.
 - **Persistent-process REPL** (M–L) — assessed 2026-07-13: **worth doing, gated on real REPL users**
   (the launch / classroom push), not a non-goal — it fights no design decision, and every peer REPL a
   student arrives from (`python`, ghci, fsi) has persistent state, putting this in the same false-friend

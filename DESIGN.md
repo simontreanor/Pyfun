@@ -1263,17 +1263,22 @@ type's own constructor signature since the scrutinee type is the recognizer's *i
 case is a refutable leaf, and any mixing (two patterns, or literals beside cases) conservatively
 demands a wildcard.
 
-**Shape rules** (checker errors, keeping the lowering honest): an active pattern may appear only as
-the **whole** pattern of an arm (no nesting under constructors / or- / as-patterns); case arguments
-after the parameter expressions must be **binders** (variables or `_`); the other arms of such a
-match must be literals, variables, or `_`. **Guards are supported** — a guarded match lowers to a
-fall-through `if`-sequence (below), so a failing guard falls through to the next arm. Of the remaining
-restrictions, only the *flat* conveniences are deferred (see ROADMAP): or-patterns over cases of one
-total pattern and structural non-AP arms — both fit this chain with no new type-system machinery.
-Nesting an AP under structural patterns, nested destructuring case arguments, and cross-module export
-are **non-goals** (ROADMAP): each needs recognizer application at projection paths and/or usefulness
-recursion into the hidden monomorphic case types (soundness-sensitive), and each has a direct
-workaround (guards; bind-then-destructure in the body; a nested `match`).
+**Shape rules** (checker errors, keeping the lowering honest): an active pattern may appear as the
+**whole** pattern of an arm, or as an alternative in a top-level **or-pattern whose alternatives are
+all binder-free cases** (`case Even | Odd:`, `case Small _ | Big _:`, `case DivisibleBy 3 |
+DivisibleBy 5:` — a disjunction of tests; a *binding* alternative would make the or-arm's bindings
+partial, so case fields must be `_`). Case arguments after the parameter expressions must be
+**binders** (variables or `_`). **Structural non-AP arms mix freely** — `case Some x:` / `case [x]:`
+/ record and tuple patterns sit beside AP arms; each lowers as a one-armed native `match` in the
+fall-through sequence (below), and exhaustiveness for the mix stays conservative (the closed-set
+signature applies only to a pure same-AP column; a mixed column falls back to the structural
+signature, with concrete witnesses). **Guards are supported** on both kinds of arm — a guarded match
+lowers to the fall-through `if`-sequence, so a failing guard falls through to the next arm. Still
+rejected, as **non-goals** (ROADMAP): nesting an AP *under* structural patterns (`case Some
+(Positive p):`), nested destructuring case arguments, and cross-module export — each needs recognizer
+application at projection paths and/or usefulness recursion into the hidden monomorphic case types
+(soundness-sensitive), and each has a direct workaround (guards; bind-then-destructure in the body; a
+nested `match`).
 
 **Lowering — an honest if/elif chain.** An active pattern is a *function call*, not a structural
 test, so Python's `match` cannot express it. The declaration lowers to a plain def
@@ -1282,14 +1287,18 @@ classes, underscore-mangled, no ordering); a partial-Option pattern reuses `Some
 one needs no classes. A `match` containing any active-pattern arm evaluates the scrutinee once,
 hoists each **distinct** recognizer application (function + arguments) to a temp — so side effects
 run at most once per match — then emits the chain: total/Option cases test `isinstance` and bind
-fields (`s = _pf_t0._0`), bool cases test truthiness (`if _pf_t0:`), literal arms compare (`==`), a
+fields (`s = _pf_t0._0`), bool cases test truthiness (`if _pf_t0:`), an or-pattern of cases is the
+`or` of its alternatives' tests (one shared recognizer, memoized), literal arms compare (`==`), a
 trailing `_`/variable arm becomes the `else` (else a defensive raise). The emitter collapses
-`else: if` into `elif`, so the output reads as hand-written Python. A **guarded** match instead
-lowers to a forward `if`-sequence with early exit (`lower_ap_match_seq`): each arm computes its
-recognizer **lazily** (only when reached, memoized so a repeated application still runs at most
-once), and a full match (structural test *and* guard) returns — or, in value position, sets a
-`_done` sentinel that gates the remaining arms — so a failing guard falls through. A match with no
-active-pattern arms keeps the native `match`/`case` lowering unchanged.
+`else: if` into `elif`, so the output reads as hand-written Python. A **guarded** match — or one
+with a **structural** arm — instead lowers to a forward `if`-sequence with early exit
+(`lower_ap_match_seq`): each AP arm computes its recognizer **lazily** (only when reached, memoized
+so a repeated application still runs at most once), a structural arm becomes a **one-armed native
+`match`** (`match subj:` / `case Some(x): …` with no default — a non-match falls out and on to the
+next arm, and a native `case … if guard:` carries the guard), and a full match returns — or, in
+value position, sets a `_done` sentinel that gates the remaining arms — so a failing test or guard
+falls through. A match with no active-pattern arms keeps the native `match`/`case` lowering
+unchanged.
 
 ```python
 def _ap_Even_Odd(n):
