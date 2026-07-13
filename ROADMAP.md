@@ -44,13 +44,14 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   hidden AP/ADT classes, deterministic naming all currently assume whole-program lowering). Cheap interim
   mitigation (S) if the wart bites first: warn when a remembered definition's inferred effect is
   `io`/`async` ("this definition will re-run on each later entry").
-- **`datetime` interop cookbook example** (S) — the surviving piece of the old "`Format` dates follow-on"
-  (now a non-goal, below): a `examples/interop/datetime.pyfun` showing the boundary story for dates —
-  `extern type Datetime` handle, constructor/`now` externs, pinned instance methods (`.isoformat()`,
-  arithmetic via `.replace()`/`timedelta`). Probably the most-used Python stdlib module and the cookbook
-  doesn't cover it; a natural teaching example of `extern type` + instance-access targets. The numeric/
-  string `Format` first cut (`fixed`/`thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`)
-  shipped and is complete as-is.
+- **Explicit module/attribute split on extern targets** (S–M) — the dotted-target import heuristic
+  (maximal lowercase prefix = module path, `DESIGN.md` §6) has now bitten three times: `sys.stdout.write`,
+  `urllib.response.addinfourl` (both reachable via instance-access externs), and — writing the `datetime`
+  cookbook example — **classmethods on lowercase classes** (`datetime.datetime.now` / `.fromisoformat` /
+  `.strptime` mis-import as `import datetime.datetime`), which have *no* receiver and so no workaround
+  short of a Python-side wrapper. Fix: an optional explicit marker on the target telling the emitter where
+  the module path ends (syntax open — e.g. `= datetime::datetime.now` or a pinned-import clause); the
+  heuristic stays the default. Purely a lowering/emitter concern, no type-system impact.
 - **Fold-pass coverage extensions ("Tier B")** (S–M per slice) — extend the landed in-place accumulation
   pass (`src/lowering/fold_loop.rs`, mechanics + soundness obligations in `DESIGN.md` §5.1) to fold shapes
   that today reject and fall back to `_pf_fold`: **local named folders** (network-rail's `dedupLegs` inner
@@ -164,7 +165,8 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   it, don't rebuild it), and a general `formatDate` takes a strftime pattern — `"%Y-%m-%d"` is exactly the
   stringly-typed mini-language the f-string-specifier non-goal rejects and the `Format` module exists to
   replace; a *typed* date-format DSL is out of scope. Dates belong at the boundary: `extern type Datetime`
-  + pinned instance methods, where the programmer signs the contract — the cookbook example above.
+  + instance-method externs, where the programmer signs the contract — shipped as
+  `examples/interop/datetime.pyfun` (a fully *pure* FFI pipeline).
 - **Unicode / symbol measure names (`<Ω>`, `<μ>`, superscript `m²`)** — measure names are ordinary
   identifiers, so this can't be scoped to units; it's language-wide Unicode identifiers (which would leak
   into Python names). Safe homoglyph handling (µ U+00B5 vs μ U+03BC) needs Unicode *normalization*, which

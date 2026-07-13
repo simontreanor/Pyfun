@@ -1,0 +1,50 @@
+# datetime — the most-imported stdlib module, wrapped as typed, *pure* values.
+#
+#   pyfun run examples/interop/datetime.pyfun
+#
+# datetime is all classes, which makes it a tour of the object-side extern forms:
+# a class target as a constructor, property/method receivers, and Python's
+# `operator` module for the arithmetic the classes define with `+`/`-`. Building
+# and combining dates is deterministic, so these externs are declared `pure` —
+# the boundary's opt-out — and `let pure` then *proves* a whole pipeline effect-free.
+
+extern type Datetime
+extern type Delta
+
+# A class is callable, so a class target is a constructor: `date 2026 7 13` lowers
+# to datetime.datetime(2026, 7, 13), auto-importing the class's module. (Its
+# *classmethods* — datetime.datetime.now / .fromisoformat — can't be dotted targets:
+# the import heuristic reads the lowercase class as a submodule, DESIGN.md §6.)
+extern pure date : int -> int -> int -> Datetime = datetime.datetime
+extern pure days : int -> Delta = datetime.timedelta      # timedelta(days) — first positional
+
+# Members of the opaque handles: `= .attr` reads a property, `= .attr()` calls a method.
+extern pure weekday   : Datetime -> int    = .weekday()   # 0 = Monday
+extern pure isoformat : Datetime -> string = .isoformat()
+extern pure inDays    : Delta -> int       = .days
+
+# datetime's arithmetic lives on `+`/`-`, and Python exposes every operator as a
+# plain function in the `operator` module — ready-made extern targets.
+extern pure shift   : Datetime -> Delta -> Datetime = operator.add   # d + delta
+extern pure between : Datetime -> Datetime -> Delta = operator.sub   # b - a
+
+let launch = date 2026 7 13
+print (isoformat launch)                                # 2026-07-13T00:00:00
+print (weekday launch)                                  # 0 — a Monday
+
+# The externs are pure, so the compiler verifies this pipeline touches no effect.
+let pure daysBetween a b = inDays (between b a)
+print (daysBetween launch (shift launch (days 90)))     # 90
+
+# Boundary handles flow through the ordinary combinators like any other value.
+let sprintEnds = List.map (fun n -> isoformat (shift launch (days (n * 14)))) [1, 2, 3]
+print sprintEnds
+
+# An impossible date raises ValueError in Python; `try` reifies it as a Result,
+# and the match must handle both outcomes.
+let describe r =
+  match r:
+    case Ok d: f"valid: {isoformat d}"
+    case Error e: f"invalid: {e.errorKind}"
+
+print (describe (try (date 2026 2 30)))                 # invalid: ValueError
