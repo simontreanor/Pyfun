@@ -1165,8 +1165,9 @@ fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
 }
 
 /// P8: collect the free variables of `e` (names referenced but not bound within),
-/// given the already-bound set. Used only for the named-folder capture check.
-fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
+/// given the already-bound set. Used for the named-folder capture check and the
+/// decode pass's named-decoder check (`decode_spec.rs`).
+pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<String>) {
     match &e.kind {
         ExprKind::Var(n) => {
             if !bound.contains(n) {

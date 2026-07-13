@@ -3229,11 +3229,258 @@ fn e2e_decode_list_nullable_oneof_andthen() {
 #[test]
 fn decode_pipeline_is_pure() {
     // Decoders are a pure sublanguage, so `let pure` over `decodeString` is accepted
-    // (unlike a raw `json.loads` extern, which is `io` at the boundary).
+    // (unlike a raw `json.loads` extern, which is `io` at the boundary). The static
+    // `Decode.int` decoder now specializes (`DESIGN.md` §5.3): direct `json.loads`
+    // plus an inline guard, no interpreter helper.
     let py =
         pyfun::compile("let pure parse s = Decode.decodeString Decode.int s\nlet r = parse \"1\"")
             .unwrap();
-    assert!(py.contains("_pf_dec_decode_string"), "{py}");
+    assert!(py.contains("json.loads"), "{py}");
+    assert!(!py.contains("_pf_dec_decode_string"), "{py}");
+}
+
+// ---------- decode specialization (src/lowering/decode_spec.rs) ----------
+//
+// A statically-known `Decode.decodeString dec s` is deforested from the combinator
+// interpreter into direct dict/list access (one `try`, byte-identical Result). These
+// positive tests assert the specialized shape is emitted (`json.loads` present,
+// `_pf_dec_decode_string` absent) and, via e2e, that value + error fidelity matches
+// the interpreter. Fallback tests assert the interpreter helper is still emitted for
+// dynamic shapes (`andThen`, a decoder parameter, a shadowed free var) and computes
+// the same value.
+
+/// Assert the decode specializer fired on `source`: no interpreter helper, direct
+/// `json.loads`. Returns the compiled Python for further substring assertions.
+fn assert_decode_specialized(source: &str) -> String {
+    let py = pyfun::compile(source).unwrap_or_else(|e| panic!("compile failed: {e}\n{source}"));
+    assert!(
+        !py.contains("_pf_dec_decode_string"),
+        "expected specialization (no interpreter helper), got:\n{py}"
+    );
+    assert!(py.contains("json.loads"), "expected direct json.loads:\n{py}");
+    py
+}
+
+/// Assert `source` fell back to the interpreter (`_pf_dec_decode_string` present) —
+/// the specializer rejected a dynamic shape.
+fn assert_decode_fallback(source: &str) {
+    let py = pyfun::compile(source).unwrap_or_else(|e| panic!("compile failed: {e}\n{source}"));
+    assert!(
+        py.contains("_pf_dec_decode_string"),
+        "expected the interpreter fallback (rejected specialization), got:\n{py}"
+    );
+}
+
+#[test]
+fn decode_spec_fires_on_inline_field() {
+    // An inline `field` + primitive decoder deforests: json.loads + an isinstance guard,
+    // no combinator interpreter.
+    let py = assert_decode_specialized(
+        r#"let r = Decode.decodeString (Decode.field "name" Decode.string) """{"name": "ada"}"""
+"#,
+    );
+    assert!(py.contains("isinstance"), "expected an isinstance guard:\n{py}");
+}
+
+#[test]
+fn decode_spec_fires_through_named_decoder() {
+    // A NAMED top-level decoder (through `let`) is inlined and specialized too.
+    let py = assert_decode_specialized(
+        r#"type Pair = { name: string, age: int }
+let user =
+  Decode.map2 (fun name age -> Pair { name = name, age = age })
+    (Decode.field "name" Decode.string)
+    (Decode.field "age" Decode.int)
+let r = Decode.decodeString user """{"name": "ada", "age": 36}"""
+"#,
+    );
+    assert!(py.contains("isinstance"), "expected an isinstance guard:\n{py}");
+}
+
+#[test]
+fn e2e_decode_spec_success_and_missing_field() {
+    // Value fidelity for a good parse; a missing field is the interpreter's KeyError,
+    // `'name'` and all, folded to `Error` — never a crash.
+    run_and_check(
+        r#"let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: f"{e.errorKind}: {e.errorMessage}"
+let good = show (Decode.decodeString (Decode.field "name" Decode.string) """{"name": "ada"}""")
+let missing = show (Decode.decodeString (Decode.field "name" Decode.string) """{"other": 1}""")
+"#,
+        &[("good", "ok: ada"), ("missing", "KeyError: 'name'")],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_wrong_type() {
+    // A strict primitive rejects the wrong JSON type with the interpreter's message.
+    run_and_check(
+        r#"let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: f"{e.errorKind}: {e.errorMessage}"
+let wrong = show (Decode.decodeString (Decode.field "age" Decode.int) """{"age": "old"}""")
+"#,
+        &[("wrong", "ValueError: expected an int, got str")],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_int_bool_float_strictness() {
+    // `Decode.int` rejects a JSON bool (a Python bool is an int subclass); `Decode.float`
+    // widens a JSON int to a float. Both match the interpreter's strictness.
+    run_and_check(
+        r#"let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: f"{e.errorKind}: {e.errorMessage}"
+let boolNotInt = show (Decode.decodeString Decode.int "true")
+let intAsFloat = show (Decode.decodeString Decode.float "5")
+"#,
+        &[
+            ("boolNotInt", "ValueError: expected an int, got bool"),
+            ("intAsFloat", "ok: 5.0"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_malformed_json_kind() {
+    // Malformed input surfaces json's own JSONDecodeError kind through the fold.
+    run_and_check(
+        r#"let kind r =
+  match r:
+    case Ok v: "ok"
+    case Error e: e.errorKind
+let malformed = kind (Decode.decodeString Decode.bool "not json")
+"#,
+        &[("malformed", "JSONDecodeError")],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_nullable() {
+    // `nullable` gives the None side on JSON null, the Some side on a value.
+    run_and_check(
+        r#"let opt r =
+  match r:
+    case Ok o:
+      match o:
+        case Some x: f"some {x}"
+        case None: "none"
+    case Error e: e.errorKind
+let onNull = opt (Decode.decodeString (Decode.nullable Decode.int) "null")
+let onValue = opt (Decode.decodeString (Decode.nullable Decode.int) "5")
+"#,
+        &[("onNull", "none"), ("onValue", "some 5")],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_oneof_first_match_and_all_fail() {
+    // `oneOf` takes the first alternative that does not raise (ordering matters), and
+    // exhausts to the interpreter's exact message when none match.
+    run_and_check(
+        r#"let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: e.errorMessage
+let tagOf = Decode.oneOf [Decode.map (fun b -> "bool") Decode.bool, Decode.map (fun n -> "int") Decode.int]
+let firstMatch = show (Decode.decodeString tagOf "true")
+let secondMatch = show (Decode.decodeString tagOf "5")
+let allFail = show (Decode.decodeString (Decode.oneOf [Decode.string, Decode.map (fun b -> "b") Decode.bool]) "5")
+"#,
+        &[
+            ("firstMatch", "ok: bool"),
+            ("secondMatch", "ok: int"),
+            ("allFail", "Decode.oneOf: no decoder matched"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_list_of_objects_via_named_decoder() {
+    // A list whose element decoder is a nested NAMED decoder over objects.
+    run_and_check(
+        r#"let idDec = Decode.field "id" Decode.int
+let show r =
+  match r:
+    case Ok xs: f"sum: {List.sum xs}"
+    case Error e: e.errorKind
+let total = show (Decode.decodeString (Decode.list idDec) """[{"id": 1}, {"id": 2}]""")
+"#,
+        &[("total", "sum: 3")],
+    );
+}
+
+#[test]
+fn e2e_decode_spec_succeed_and_fail() {
+    // `succeed` ignores the input and yields its value; `fail` raises the interpreter's
+    // ValueError with the given message.
+    run_and_check(
+        r#"let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: f"{e.errorKind}: {e.errorMessage}"
+let s = show (Decode.decodeString (Decode.succeed 42) "0")
+let failed = show (Decode.decodeString (Decode.fail "boom") "0")
+"#,
+        &[("s", "ok: 42"), ("failed", "ValueError: boom")],
+    );
+}
+
+#[test]
+fn decode_andthen_falls_back() {
+    // `andThen` chooses a decoder from an already-decoded value — dynamic, so the pass
+    // rejects it and keeps the interpreter. It still evaluates correctly.
+    let source = r#"let dec = Decode.andThen (fun n -> Decode.succeed (n + 1)) Decode.int
+let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: e.errorKind
+let out = show (Decode.decodeString dec "41")
+"#;
+    assert_decode_fallback(source);
+    run_and_check(source, &[("out", "ok: 42")]);
+}
+
+#[test]
+fn decode_parameter_decoder_falls_back() {
+    // A decoder passed as a function parameter is not statically known — fall back.
+    let source = r#"let runWith d s = Decode.decodeString d s
+let show r =
+  match r:
+    case Ok v: f"ok: {v}"
+    case Error e: e.errorKind
+let out = show (runWith Decode.int "7")
+"#;
+    assert_decode_fallback(source);
+    run_and_check(source, &[("out", "ok: 7")]);
+}
+
+#[test]
+fn decode_shadowed_free_var_falls_back() {
+    // A named decoder's free variable (`bump`, a top-level helper used inside its map
+    // lambda) resolves at top level in the interpreter. A same-named local at the call
+    // site would capture it after inlining, so the pass refuses to specialize. The
+    // interpreter still resolves `bump` to the top-level fn (105), independent of the
+    // function-local `bump = 0` at the call site. (The shadowing local is kept inside a
+    // function so Python function scope isolates it; a top-level let-block local instead
+    // leaks to module scope — see the suspected-bug note in the report.)
+    let source = r#"let bump n = n + 100
+let dec = Decode.map (fun x -> bump x) Decode.int
+let run u =
+  let bump = 0
+  let r = Decode.decodeString dec "5"
+  match r:
+    case Ok v: f"ok: {v} ({bump})"
+    case Error e: e.errorKind
+let useIt = run 0
+"#;
+    assert_decode_fallback(source);
+    run_and_check(source, &[("useIt", "ok: 105 (0)")]);
 }
 
 // ---------- interop cookbook examples (regression guard on the showcase) ----------

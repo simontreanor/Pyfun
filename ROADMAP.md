@@ -22,22 +22,13 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs behind an
   `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain **non-goals**
   (below).
-- **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive) — assessed 2026-07-13:
-  **worth keeping (not a non-goal), gated on a decode-dominated workload.** Unlike the measured-out
-  lowering tiers (non-goals, below), this deforests a per-record *interpreter* — `Decode.decodeString`
-  builds a runtime decoder value and walks it over `json.loads` output — so the payoff on its target class
-  is potentially multi-x, not single-digit %. When the decoder is a syntactically-known composition of the
-  simple combinators (`field`/`string`/`int`/`list`/`map2–4`/`oneOf`/`succeed`), compile it to **direct
-  dict/list access with inline error handling** (`Decode.field "x" Decode.string` → a guarded `d["x"]`,
-  `map3 f a b c` → `f(…)`); fall back to the interpreter for dynamic shapes (`andThen`, recursion, a
-  decoder passed as a value). Must be **byte-identical** to the interpreter's `Result` (same `Error` on
-  wrong-type/missing-field) — differential-gated like the fold pass. **Demand gate:** measured out for
-  network-rail (the 2026-07-10 wall-clock ablation put the entire `Decode` path at ~1.3s / ~10% of a ~14s
-  run — the bulk is gzip+read and a substring prefilter the native helper pays too — so ≤0.8s available);
-  pick it up only for bulk JSON→ADT workloads where decoding dominates *and* staying pure matters — a
-  genuinely hot decode loop can always drop to an `extern`. `DESIGN.md` §5.2/§6.
-- **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
-  could default to `uv`.
+- **Larger prelude / package manager** — added on demand: prelude functions when a real program misses
+  one; the package/façade story (publish typed extern façades once, `import` many) is a whole axis that
+  waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
+  non-goal, below — not part of this bucket.) (Decode specialization shipped 2026-07-13 — `DESIGN.md`
+  §5.3: statically-known decoders deforest to direct dict/list access, byte-identical `Result`s, 2.8x
+  measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
+  interpreter.)
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
