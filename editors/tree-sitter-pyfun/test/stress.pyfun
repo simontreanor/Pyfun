@@ -1,0 +1,133 @@
+# Grammar stress file: constructs the examples corpus does not exercise.
+# Must (a) pass `pyfun check` and (b) tree-sitter parse with zero errors.
+
+## A doc comment at column 0.
+extern type Datetime
+extern import datetime as dt
+extern pure mkDate : int -> int -> int -> Datetime = dt.datetime
+extern slurp : string ->{io} string = builtins.open
+extern pure applyIt : (a ->{e} b) -> a ->{e} b = apply
+
+# --- literals ---
+let hexy = 0xDEAD_BEEF
+let octy = 0o17
+let biny = 0b1010_1010
+let sci = 6.674e-11
+let seppy = 1_000_000
+let expo = 1e6
+
+measure s
+let dimless = 1<1>
+let hz = 2<1/s>
+
+let raw = r"C:\temp\x"
+let trip = """line1
+"quoted" line2"""
+let ftrip = f"""x = {1 + 1}"""
+let fdbg = f"{raw=}"
+let esc = "tab\there \u{1F600}\n"
+let braces = f"{{literal}} {1 + 2}"
+
+# --- operators, sections, composition ---
+let inRange x = 0 <= x < 10
+let prod ns = List.fold (*) 1 ns
+let backpipe = String.len <| "abc"
+let composed = (fun n -> n + 1) >> (fun n -> n * 2)
+let nn = not (1 == 2)
+let poly x = -x ** 2
+let safeDiv = try (1 // 0)
+
+let ok =
+  1 < 2
+  and 2 < 3
+
+let piped =
+  [1, 2, 3]
+  |> List.map (fun x -> x * 2)
+  |> List.fold (+) 0
+
+# --- blocks, mutation, lambda block bodies ---
+let counter =
+  let mut n = 0
+  n <- n + 1
+  n
+
+let mkAdder n = fun m ->
+  let t = n + m
+  t
+
+let grade x =
+  if x >= 90 then "A"
+  elif x >= 80 then "B"
+  else "C"
+
+# --- ADTs: indented variants, records, updates, patterns ---
+type Signal =
+  | Walk
+  | Wait
+  | Stop
+
+type Pt = { x: int, y: int }
+type Seg = { first: Pt, last: Pt }
+
+let s0 = Seg { first = Pt { x = 0, y = 0 }, last = Pt { x = 1, y = 1 } }
+let s1 = { s0 with first.x = 99 }
+
+let originish p =
+  match p:
+    case Pt { x = 0, y }: y
+    case Pt { x }: x
+
+let classify xs =
+  match xs:
+    case []: "empty"
+    case [x]: f"one {x}"
+    case [hd, *mid, tl]: f"{hd}..{tl} spread {List.len mid}"
+
+let smallness n =
+  match n:
+    case -1: "neg"
+    case 0 | 1 as tiny: f"small {tiny}"
+    case _: "big"
+
+# --- active patterns ---
+let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd
+let parity n =
+  match n:
+    case Even: "even"
+    case Odd: "odd"
+
+let (|DivisibleBy|_|) d n = if n % d == 0 then Some n else None
+let fizzy n =
+  match n:
+    case DivisibleBy 15 k: f"fizzbuzz {k}"
+    case _: "plain"
+
+# --- modules & computation expressions ---
+module Geom =
+  let square x = x * x
+  let area w h = w * h
+
+let sq9 = Geom.square 3
+
+module Maybe =
+  let return_ x = Some x
+  let bind m f = match m: case Some v: f v case None: None
+
+let maybeSum a b =
+  Maybe { let! x = a
+          let! y = b
+          return x + y }
+
+let firstEvens =
+  seq { yield 0
+        yield! (Seq.ofList [2, 4]) }
+
+let chained =
+  result { let! v = Ok 1
+           let w = v + 1
+           return w }
+
+print (parity 4)
+print (fizzy 30)
+print (grade 85)

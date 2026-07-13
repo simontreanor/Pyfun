@@ -1,0 +1,5 @@
+# Typed holes block compilation by design, so this file is parse-only
+# (not `pyfun check`-validated, unlike stress.pyfun).
+let answer = ? + 1
+let named = ?whatGoesHere
+let inCall = List.map ?f [1, 2, 3]

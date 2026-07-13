@@ -74,6 +74,22 @@ vim.api.nvim_create_autocmd('FileType', {
 That's it — open a `.pyfun` file and hover (`K`), go-to-definition (`gd` / `C-]`),
 rename (`grn`), and diagnostics all work.
 
+**Optional: Tree-sitter highlighting** — the bundled regex syntax is serviceable, but
+the [Tree-sitter grammar](tree-sitter-pyfun/) is precise (it understands the offside
+rule). With nvim-treesitter installed, register the parser and `:TSInstall pyfun`;
+the highlight query is already in `editors/nvim/queries/pyfun/`:
+
+```lua
+require('nvim-treesitter.parsers').get_parser_configs().pyfun = {
+  install_info = {
+    url = 'https://github.com/simontreanor/Pyfun',
+    files = { 'src/parser.c', 'src/scanner.c' },
+    location = 'editors/tree-sitter-pyfun',
+  },
+  filetype = 'pyfun',
+}
+```
+
 ---
 
 ## Helix
@@ -94,9 +110,20 @@ indent = { tab-width = 4, unit = "    " }
 language-servers = ["pyfun"]
 ```
 
-All LSP features work (diagnostics, hover, goto, rename, completion). Helix highlights
-via Tree-sitter, and Pyfun doesn't ship a Tree-sitter grammar yet — so you get a plain
-color scheme until one lands (it's on the roadmap).
+All LSP features work (diagnostics, hover, goto, rename, completion). For syntax
+highlighting, add the [Tree-sitter grammar](tree-sitter-pyfun/) and build it:
+
+```toml
+[[grammar]]
+name = "pyfun"
+source = { git = "https://github.com/simontreanor/Pyfun", rev = "main", subpath = "editors/tree-sitter-pyfun" }
+```
+
+```bash
+hx --grammar fetch && hx --grammar build
+mkdir -p ~/.config/helix/runtime/queries/pyfun
+cp editors/tree-sitter-pyfun/queries/highlights.scm ~/.config/helix/runtime/queries/pyfun/
+```
 
 ---
 
