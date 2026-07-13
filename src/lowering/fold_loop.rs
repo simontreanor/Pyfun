@@ -1072,8 +1072,9 @@ fn ce_item_value(it: &CeItem) -> &Expr {
 
 /// P8: collect the names bound in this expression's own (Python function) frame —
 /// `let` bindings, `match` binders, `as`-patterns — **without** descending into
-/// nested functions/CEs (their bindings are a separate scope).
-fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
+/// nested functions/CEs (their bindings are a separate scope). Also used by
+/// `lower_module`'s top-level shadow check (`top_binding_needs_frame`).
+pub(super) fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
     match &e.kind {
         ExprKind::Block { stmts } => {
             for s in stmts {

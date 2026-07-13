@@ -3257,7 +3257,10 @@ fn assert_decode_specialized(source: &str) -> String {
         !py.contains("_pf_dec_decode_string"),
         "expected specialization (no interpreter helper), got:\n{py}"
     );
-    assert!(py.contains("json.loads"), "expected direct json.loads:\n{py}");
+    assert!(
+        py.contains("json.loads"),
+        "expected direct json.loads:\n{py}"
+    );
     py
 }
 
@@ -3279,7 +3282,10 @@ fn decode_spec_fires_on_inline_field() {
         r#"let r = Decode.decodeString (Decode.field "name" Decode.string) """{"name": "ada"}"""
 "#,
     );
-    assert!(py.contains("isinstance"), "expected an isinstance guard:\n{py}");
+    assert!(
+        py.contains("isinstance"),
+        "expected an isinstance guard:\n{py}"
+    );
 }
 
 #[test]
@@ -3294,7 +3300,10 @@ let user =
 let r = Decode.decodeString user """{"name": "ada", "age": 36}"""
 "#,
     );
-    assert!(py.contains("isinstance"), "expected an isinstance guard:\n{py}");
+    assert!(
+        py.contains("isinstance"),
+        "expected an isinstance guard:\n{py}"
+    );
 }
 
 #[test]
@@ -3638,6 +3647,40 @@ fn run_python(python: &str, program: &str) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("python stdout is utf-8")
+}
+
+// ---------- top-level block shadowing (module scope has no frame) ----------
+
+#[test]
+fn top_level_block_shadow_does_not_clobber_a_definition() {
+    // A block-local `let` inside a *top-level* binding used to emit a
+    // module-level assignment, REBINDING a same-named top-level def and
+    // corrupting every closure over it. The binding's evaluation now wraps in
+    // a fresh nullary function when (and only when) a block binder collides
+    // with a module-level name, so Python function scope isolates it.
+    let src = "let bump n = n + 100\n\
+               let useBump x = bump x\n\
+               let useIt =\n  let bump = 0\n  useBump 5\n\
+               let after = useBump 7";
+    run_and_check(src, &[("useIt", "105"), ("after", "107")]);
+}
+
+#[test]
+fn top_level_match_binder_shadow_does_not_clobber() {
+    // Match-arm binders are frame binders too — same hazard, same wrap.
+    let src = "let bump n = n + 100\n\
+               let useIt =\n  match Some 0:\n    case Some bump: bump\n    case None: 1\n\
+               let after = bump 7";
+    run_and_check(src, &[("useIt", "0"), ("after", "107")]);
+}
+
+#[test]
+fn top_level_block_without_collision_stays_unwrapped() {
+    // No collision → the plain module-scope lowering is unchanged (no wrapper
+    // function call bound to the name).
+    let py = pyfun::compile("let a =\n  let t = 1\n  t + 1").unwrap();
+    assert!(!py.contains("= _pf_fn"), "{py}");
+    assert!(py.contains("t = 1"), "{py}");
 }
 
 // ---------- Tier-1 in-place linear fold (DESIGN.md §5) ----------
