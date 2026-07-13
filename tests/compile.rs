@@ -176,6 +176,69 @@ fn extern_on_class_method_imports_only_the_module() {
 }
 
 #[test]
+fn extern_split_marker_imports_only_the_marked_module() {
+    // `datetime::datetime.now` marks the module boundary explicitly: import the
+    // left of `::` as written (`import datetime`), reference the full dotted path.
+    // Without the marker the lowercase-prefix heuristic would wrongly emit
+    // `import datetime.datetime`.
+    let py = pyfun::compile(
+        "extern now: unit -> a = datetime::datetime.now\nlet t = now ()",
+    )
+    .unwrap();
+    assert!(py.contains("import datetime\n") || py.contains("import datetime\r"), "{py}");
+    assert!(!py.contains("import datetime.datetime"), "{py}");
+    assert!(py.contains("t = datetime.datetime.now()"), "{py}");
+}
+
+#[test]
+fn extern_split_marker_fully_applied_calls_the_dotted_path() {
+    // `sys::stdout.write` imports `sys` and calls through the full path.
+    let py = pyfun::compile(
+        "extern write: string -> int = sys::stdout.write\nlet r = write \"hi\"",
+    )
+    .unwrap();
+    assert!(py.contains("import sys\n") || py.contains("import sys\r"), "{py}");
+    assert!(py.contains("r = sys.stdout.write(\"hi\")"), "{py}");
+}
+
+#[test]
+fn bare_reference_to_a_split_extern_still_records_the_import() {
+    // A bare (unapplied) reference to a `::`-split extern must still record the
+    // marked module — the reference lowers to the dotted path, which needs `sys`.
+    let py = pyfun::compile(
+        "extern write: string -> int = sys::stdout.write\nlet w = write",
+    )
+    .unwrap();
+    assert!(py.contains("import sys\n") || py.contains("import sys\r"), "{py}");
+    assert!(py.contains("w = sys.stdout.write"), "{py}");
+}
+
+#[test]
+fn split_marker_composes_with_pinned_kwargs() {
+    // The `::` split and pinned kwargs coexist: import the marked module and append
+    // the kwargs to the emitted call as usual.
+    let py = pyfun::compile(
+        "extern conn: string -> a = sqlite3::dbapi2.connect(timeout=5)\nlet c = conn \":memory:\"",
+    )
+    .unwrap();
+    assert!(py.contains("import sqlite3\n") || py.contains("import sqlite3\r"), "{py}");
+    assert!(!py.contains("import sqlite3.dbapi2"), "{py}");
+    assert!(py.contains("c = sqlite3.dbapi2.connect(\":memory:\", timeout=5)"), "{py}");
+}
+
+#[test]
+fn import_heuristic_is_unchanged_without_the_split_marker() {
+    // With no `::`, the lowercase-prefix heuristic is untouched: a submodule target
+    // still imports the submodule (`urllib.request`), not just the top package.
+    let py = pyfun::compile(
+        "extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"",
+    )
+    .unwrap();
+    assert!(py.contains("import urllib.request"), "{py}");
+    assert!(py.contains("r = urllib.request.urlopen(\"x\")"), "{py}");
+}
+
+#[test]
 fn extern_kwargs_are_appended_to_the_call() {
     // A plain extern with pinned kwargs appends them to every call.
     let py = pyfun::compile(
@@ -2573,6 +2636,17 @@ fn e2e_extern_calls_python() {
          let code = ord \"A\"\n\
          let root = tan 0.0",
         &[("label", "42"), ("code", "65"), ("root", "0.0")],
+    );
+}
+
+#[test]
+fn e2e_extern_split_marker_calls_python() {
+    // The `::` split reaches a live call: `datetime.datetime.fromisoformat` parses a
+    // fixed ISO string to a deterministic `datetime` whose `str(...)` is stable.
+    run_and_check(
+        "extern parse: string -> a = datetime::datetime.fromisoformat\n\
+         let d = parse \"2020-01-02\"",
+        &[("d", "2020-01-02 00:00:00")],
     );
 }
 
