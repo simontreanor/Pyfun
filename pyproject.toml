@@ -20,8 +20,13 @@ classifiers = [
 ]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+jupyter = ["ipykernel>=6.29"]
+
 [project.urls]
 Repository = "https://github.com/simontreanor/Pyfun"
 
 [tool.maturin]
 bindings = "bin"
+python-source = "python"
+module-name = "pyfun_kernel"

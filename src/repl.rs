@@ -408,7 +408,9 @@ impl Session {
 }
 
 /// Whether the trailing expression of the analyzed module has type `unit`.
-fn expression_is_unit(analysis: &pyfun::Analysis) -> bool {
+/// (Shared with the Jupyter kernel engine, `src/kernel.rs`, as are the chunk
+/// helpers below — the engine is this session logic minus the worker.)
+pub(crate) fn expression_is_unit(analysis: &pyfun::Analysis) -> bool {
     let Some(module) = &analysis.module else {
         return false;
     };
@@ -438,7 +440,7 @@ fn render_errors(source: &str, errors: &[pyfun::types::TypeError]) {
 /// (`@dataclass(...)`) attach to the *following* `class`/`def` chunk. Chunks are
 /// stored with trailing whitespace trimmed (so the same statement compares equal
 /// whether or not later statements follow it) and no trailing newline.
-fn chunk_python(src: &str) -> Vec<String> {
+pub(crate) fn chunk_python(src: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
     // True while `current` holds only decorator lines — the next column-0 line
@@ -470,7 +472,7 @@ fn push_chunk(chunks: &mut Vec<String>, current: &mut String) {
 
 /// The not-yet-executed chunks of a program, joined into one exec-able blob (in
 /// program order). Empty when the worker has already run everything.
-fn blob_of_new(chunks: &[String], executed: &HashSet<String>) -> String {
+pub(crate) fn blob_of_new(chunks: &[String], executed: &HashSet<String>) -> String {
     let new: Vec<&str> = chunks
         .iter()
         .filter(|c| !executed.contains(*c))
@@ -487,7 +489,7 @@ fn blob_of_new(chunks: &[String], executed: &HashSet<String>) -> String {
 /// (decorated) class definitions — which an *expression* entry may permanently
 /// contribute to the namespace. Everything else an expression emits is its own
 /// one-shot statements, which must re-run if the expression is re-entered.
-fn is_infrastructure(chunk: &str) -> bool {
+pub(crate) fn is_infrastructure(chunk: &str) -> bool {
     ["import ", "from ", "def _pf_", "@", "class "]
         .iter()
         .any(|prefix| chunk.starts_with(prefix))
