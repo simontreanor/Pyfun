@@ -201,6 +201,10 @@ struct Lowerer {
     /// `extern` name → its dotted Python target path (e.g. `["math", "sqrt"]`).
     /// A reference to one lowers to the target rather than the Pyfun name.
     extern_targets: std::collections::HashMap<String, Vec<String>>,
+    /// `extern` name → explicit `::` module split (segment count), for targets
+    /// that override the lowercase-prefix import heuristic (`DESIGN.md` §6).
+    /// Only names whose declaration carried a `::` appear here.
+    extern_import_splits: std::collections::HashMap<String, usize>,
     /// Instance-access externs (`= .read()` / `= .text`) → whether the target is a
     /// method call or a bare property read on the first argument (the receiver).
     receiver_externs: std::collections::HashMap<String, Receiver>,
@@ -309,6 +313,7 @@ impl Lowerer {
         field_to_record.insert("errorKind".to_string(), "Exception".to_string());
         field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
+        let mut extern_import_splits = std::collections::HashMap::new();
         let mut receiver_externs = std::collections::HashMap::new();
         let mut nullary_externs = HashSet::new();
         let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>> =
@@ -323,6 +328,9 @@ impl Lowerer {
                     // prelude: it is the number of leading arrows in the type.
                     arities.insert(decl.name.clone(), arrow_arity(&decl.ty));
                     extern_targets.insert(decl.name.clone(), decl.target.clone());
+                    if let Some(split) = decl.import_split {
+                        extern_import_splits.insert(decl.name.clone(), split);
+                    }
                     if let Some(kind) = decl.receiver {
                         receiver_externs.insert(decl.name.clone(), kind);
                     }
@@ -466,6 +474,7 @@ impl Lowerer {
             record_fields,
             field_to_record,
             extern_targets,
+            extern_import_splits,
             receiver_externs,
             nullary_externs,
             extern_kwargs,
@@ -577,12 +586,12 @@ impl Lowerer {
                         } else if is_unit_domain(&decl.ty) {
                             // A nullary extern binds to a lambda that ignores its
                             // unit argument, so a cross-module `Mod.now ()` works.
-                            if let Some(module) = extern_import(&decl.target) {
+                            if let Some(module) = extern_import(&decl.target, decl.import_split) {
                                 self.needed_imports.insert(module);
                             }
                             nullary_lambda(&decl.target, kwargs)
                         } else {
-                            if let Some(module) = extern_import(&decl.target) {
+                            if let Some(module) = extern_import(&decl.target, decl.import_split) {
                                 self.needed_imports.insert(module);
                             }
                             // A plain extern with pinned kwargs binds to a
@@ -1432,7 +1441,9 @@ impl Lowerer {
             && self.nullary_externs.contains(name)
         {
             let target = self.extern_targets[name].clone();
-            if let Some(module) = extern_import(&target) {
+            if let Some(module) =
+                extern_import(&target, self.extern_import_splits.get(name).copied())
+            {
                 self.needed_imports.insert(module);
             }
             let mut stmts = Vec::new();
@@ -1475,7 +1486,9 @@ impl Lowerer {
         {
             let target = self.extern_targets[name].clone();
             let arity = self.arities.get(name).copied();
-            if let Some(module) = extern_import(&target) {
+            if let Some(module) =
+                extern_import(&target, self.extern_import_splits.get(name).copied())
+            {
                 self.needed_imports.insert(module);
             }
             let mut stmts = Vec::new();
@@ -1638,7 +1651,9 @@ impl Lowerer {
             // references are handled directly in `lower_application`.
             if self.nullary_externs.contains(name) {
                 let target = self.extern_targets[name].clone();
-                if let Some(module) = extern_import(&target) {
+                if let Some(module) =
+                extern_import(&target, self.extern_import_splits.get(name).copied())
+            {
                     self.needed_imports.insert(module);
                 }
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
@@ -1650,7 +1665,9 @@ impl Lowerer {
             // application. Applied references are handled in `lower_application`.
             if let Some(kwargs) = self.extern_kwargs.get(name).cloned() {
                 let target = self.extern_targets[name].clone();
-                if let Some(module) = extern_import(&target) {
+                if let Some(module) =
+                extern_import(&target, self.extern_import_splits.get(name).copied())
+            {
                     self.needed_imports.insert(module);
                 }
                 let arity = self.arities.get(name).copied();
@@ -1659,7 +1676,9 @@ impl Lowerer {
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
             if let Some(target) = self.extern_targets.get(name).cloned() {
-                if let Some(module) = extern_import(&target) {
+                if let Some(module) =
+                extern_import(&target, self.extern_import_splits.get(name).copied())
+            {
                     self.needed_imports.insert(module);
                 }
                 return dotted_path(&target);
@@ -2928,13 +2947,19 @@ fn nullary_lambda(target: &[String], kwargs: Vec<(String, PyExpr)>) -> PyExpr {
 /// leading run of lowercase-initial segments** among everything before the final
 /// referenced name — but always at least the top-level package. This imports
 /// `urllib.request` (submodule) yet stops at `sqlite3` before the `Connection`
-/// class. The lone assumption it can't see through is a *lowercase attribute* that
-/// is a value rather than a submodule (`sys.stdout.write`); such a target must be
-/// reached through a small Python-side wrapper instead (`DESIGN.md` §6).
+/// class. The one shape it can't see through is a *lowercase attribute* that is a
+/// value or class rather than a submodule (`sys.stdout.write`,
+/// `datetime.datetime.now`) — for those, an explicit `::` in the target
+/// (`datetime::datetime.now`) supplies `split`, and the marked prefix is imported
+/// **as written** (trusted like the rest of the boundary contract), bypassing the
+/// heuristic and the builtin-type check (`DESIGN.md` §6).
 ///
 /// A target rooted at a builtin *type* (`bytes.decode`, `int.from_bytes`) imports
 /// nothing — those names are always in scope.
-fn extern_import(target: &[String]) -> Option<String> {
+fn extern_import(target: &[String], split: Option<usize>) -> Option<String> {
+    if let Some(n) = split {
+        return Some(target[..n].join("."));
+    }
     if target.len() < 2 || PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
         return None;
     }

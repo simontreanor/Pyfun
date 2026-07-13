@@ -128,6 +128,14 @@ pub struct ExternDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub target: Vec<String>,
+    /// Explicit module/attribute split from a `::` in the target (`DESIGN.md` §6):
+    /// `= datetime::datetime.now` marks the first `import_split` segments as the
+    /// module to import (`import datetime`), overriding the lowercase-prefix
+    /// heuristic that would otherwise mis-read a lowercase class (or value
+    /// attribute like `sys.stdout`) as a submodule. `None` = use the heuristic.
+    /// Purely an import concern: the emitted *reference* is the full dotted path
+    /// either way. Always `1 <= n < target.len()`; never set on a receiver form.
+    pub import_split: Option<usize>,
     /// Instance-access form for a target beginning with `.` (`DESIGN.md` §6). The
     /// `target` is a member path applied to the first argument (the receiver);
     /// `None` is an ordinary module-qualified target. Sidesteps naming (and

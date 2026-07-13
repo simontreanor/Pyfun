@@ -44,14 +44,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   hidden AP/ADT classes, deterministic naming all currently assume whole-program lowering). Cheap interim
   mitigation (S) if the wart bites first: warn when a remembered definition's inferred effect is
   `io`/`async` ("this definition will re-run on each later entry").
-- **Explicit module/attribute split on extern targets** (S–M) — the dotted-target import heuristic
-  (maximal lowercase prefix = module path, `DESIGN.md` §6) has now bitten three times: `sys.stdout.write`,
-  `urllib.response.addinfourl` (both reachable via instance-access externs), and — writing the `datetime`
-  cookbook example — **classmethods on lowercase classes** (`datetime.datetime.now` / `.fromisoformat` /
-  `.strptime` mis-import as `import datetime.datetime`), which have *no* receiver and so no workaround
-  short of a Python-side wrapper. Fix: an optional explicit marker on the target telling the emitter where
-  the module path ends (syntax open — e.g. `= datetime::datetime.now` or a pinned-import clause); the
-  heuristic stays the default. Purely a lowering/emitter concern, no type-system impact.
 - **Fold-pass coverage extensions ("Tier B")** (S–M per slice) — extend the landed in-place accumulation
   pass (`src/lowering/fold_loop.rs`, mechanics + soundness obligations in `DESIGN.md` §5.1) to fold shapes
   that today reject and fall back to `_pf_fold`: **local named folders** (network-rail's `dedupLegs` inner
