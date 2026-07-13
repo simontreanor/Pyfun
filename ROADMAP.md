@@ -20,16 +20,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   both have body-duplication or nested-`match` workarounds. Guards + lazy recognizer eval already shipped
   (`lower_ap_match_seq`). Everything deeper — nesting, nested destructuring, export — is a **non-goal**
   (below). `DESIGN.md` §7.2.1.
-- **Effect variables in `extern` arrows** (S–M) — the HM-native answer to the one real gap that exact
-  declared effects leave: a declared callback arrow must pick one closed effect level, so
-  `extern each : (a -> unit) -> List a -> unit` rejects a printing callback (bare `->` = pure) while
-  `->{io}` would reject a pure one — **no annotation accepts both**. Fix: let a lowercase name in `->{…}`
-  be an effect *variable* (`extern each : (a ->{e} unit) -> List a ->{io, e} unit`), generalized in the
-  extern's scheme — exactly how the stdlib's own effect-polymorphic `map`/`fold` schemes already work
-  (`Scheme::eff_vars`, most-general binding in `unify_eff`), so it's syntax + plumbing, no new theory.
-  Deferred on zero demand: no extern in the repo takes a function argument yet. Scoped to externs only —
-  effect vars in `type` fields would need effect-*parameterized* types, a whole axis (see the subsumption
-  non-goal below). `DESIGN.md` §4.
 - **Persistent-process REPL** (M–L) — assessed 2026-07-13: **worth doing, gated on real REPL users**
   (the launch / classroom push), not a non-goal — it fights no design decision, and every peer REPL a
   student arrives from (`python`, ghci, fsi) has persistent state, putting this in the same false-friend
@@ -101,7 +91,8 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   *directional* (safe only at contravariant positions), so it means threading polarity through a
   symmetric HM unifier — an invasive, permanent complication — and a variance slip lets an effect past
   `let pure`, the flagship guarantee. Where a declared arrow genuinely must accept any effect, the
-  HM-native fix is an effect *variable* (deferred, above), not subtyping. `DESIGN.md` §4.
+  HM-native fix is an effect *variable* in the extern signature — **implemented** (`->{e}`,
+  extern-only, 2026-07-13), not subtyping. `DESIGN.md` §4.
 - **Active-pattern nesting & export** — three cutoffs keeping the feature honest to its lowering (an AP is
   a *function call*, not a structural test): **(1) nesting an AP under structural patterns** — under
   constructors (`case Some (Positive p):`), tuple scrutinees (`case (Positive p, Positive q):`), or

@@ -71,6 +71,8 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   a compile error. Override the boundary default with `->{async}` for async libraries. For a
   call that is genuinely deterministic and effect-free, `extern pure` asserts it — and then
   `let pure` can *prove* whole pipelines over the boundary effect-free (`datetime.pyfun`).
+  A callback-taking extern uses an effect *variable* so both pure and effectful callbacks
+  flow: `extern each : (a ->{e} unit) -> List a ->{io, e} unit` (`DESIGN.md` §4).
 - **Classes as constructors, operators as functions.** A class target is callable —
   `extern pure date : int -> int -> int -> Datetime = datetime.datetime` — so no factory
   wrapper is needed. And where a library defines its API on `+`/`-` (as `datetime` does),
