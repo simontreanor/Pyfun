@@ -407,6 +407,10 @@ Install **Pyfun** from the VS Code Marketplace (or search "Pyfun" in the Extensi
 Building the extension from source is covered in
 [`editors/vscode/DEVELOPMENT.md`](https://github.com/simontreanor/Pyfun/tree/main/editors/vscode/DEVELOPMENT.md).
 
+Not a VS Code user? Because the server is plain LSP over stdio, any editor with an LSP client
+works — copy-paste configs for **Neovim**, **Helix**, and **Emacs** are in
+[`editors/README.md`](https://github.com/simontreanor/Pyfun/tree/main/editors/README.md).
+
 ---
 
 ## How it works
