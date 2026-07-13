@@ -39,6 +39,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
+| [`datetime.pyfun`](./datetime.pyfun) | `datetime` (stdlib) | ✅ | a **pure** FFI: `extern pure` + `let pure` prove a date pipeline effect-free; class target as constructor; `operator.add`/`sub` as extern targets; `try` on an impossible date |
 
 ## Reusable patterns (all verified against the current compiler)
 
@@ -67,7 +68,14 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   every Python programmer has imported.
 - **Effects for free.** A plain `extern` is `io`; the checker infers and propagates it, so
   any function touching the boundary is `io` with no annotation, and `let pure` over it is
-  a compile error. Override the boundary default with `->{async}` for async libraries.
+  a compile error. Override the boundary default with `->{async}` for async libraries. For a
+  call that is genuinely deterministic and effect-free, `extern pure` asserts it — and then
+  `let pure` can *prove* whole pipelines over the boundary effect-free (`datetime.pyfun`).
+- **Classes as constructors, operators as functions.** A class target is callable —
+  `extern pure date : int -> int -> int -> Datetime = datetime.datetime` — so no factory
+  wrapper is needed. And where a library defines its API on `+`/`-` (as `datetime` does),
+  Python's `operator` module exposes every operator as a plain function: `= operator.add`
+  is a ready-made extern target (`datetime.pyfun`).
 
 ## Honest limits (the frontier these examples expose)
 
@@ -84,6 +92,12 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   would pull in the deferred package manager, so it is kept out of scope here.
 - **Anonymous record types** aren't accepted in an extern signature, so an ad-hoc request
   or response body needs a named `type`. (Tracked separately.)
+- **Classmethods on lowercase classes** can't be dotted targets: the import heuristic reads
+  the maximal lowercase prefix as the module path, so `datetime.datetime.now` mis-imports
+  (`import datetime.datetime`). The class itself works (two segments — the constructor
+  pattern above), and instance members work (`= .isoformat()`), but `now` / `fromisoformat`
+  / `strptime` need a Python-side wrapper today. Tracked in `ROADMAP.md` (an explicit
+  module/attribute split marker on extern targets).
 
 The extern-FFI *reach* rough edges these examples first surfaced have all been closed — submodule
 imports (`urllib.parse.quote` → `import urllib.parse`), instance access (`= .method()` calls and
