@@ -1896,9 +1896,91 @@ fn annotation_on_an_argument_arrow_keeps_the_boundary_io_default() {
 
 #[test]
 fn rejects_an_unknown_effect_label() {
+    // In an `extern` a lowercase non-label name is an effect *variable*
+    // (`DESIGN.md` §4), so the unknown-label error now fires only where
+    // variables are not allowed: a `type` declaration's arrows.
     assert_error_contains(
-        "extern spook: string ->{spooky} unit = ghost.boo",
+        "type Spook = S (string ->{spooky} unit)",
         "unknown effect label `spooky`",
+    );
+}
+
+// ---------- extern effect variables (`->{e}`, DESIGN §4) ----------
+
+#[test]
+fn effect_var_extern_accepts_both_pure_and_io_callbacks() {
+    // The gap this closes: a declared callback arrow `->{e}` is effect-polymorphic,
+    // so the *same* extern takes a pure callback (`e := pure`) and an effectful one
+    // (`e := io`). Exact `->{io}` used to reject the pure case, `->` the io case.
+    let each = "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each\n";
+    assert!(pyfun::check(&format!("{each}let r = each (fun x -> ()) [1, 2, 3]")).is_ok());
+    assert!(pyfun::check(&format!("{each}let r = each (fun x -> print x) [1, 2, 3]")).is_ok());
+}
+
+#[test]
+fn pure_pipeline_through_an_effect_var_extern_is_pure() {
+    // With a pure callback the whole pipeline is provably pure: `e` on the callback
+    // and on the innermost arrow are the *same* var, so both resolve to pure and the
+    // `let pure` assertion holds.
+    let src = "extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app\n\
+               let pure five = app (fun x -> x + 2) 3";
+    assert!(pyfun::check(src).is_ok(), "{:?}", pyfun::check(src).err());
+}
+
+#[test]
+fn io_callback_through_an_effect_var_extern_defeats_pure() {
+    // The linked-var flip side: an io callback forces `e := io`, so the innermost
+    // `->{e}` performs io and the `let pure` binding is rejected.
+    let src = "extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app\n\
+               let pure bad = app (fun x -> print x) 3";
+    assert_error_contains(src, "declared `pure` but performs `io`");
+}
+
+#[test]
+fn label_plus_effect_var_innermost_keeps_io_even_for_a_pure_callback() {
+    // On an `->{io, e}` innermost the `io` label is unconditional: even a pure
+    // callback (`e := pure`) leaves io, so a `let pure` over `each` still fails.
+    let src = "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each\n\
+               let pure bad = each (fun x -> ()) [1]";
+    assert_error_contains(src, "declared `pure` but performs `io`");
+}
+
+#[test]
+fn labels_and_effect_vars_mix_in_an_extern_signature() {
+    // `->{io, e}` and `->{async, e}` are both legal: a known label alongside a var.
+    assert!(
+        pyfun::check(
+            "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each\n\
+             let r = each (fun x -> ()) [1, 2]"
+        )
+        .is_ok()
+    );
+    assert!(
+        pyfun::check(
+            "extern gather: (a ->{e} b) -> List a ->{async, e} List b = mymod.gather\n\
+             let r = gather (fun x -> x) [1, 2]"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn uppercase_name_in_an_extern_arrow_is_not_an_effect_var() {
+    // Effect variables are lowercase (like type vars); an uppercase non-label name
+    // is still an unknown label, even inside an `extern`.
+    assert_error_contains(
+        "extern bad: (a ->{E} unit) -> unit = mymod.bad",
+        "unknown effect label `E`",
+    );
+}
+
+#[test]
+fn rejects_an_effect_var_in_a_record_field() {
+    // The privilege is extern-scoped: a `->{e}` in a record field (like an ADT
+    // variant field) has no extern scheme to generalize into, so it errors.
+    assert_error_contains(
+        "type Callbacks = { onData: string ->{e} unit }",
+        "unknown effect label `e`",
     );
 }
 

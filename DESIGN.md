@@ -124,9 +124,16 @@ extern still calls Python. Note declared effects are **exact** (no sub-effecting
 does not satisfy a declared `->{io}` parameter, because two closed effect sets unify only when equal.
 Effect subsumption (pure ≤ io) is a **non-goal** (ROADMAP): sound subsumption is directional, so it
 would thread polarity through the symmetric unifier and risk the `let pure` guarantee on a variance
-slip. Where a declared arrow must accept any effect (a boundary callback), the HM-native refinement is
-an effect *variable* in the extern signature, generalized like the stdlib's effect-polymorphic
-combinator schemes — deferred on demand (ROADMAP).
+slip. Where a declared arrow must accept any effect (a boundary callback), the HM-native answer is an
+**effect variable — implemented, extern-only**: in an `extern` signature a lowercase `->{…}` name
+that is not a known label is a variable (`extern each : (a ->{e} unit) -> List a ->{io, e} unit`),
+collected like type variables (`collect_effect_vars`), generalized in the extern's scheme
+(`Scheme::eff_vars`), and instantiated fresh per use site — exactly the stdlib's effect-polymorphic
+`map`/`fold` mechanics. A pure and a printing callback now both flow; the callback's effect rides the
+variable into the innermost `{io, e}`, so `let pure` still rejects an impure pipeline. A `->{e}` on
+the innermost arrow counts as annotated (skips the io-by-default rule, asserting "exactly the
+callback's effect"). In a `type` declaration effect variables remain an error — ADT/record fields
+would need effect-*parameterized* types, which stays out of scope.
 
 The original coarse-`IO` design intent — pure-by-default with inferred, propagating purity; effects
 tracked in the type with room to grow toward an effect row; the Python boundary inherently effectful;

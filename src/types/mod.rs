@@ -1528,7 +1528,8 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                     let mut field_tys = Vec::with_capacity(variant.fields.len());
                     let mut ok = true;
                     for field in &variant.fields {
-                        match resolve(field, &param_map, &decls.type_arity, span) {
+                        // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
+                        match resolve(field, &param_map, &decls.type_arity, span, &HashMap::new()) {
                             Ok(t) => field_tys.push(t),
                             Err(e) => {
                                 errors.push(e);
@@ -1585,7 +1586,8 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                     // (`DESIGN.md` §8.3): two records may share a field; the clash is
                     // only reported at an *ambiguous access* site, never here. (A field
                     // repeated within *one* record is still an error — the `local` set.)
-                    match resolve(&field.ty, &param_map, &decls.type_arity, span) {
+                    // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
+                    match resolve(&field.ty, &param_map, &decls.type_arity, span, &HashMap::new()) {
                         Ok(t) => resolved.push((field.name.clone(), t)),
                         Err(e) => {
                             errors.push(e);
@@ -1636,7 +1638,11 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
         }
         let mut var_map = HashMap::new();
         collect_type_vars(&decl.ty, &mut var_map);
-        match resolve(&decl.ty, &var_map, &decls.type_arity, span) {
+        // Effect variables (`->{e}`) are an extern-only privilege: collected here
+        // and generalized in the scheme below (`DESIGN.md` §4).
+        let mut eff_map = HashMap::new();
+        collect_effect_vars(&decl.ty, &mut eff_map);
+        match resolve(&decl.ty, &var_map, &decls.type_arity, span, &eff_map) {
             Ok(mut ty) => {
                 // Effectful-by-default boundary: the innermost arrow gets `io`
                 // unless the binding asserts `pure` — or the innermost arrow
@@ -1654,7 +1660,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                         uvars: vec![],
                         num_vars: vec![],
                         ord_vars: vec![],
-                        eff_vars: vec![],
+                        eff_vars: (0..eff_map.len() as u32).collect(),
                         mutable: false,
                         ty,
                     },
@@ -1697,9 +1703,46 @@ fn collect_type_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
     }
 }
 
+/// Collect the effect *variables* of a declared `extern` type — lowercase
+/// `->{…}` names that are not known labels — in order of first appearance, each
+/// mapped to a sequential id (mirroring [`collect_type_vars`]). Only `extern`
+/// signatures collect these; a `type` declaration resolves against an empty map,
+/// so an effect variable there errors (`DESIGN.md` §4). The ids land in the
+/// extern's [`Scheme::eff_vars`], instantiated fresh at every use site exactly
+/// like the stdlib's effect-polymorphic combinator schemes — this is what lets a
+/// declared callback arrow accept a pure *and* an effectful argument
+/// (`extern each : (a ->{e} unit) -> List a ->{io, e} unit`).
+fn collect_effect_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
+    match ty {
+        TypeExpr::Fun(a, b, effects) => {
+            for name in effects {
+                if EffLabel::from_name(name).is_none()
+                    && name.chars().next().is_some_and(char::is_lowercase)
+                {
+                    let next = map.len() as u32;
+                    map.entry(name.clone()).or_insert(next);
+                }
+            }
+            collect_effect_vars(a, map);
+            collect_effect_vars(b, map);
+        }
+        TypeExpr::Tuple(elems) => {
+            for e in elems {
+                collect_effect_vars(e, map);
+            }
+        }
+        TypeExpr::Con(_, _, args) => {
+            for a in args {
+                collect_effect_vars(a, map);
+            }
+        }
+    }
+}
+
 /// Whether the innermost (rightmost) arrow of a declared type carries an explicit
 /// `->{...}` effect annotation. Such an `extern` is trusted as written and skips
-/// the `io`-by-default rule (`DESIGN.md` §4/§6).
+/// the `io`-by-default rule (`DESIGN.md` §4/§6) — a lone effect *variable*
+/// (`->{e}`) counts: it asserts "exactly the callback's effect".
 fn innermost_arrow_annotated(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Fun(_, ret, effects) => {
@@ -3262,16 +3305,24 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
 }
 
 /// Resolve a surface type expression into a [`Ty`].
+///
+/// `eff_params` maps effect-*variable* names to bound ids, pre-collected by
+/// [`collect_effect_vars`] — non-empty only for an `extern` signature
+/// (`DESIGN.md` §4). A `type` declaration passes an empty map, so a lowercase
+/// non-label name in its `->{…}` stays an error there: effect variables in
+/// ADT/record fields would need effect-*parameterized* types (a non-goal).
 fn resolve(
     ty: &TypeExpr,
     params: &HashMap<String, u32>,
     type_arity: &HashMap<String, usize>,
     span: Span,
+    eff_params: &HashMap<String, u32>,
 ) -> Result<Ty, TypeError> {
     match ty {
         // A function type written in a declaration (an ADT/record field or an
         // `extern` signature) carries the effect labels of its `->{...}`
-        // annotation; a bare `->` stays pure (`DESIGN.md` §4).
+        // annotation; a bare `->` stays pure (`DESIGN.md` §4). In an `extern`,
+        // a lowercase non-label name is an effect variable (`->{e}`).
         TypeExpr::Fun(a, b, effects) => {
             let mut eff = Effect::pure();
             for name in effects {
@@ -3279,26 +3330,33 @@ fn resolve(
                     Some(label) => {
                         eff.labels.insert(label);
                     }
-                    None => {
-                        return Err(TypeError {
-                            message: format!(
-                                "unknown effect label `{name}` (known labels: `io`, `async`)"
-                            ),
-                            span,
-                        });
-                    }
+                    None => match eff_params.get(name) {
+                        Some(id) => {
+                            eff.vars.insert(*id);
+                        }
+                        None => {
+                            return Err(TypeError {
+                                message: format!(
+                                    "unknown effect label `{name}` (known labels: `io`, \
+                                     `async`; an effect variable is only allowed in an \
+                                     `extern` signature)"
+                                ),
+                                span,
+                            });
+                        }
+                    },
                 }
             }
             Ok(Ty::Fun(
-                Box::new(resolve(a, params, type_arity, span)?),
-                Box::new(resolve(b, params, type_arity, span)?),
+                Box::new(resolve(a, params, type_arity, span, eff_params)?),
+                Box::new(resolve(b, params, type_arity, span, eff_params)?),
                 eff,
             ))
         }
         TypeExpr::Tuple(elems) => {
             let resolved: Result<Vec<Ty>, TypeError> = elems
                 .iter()
-                .map(|e| resolve(e, params, type_arity, span))
+                .map(|e| resolve(e, params, type_arity, span, eff_params))
                 .collect();
             Ok(Ty::Tuple(resolved?))
         }
@@ -3328,7 +3386,7 @@ fn resolve(
                 Some(&arity) if arity == args.len() => {
                     let resolved: Result<Vec<Ty>, TypeError> = args
                         .iter()
-                        .map(|a| resolve(a, params, type_arity, span))
+                        .map(|a| resolve(a, params, type_arity, span, eff_params))
                         .collect();
                     Ok(Ty::Con(name.clone(), resolved?))
                 }

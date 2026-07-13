@@ -265,6 +265,10 @@ const PROGRAMS: &[&str] = &[
     "extern fetch: string ->{async} string = httpx.get",
     "extern send: string -> string ->{io, async} unit = hub.send",
     "extern register: (string ->{io} unit) -> unit = hub.register",
+    // Effect *variables* (`->{e}`, extern-only): a bare var and a label+var mix
+    // print back verbatim (the effect list is just names to the printer).
+    "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each",
+    "extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app",
     "type Handler = H (string ->{io} unit)",
     "type Callbacks = { onData: string ->{io, async} unit }",
     // Interpolated strings `f"..."`: literal chunks, holes with full expressions,
