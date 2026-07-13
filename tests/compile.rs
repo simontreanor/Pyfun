@@ -3103,6 +3103,81 @@ fn e2e_active_pattern_match_in_value_position() {
 }
 
 #[test]
+fn or_pattern_arm_lowers_to_an_or_of_isinstance_tests() {
+    // `case Even | Odd:` becomes a disjunction of the alternatives' tests over a
+    // *single* hoisted recognizer result (the memo collapses the shared call).
+    let py = pyfun::compile(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let f n =\n  match n:\n    case Even | Odd: \"eo\"",
+    )
+    .unwrap();
+    assert!(
+        py.contains("isinstance(_pf_t0, _Even) or isinstance(_pf_t0, _Odd)"),
+        "{py}"
+    );
+    // The recognizer is called at exactly one site (plus its def), not once per
+    // alternative.
+    assert_eq!(py.matches("_ap_Even_Odd(").count(), 2, "{py}");
+}
+
+#[test]
+fn structural_arm_lowers_to_a_one_armed_native_match() {
+    // A constructor arm beside an AP arm emits a one-armed `match`/`case` (no
+    // `case _`), so a non-match falls through to the next arm.
+    let py = pyfun::compile(
+        "let (|Answer|_|) o = o == Some 42\n\
+         let f o =\n  match o:\n    case Answer: 1\n    case Some x: x\n    case None: 0",
+    )
+    .unwrap();
+    // The AP arm still tests its hoisted recognizer result…
+    assert!(py.contains("_pf_t0 = _ap_Answer(o)"), "{py}");
+    assert!(py.contains("if _pf_t0:"), "{py}");
+    // …and each structural arm is its own one-armed match, falling through.
+    assert!(py.contains("match o:"), "{py}");
+    assert!(py.contains("case Some(x):"), "{py}");
+    assert!(py.contains("case None_():"), "{py}");
+    // No exhaustive native `match` (which would carry a `case _`): the arms fall
+    // through independently, backstopped by a `raise` at the end.
+    assert!(!py.contains("case _:"), "{py}");
+    assert!(
+        py.contains("raise RuntimeError(\"non-exhaustive match\")"),
+        "{py}"
+    );
+}
+
+#[test]
+fn structural_arm_beside_active_pattern_in_value_position() {
+    // In value position the one-armed `match` is gated by the `_done` sentinel
+    // (`if not _pf_t…:`) and assigns a temp instead of returning.
+    let py = pyfun::compile(
+        "let (|Answer|_|) o = o == Some 42\n\
+         let classify o =\n  let label =\n    match o:\n      case Answer: \"answer\"\n      case Some n: String.fromInt n\n      case None: \"none\"\n  String.concat label \"!\"",
+    )
+    .unwrap();
+    assert!(py.contains("if not _pf_t"), "{py}");
+    assert!(py.contains("match o:"), "{py}");
+    assert!(py.contains("case Some(n):"), "{py}");
+}
+
+#[test]
+fn e2e_active_and_or_and_structural_arms_mix() {
+    // One match combining an AP arm, an or-AP arm, and structural arms, with a
+    // guard: an AP arm filters first (`Answer` beats `Some x` for `Some 42`), a
+    // guarded structural arm that fails its guard falls through to a later arm,
+    // and fall-through order is respected.
+    run_and_check(
+        "let (|Answer|_|) o = o == Some 42\n\
+         let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+         let describe o =\n  match o:\n    case Some x if x > 100: \"big\"\n    case Answer: \"the answer\"\n    case Some x: (match x:\n      case Even | Odd: String.fromInt x)\n    case None: \"none\"\n\
+         let a = describe (Some 42)\n\
+         let b = describe (Some 7)\n\
+         let c = describe (Some 500)\n\
+         let d = describe None",
+        &[("a", "the answer"), ("b", "7"), ("c", "big"), ("d", "none")],
+    );
+}
+
+#[test]
 fn e2e_decode_primitives_and_totality() {
     // `Decode.decodeString` runs a decoder over JSON text totally: a good parse is
     // `Ok`, a type mismatch or malformed input is `Error` (here folded to a default).

@@ -4332,62 +4332,77 @@ impl Infer {
         }
     }
 
-    /// Enforce the MVP shape rules for a `match` that uses active patterns
+    /// Enforce the shape rules for a `match` that uses active patterns
     /// (`DESIGN.md` §7.2). An active pattern is a *function call*, not a
-    /// structural test, so such a match lowers to an if/elif chain; to keep that
-    /// chain honest: (1) an active pattern may appear only as the **whole**
-    /// pattern of an arm (no nesting under constructors / or- / as-patterns);
-    /// (2) the other arms must be literals, variables, or `_` (each expressible
-    /// as one condition). Guards **are** supported: a guarded match lowers to a
-    /// fall-through `if`-sequence with early exit (`lower_ap_match_seq`), so a
-    /// failing guard falls through to the next arm.
+    /// structural test, so an AP arm must be expressible as a runtime test:
+    /// a case may appear as the **whole** pattern of an arm, or as an
+    /// alternative in a top-level **or-pattern whose alternatives are all
+    /// binder-free active-pattern cases** (`case Even | Odd:` — a disjunction
+    /// of tests; a binding alternative would make the disjunction's bindings
+    /// partial). Nesting a case under constructors / as-patterns stays
+    /// rejected. Structural non-AP arms mix freely (each lowers as a one-armed
+    /// native `match` in the fall-through sequence), as do guards.
     fn check_ap_match_shape(&self, arms: &[MatchArm], span: Span) -> Result<(), TypeError> {
-        let mut uses_ap = false;
         for arm in arms {
             match &arm.pattern {
                 Pattern::Ctor { name, args, .. }
                     if self.decls.active_patterns.contains_key(name) =>
                 {
-                    uses_ap = true;
                     if args.iter().any(|a| self.pattern_mentions_ap(a)) {
                         return Err(TypeError {
                             message: "an active pattern may only appear as the whole \
-                                      pattern of a `case` arm (MVP)"
+                                      pattern of a `case` arm"
                                 .to_string(),
                             span,
                         });
                     }
                 }
+                // `case Even | Odd:` — every alternative must be a binder-free
+                // active-pattern case (case fields, if any, bound with `_`).
+                Pattern::Or(alts) if self.pattern_mentions_ap(&arm.pattern) => {
+                    for alt in alts {
+                        let Pattern::Ctor { name, args, .. } = alt else {
+                            return Err(TypeError {
+                                message: "an or-pattern using active-pattern cases may \
+                                          combine only active-pattern cases"
+                                    .to_string(),
+                                span,
+                            });
+                        };
+                        let Some(ap) = self.decls.active_patterns.get(name) else {
+                            return Err(TypeError {
+                                message: "an or-pattern using active-pattern cases may \
+                                          combine only active-pattern cases"
+                                    .to_string(),
+                                span,
+                            });
+                        };
+                        if args[ap.extra.min(args.len())..]
+                            .iter()
+                            .any(|b| !matches!(b, Pattern::Wildcard))
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "an active-pattern case in an or-pattern cannot bind \
+                                     — use `_` for `{name}`'s fields"
+                                ),
+                                span,
+                            });
+                        }
+                    }
+                }
                 p if self.pattern_mentions_ap(p) => {
                     return Err(TypeError {
                         message: "an active pattern may only appear as the whole pattern \
-                                  of a `case` arm (MVP)"
+                                  of a `case` arm (or as an alternative in an or-pattern \
+                                  of cases)"
                             .to_string(),
                         span,
                     });
                 }
+                // A structural (non-AP) arm: any pattern is allowed — it lowers
+                // as a one-armed native `match` in the fall-through sequence.
                 _ => {}
-            }
-        }
-        if !uses_ap {
-            return Ok(());
-        }
-        for arm in arms {
-            match &arm.pattern {
-                Pattern::Ctor { name, .. } if self.decls.active_patterns.contains_key(name) => {}
-                Pattern::Int(_)
-                | Pattern::Str(_)
-                | Pattern::Bool(_)
-                | Pattern::Var { .. }
-                | Pattern::Wildcard => {}
-                _ => {
-                    return Err(TypeError {
-                        message: "a `match` that uses an active pattern can mix only \
-                                  literal, variable, and `_` arms (MVP)"
-                            .to_string(),
-                        span,
-                    });
-                }
             }
         }
         Ok(())

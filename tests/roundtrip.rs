@@ -337,6 +337,10 @@ const PROGRAMS: &[&str] = &[
     "## Splits parity.\nlet (|Even|Odd|) n = if n % 2 == 0 then Even else Odd",
     "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f n =\n  match n:\n    case Even: 1\n    case Odd: 2",
     "let f n =\n  match n:\n    case DivisibleBy 3: 1\n    case Prime p: p\n    case _: 0",
+    // An or-pattern of binder-free active-pattern cases as the whole arm, and a
+    // structural arm sitting beside an active-pattern arm.
+    "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f n =\n  match n:\n    case Even | Odd: \"eo\"",
+    "let f o =\n  match o:\n    case Answer: 1\n    case Some x: x\n    case None: 0",
 ];
 
 #[test]

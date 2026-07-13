@@ -2163,11 +2163,36 @@ impl Lowerer {
 
     // ----- active patterns (`DESIGN.md` §7.2) -----
 
-    /// Does any arm of this match use an active-pattern case at its top level?
+    /// Does any arm of this match use an active-pattern case at its top level —
+    /// bare (`case Even:`) or as an or-pattern of cases (`case Even | Odd:`)?
     fn match_uses_ap(&self, arms: &[crate::parser::ast::MatchArm]) -> bool {
-        arms.iter().any(
-            |a| matches!(&a.pattern, Pattern::Ctor { name, .. } if self.ap_uses.contains_key(name)),
-        )
+        arms.iter().any(|a| match &a.pattern {
+            Pattern::Ctor { name, .. } => self.ap_uses.contains_key(name),
+            Pattern::Or(alts) => alts.iter().any(
+                |p| matches!(p, Pattern::Ctor { name, .. } if self.ap_uses.contains_key(name)),
+            ),
+            _ => false,
+        })
+    }
+
+    /// Whether an arm pattern is expressible as one *condition* in the AP
+    /// if/elif chain: a literal, a catch-all, an active-pattern case, or an
+    /// or-pattern of (binder-free, checker-enforced) active-pattern cases.
+    /// Anything else is a *structural* arm, lowered as a one-armed native
+    /// `match` inside the fall-through sequence (`lower_ap_match_seq`).
+    fn ap_chain_supported(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Wildcard
+            | Pattern::Var { .. }
+            | Pattern::Int(_)
+            | Pattern::Str(_)
+            | Pattern::Bool(_) => true,
+            Pattern::Ctor { name, .. } => self.ap_uses.contains_key(name),
+            Pattern::Or(alts) => alts.iter().all(
+                |p| matches!(p, Pattern::Ctor { name, .. } if self.ap_uses.contains_key(name)),
+            ),
+            _ => false,
+        }
     }
 
     /// Lower a `match` that uses active patterns to an honest **if/elif chain**
@@ -2177,8 +2202,10 @@ impl Lowerer {
     /// function + same parameter arguments) is hoisted to a temp before the
     /// chain, so its side effects happen at most once per match. `assign_to`
     /// selects value position (arm bodies assign that temp) vs return position
-    /// (arm bodies return). The checker's shape rules guarantee every arm is an
-    /// active-pattern case, a literal, a variable, or `_`, with no guards.
+    /// (arm bodies return). The flat chain handles arms that are one condition
+    /// each — an active-pattern case, an or-pattern of cases, a literal, a
+    /// variable, or `_`; a guard or a *structural* arm routes to the
+    /// fall-through sequence (`lower_ap_match_seq`).
     fn lower_ap_match(
         &mut self,
         scrutinee: &Expr,
@@ -2199,10 +2226,15 @@ impl Lowerer {
                 tmp
             }
         };
-        // A guard can fail *after* binding names, so a guarded match needs a
-        // fall-through lowering (a forward `if`-sequence with early exit); the
-        // guard-free shape keeps the flat if/elif chain below unchanged.
-        if arms.iter().any(|a| a.guard.is_some()) {
+        // A guard can fail *after* binding names, and a *structural* arm (a
+        // constructor/tuple/record/list pattern beside the AP arms) is a native
+        // `match`, not a chain condition — both need the fall-through lowering
+        // (a forward `if`-sequence with early exit). The guard-free, chain-only
+        // shape keeps the flat if/elif chain below unchanged.
+        if arms
+            .iter()
+            .any(|a| a.guard.is_some() || !self.ap_chain_supported(&a.pattern))
+        {
             return self.lower_ap_match_seq(&subject, arms, locals, assign_to, stmts);
         }
         // (recognizer, lowered args, temp) per distinct hoisted application.
@@ -2282,6 +2314,46 @@ impl Lowerer {
             None => None,
         };
         for arm in arms {
+            // A structural arm (constructor/tuple/record/list pattern) is a
+            // one-armed native `match`: the pattern tests and binds Python-side,
+            // a failing case (or guard) falls out of the `match` and on to the
+            // next arm. No recognizer is involved.
+            if !self.ap_chain_supported(&arm.pattern) {
+                let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                let guard = self.lower_guard(&arm.guard, &arm_locals)?;
+                let body: Vec<PyStmt> = match (assign_to, &done) {
+                    (None, _) => self.lower_return(&arm.body, &arm_locals)?,
+                    (Some(tmp), Some(d)) => {
+                        let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                        let mut b = with_assign(s, tmp, v);
+                        b.push(PyStmt::Assign {
+                            target: d.clone(),
+                            value: PyExpr::Bool(true),
+                        });
+                        b
+                    }
+                    (Some(_), None) => {
+                        unreachable!("value position always allocates a sentinel")
+                    }
+                };
+                let stmt = PyStmt::Match {
+                    subject: PyExpr::Name(subject.to_string()),
+                    cases: vec![PyCase {
+                        pattern: self.lower_pattern(&arm.pattern),
+                        guard,
+                        body,
+                    }],
+                };
+                match &done {
+                    Some(d) => stmts.push(PyStmt::If {
+                        test: PyExpr::Not(Box::new(PyExpr::Name(d.clone()))),
+                        body: vec![stmt],
+                        orelse: vec![],
+                    }),
+                    None => stmts.push(stmt),
+                }
+                continue;
+            }
             // The recognizer application is hoisted into this arm's own block, so
             // it runs only when the arm is reached (lazy).
             let mut arm_block: Vec<PyStmt> = Vec::new();
@@ -2440,6 +2512,31 @@ impl Lowerer {
                     // Bool-flavored partial: the recognizer's result *is* the test.
                     Ok((Some(PyExpr::Name(tmp)), vec![]))
                 }
+            }
+            // An or-pattern of binder-free active-pattern cases: the disjunction
+            // of the alternatives' tests (the checker enforces binder-freedom,
+            // so no alternative contributes binds). A shared recognizer is still
+            // hoisted once — the memo in `hoisted` recognizes the repeat.
+            Pattern::Or(alts) => {
+                let mut cond: Option<PyExpr> = None;
+                for alt in alts {
+                    let (c, binds) = self.ap_arm_test(alt, subject, locals, hoisted, out)?;
+                    let c = c.ok_or_else(|| LowerError {
+                        message: "an or-pattern alternative in an active-pattern match \
+                                  must be a testable case"
+                            .to_string(),
+                    })?;
+                    debug_assert!(binds.is_empty(), "or-alternatives are binder-free");
+                    cond = Some(match cond {
+                        None => c,
+                        Some(prev) => PyExpr::BinOp {
+                            op: PyBinOp::Or,
+                            left: Box::new(prev),
+                            right: Box::new(c),
+                        },
+                    });
+                }
+                Ok((cond, vec![]))
             }
             _ => Err(LowerError {
                 message: "unsupported pattern in a match using active patterns".to_string(),
