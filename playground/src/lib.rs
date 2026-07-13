@@ -42,19 +42,19 @@ pub fn compile(source: &str) -> String {
 
     // Emit Python only when the analysis is clean. A residual compile/lowering error
     // (rare once analysis passes) is surfaced as one more diagnostic.
-    let python = if analysis.parse_ok && analysis.diagnostics.is_empty() && analysis.holes.is_empty()
-    {
-        match pyfun::compile(source) {
-            Ok(py) => Some(py),
-            Err(e) => {
-                let span = e.span();
-                diagnostics.push(diag(span.start, span.end, "error", &e.message()));
-                None
+    let python =
+        if analysis.parse_ok && analysis.diagnostics.is_empty() && analysis.holes.is_empty() {
+            match pyfun::compile(source) {
+                Ok(py) => Some(py),
+                Err(e) => {
+                    let span = e.span();
+                    diagnostics.push(diag(span.start, span.end, "error", &e.message()));
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let python_field = match &python {
         Some(py) => format!("\"{}\"", json_escape(py)),
