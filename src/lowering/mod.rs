@@ -654,7 +654,35 @@ impl Lowerer {
                         });
                     }
                 }
-                Item::Let(binding) => self.lower_let(binding, &HashSet::new(), &mut code)?,
+                Item::Let(binding) => {
+                    // A block-valued binding at module scope has no Python frame
+                    // to hide its locals in — a block-local `let` colliding with a
+                    // module-level name would emit a module-level assignment that
+                    // REBINDS it, corrupting every closure and later use of the
+                    // original. When (and only when) such a collision exists, wrap
+                    // the evaluation in a fresh nullary function: Python function
+                    // scope isolates the block locals, and `lower_fn_body`'s
+                    // capture analysis keeps `mut` reassignment declarations right.
+                    if binding.params.is_empty() && self.top_binding_needs_frame(binding) {
+                        let fname = self.fresh_fn();
+                        let body = self.lower_fn_body(&[], &binding.value, &HashSet::new())?;
+                        code.push(PyStmt::FuncDef {
+                            name: fname.clone(),
+                            params: vec![],
+                            body,
+                            is_async: false,
+                        });
+                        code.push(PyStmt::Assign {
+                            target: binding.name.clone(),
+                            value: PyExpr::Call {
+                                func: Box::new(PyExpr::Name(fname)),
+                                args: vec![],
+                            },
+                        });
+                    } else {
+                        self.lower_let(binding, &HashSet::new(), &mut code)?;
+                    }
+                }
                 // The active-pattern recognizer lowers to a plain Python def
                 // under its deterministic `_ap_…` name; inside its body the
                 // (total) cases construct the hidden `_Case` classes via the
@@ -760,6 +788,24 @@ impl Lowerer {
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
         self.lower_binding_as(&binding.name, binding, locals, out)
+    }
+
+    /// Whether a top-level parameterless binding's value introduces frame-level
+    /// binders (block `let`s, match binders) that collide with a module-level
+    /// name — the case where module-scope lowering would rebind the original
+    /// (`lower_module`'s wrap). Checked against every top-level `let` name, the
+    /// (project-mode) extern bindings, and imported file-module names.
+    fn top_binding_needs_frame(&self, binding: &LetBinding) -> bool {
+        let mut binders = HashSet::new();
+        fold_loop::collect_frame_binders(&binding.value, &mut binders);
+        if binders.is_empty() {
+            return false;
+        }
+        binders.iter().any(|b| {
+            self.user_defs.contains(b)
+                || self.extern_targets.contains_key(b)
+                || self.imported_modules.contains(b)
+        })
     }
 
     /// Record a block-level `let` in the local-folder registry (`local_fn_defs`):
