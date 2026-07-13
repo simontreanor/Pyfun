@@ -33,3 +33,4 @@ examples/interop/network-rail/chippenham-routes.md
 editors/vscode/node_modules/
 editors/vscode/*.vsix
 .claude/worktrees/
+/LAUNCH-POSTS.md
