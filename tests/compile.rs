@@ -73,8 +73,8 @@ fn unused_extern_imports_nothing() {
 fn extern_in_submodule_imports_the_submodule() {
     // A target inside a submodule must import the submodule, not just the top-level
     // package — `import urllib` would leave `urllib.parse` unbound at runtime.
-    let py =
-        pyfun::compile("extern q: string -> string = urllib.parse.quote\nlet r = q \"a b\"").unwrap();
+    let py = pyfun::compile("extern q: string -> string = urllib.parse.quote\nlet r = q \"a b\"")
+        .unwrap();
     assert!(py.contains("import urllib.parse"), "{py}");
     assert!(py.contains("r = urllib.parse.quote("), "{py}");
 }
@@ -106,10 +106,9 @@ fn extern_type_replaces_the_phantom_adt_in_the_instance_extern_pattern() {
 #[test]
 fn instance_method_extern_lowers_to_a_method_call() {
     // `= .read()` calls the method on the first argument (the receiver).
-    let py = pyfun::compile(
-        "type R = RH\nextern readBody: R -> string = .read()\nlet f r = readBody r",
-    )
-    .unwrap();
+    let py =
+        pyfun::compile("type R = RH\nextern readBody: R -> string = .read()\nlet f r = readBody r")
+            .unwrap();
     assert!(py.contains("return r.read()"), "{py}");
 }
 
@@ -126,10 +125,9 @@ fn instance_method_extern_passes_remaining_args() {
 fn instance_method_receiver_only_partial_is_the_bound_method() {
     // Applying just the receiver yields the Python bound method — the curried
     // partial with no `functools.partial` wrapper.
-    let py = pyfun::compile(
-        "type C = CH\nextern ex: C -> string -> C = .execute()\nlet g c = ex c",
-    )
-    .unwrap();
+    let py =
+        pyfun::compile("type C = CH\nextern ex: C -> string -> C = .execute()\nlet g c = ex c")
+            .unwrap();
     assert!(py.contains("return c.execute"), "{py}");
     assert!(!py.contains("functools.partial"), "{py}");
 }
@@ -137,10 +135,9 @@ fn instance_method_receiver_only_partial_is_the_bound_method() {
 #[test]
 fn instance_property_extern_reads_the_attribute() {
     // `= .scheme` (no `()`) reads the attribute — no call.
-    let py = pyfun::compile(
-        "type U = UH\nextern scheme: U -> string = .scheme\nlet f u = scheme u",
-    )
-    .unwrap();
+    let py =
+        pyfun::compile("type U = UH\nextern scheme: U -> string = .scheme\nlet f u = scheme u")
+            .unwrap();
     assert!(py.contains("return u.scheme"), "{py}");
     assert!(!py.contains("u.scheme("), "{py}");
 }
@@ -171,71 +168,108 @@ fn extern_on_class_method_imports_only_the_module() {
         "type C = CH\nextern ex: C -> string -> C = sqlite3.Connection.execute\nlet f c = ex c \"x\"",
     )
     .unwrap();
-    assert!(py.contains("import sqlite3\n") || py.contains("import sqlite3\r"), "{py}");
+    assert!(
+        py.contains("import sqlite3\n") || py.contains("import sqlite3\r"),
+        "{py}"
+    );
     assert!(!py.contains("import sqlite3.Connection"), "{py}");
 }
 
 #[test]
-fn extern_split_marker_imports_only_the_marked_module() {
-    // `datetime::datetime.now` marks the module boundary explicitly: import the
-    // left of `::` as written (`import datetime`), reference the full dotted path.
-    // Without the marker the lowercase-prefix heuristic would wrongly emit
-    // `import datetime.datetime`.
+fn extern_import_declares_the_module_explicitly() {
+    // `extern import datetime` declares the module boundary: import it as
+    // written, reference the full dotted path. Without the declaration the
+    // lowercase-prefix heuristic would wrongly emit `import datetime.datetime`.
     let py = pyfun::compile(
-        "extern now: unit -> a = datetime::datetime.now\nlet t = now ()",
+        "extern import datetime\nextern now: unit -> a = datetime.datetime.now\nlet t = now ()",
     )
     .unwrap();
-    assert!(py.contains("import datetime\n") || py.contains("import datetime\r"), "{py}");
+    assert!(
+        py.contains("import datetime\n") || py.contains("import datetime\r"),
+        "{py}"
+    );
     assert!(!py.contains("import datetime.datetime"), "{py}");
     assert!(py.contains("t = datetime.datetime.now()"), "{py}");
 }
 
 #[test]
-fn extern_split_marker_fully_applied_calls_the_dotted_path() {
-    // `sys::stdout.write` imports `sys` and calls through the full path.
+fn extern_import_covers_a_fully_applied_value_attribute_target() {
+    // `extern import sys` roots `sys.stdout.write` (a value attribute the
+    // heuristic would read as a submodule); the call goes through the full path.
     let py = pyfun::compile(
-        "extern write: string -> int = sys::stdout.write\nlet r = write \"hi\"",
+        "extern import sys\nextern write: string -> int = sys.stdout.write\nlet r = write \"hi\"",
     )
     .unwrap();
-    assert!(py.contains("import sys\n") || py.contains("import sys\r"), "{py}");
+    assert!(
+        py.contains("import sys\n") || py.contains("import sys\r"),
+        "{py}"
+    );
+    assert!(!py.contains("import sys.stdout"), "{py}");
     assert!(py.contains("r = sys.stdout.write(\"hi\")"), "{py}");
 }
 
 #[test]
-fn bare_reference_to_a_split_extern_still_records_the_import() {
-    // A bare (unapplied) reference to a `::`-split extern must still record the
-    // marked module — the reference lowers to the dotted path, which needs `sys`.
+fn bare_reference_to_a_declared_import_extern_still_records_it() {
+    // A bare (unapplied) reference must still record the declared module — the
+    // reference lowers to the dotted path, which needs `sys` bound.
     let py = pyfun::compile(
-        "extern write: string -> int = sys::stdout.write\nlet w = write",
+        "extern import sys\nextern write: string -> int = sys.stdout.write\nlet w = write",
     )
     .unwrap();
-    assert!(py.contains("import sys\n") || py.contains("import sys\r"), "{py}");
+    assert!(
+        py.contains("import sys\n") || py.contains("import sys\r"),
+        "{py}"
+    );
     assert!(py.contains("w = sys.stdout.write"), "{py}");
 }
 
 #[test]
-fn split_marker_composes_with_pinned_kwargs() {
-    // The `::` split and pinned kwargs coexist: import the marked module and append
-    // the kwargs to the emitted call as usual.
+fn extern_import_alias_emits_import_as_and_roots_targets() {
+    // `extern import json as j` mirrors Python's aliased import: the emitted
+    // import carries the alias, and targets root at the alias name.
     let py = pyfun::compile(
-        "extern conn: string -> a = sqlite3::dbapi2.connect(timeout=5)\nlet c = conn \":memory:\"",
+        "extern import json as j\nextern dumps: List int -> string = j.dumps\nlet s = dumps [1]",
     )
     .unwrap();
-    assert!(py.contains("import sqlite3\n") || py.contains("import sqlite3\r"), "{py}");
-    assert!(!py.contains("import sqlite3.dbapi2"), "{py}");
-    assert!(py.contains("c = sqlite3.dbapi2.connect(\":memory:\", timeout=5)"), "{py}");
+    assert!(py.contains("import json as j"), "{py}");
+    assert!(py.contains("s = j.dumps([1])"), "{py}");
 }
 
 #[test]
-fn import_heuristic_is_unchanged_without_the_split_marker() {
-    // With no `::`, the lowercase-prefix heuristic is untouched: a submodule target
-    // still imports the submodule (`urllib.request`), not just the top package.
+fn extern_import_composes_with_pinned_kwargs() {
+    // A declared import and pinned kwargs coexist: import the declared module
+    // and append the kwargs to the emitted call as usual.
     let py = pyfun::compile(
-        "extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"",
+        "extern import sqlite3\nextern conn: string -> a = sqlite3.dbapi2.connect(timeout=5)\nlet c = conn \":memory:\"",
     )
     .unwrap();
+    assert!(
+        py.contains("import sqlite3\n") || py.contains("import sqlite3\r"),
+        "{py}"
+    );
+    assert!(!py.contains("import sqlite3.dbapi2"), "{py}");
+    assert!(
+        py.contains("c = sqlite3.dbapi2.connect(\":memory:\", timeout=5)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn import_heuristic_is_unchanged_without_a_declared_import() {
+    // With no `extern import`, the lowercase-prefix heuristic is untouched: a
+    // submodule target still imports the submodule, not just the top package.
+    let py = pyfun::compile("extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"")
+        .unwrap();
     assert!(py.contains("import urllib.request"), "{py}");
     assert!(py.contains("r = urllib.request.urlopen(\"x\")"), "{py}");
+}
+
+#[test]
+fn unused_extern_import_emits_nothing() {
+    // A declared module import is hoisted only when a target rooted at it is
+    // actually used — an unused declaration leaves no trace in the output.
+    let py = pyfun::compile("extern import sqlite3\nlet x = 1").unwrap();
+    assert!(!py.contains("import sqlite3"), "{py}");
 }
 
 #[test]
@@ -652,7 +686,10 @@ fn stdlib_predicates_inline_when_fully_applied() {
     // The idiom is emitted directly, not a `_pf_*` helper call. Argument order
     // matches each helper body (`sub in s`, `s.startswith(pre)`, …).
     assert!(py.contains("return \"x\" in s"), "String.contains: {py}");
-    assert!(py.contains("return s.startswith(\"x\")"), "startsWith: {py}");
+    assert!(
+        py.contains("return s.startswith(\"x\")"),
+        "startsWith: {py}"
+    );
     assert!(py.contains("return s.endswith(\"x\")"), "endsWith: {py}");
     assert!(py.contains("return 3 in xs"), "List.contains: {py}");
     assert!(py.contains("return 3 in s"), "Set.contains: {py}");
@@ -660,11 +697,26 @@ fn stdlib_predicates_inline_when_fully_applied() {
     assert!(py.contains("return not xs"), "List.isEmpty: {py}");
     // None of the inlined helpers are defined, since nothing references them.
     assert!(!py.contains("_pf_str_contains"), "no contains helper: {py}");
-    assert!(!py.contains("_pf_str_starts_with"), "no startsWith helper: {py}");
-    assert!(!py.contains("_pf_str_ends_with"), "no endsWith helper: {py}");
-    assert!(!py.contains("_pf_list_contains"), "no list-contains helper: {py}");
-    assert!(!py.contains("_pf_set_contains"), "no set-contains helper: {py}");
-    assert!(!py.contains("_pf_map_contains"), "no map-contains helper: {py}");
+    assert!(
+        !py.contains("_pf_str_starts_with"),
+        "no startsWith helper: {py}"
+    );
+    assert!(
+        !py.contains("_pf_str_ends_with"),
+        "no endsWith helper: {py}"
+    );
+    assert!(
+        !py.contains("_pf_list_contains"),
+        "no list-contains helper: {py}"
+    );
+    assert!(
+        !py.contains("_pf_set_contains"),
+        "no set-contains helper: {py}"
+    );
+    assert!(
+        !py.contains("_pf_map_contains"),
+        "no map-contains helper: {py}"
+    );
     assert!(!py.contains("_pf_is_empty"), "no isEmpty helper: {py}");
 }
 
@@ -690,7 +742,10 @@ fn stdlib_predicate_partial_application_falls_back_to_helper() {
          let r = List.filter f [\"xy\", \"ab\"]",
     )
     .unwrap();
-    assert!(py.contains("def _pf_str_contains(sub, s):"), "helper defined: {py}");
+    assert!(
+        py.contains("def _pf_str_contains(sub, s):"),
+        "helper defined: {py}"
+    );
     assert!(
         py.contains("f = functools.partial(_pf_str_contains, \"x\")"),
         "partial routes to helper: {py}"
@@ -1328,7 +1383,10 @@ fn string_functions_lower_to_builtins_and_helpers() {
     assert!(py.contains("return sep.join(xs)"), "{py}");
     // `String.contains` is a fully-applied pure predicate: it inlines to `sub in s`
     // (Lever A), so the `_pf_str_contains` helper is never emitted.
-    assert!(py.contains("has = \"a\" in \"abc\""), "contains inlined: {py}");
+    assert!(
+        py.contains("has = \"a\" in \"abc\""),
+        "contains inlined: {py}"
+    );
     assert!(!py.contains("_pf_str_contains"), "{py}");
 }
 
@@ -1546,8 +1604,14 @@ fn ordering_is_emitted_only_when_a_type_is_compared() {
     // never compared, sheds `_pf_order_key`/`__lt__`/`@total_ordering` entirely.
     let py = pyfun::compile("type Color = Red | Green | Blue\nlet x = Red").unwrap();
     assert!(py.contains("class Red:"), "{py}");
-    assert!(!py.contains("_pf_order_key"), "no ordering when uncompared: {py}");
-    assert!(!py.contains("total_ordering"), "no import when uncompared: {py}");
+    assert!(
+        !py.contains("_pf_order_key"),
+        "no ordering when uncompared: {py}"
+    );
+    assert!(
+        !py.contains("total_ordering"),
+        "no import when uncompared: {py}"
+    );
 }
 
 #[test]
@@ -1645,11 +1709,17 @@ fn record_lowers_to_frozen_dataclass() {
     assert!(py.contains("class Point:"), "{py}");
     assert!(py.contains("x: int"), "{py}");
     assert!(py.contains("y: int"), "{py}");
-    assert!(!py.contains("def __repr__"), "records use the dataclass repr: {py}");
+    assert!(
+        !py.contains("def __repr__"),
+        "records use the dataclass repr: {py}"
+    );
     // The literal is reordered to the declared field order for a positional call.
     assert!(py.contains("p = Point(3, 4)"), "{py}");
     // Uncompared here, so no `order=True` (ordering is on demand, `DESIGN.md` §7.1).
-    assert!(!py.contains("order=True"), "no ordering when uncompared: {py}");
+    assert!(
+        !py.contains("order=True"),
+        "no ordering when uncompared: {py}"
+    );
 }
 
 #[test]
@@ -1677,7 +1747,10 @@ fn dataclass_fields_get_python_type_annotations() {
     assert!(py.contains("ratio: float"), "{py}");
     assert!(py.contains("label: str"), "{py}");
     assert!(py.contains("tags: list"), "{py}");
-    assert!(py.contains("maybe: object"), "user-typed field is object: {py}");
+    assert!(
+        py.contains("maybe: object"),
+        "user-typed field is object: {py}"
+    );
     // A generic ADT payload (`Has a`) is also `object`.
     assert!(py.contains("_0: object"), "{py}");
 }
@@ -2640,11 +2713,13 @@ fn e2e_extern_calls_python() {
 }
 
 #[test]
-fn e2e_extern_split_marker_calls_python() {
-    // The `::` split reaches a live call: `datetime.datetime.fromisoformat` parses a
-    // fixed ISO string to a deterministic `datetime` whose `str(...)` is stable.
+fn e2e_extern_import_calls_python() {
+    // A declared `extern import` reaches a live call: `datetime.datetime
+    // .fromisoformat` parses a fixed ISO string to a deterministic `datetime`
+    // whose `str(...)` is stable.
     run_and_check(
-        "extern parse: string -> a = datetime::datetime.fromisoformat\n\
+        "extern import datetime\n\
+         extern parse: string -> a = datetime.datetime.fromisoformat\n\
          let d = parse \"2020-01-02\"",
         &[("d", "2020-01-02 00:00:00")],
     );
@@ -3080,10 +3155,9 @@ fn e2e_decode_list_nullable_oneof_andthen() {
 fn decode_pipeline_is_pure() {
     // Decoders are a pure sublanguage, so `let pure` over `decodeString` is accepted
     // (unlike a raw `json.loads` extern, which is `io` at the boundary).
-    let py = pyfun::compile(
-        "let pure parse s = Decode.decodeString Decode.int s\nlet r = parse \"1\"",
-    )
-    .unwrap();
+    let py =
+        pyfun::compile("let pure parse s = Decode.decodeString Decode.int s\nlet r = parse \"1\"")
+            .unwrap();
     assert!(py.contains("_pf_dec_decode_string"), "{py}");
 }
 

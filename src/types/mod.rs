@@ -1085,7 +1085,8 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     for (idx, item) in module.items.iter().enumerate() {
         match item {
             // Measures and types are handled by the pre-pass and bind no value.
-            Item::Measure { .. } | Item::Type(_) => {}
+            // `extern import` is purely a lowering concern (`DESIGN.md` §6).
+            Item::Measure { .. } | Item::Type(_) | Item::ExternImport { .. } => {}
             // An `extern` is resolved by the pre-pass (its scheme is already in
             // `env`); export its name so a dependent module can reference it
             // qualified (`Mathx.sqrt`), exactly like a `let` value (`DESIGN.md` §6.1).
@@ -1587,7 +1588,13 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                     // only reported at an *ambiguous access* site, never here. (A field
                     // repeated within *one* record is still an error — the `local` set.)
                     // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
-                    match resolve(&field.ty, &param_map, &decls.type_arity, span, &HashMap::new()) {
+                    match resolve(
+                        &field.ty,
+                        &param_map,
+                        &decls.type_arity,
+                        span,
+                        &HashMap::new(),
+                    ) {
                         Ok(t) => resolved.push((field.name.clone(), t)),
                         Err(e) => {
                             errors.push(e);
@@ -2776,7 +2783,10 @@ fn seed_format_prelude(env: &mut Env) {
         uscheme(pure_fn(str_(), pure_fn(int(), pure_fn(float_u(), str_())))),
     );
     // Format.grouped x -> thousands-grouped integer.
-    env.insert("Format.grouped".to_string(), uscheme(pure_fn(int_u(), str_())));
+    env.insert(
+        "Format.grouped".to_string(),
+        uscheme(pure_fn(int_u(), str_())),
+    );
     // Format.padLeft w fill s -> pad on the left to width w (right-justify); `fill`
     // is a length-1 string (Pyfun has no `char`).
     let pad = || pure_fn(int(), pure_fn(str_(), pure_fn(str_(), str_())));
@@ -2821,7 +2831,10 @@ fn seed_decode_prelude(env: &mut Env) {
     put("bool", scheme(vec![], dec(Ty::Bool)));
     // Structure.
     // Decode.field name dec : pull one object field, then decode it.
-    put("field", scheme(vec![0], pf(str_(), pf(dec(v(0)), dec(v(0))))));
+    put(
+        "field",
+        scheme(vec![0], pf(str_(), pf(dec(v(0)), dec(v(0))))),
+    );
     // Decode.list dec : a JSON array of homogeneous values.
     put("list", scheme(vec![0], pf(dec(v(0)), dec(list(v(0))))));
     // Decode.nullable dec : JSON null -> None, otherwise Some (decoded).
@@ -4432,7 +4445,8 @@ impl Infer {
             ExprKind::Hole { name } => {
                 let ty = self.fresh();
                 // Snapshot the environment for valid-hole-fit search (post-hoc).
-                self.holes.push((span, name.clone(), ty.clone(), env.clone()));
+                self.holes
+                    .push((span, name.clone(), ty.clone(), env.clone()));
                 Ok(ty)
             }
             // Integer literals are polymorphic numerics (`num 'a => 'a`) so they

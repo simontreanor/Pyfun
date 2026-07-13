@@ -234,13 +234,13 @@ const PROGRAMS: &[&str] = &[
     "extern pure pow: float -> float -> float = math.pow",
     // A dotted target inside a submodule (imported as the submodule at lowering).
     "extern quote: string -> string = urllib.parse.quote",
-    // Explicit `::` module/attribute split (`DESIGN.md` §6): everything left of
-    // `::` is the module to import, the whole dotted path is the reference. The
-    // printer re-emits the marker at its recorded position, so it round-trips —
-    // bare, with pinned kwargs, and with a multi-segment module side.
-    "extern now: unit -> a = datetime::datetime.now",
-    "extern conn: string -> a = sqlite3::dbapi2.connect(timeout=5)",
-    "extern f: a -> b = a.b::C.d",
+    // `extern import` (`DESIGN.md` §6): a boundary module declaration mirroring
+    // Python's import statement — bare, dotted, aliased, and alongside the
+    // extern whose target it roots.
+    "extern import datetime",
+    "extern import urllib.request",
+    "extern import numpy as np",
+    "extern import datetime\nextern now: unit -> a = datetime.datetime.now",
     // Instance-access externs. A method (`= .method()`) is called on the first
     // argument; a property (`= .attr`) is read. Includes the case where the member
     // name equals the Pyfun name, which must still print the leading `.` to
@@ -359,10 +359,7 @@ fn multiline_union_parses_like_inline() {
             "type Shape = Circle float | Rect float float",
         ),
         // Same-line `|` and newline `|` may be mixed within the block.
-        (
-            "type M =\n  | A | B\n  | C",
-            "type M = A | B | C",
-        ),
+        ("type M =\n  | A | B\n  | C", "type M = A | B | C"),
         (
             "type Point =\n  { x: int, y: int }",
             "type Point = { x: int, y: int }",
@@ -646,7 +643,11 @@ fn let_rec_is_rejected_with_a_helpful_hint() {
     // `let rec f x = …` would otherwise silently define a function named `rec`; we
     // catch it and point at the fix.
     let err = parse("let rec f x = x").unwrap_err();
-    assert!(err.message().contains("`rec` is not a keyword"), "{}", err.message());
+    assert!(
+        err.message().contains("`rec` is not a keyword"),
+        "{}",
+        err.message()
+    );
     // A binding genuinely named `rec` with no params is still fine (a plain value).
     assert!(parse("let rec = 1").is_ok());
     // …and so is the corrected form.

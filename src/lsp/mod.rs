@@ -1629,10 +1629,7 @@ mod tests {
         let src = "let add a b = a + b";
         server.handle(&json::parse(&open_msg(uri, src)).unwrap());
         let value = hover_value(&mut server, uri, 0, 4); // `add`
-        assert!(
-            !value.contains("**Effect:**"),
-            "hover value was {value:?}"
-        );
+        assert!(!value.contains("**Effect:**"), "hover value was {value:?}");
     }
 
     #[test]

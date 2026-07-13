@@ -71,6 +71,19 @@ pub enum Item {
         name: String,
         span: NodeSpan,
     },
+    /// `extern import python.path [as alias]` — declare the Python module that
+    /// extern targets in this file are rooted at (`DESIGN.md` §6), mirroring
+    /// Python's own import statement (`as` and all). A used target whose prefix
+    /// matches the declared path — or whose first segment is the alias — imports
+    /// the module exactly as declared, overriding the lowercase-prefix heuristic
+    /// (which cannot see that `datetime.datetime` is a class, not a submodule).
+    /// Purely an import/lowering concern: no Pyfun name is bound, nothing is
+    /// type-checked, and an unused declaration emits nothing.
+    ExternImport {
+        path: Vec<String>,
+        alias: Option<String>,
+        span: NodeSpan,
+    },
     /// `let (|A|B|) input = …` / `let (|A|_|) params… input = …` — an active
     /// pattern (`DESIGN.md` §7.2): a named recognizer whose cases are used as
     /// constructors in `case` patterns. Top level only.
@@ -128,14 +141,6 @@ pub struct ExternDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub target: Vec<String>,
-    /// Explicit module/attribute split from a `::` in the target (`DESIGN.md` §6):
-    /// `= datetime::datetime.now` marks the first `import_split` segments as the
-    /// module to import (`import datetime`), overriding the lowercase-prefix
-    /// heuristic that would otherwise mis-read a lowercase class (or value
-    /// attribute like `sys.stdout`) as a submodule. `None` = use the heuristic.
-    /// Purely an import concern: the emitted *reference* is the full dotted path
-    /// either way. Always `1 <= n < target.len()`; never set on a receiver form.
-    pub import_split: Option<usize>,
     /// Instance-access form for a target beginning with `.` (`DESIGN.md` §6). The
     /// `target` is a member path applied to the first argument (the receiver);
     /// `None` is an ordinary module-qualified target. Sidesteps naming (and

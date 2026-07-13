@@ -39,7 +39,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
-| [`datetime.pyfun`](./datetime.pyfun) | `datetime` (stdlib) | ✅ | a **pure** FFI: `extern pure` + `let pure` prove a date pipeline effect-free; class target as constructor; `::` import-split for classmethods (`now`, `fromisoformat`); `operator.add`/`sub` as extern targets; `try` on an impossible date |
+| [`datetime.pyfun`](./datetime.pyfun) | `datetime` (stdlib) | ✅ | a **pure** FFI: `extern pure` + `let pure` prove a date pipeline effect-free; class target as constructor; `extern import` for classmethods (`now`, `fromisoformat`); `operator.add`/`sub` as extern targets; `try` on an impossible date |
 
 ## Reusable patterns (all verified against the current compiler)
 
@@ -78,12 +78,12 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   wrapper is needed. And where a library defines its API on `+`/`-` (as `datetime` does),
   Python's `operator` module exposes every operator as a plain function: `= operator.add`
   is a ready-made extern target (`datetime.pyfun`).
-- **`::` when the import heuristic can't see the split.** A dotted target's module is
+- **`extern import` when the heuristic can't see the module.** A dotted target's module is
   guessed by its lowercase prefix, which mis-reads a lowercase *class* (or value attribute)
-  as a submodule. A single `::` marks the split explicitly:
-  `extern now : unit -> Datetime = datetime::datetime.now` imports `datetime` and calls
-  `datetime.datetime.now()`; `sys::stdout.write` works the same way (`datetime.pyfun`,
-  `DESIGN.md` §6).
+  as a submodule. Declare it explicitly — Python's own import statement, `as` and all:
+  `extern import datetime` roots every `datetime.datetime.*` target in the file
+  (`datetime.pyfun`); `extern import numpy as np` lets targets say `np.zeros` and emits
+  `import numpy as np` (`DESIGN.md` §6).
 
 ## Honest limits (the frontier these examples expose)
 

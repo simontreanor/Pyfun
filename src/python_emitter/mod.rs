@@ -316,7 +316,14 @@ pub fn emit(module: &PyModule) -> String {
     if !classes.is_empty() {
         line(&mut out, 0, "from dataclasses import dataclass");
         let needs_total_ordering = classes.iter().any(|s| {
-            matches!(s, PyStmt::ClassDef { order: Some(_), record: false, .. })
+            matches!(
+                s,
+                PyStmt::ClassDef {
+                    order: Some(_),
+                    record: false,
+                    ..
+                }
+            )
         });
         if needs_total_ordering {
             line(&mut out, 0, "from functools import total_ordering");

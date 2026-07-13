@@ -301,14 +301,26 @@ submodule `urllib.request`, while `sqlite3.Connection.execute` imports only `sql
 is a class attribute, not a submodule); a target rooted at a builtin type (`str.upper`,
 `int.from_bytes`) imports nothing, since those names are always in scope. The one shape the heuristic
 can't see through is a *lowercase* attribute that is a value or class rather than a submodule
-(`sys.stdout.write`; classmethods on the lowercase class `datetime.datetime`). For those, a single
-**`::` in the target marks explicitly where the module path ends**: `extern now : unit -> Datetime =
-datetime::datetime.now` imports `datetime` (the prefix, trusted as written — the same
-signed-contract stance as the rest of the boundary) and references `datetime.datetime.now`. The
-marker is purely an import concern (the emitted reference is the full dotted path either way,
-`ExternDecl::import_split`), composes with pinned kwargs, appears at most once, and is rejected on an
-instance-access target (a leading-dot member path has no module part). Receiver-reachable members can
-of course still use the instance-access form below instead. A **nullary** extern (`unit -> a`,
+(`sys.stdout.write`; classmethods on the lowercase class `datetime.datetime`). For those, declare the
+module explicitly with **`extern import`** — Python's own import statement behind the `extern`
+keyword, `as` and all:
+
+```
+extern import datetime
+extern import numpy as np
+extern now : unit -> Datetime = datetime.datetime.now    # import datetime; datetime.datetime.now()
+extern zeros : int -> Arr = np.zeros                     # import numpy as np; np.zeros(n)
+```
+
+A used target rooted at a declared path (longest match) — or at its alias name — imports the module
+exactly as declared (trusted as written, the same signed-contract stance as the rest of the
+boundary), and only otherwise does the heuristic decide (`Lowerer::extern_import_spec`). One
+declaration serves every extern in the file rooted at that module. It is purely an import/lowering
+concern: no Pyfun name is bound, the checker ignores it (`Item::ExternImport`), an unused declaration
+emits nothing, and the emitted reference is always the full dotted target as written. The `extern`
+prefix keeps it distinct from Pyfun's own file-module `import Geometry` (§6.1) — the module graph and
+LSP are untouched. Receiver-reachable members can of course still use the instance-access form below
+instead. A **nullary** extern (`unit -> a`,
 e.g. `time.time`) applied to `()` lowers to a zero-argument call (`time.time()`), not `time.time(None)`
 — the unit argument is evaluated for effects but dropped. Arity is the number of leading arrows, so partial application of an
 extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still

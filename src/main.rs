@@ -132,10 +132,7 @@ fn check(path: &str) -> ExitCode {
         eprintln!("\n{n} error{}", if n == 1 { "" } else { "s" });
     }
     if hn > 0 {
-        eprintln!(
-            "{hn} unfilled hole{}",
-            if hn == 1 { "" } else { "s" }
-        );
+        eprintln!("{hn} unfilled hole{}", if hn == 1 { "" } else { "s" });
     }
     ExitCode::FAILURE
 }

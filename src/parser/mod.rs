@@ -38,10 +38,9 @@ pub mod ast;
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
     ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternArg,
-    ExternDecl,
-    FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding, MatchArm, Module,
-    NodeSpan,
-    Param, Pattern, Receiver, TypeDecl, TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
+    ExternDecl, FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding,
+    MatchArm, Module, NodeSpan, Param, Pattern, Receiver, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
+    UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -141,16 +140,6 @@ impl Parser {
     /// Start offset of the current (next-to-consume) token.
     fn cur_start(&self) -> usize {
         self.tokens[self.pos].span.start
-    }
-
-    /// Whether the cursor sits on a `::` — two **adjacent** `:` tokens (the lexer
-    /// has no compound token for it). Spaced colons (`a : : b`) do not count, so
-    /// the marker prints back exactly as written.
-    fn at_colon_colon(&self) -> bool {
-        *self.peek() == Tok::Colon
-            && *self.peek2() == Tok::Colon
-            && self.pos + 1 < self.tokens.len()
-            && self.tokens[self.pos].span.end == self.tokens[self.pos + 1].span.start
     }
 
     /// End offset of the most recently consumed token.
@@ -266,10 +255,10 @@ impl Parser {
         match self.peek() {
             Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
-            // `extern type Conn` declares an opaque handle type; `extern name : …` a value.
-            Tok::Extern if *self.peek2() == Tok::Type => {
-                Ok(Item::Type(self.parse_extern_type()?))
-            }
+            // `extern type Conn` declares an opaque handle type; `extern import m`
+            // a boundary module import; `extern name : …` a value.
+            Tok::Extern if *self.peek2() == Tok::Type => Ok(Item::Type(self.parse_extern_type()?)),
+            Tok::Extern if *self.peek2() == Tok::Import => self.parse_extern_import(),
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
             Tok::Import => self.parse_import(),
@@ -347,6 +336,28 @@ impl Parser {
         })
     }
 
+    /// `extern import python.path [as alias]` — a boundary module-import
+    /// declaration (`DESIGN.md` §6), mirroring Python's own import statement. A
+    /// used extern target rooted at the declared path (or at its alias) imports
+    /// the module exactly as written here, overriding the lowercase-prefix
+    /// heuristic. Binds no Pyfun name.
+    fn parse_extern_import(&mut self) -> Result<Item, ParseError> {
+        let start = self.cur_start();
+        self.expect(&Tok::Extern, "`extern`")?;
+        self.expect(&Tok::Import, "`import`")?;
+        let mut path = vec![self.parse_ident("Python module")?];
+        while self.eat(&Tok::Dot) {
+            path.push(self.parse_ident("Python module")?);
+        }
+        let alias = if self.eat(&Tok::As) {
+            Some(self.parse_ident("import alias")?)
+        } else {
+            None
+        };
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(Item::ExternImport { path, alias, span })
+    }
+
     /// `extern [pure] name : type [= a.b.c]` — a typed import of a Python callable
     /// or value (`DESIGN.md` §6). The optional `= …` clause gives the dotted Python
     /// path; omitted, the target is the Pyfun name itself.
@@ -363,42 +374,11 @@ impl Parser {
         // attribute/property (`resp.text`) — trailing `()` is the "call" marker.
         // A trailing `(kw = lit, …)` pins fixed Python keyword arguments on the
         // target, appended to every emitted call (`open(path, encoding="utf-8")`).
-        let (target, import_split, receiver, kwargs) = if self.eat(&Tok::Eq) {
+        let (target, receiver, kwargs) = if self.eat(&Tok::Eq) {
             let dotted = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
-            // Segments continue with `.`; a single `::` may mark where the module
-            // path ends (`datetime::datetime.now` imports `datetime`), overriding
-            // the lowercase-prefix import heuristic (`DESIGN.md` §6).
-            let mut import_split = None;
-            loop {
-                if self.eat(&Tok::Dot) {
-                    segs.push(self.parse_ident("Python attribute")?);
-                } else if self.at_colon_colon() {
-                    let start = self.cur_start();
-                    self.bump();
-                    self.bump();
-                    let span = Span::new(start, self.prev_end());
-                    if dotted {
-                        return Err(ParseError {
-                            message: "`::` marks the module to import, but an \
-                                      instance-access target (leading `.`) has no \
-                                      module path"
-                                .to_string(),
-                            span,
-                        });
-                    }
-                    if import_split.is_some() {
-                        return Err(ParseError {
-                            message: "an extern target may contain `::` at most once"
-                                .to_string(),
-                            span,
-                        });
-                    }
-                    import_split = Some(segs.len());
-                    segs.push(self.parse_ident("Python attribute")?);
-                } else {
-                    break;
-                }
+            while self.eat(&Tok::Dot) {
+                segs.push(self.parse_ident("Python attribute")?);
             }
             // Parentheses (present in all three receiver forms) may hold pinned
             // keyword arguments. For a leading-dot target they also mark the method
@@ -417,9 +397,9 @@ impl Parser {
             } else {
                 None
             };
-            (segs, import_split, receiver, kwargs)
+            (segs, receiver, kwargs)
         } else {
-            (vec![name.clone()], None, None, Vec::new())
+            (vec![name.clone()], None, Vec::new())
         };
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
@@ -428,7 +408,6 @@ impl Parser {
             name,
             ty,
             target,
-            import_split,
             receiver,
             kwargs,
             span,
