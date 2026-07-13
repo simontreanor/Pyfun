@@ -11,20 +11,6 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
-- **Persistent-process REPL** (M–L) — assessed 2026-07-13: **worth doing, gated on real REPL users**
-  (the launch / classroom push), not a non-goal — it fights no design decision, and every peer REPL a
-  student arrives from (`python`, ghci, fsi) has persistent state, putting this in the same false-friend
-  category as the `match:` syntax work. Today's REPL re-checks and re-runs the *accumulated definitions*
-  in a fresh Python per eval (`src/repl.rs`), which is inconsistent, not just limited: an effectful
-  *expression* runs once at entry, but an effectful *definition* runs zero times when entered and once per
-  *later* eval — `let db = connect …` re-creates its state on every subsequent entry, so REPL-driven
-  `extern` exploration (the classic Python workflow, and the showcase) degrades exactly where Pyfun wants
-  to shine. `let mut` doesn't carry either. Honest effort: the long-lived Python worker (`exec` blobs into
-  one namespace, stream output back) is the easy half; the real work is compiler-side **incremental
-  emission** — emit only the new entry's code against the already-executed program (`_pf_*` helper dedup,
-  hidden AP/ADT classes, deterministic naming all currently assume whole-program lowering). Cheap interim
-  mitigation (S) if the wart bites first: warn when a remembered definition's inferred effect is
-  `io`/`async` ("this definition will re-run on each later entry").
 - **Fold-pass coverage extensions ("Tier B")** (S–M per slice) — extend the landed in-place accumulation
   pass (`src/lowering/fold_loop.rs`, mechanics + soundness obligations in `DESIGN.md` §5.1) to fold shapes
   that today reject and fall back to `_pf_fold`: **local named folders** (network-rail's `dedupLegs` inner
