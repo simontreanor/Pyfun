@@ -159,6 +159,36 @@ For `lsp-mode` instead of eglot:
 
 ---
 
+## PyCharm / IntelliJ (including free mode and Community editions)
+
+Two pieces, both zero-code: an LSP client and syntax highlighting.
+
+**1. Language server via [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)**
+(Red Hat's free, open-source LSP client — works in unified PyCharm's free mode *and* the
+legacy Community editions):
+
+1. Install **LSP4IJ** from the plugin marketplace.
+2. **Settings → Languages & Frameworks → Language Servers**, click **+** to open the
+   *New Language Server* dialog.
+3. *Server* tab — **Name:** `pyfun`, **Command:** `pyfun lsp`
+4. *Mappings* tab — add a **File name pattern**: `*.pyfun` with **Language Id** `pyfun`.
+
+Open a `.pyfun` file: diagnostics, hover types/effects, go-to-definition, rename, and
+completion all work.
+
+**2. Syntax highlighting via the built-in TextMate Bundles support** (the IDE loads
+VS Code-format extensions directly):
+
+1. Clone this repo (or copy the [`vscode/`](vscode/) folder).
+2. **Settings → Editor → TextMate Bundles**, click **+**, and select the `editors/vscode`
+   directory.
+
+> On unified PyCharm/IntelliJ 2025.2+, JetBrains' native LSP API is also free for all
+> users, so a dedicated marketplace plugin is possible — it's on the roadmap for when
+> there's demand; the LSP4IJ route above needs nothing from us.
+
+---
+
 ## Any other editor
 
 If your editor has an LSP client, point it at:
