@@ -47,6 +47,21 @@ impl Drop for Project {
 const GEOMETRY: (&str, &str) = ("geometry.pyfun", "let area w h = w * h");
 
 #[test]
+fn version_flag_prints_the_crate_version() {
+    // The first command a cautious newcomer runs; all three spellings work.
+    for flag in ["--version", "-V", "version"] {
+        let out = Command::new(pyfun_bin()).arg(flag).output().unwrap();
+        assert!(out.status.success(), "{flag}");
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert_eq!(
+            stdout.trim(),
+            format!("pyfun {}", env!("CARGO_PKG_VERSION")),
+            "{flag}"
+        );
+    }
+}
+
+#[test]
 fn check_passes_over_the_whole_graph() {
     let proj = Project::new(
         "check_ok",
