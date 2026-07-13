@@ -409,7 +409,27 @@ Building the extension from source is covered in
 
 Not a VS Code user? Because the server is plain LSP over stdio, any editor with an LSP client
 works — copy-paste configs for **Neovim**, **Helix**, and **Emacs** are in
-[`editors/README.md`](https://github.com/simontreanor/Pyfun/tree/main/editors/README.md).
+[`editors/README.md`](https://github.com/simontreanor/Pyfun/tree/main/editors/README.md), along with a
+[Tree-sitter grammar](https://github.com/simontreanor/Pyfun/tree/main/editors/tree-sitter-pyfun).
+
+---
+
+## Jupyter
+
+Pyfun ships a Jupyter kernel — a type-checked notebook where definitions echo their inferred
+types and state persists across cells:
+
+```bash
+pip install "pyfun-lang[jupyter]"
+python -m pyfun_kernel.install
+```
+
+Then pick the **Pyfun** kernel in JupyterLab, VS Code, or any notebook UI. Every cell is
+type-checked against the session before anything runs — an ill-typed cell is rejected with
+rustc-style diagnostics and changes nothing. A cell can mix definitions with a trailing
+expression to display; re-running a cell re-runs the expression but not the definitions'
+effects (they ran once, at entry). Shift-Tab shows the inferred type of the identifier
+under the cursor.
 
 ---
 

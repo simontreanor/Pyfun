@@ -24,6 +24,7 @@ use pyfun::diagnostics::{self, Level};
 use pyfun::project::{self, ProjectError};
 use pyfun::syntax::{Item, Module};
 
+mod kernel;
 mod repl;
 
 fn main() -> ExitCode {
@@ -55,6 +56,7 @@ fn main() -> ExitCode {
         },
         Some("lsp") => lsp_server(),
         Some("repl") => repl::run(),
+        Some("kernel-engine") => kernel::run(),
         // Shorthand: a bare path means `compile <path>` to stdout.
         Some(path) => compile(path, None),
     }
@@ -73,6 +75,9 @@ fn help() {
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
+    eprintln!(
+        "  pyfun kernel-engine                       session engine for the Jupyter kernel (stdio)"
+    );
     eprintln!("  pyfun --version                           print the compiler version");
     eprintln!("  pyfun <file.pyfun>                        shorthand for `compile`");
 }
