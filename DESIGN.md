@@ -68,10 +68,12 @@ parse → type-infer/check → exhaustiveness check → immutability check → e
 What the compiler enforces, mirroring (and exceeding) F#:
 
 - **Type safety** — Hindley–Milner inference (no annotations required). *Optional* type annotations
-  (`let x : T`, `(x: T)`) are **parked** — deprioritized, not merely deferred (see ROADMAP): HM inference
-  is complete so the compiler needs none, and their strongest concrete driver (lifting the field-name
-  uniqueness restriction) already shipped via the use-site multimap *without* annotations.
-  Today everything is inferred and surfaced by LSP hover / `pyfun check` / REPL `:type`.
+  (`let x : T`, `(x: T)`) are a **non-goal** (see ROADMAP non-goals): HM inference is complete so the
+  compiler needs none, their strongest concrete driver (lifting the field-name uniqueness restriction)
+  already shipped via the use-site multimap *without* annotations, and annotation-free code is the point —
+  `extern` (§6) is the one place types are asked for on purpose. Everything is inferred and surfaced by
+  LSP hover / `pyfun check` / REPL `:type`. Sole revisit trigger: error localization under pure inference
+  becoming a real recurring pain — answered first by better HM diagnostics, not syntax.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
 - **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
   binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
@@ -120,7 +122,11 @@ the *declaration-side* exception to "never written": ordinary code remains annot
 an annotation elsewhere (say on a higher-order *argument* arrow) does not suppress the default — the
 extern still calls Python. Note declared effects are **exact** (no sub-effecting): a *pure* function
 does not satisfy a declared `->{io}` parameter, because two closed effect sets unify only when equal.
-Effect subsumption (pure ≤ io) is a possible later refinement.
+Effect subsumption (pure ≤ io) is a **non-goal** (ROADMAP): sound subsumption is directional, so it
+would thread polarity through the symmetric unifier and risk the `let pure` guarantee on a variance
+slip. Where a declared arrow must accept any effect (a boundary callback), the HM-native refinement is
+an effect *variable* in the extern signature, generalized like the stdlib's effect-polymorphic
+combinator schemes — deferred on demand (ROADMAP).
 
 The original coarse-`IO` design intent — pure-by-default with inferred, propagating purity; effects
 tracked in the type with room to grow toward an effect row; the Python boundary inherently effectful;
@@ -136,8 +142,8 @@ the opt-in, definition-level `let pure` assertion — never expression-body poll
 so a function whose body is an async block has an `->{async}` arrow and a `let pure` binding wrapping
 one is rejected (the label was already representable, annotatable via `->{async}` externs, and
 inferrable by propagation; the CE now contributes it too). Still open: the exact discharge story
-(is `io` terminal until a runtime boundary?) and effect subsumption (declared effects are exact — see
-above). Effect annotations in declared function types are **done** (`->{label, …}`), as is surfacing
+(is `io` terminal until a runtime boundary?); effect subsumption is a **non-goal** (declared effects
+stay exact — see above). Effect annotations in declared function types are **done** (`->{label, …}`), as is surfacing
 inferred effects in hover output — the LSP (§9) shows `->{io}` / `->{io, async}` on arrows when you
 hover an expression or binding name.
 
@@ -1236,8 +1242,13 @@ demands a wildcard.
 the **whole** pattern of an arm (no nesting under constructors / or- / as-patterns); case arguments
 after the parameter expressions must be **binders** (variables or `_`); the other arms of such a
 match must be literals, variables, or `_`. **Guards are supported** — a guarded match lowers to a
-fall-through `if`-sequence (below), so a failing guard falls through to the next arm. Lifting the
-remaining restrictions (nested case args, structural non-AP arms) is a fast-follow.
+fall-through `if`-sequence (below), so a failing guard falls through to the next arm. Of the remaining
+restrictions, only the *flat* conveniences are deferred (see ROADMAP): or-patterns over cases of one
+total pattern and structural non-AP arms — both fit this chain with no new type-system machinery.
+Nesting an AP under structural patterns, nested destructuring case arguments, and cross-module export
+are **non-goals** (ROADMAP): each needs recognizer application at projection paths and/or usefulness
+recursion into the hidden monomorphic case types (soundness-sensitive), and each has a direct
+workaround (guards; bind-then-destructure in the body; a nested `match`).
 
 **Lowering — an honest if/elif chain.** An active pattern is a *function call*, not a structural
 test, so Python's `match` cannot express it. The declaration lowers to a plain def

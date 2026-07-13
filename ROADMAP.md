@@ -11,135 +11,87 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
-- **Type annotations** (L) — `let x : T = …`, params `(x: T)`, return types. Parked: HM inference is
-  complete, so the compiler needs none, and types are already surfaced by LSP hover / `pyfun check` / REPL
-  `:type`. The one concrete unlock it once offered — lifting field-name uniqueness — shipped *without* it
-  (use-site multimap). Fights a load-bearing syntax decision: a depth-0 `:` is the `match`/`case` block
-  opener, so `let x : T` needs a disambiguating rule. **Revisit on a concrete driver:** error localization
-  becomes a real pain (better: improve HM *diagnostics* directly), or a deliberate F#-parity call. Cheap
-  partial slice if wanted: param annotations `(x: T)` alone (inside brackets `:` is free). `DESIGN.md` §8.3.
-- **Active-pattern fast-follows (residual)** (M) — **guards + lazy recognizer eval shipped** (the
-  fall-through `if`-sequence lowering, `lower_ap_match_seq`). Remaining shape rules: an AP only as an arm's
-  *whole* pattern (no nesting under ctors / or- / as-patterns); **binder-only case arguments** — no nested
-  *destructuring* like `case Small (x, y):` (a nested *literal* `case Small 0:` is already expressible as
-  `case Small s if s == 0:` via guards); structural non-AP arms restricted to literals/vars/`_`; and
-  module-local (cross-module export is a **non-goal** — the hidden type and mono field vars can't cross a
-  module boundary soundly). Nested destructuring case args need the usefulness algorithm to recurse into
-  AP-case field types (soundness-sensitive), for low marginal value now that guards cover literals.
-  `DESIGN.md` §7.2.1.
-- **Effect subsumption** (M) — declared effects are exact (two closed effect sets unify only when
-  equal), so a *pure* function does not satisfy a declared `->{io}`/`->{async}` parameter. Sound
-  subsumption (pure ≤ io) is *directional* — safe only at contravariant argument positions — so it needs
-  **polarity threaded through the unifier** (`unify` currently unifies `Ty::Fun` arg/result/effect
-  symmetrically) plus a directional effect-coerce. Low demand today, and done carelessly it lets effects
-  slip past `let pure`, so it wants its own careful pass. `DESIGN.md` §4.
-- **Persistent-process REPL** (M) — today's REPL re-runs the accumulated definitions on each eval, so pure
-  defs feel persistent but top-level effects / `let mut` don't carry across entries. A long-lived Python
-  process would make state genuinely persistent.
-- **`Format` module — dates follow-on** (S) — the numeric/string first cut shipped (`Format.fixed`/
-  `thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`). `formatDate` is still open: it needs a
-  date type or a Python `datetime` `extern`, so it was left out of the pure-stdlib first cut.
-- **`extern` stub generator** (L) — a `pyfun stub <module.pyi>` tool that reads a Python type stub (PEP 484
-  `.pyi`) and emits a *starting-point* `.pyfun` `extern` file: an `extern type` handle per class, an
-  `extern` signature per function/method (instance methods as the `= .method()` receiver form, §6). Cuts the
-  mechanical bulk of wrapping a library and complements the deferred façade/package-manager story below
-  (generate bindings, refine, publish once, `import` many). **Explicitly a scaffold, not an oracle:** a
-  `.pyi` cannot express what Pyfun most wants — effects (`io`/`async`), units, ADT/`Result` totality — and
-  hints are frequently absent or `Any`, so every generated arrow would be `io`-by-default and every unmapped
-  type an opaque `extern type` or an open `-> a` for the human to tighten (cf. widening the HTTP body to a
-  named `Bytes` handle in `examples/interop/http_fetch.pyfun`). This keeps the trusted-contract model (§4):
-  the tool proposes a signature, the programmer still signs it. Needs a small dependency-free `.pyi`-subset
-  parser. Note it does **not** remove extern annotations — the boundary contract is the one place Pyfun asks
-  for types on purpose; the generator only drafts them. `DESIGN.md` §6.
-- **Performance-directed lowering — in-place accumulation + defunctionalize hot folds** (L) — the
-  `examples/interop/network-rail` pair measures the cost of naive lowering: the pure-Pyfun `Seq.fold` over
-  the ~660k-line feed runs ~15x slower than the equivalent native-Python loop. **Profiling (2026-07-09)
-  pinpoints the culprit, and it is *not* call overhead:** `Map.add` lowers to
-  `dict(list(m.items()) + [[k, v]])` — a full O(n) dict copy *per insert* — so building the ~12k-entry
-  tiploc map inside the fold is O(n²), and cProfile put `_pf_map_add` at **87% of runtime**.
-  `List.concat`/`Set.add` share the shape. The per-element `functools.reduce` / `_pf_str_contains` call
-  overhead is real but secondary. A hand-written prototype of the fix — a mutable accumulator so
-  `Map.add`→`m[k] = v` and `List.concat`→`xs.append(e)` — ran **24.6x faster with byte-identical output** on
-  the map-build-dominated 100k-line slice. **On the full ~660k-line feed the landed pass measures ~1.5x**
-  (29.5s → 19.6s, byte-identical): the O(n²) build is only ~⅓ of full-file time, the rest being per-line
-  `_pf_str_contains` calls and gzip decode — so 24.6x is the figure when incremental collection-building
-  dominates, not a universal one (the residual per-line call overhead is what tiers 2–3 below target).
-  The instinct is the one the compiler already applies to currying (fully-applied calls collapse to direct
-  `f(a, b)`; `DESIGN.md` §5–6), extended to iteration.
-
-  Tiered plan, biggest measured win first. **(1) In-place linear accumulation — LANDED (Tier A).** When a
-  `Seq.fold`/`List.fold` threads its accumulator *linearly* (a fold's acc always does) and updates it only
-  via copy-returning collection ops (`Map.add`/`List.concat`/`Set.add`), the folder is inlined into a `for`
-  loop and those ops are rewritten to in-place mutation of a mutable local (`m[k] = v`, `xs.append(e)`).
-  Shipped as `src/lowering/fold_loop.rs` (hooked in `lower_application`, default-on with a `PYFUN_NO_FOLD_OPT`
-  kill switch; `DESIGN.md` §5.1): a two-phase, side-effect-free syntactic analysis (P1–P11 of the design
-  memo) that also inlines the folder body (tier 2, below), so it subsumes item (2) for the qualifying shape.
-  The `network-rail` `scan` now emits the mutable-accumulator loop with **byte-identical output** to the
-  `reduce` form (differential-gated). *Tier B deferral:* local named folders (e.g. `dedupLegs`'s inner
-  `step`), chained updates in one slot, fresh-reset slots (`(Map.empty, runs)`), `Map.remove`/`Set.remove`
-  (`m.pop`/`s.discard`), and defensive-copy `Var` inits — each rejects and falls back to `_pf_fold` today.
-  (A persistent-map/HAMT `Map` would kill the O(n²) generally, even outside folds, but is more work and still
-  loses to a bare `dict` on this pattern.) **(2)** Splice the folder body inline to drop the residual
-  per-element call overhead. **(3)** Stream-fuse `map`/`filter`/`take`/`fold` pipelines into one loop
-  (deforestation) so no intermediate iterators are built. **(4)** Gated micro-opts (hoist method lookups
-  out of loops), since they erode the line-to-line source correspondence Pyfun's *readable-output* promise
-  depends on.
-
-  The hard parts are the enabling analyses, not the emission: an **inlinability** check on the folder, a
-  **linearity/aliasing** check to license in-place accumulator mutation soundly (a fold's acc qualifies; a
-  captured/aliased value does not), and preserved effect ordering. Falls back to today's `reduce`/lazy-
-  combinator lowering whenever those don't hold, so it is strictly additive. Lives in `src/lowering` (see
-  the `_pf_fold` helper and the `Seq.*` cases).
-
-  Framing / ceiling: unlike F# — whose elegant `Seq` pipelines lean on the .NET **JIT** to become fast IL
-  at runtime — Pyfun targets un-JIT'd CPython, so *the compiler must be the AOT optimizer itself*. That
-  caps the target at "as fast as idiomatic hand-written Python," never F#-on-.NET; for merely-warm loops
-  that is plenty. It **complements, not replaces, the `extern` boundary**: better lowering raises the floor
-  so the pure version is viable more often, while a genuinely hot inner loop still belongs behind an
-  `extern` to an already-optimized library (numpy/polars/C) — you never out-codegen "call the fast thing
-  that already exists." Tier 1 is already measured (24.6x on the example, output-identical) and clearly
-  earns its keep — start there; tiers 2–4 are incremental and can be judged as they land.
-- **Specialize statically-known `Decode` decoders — the remaining sketched lever** (M–L) — after the
-  in-place fold pass and the UTF-8 read landed, `examples/interop/network-rail`'s pure variant sits at ~7s
-  vs the native-Python helper's ~5s (~1.3x). **A cProfile caution, learned the hard way here:** the profile
-  put `_pf_str_contains` at ~6s / 87% of the run, which *looked* like the residual — but that was a profiler
-  **artifact**. cProfile adds fixed per-call instrumentation, and this trivial O(1) wrapper is called
-  ~1.87M times, so the profiler's own overhead dominated its line; the real work (the `in` itself) is
-  unchanged whether inlined or not. **Inlining it (Lever A — landed)** — fully-applied pure 1:1 stdlib
-  wrappers now emit the Python idiom directly (`"CHIPNHM" in line`, `s.startswith(p)`, `not xs`) instead of a
-  `_pf_*` call (`DESIGN.md` §5.2) — proved the point when measured on **wall-clock**: same example compiled
-  both ways, back to back, it saved ~3% (~0.4s), not 6s. Lever A is worth keeping (a real, if small,
-  speedup, and *more readable* output), but the lesson is the bigger takeaway: **confirm a hot-small-function
-  profile line against wall-clock before believing it.** A **wall-clock ablation + a direct instrumented
-  measurement of the real `Decode` path** (2026-07-10) then located the rest: of a ~14s run (current
-  machine, ~2x its earlier state), **read+gunzip is ~5.7s and the substring prefilter is ~5.9s** — scanning
-  ~4500-char lines for an absent token, ~half the run each, and **both shared with the helper**; `json.loads`
-  is ~0.5s; and **the entire `Decode` path (json parse + interpreter) is ~1.3s, ~10% of wall.** So the
-  ~1.3x is *not* decode-bound: it nets to a small residual (the interpreter's overhead over the helper's
-  dict access, ~0.6s) on top of a run dominated by IO + substring scanning the helper pays too. The genuine
-  dominant cost, if one ever cared, is that shared prefilter (huge lines) — inherent to the workload, not a
-  Pyfun-vs-Python gap.
-
-  **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive). `Decode.decodeString`
-  builds a runtime decoder *value* and interprets it over `json.loads` output per line. When the decoder is
-  a syntactically-known composition of the simple combinators (`field`/`string`/`int`/`list`/`map2–4`/
-  `oneOf`/`succeed`), compile it to **direct dict/list access with inline error handling** (`Decode.field
-  "x" Decode.string`→a guarded `d["x"]`, `map3 f a b c`→`f(…)`), deforesting the combinator interpreter;
-  fall back to the interpreter for the dynamic cases (`andThen`, recursion, a decoder passed as a value).
-  The result must be **byte-identical** to the interpreter's `Result` (a wrong-type/missing-field yields the
-  same `Error`) — differential-gate it like the fold pass. NB for network-rail this is *minor* (the
-  substring prefilter means `Decode` runs on only ~12k of 660k lines); it is the right general lever for
-  decode-heavy workloads.
-
-  Same caveat as the fold entry: optional, diminishing-returns, reserve the boundary for genuinely-hot
-  loops. **For network-rail it is now measured out**: `Decode` is ~1.3s / ~10% of wall (see above), so this
-  pass could shave ~0.8s at most and would not touch the IO/prefilter-dominated bulk — it earns its keep on
-  *decode-heavy* workloads, not this one. `DESIGN.md` §5.2/§6.
+- **Active-pattern flat-match conveniences** (S–M) — the two residual shape rules whose lifting fits the
+  existing fall-through `if`-chain lowering with **no new type-system machinery**, deferred on zero demand
+  (the only AP user outside tests is the `examples/hello.pyfun` showcase): **or-patterns over cases of the
+  same total pattern** (`case Even | Odd:` — a disjunction of already-hoisted tests; binder-free
+  alternatives only) and **structural non-AP arms** beside AP arms (each lowers as one more condition /
+  one-armed native `match` in the chain; exhaustiveness stays conservative, still demanding `_`). Today
+  both have body-duplication or nested-`match` workarounds. Guards + lazy recognizer eval already shipped
+  (`lower_ap_match_seq`). Everything deeper — nesting, nested destructuring, export — is a **non-goal**
+  (below). `DESIGN.md` §7.2.1.
+- **Effect variables in `extern` arrows** (S–M) — the HM-native answer to the one real gap that exact
+  declared effects leave: a declared callback arrow must pick one closed effect level, so
+  `extern each : (a -> unit) -> List a -> unit` rejects a printing callback (bare `->` = pure) while
+  `->{io}` would reject a pure one — **no annotation accepts both**. Fix: let a lowercase name in `->{…}`
+  be an effect *variable* (`extern each : (a ->{e} unit) -> List a ->{io, e} unit`), generalized in the
+  extern's scheme — exactly how the stdlib's own effect-polymorphic `map`/`fold` schemes already work
+  (`Scheme::eff_vars`, most-general binding in `unify_eff`), so it's syntax + plumbing, no new theory.
+  Deferred on zero demand: no extern in the repo takes a function argument yet. Scoped to externs only —
+  effect vars in `type` fields would need effect-*parameterized* types, a whole axis (see the subsumption
+  non-goal below). `DESIGN.md` §4.
+- **Persistent-process REPL** (M–L) — assessed 2026-07-13: **worth doing, gated on real REPL users**
+  (the launch / classroom push), not a non-goal — it fights no design decision, and every peer REPL a
+  student arrives from (`python`, ghci, fsi) has persistent state, putting this in the same false-friend
+  category as the `match:` syntax work. Today's REPL re-checks and re-runs the *accumulated definitions*
+  in a fresh Python per eval (`src/repl.rs`), which is inconsistent, not just limited: an effectful
+  *expression* runs once at entry, but an effectful *definition* runs zero times when entered and once per
+  *later* eval — `let db = connect …` re-creates its state on every subsequent entry, so REPL-driven
+  `extern` exploration (the classic Python workflow, and the showcase) degrades exactly where Pyfun wants
+  to shine. `let mut` doesn't carry either. Honest effort: the long-lived Python worker (`exec` blobs into
+  one namespace, stream output back) is the easy half; the real work is compiler-side **incremental
+  emission** — emit only the new entry's code against the already-executed program (`_pf_*` helper dedup,
+  hidden AP/ADT classes, deterministic naming all currently assume whole-program lowering). Cheap interim
+  mitigation (S) if the wart bites first: warn when a remembered definition's inferred effect is
+  `io`/`async` ("this definition will re-run on each later entry").
+- **`datetime` interop cookbook example** (S) — the surviving piece of the old "`Format` dates follow-on"
+  (now a non-goal, below): a `examples/interop/datetime.pyfun` showing the boundary story for dates —
+  `extern type Datetime` handle, constructor/`now` externs, pinned instance methods (`.isoformat()`,
+  arithmetic via `.replace()`/`timedelta`). Probably the most-used Python stdlib module and the cookbook
+  doesn't cover it; a natural teaching example of `extern type` + instance-access targets. The numeric/
+  string `Format` first cut (`fixed`/`thousands`/`percent`/`currency`/`grouped`/`padLeft`/`padRight`)
+  shipped and is complete as-is.
+- **Fold-pass coverage extensions ("Tier B")** (S–M per slice) — extend the landed in-place accumulation
+  pass (`src/lowering/fold_loop.rs`, mechanics + soundness obligations in `DESIGN.md` §5.1) to fold shapes
+  that today reject and fall back to `_pf_fold`: **local named folders** (network-rail's `dedupLegs` inner
+  `step` is the live instance), **chained updates in one slot**, **fresh-reset slots** (`(Map.empty,
+  runs)`), **`Map.remove`/`Set.remove`** (`m.pop`/`s.discard`), and **defensive-copy `Var` inits**. This is
+  the one perf lever with a proven payoff profile — the O(n²)→O(n) collection-build collapse measured 24.6x
+  where incremental building dominates (~1.5x on the whole network-rail feed), byte-identical output —
+  extended shape by shape behind the same differential gate. Demand-driven: pick up a slice when a real
+  program's hot fold rejects. (A persistent-map/HAMT `Map` would kill the O(n²) generally but still loses
+  to a bare `dict` on this pattern.) The ceiling framing stands and caps all perf work: Pyfun targets
+  un-JIT'd CPython, so the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner
+  loop still belongs behind an `extern` to an already-fast library — the further lowering tiers (general
+  inlining, fusion, micro-opts) were measured out and are now **non-goals** (below).
+- **Specialize statically-known `Decode` decoders** (M–L, soundness-sensitive) — assessed 2026-07-13:
+  **worth keeping (not a non-goal), gated on a decode-dominated workload.** Unlike the measured-out
+  lowering tiers (non-goals, below), this deforests a per-record *interpreter* — `Decode.decodeString`
+  builds a runtime decoder value and walks it over `json.loads` output — so the payoff on its target class
+  is potentially multi-x, not single-digit %. When the decoder is a syntactically-known composition of the
+  simple combinators (`field`/`string`/`int`/`list`/`map2–4`/`oneOf`/`succeed`), compile it to **direct
+  dict/list access with inline error handling** (`Decode.field "x" Decode.string` → a guarded `d["x"]`,
+  `map3 f a b c` → `f(…)`); fall back to the interpreter for dynamic shapes (`andThen`, recursion, a
+  decoder passed as a value). Must be **byte-identical** to the interpreter's `Result` (same `Error` on
+  wrong-type/missing-field) — differential-gated like the fold pass. **Demand gate:** measured out for
+  network-rail (the 2026-07-10 wall-clock ablation put the entire `Decode` path at ~1.3s / ~10% of a ~14s
+  run — the bulk is gzip+read and a substring prefilter the native helper pays too — so ≤0.8s available);
+  pick it up only for bulk JSON→ADT workloads where decoding dominates *and* staying pure matters — a
+  genuinely hot decode loop can always drop to an `extern`. `DESIGN.md` §5.2/§6.
 - **Larger prelude / package manager / macros** — added on demand. A future Python-side runtime package
   could default to `uv`.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
+- **Type annotations (`let x : T`, `(x: T)`, return types)** — annotation-free code is a selling point,
+  not a gap: HM inference is complete so the compiler needs none, types are already surfaced by LSP hover /
+  `pyfun check` / REPL `:type`, and `extern` is the one place Pyfun asks for types on purpose (the boundary
+  contract). The one concrete unlock they once offered — lifting field-name uniqueness — shipped *without*
+  them (use-site multimap), and the syntax fights a load-bearing decision: a depth-0 `:` is the
+  `match`/`case` block opener. **Sole revisit trigger:** error *localization* under pure inference becomes a
+  real, recurring pain — and even then the first answer is better HM diagnostics (provenance / expected-vs-
+  found notes), with param annotations `(x: T)` alone (inside brackets `:` is free) as the fallback slice,
+  not full `let` annotations. `DESIGN.md` §3, §8.3.
 - **Visibility (`pub`)** — all-public is the Python-natural model; enforced privacy fights the ethos.
 - **Tail-call optimization** — CPython has none; the stack-safe path is the `List`/`Seq` combinators.
 - **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
@@ -149,6 +101,24 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   *structural* records Pyfun deliberately doesn't have — its records are nominal. Field-name ambiguity was
   solved instead with a lazy **use-site multimap** (a bare `p.x` errors only when two visible records
   genuinely share `x`, never at declaration/import). `DESIGN.md` §8.3.
+- **Effect subsumption (pure ≤ io subtyping)** — the wrong tool for the gap it would close. Declared
+  effects are exact (two closed sets unify only when equal), which only ever bites at *declared* arrows —
+  ordinary code is inference-first, and inferred higher-order functions are already effect-polymorphic, so
+  pure and impure arguments both flow everywhere annotations aren't written. Sound subsumption is
+  *directional* (safe only at contravariant positions), so it means threading polarity through a
+  symmetric HM unifier — an invasive, permanent complication — and a variance slip lets an effect past
+  `let pure`, the flagship guarantee. Where a declared arrow genuinely must accept any effect, the
+  HM-native fix is an effect *variable* (deferred, above), not subtyping. `DESIGN.md` §4.
+- **Active-pattern nesting & export** — three cutoffs keeping the feature honest to its lowering (an AP is
+  a *function call*, not a structural test): **(1) nesting an AP under structural patterns** — under
+  constructors (`case Some (Positive p):`), tuple scrutinees (`case (Positive p, Positive q):`), or
+  as-patterns — needs recognizer application at projection paths plus Maranget usefulness recursing into
+  hidden case sets at depth; the workaround is a nested `match` on the bound value. **(2) Nested
+  destructuring case arguments** (`case Small (x, y):`) — the same soundness-sensitive usefulness recursion
+  into the case's monomorphic field types, for ergonomics-only payoff: a nested *literal* is
+  `case Small s if s == 0:` (guards, shipped), and a tuple payload is bound whole and destructured in the
+  body. **(3) Cross-module export** — the hidden case-set type and its mono field vars can't cross a module
+  boundary soundly. Re-open only on a concrete driver; F#-parity alone doesn't qualify. `DESIGN.md` §7.2.1.
 - **Singly-linked `list` + `cons`/`head`/`tail` patterns** (F#'s `list`) — Pyfun's `List` *is* F#'s *array*
   (a Python `list`). A cons-cell type would lower to un-Pythonic linked nodes, and its recursive `x :: xs`
   idiom is stack-unsafe without TCO. Sequence patterns on the existing `List` (`case [x, *rest]`, done) are
@@ -163,8 +133,38 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   no types for.
 - **f-string format specifiers (`{x:.2f}`, `{v!r}`)** — an unchecked, stringly-typed sublanguage smuggled
   inside a string literal: the compiler can't see into it, so `.2f`→`.f2` misformats only at runtime and
-  nothing enforces consistency. The Pyfun way is centralized formatting functions (the `Format` module
-  above). Plain `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded.
+  nothing enforces consistency. The Pyfun way is centralized formatting functions (the shipped `Format`
+  module, `DESIGN.md` §6). Plain `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is
+  excluded.
+- **Further lowering tiers: general inlining, stream fusion, micro-opts (old perf tiers 2–4)** — measured
+  out on the flagship workload; each also pressures the *readable-output* promise. **(2) General
+  folder/call inlining:** the landed fold pass already splices the folder into the loop for every
+  qualifying fold, and the residual per-element call overhead is wall-clock-small — inlining the hottest
+  wrapper (1.87M calls) saved ~3%, after the cProfile line claiming 87% proved to be the profiler's own
+  per-call overhead (`DESIGN.md` §5.2). **(3) Stream fusion / deforestation:** rests on a false premise
+  here — `Seq` pipelines are already lazy iterators, nothing intermediate materializes — so fusion only
+  removes per-element indirection (the same small bucket: network-rail's entire interpreter residual is
+  ~0.6s of ~14s), while costing one of the hardest passes there is (effect ordering across fused stages)
+  and replacing a visible source pipeline with a fused loop the source doesn't show. **(4) Micro-opts**
+  (hoisting method lookups out of loops): noise-level wins, pure erosion of line-to-line correspondence.
+  Reopen (3) only on a profiled real workload where combinator indirection itself — not IO or costs shared
+  with native Python — dominates and an `extern` is inappropriate. `DESIGN.md` §5.1–5.2.
+- **`extern` stub generator** (`pyfun stub <module.pyi>` emitting draft extern files) — it would optimize
+  the part of the design that is deliberately small. The interop model is a *thin, curated* boundary — wrap
+  the handful of functions you call and sign each effect deliberately; the largest boundary any shipped
+  example needs is 10 externs (`http_fetch`). Bulk generation invites wide, untightened, `io`-by-default
+  surfaces nobody really signed, automating the step that was never the bottleneck while diluting the one
+  that matters (the trusted contract, §4). The mechanical drafting it offered is better done by an LLM
+  assistant from docs/stubs (same human-signs step after); a dependency-free `.pyi`-subset parser is an L
+  to build and a permanent second frontend to maintain, for inputs that are often absent, inline-only, or
+  `Any`-ridden. Reopen only if a façade/package ecosystem emerges with demonstrated churn hand-writing
+  *large* boundary files. `DESIGN.md` §6.
+- **Built-in date type / `Format.formatDate`** — doubly against the design. A native date type means
+  reimplementing calendar logic Python's `datetime` already has (the boundary-vs-engine thesis says call
+  it, don't rebuild it), and a general `formatDate` takes a strftime pattern — `"%Y-%m-%d"` is exactly the
+  stringly-typed mini-language the f-string-specifier non-goal rejects and the `Format` module exists to
+  replace; a *typed* date-format DSL is out of scope. Dates belong at the boundary: `extern type Datetime`
+  + pinned instance methods, where the programmer signs the contract — the cookbook example above.
 - **Unicode / symbol measure names (`<Ω>`, `<μ>`, superscript `m²`)** — measure names are ordinary
   identifiers, so this can't be scoped to units; it's language-wide Unicode identifiers (which would leak
   into Python names). Safe homoglyph handling (µ U+00B5 vs μ U+03BC) needs Unicode *normalization*, which
