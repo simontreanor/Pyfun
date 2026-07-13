@@ -3542,13 +3542,19 @@ fn fold_opt_nonatomic_key_is_hoisted() {
 // ----- adversarial: each must fall back to `_pf_fold` and stay correct -----
 
 #[test]
-fn fold_reject_named_init_binding() {
-    // A1: init is a named binding read after the fold — mutating it would corrupt.
+fn fold_named_init_binding_gets_a_defensive_copy() {
+    // Tier B: a `Var` init now qualifies via a defensive shallow copy
+    // (`m = dict(seed)`) — the loop mutates the copy, so a read of the
+    // original *after* the fold still sees it untouched (the invariant the
+    // old rejection protected).
     let src = "let seed = Map.empty\n\
                let grown = List.fold (fun m x -> Map.add x x m) seed [1, 2]\n\
                let a = Map.len seed\n\
                let b = Map.len grown";
-    assert_fold_fallback(src, &[("a", "0"), ("b", "2")]);
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("dict(seed)"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("a", "0"), ("b", "2")]);
 }
 
 #[test]
@@ -3658,4 +3664,251 @@ fn fold_reject_folder_is_a_parameter() {
     let src = "let foldWith f = List.fold f Map.empty [1, 2, 3]\n\
                let out = Map.len (foldWith (fun m x -> Map.add x x m))";
     assert_fold_fallback(src, &[("out", "3")]);
+}
+
+// ----- Tier B: block-local named folders -----
+
+#[test]
+fn fold_local_named_folder_block_lowers_to_loop() {
+    // A block-local `let step acc x = …` folder (its `def` and the fold share one
+    // Python frame) inlines to an in-place loop, just like a top-level folder.
+    let src = "let build xs =\n  \
+                 let step acc x = Map.add x (x * 2) acc\n  \
+                 List.fold step Map.empty xs\n\
+               let out = Map.toList (build [1, 2, 3])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for x in xs:"), "{py}");
+    assert!(py.contains("acc[x] ="), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[(1, 2), (2, 4), (3, 6)]")]);
+}
+
+#[test]
+fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
+    // The dedupLegs shape (examples/interop/network-rail/chippenham.pyfun): a
+    // block-local tuple-accumulator folder whose arm opens a block with a plain
+    // value `let k = …` (a whitelisted read of `seen` via `Map.tryFind`), storing
+    // the fresh element into the list slot.
+    let src = "type Leg = { depMin: int, dest: string }\n\
+               let dedupLegs legs =\n  \
+                 let step acc leg =\n    \
+                   match acc:\n      \
+                     case (seen, out):\n        \
+                       let k = f\"{leg.depMin}|{leg.dest}\"\n        \
+                       match Map.tryFind k seen:\n          \
+                         case Some _: (seen, out)\n          \
+                         case None: (Map.add k true seen, List.concat out [leg])\n  \
+                 match List.fold step (Map.empty, []) legs:\n    \
+                   case (_, out): out\n\
+               let out = List.map (fun l -> l.depMin) (dedupLegs [Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 2, dest = \"b\" }])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for leg in legs:"), "{py}");
+    assert!(py.contains("seen[k] = True"), "{py}");
+    assert!(py.contains("out.append(leg)"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[1, 2]")]);
+}
+
+// ----- Tier B: registry shadow-coherence (the folder name is rebound) -----
+
+#[test]
+fn fold_shadow_rebound_local_folder_uses_newest_body() {
+    // Rebinding `let step … let step …` in one block: the fold must inline the
+    // NEWEST body (`x * 2`), not the stale one (`x + 100`). Differential: the
+    // emitted loop carries the newest constant, and the value is the newest's.
+    let src = "let build xs =\n  \
+                 let step acc x = List.concat acc [x + 100]\n  \
+                 let step acc x = List.concat acc [x * 2]\n  \
+                 List.fold step [] xs\n\
+               let out = build [1, 2, 3]";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    // The dead `def step`s carry both constants; the LOOP (after the `for`) must
+    // carry only the newest body's `x * 2`.
+    let loop_body = &py[py.find("for x in xs:").expect("emitted loop")..];
+    assert!(loop_body.contains("x * 2"), "loop uses newest body:\n{py}");
+    assert!(
+        !loop_body.contains("x + 100"),
+        "loop must not use the stale body:\n{py}"
+    );
+    run_and_check(src, &[("out", "[2, 4, 6]")]);
+}
+
+#[test]
+fn fold_shadow_lambda_param_uses_parameter() {
+    // A lambda parameter named like an outer local folder shadows it: the fold
+    // uses the parameter (a runtime function value, so it falls back to `_pf_fold`)
+    // — never the stale outer `step` body. Correctness via the reduce value.
+    let src = "let build combiner xs =\n  \
+                 let step acc x = List.concat acc [x + 100]\n  \
+                 (fun step -> List.fold step [] xs) combiner\n\
+               let out = build (fun acc x -> List.concat acc [x * 2]) [1, 2, 3]";
+    let py = pyfun::compile(src).unwrap();
+    assert!(
+        py.contains("_pf_fold"),
+        "parameter folder is not inlinable:\n{py}"
+    );
+    run_and_check(src, &[("out", "[2, 4, 6]")]);
+}
+
+#[test]
+fn fold_shadow_match_binder_uses_binding() {
+    // A match-arm binder named like an outer local folder shadows it: the fold
+    // uses the binding, never the stale outer `step` body. Correctness via reduce.
+    let src = "let build sel xs =\n  \
+                 let step acc x = List.concat acc [x + 100]\n  \
+                 match sel:\n    \
+                   case Some step: List.fold step [] xs\n    \
+                   case None: []\n\
+               let out = build (Some (fun acc x -> List.concat acc [x * 2])) [1, 2, 3]";
+    let py = pyfun::compile(src).unwrap();
+    assert!(
+        py.contains("_pf_fold"),
+        "bound folder is not inlinable:\n{py}"
+    );
+    run_and_check(src, &[("out", "[2, 4, 6]")]);
+}
+
+// ----- Tier B: chained updates in one slot -----
+
+#[test]
+fn fold_chained_map_add_updates_one_slot_inner_first() {
+    // `Map.add k2 v2 (Map.add k1 v1 m)` → `m[k1]=v1` then `m[k2]=v2` — the inner
+    // add is emitted first, matching the value the copy chain would build.
+    let src = "let step m x = Map.add (x * 10) x (Map.add x x m)\n\
+               let out = Map.toList (List.fold step Map.empty [1, 2])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    let inner = py.find("m[x] = x").expect("inner add m[x] = x");
+    let outer = py.find("m[_pf_t0] = x").expect("outer add m[x * 10] = x");
+    assert!(inner < outer, "inner add must precede the outer:\n{py}");
+    run_and_check(src, &[("out", "[(1, 1), (10, 1), (2, 2), (20, 2)]")]);
+}
+
+// ----- Tier B: store-then-reset (the batching idiom) -----
+
+#[test]
+fn fold_reset_store_batching_idiom() {
+    // `([], List.concat groups [cur])` — the `cur` slot resets to a fresh `[]` and
+    // its OLD object is stored into `groups`. The old reference must be
+    // force-hoisted to a temp BEFORE the reset rebinds `cur`.
+    let src = "let step acc x =\n  \
+                 match acc:\n    \
+                   case (cur, groups):\n      \
+                     if x == 0 then ([], List.concat groups [cur])\n      \
+                     else (List.concat cur [x], groups)\n\
+               let out = match List.fold step ([], []) [1, 2, 0, 3, 0]: case (cur, groups): (cur, groups)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    let hoist = py.find("= cur").expect("force-hoisted old cur reference");
+    let reset = py.find("cur = _pf_t0").expect("cur reset to a fresh slot");
+    assert!(
+        hoist < reset,
+        "old cur must be hoisted before the reset:\n{py}"
+    );
+    assert!(
+        py.contains("groups.append("),
+        "old cur appended to groups:\n{py}"
+    );
+    run_and_check(src, &[("out", "([], [[1, 2], [3]])")]);
+}
+
+// ----- Tier B: Map.remove / Set.remove in chains -----
+
+#[test]
+fn fold_map_remove_in_chain_lowers_to_pop() {
+    // `Map.remove k (Map.add …)` → `m[…] = …` then `m.pop(k, None)` (mirrors
+    // `_pf_map_remove`), inner-first.
+    let src = "let step m x = Map.remove x (Map.add (x + 1) x m)\n\
+               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    let add = py.find("m[_pf_t0] = x").expect("inner add");
+    let pop = py.find("m.pop(x, None)").expect("Map.remove -> pop");
+    assert!(add < pop, "add must precede the remove:\n{py}");
+    run_and_check(src, &[("out", "[(4, 3)]")]);
+}
+
+#[test]
+fn fold_set_remove_in_chain_lowers_to_discard() {
+    // `Set.remove x (Set.add …)` → `s.add(…)` then `s.discard(x)` (mirrors
+    // `_pf_set_remove`), inner-first.
+    let src = "let step s x = Set.remove (x - 1) (Set.add x s)\n\
+               let out = Set.toList (List.fold step Set.empty [1, 2, 3])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    let add = py.find("s.add(x)").expect("inner Set.add");
+    let discard = py.find("s.discard(").expect("Set.remove -> discard");
+    assert!(add < discard, "add must precede the remove:\n{py}");
+    run_and_check(src, &[("out", "[3]")]);
+}
+
+// ----- Tier B: `Var` inits (defensive copy vs alias) -----
+
+#[test]
+fn fold_var_init_defensive_copy_dict_list_set() {
+    // Each mutated-in-place slot with a named (`Var`) init binds a defensive
+    // shallow copy whose constructor is inferred from its op family
+    // (`dict`/`list`/`set`); the originals read unchanged after the fold.
+    let src = "let step acc x =\n  \
+                 match acc:\n    \
+                   case (m, l, s): (Map.add x x m, List.concat l [x], Set.add x s)\n\
+               let dseed = Map.empty\n\
+               let lseed = []\n\
+               let sseed = Set.empty\n\
+               let r = List.fold step (dseed, lseed, sseed) [1, 2]\n\
+               let out = match r: case (m, l, s): (Map.toList m, l, Set.toList s)\n\
+               let origs = (Map.len dseed, List.len lseed, Set.len sseed)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    assert!(py.contains("dict(dseed)"), "dict copy:\n{py}");
+    assert!(py.contains("list(lseed)"), "list copy:\n{py}");
+    assert!(py.contains("set(sseed)"), "set copy:\n{py}");
+    run_and_check(
+        src,
+        &[
+            ("out", "([(1, 1), (2, 2)], [1, 2], [1, 2])"),
+            ("origs", "(0, 0, 0)"),
+        ],
+    );
+}
+
+#[test]
+fn fold_var_init_alias_for_passthrough_slot() {
+    // A pass-through slot (never mutated in place) with a `Var` init binds as a
+    // plain alias — no defensive copy constructor.
+    let src = "let step acc x =\n  \
+                 match acc:\n    \
+                   case (m, keep): (Map.add x x m, keep)\n\
+               let seed = Map.empty\n\
+               let seed2 = Map.empty\n\
+               let r = List.fold step (seed, seed2) [1, 2]\n\
+               let out = match r: case (m, keep): (Map.len m, Map.len keep, Map.len seed2)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    assert!(py.contains("m = dict(seed)"), "mutated slot copies:\n{py}");
+    assert!(
+        py.contains("keep = seed2"),
+        "pass-through slot aliases:\n{py}"
+    );
+    assert!(
+        !py.contains("dict(seed2)") && !py.contains("list(seed2)") && !py.contains("set(seed2)"),
+        "alias slot must not be copied:\n{py}"
+    );
+    run_and_check(src, &[("out", "(2, 0, 0)")]);
+}
+
+// ----- Tier B: soundness fix — parameterized local `let` closes over the accumulator -----
+
+#[test]
+fn fold_reject_parameterized_local_let_closure() {
+    // A *parameterized* local `let peek u = Map.len acc` is a deferred closure over
+    // the accumulator: it could observe a future mutation, so the fold is rejected
+    // (a plain value `let` with a whitelisted read still qualifies — see the dedup
+    // shape above).
+    let src = "let step acc x =\n  \
+                 let peek u = Map.len acc\n  \
+                 Map.add x (peek 0) acc\n\
+               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+    assert_fold_fallback(src, &[("out", "[(1, 0), (2, 1), (3, 2)]")]);
 }

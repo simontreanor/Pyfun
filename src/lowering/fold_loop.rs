@@ -1,12 +1,17 @@
-//! Tier-1 in-place linear accumulation for `Seq.fold` / `List.fold` (`DESIGN.md`
-//! §5).
+//! In-place linear accumulation for `Seq.fold` / `List.fold` (`DESIGN.md` §5) —
+//! Tier 1 plus the Tier B coverage extensions.
 //!
-//! A qualifying fully-applied fold whose accumulator is a fresh collection (or a
-//! flat tuple of fresh collections) threaded linearly through the folder is
-//! rewritten from `functools.reduce(f, xs, acc)` — which rebuilds a fresh
-//! container every step (O(n²) build-by-concat) — into a `for`-loop over a
-//! **mutable** accumulator, turning copy-returning ops into in-place mutations
-//! (`Map.add`→`m[k]=v`, `List.concat`→`.append`/`.extend`, `Set.add`→`.add`).
+//! A qualifying fully-applied fold whose accumulator is threaded linearly
+//! through the folder is rewritten from `functools.reduce(f, xs, acc)` — which
+//! rebuilds a fresh container every step (O(n²) build-by-concat) — into a
+//! `for`-loop over a **mutable** accumulator, turning copy-returning ops into
+//! in-place mutations (`Map.add`→`m[k]=v`, `Map.remove`→`.pop(k, None)`,
+//! `List.concat`→`.append`/`.extend`, `Set.add`→`.add`, `Set.remove`→
+//! `.discard`). The folder may be a lambda, a top-level named `let`, or a
+//! **block-local** named `let` (`local_fn_defs`, kept shadow-coherent in
+//! `mod.rs`); a tail leaf may **chain** updates in one slot and **reset** a slot
+//! to a fresh init; an init slot may be a named binding, bound via a defensive
+//! shallow copy (mutated slots) or an alias (untouched slots).
 //!
 //! Correctness is absolute: the analysis is a set of conservative *syntactic*
 //! proof obligations (P1–P11 in the memo) evaluated with **no** side effects on
@@ -26,19 +31,47 @@ use crate::python_emitter::{PyCase, PyExpr, PyStmt};
 
 use super::{LowerError, Lowered, Lowerer};
 
-/// A recognized per-slot update at a fold tail leaf, with the (still-unlowered)
+/// One recognized in-place update at a fold tail leaf, with the (still-unlowered)
 /// argument expressions the mutation needs.
 enum SlotOp<'a> {
-    /// `Var(slot)` in its own slot — the accumulator slot is unchanged.
-    Passthrough,
     /// `Map.add k v M` → `M[k] = v`.
     MapAdd { key: &'a Expr, val: &'a Expr },
+    /// `Map.remove k M` → `M.pop(k, None)` (mirrors `_pf_map_remove`).
+    MapRemove { key: &'a Expr },
     /// `List.concat M [e]` → `M.append(e)`.
     ListAppend { elem: &'a Expr },
     /// `List.concat M ys` → `M.extend(ys)` (ys mentions no sensitive name).
     ListExtend { ys: &'a Expr },
     /// `Set.add x M` → `M.add(x)`.
     SetAdd { elem: &'a Expr },
+    /// `Set.remove x M` → `M.discard(x)` (mirrors `_pf_set_remove`).
+    SetRemove { elem: &'a Expr },
+}
+
+/// One slot's plan at a tail leaf: an optional **fresh reset** as the chain base
+/// (`(Map.empty, …)` — the slot is rebound to a fresh container; safe because the
+/// loop's containers are never aliased, P11), then a **chain** of updates,
+/// innermost-first (`Map.add k2 v2 (Map.add k1 v1 m)` → `m[k1]=v1; m[k2]=v2`).
+/// `reset: None, ops: []` is a pass-through (the slot carries unchanged).
+struct SlotPlan<'a> {
+    reset: Option<&'a Expr>,
+    ops: Vec<SlotOp<'a>>,
+}
+
+/// How a slot's accumulator is initialized before the loop.
+#[derive(Clone, Copy, PartialEq)]
+enum InitKind {
+    /// A syntactically fresh literal (`Map.empty` / `Set.empty` / `[…]`).
+    Fresh,
+    /// A named binding the loop mutates in place — a **defensive shallow copy**
+    /// (`dict(v)` / `list(v)` / `set(v)`; the constructor is inferred from the
+    /// slot's update ops) keeps the original intact, exactly as the copy-returning
+    /// reduce form would. The copied *values* stay shared, as they do under
+    /// reduce (immutable Pyfun data).
+    Copy(&'static str),
+    /// A named binding the loop never mutates in place (pass-through / reset-only
+    /// slots) — bound directly; the reduce form returns the same object.
+    Alias,
 }
 
 /// The result of a successful analysis: everything [`Lowerer::emit_fold_loop`]
@@ -53,8 +86,11 @@ pub(super) struct FoldPlan<'a> {
     slots: Vec<String>,
     /// The folder's accumulator parameter (the destructure scrutinee / single slot).
     acc_param: String,
-    /// The fresh-init expression for each slot (parallel to `slots`).
+    /// The init expression for each slot (parallel to `slots`).
     inits: Vec<&'a Expr>,
+    /// How each slot's init binds (fresh literal / defensive copy / alias),
+    /// parallel to `inits`.
+    init_kinds: Vec<InitKind>,
     /// The collection folded over.
     xs: &'a Expr,
     /// The folder body to inline as the loop body (the destructure arm body for a
@@ -83,17 +119,30 @@ impl Lowerer {
         let [folder, init, xs] = args_ast else {
             return Ok(None);
         };
-        let is_lambda = matches!(&folder.kind, ExprKind::Fn { .. });
-        // P2: the folder must be an in-place 2-ary lambda literal, or a bare
-        // reference to a top-level 2-ary `let` (recorded in `top_fn_defs`) that is
-        // not shadowed by a local. Anything else (a `mut`, an extern, an imported
-        // member, a parameter) has no inlinable body — reject.
-        let (params, body): (Vec<Param>, Expr) = match &folder.kind {
+        // P2: the folder must be an in-place 2-ary lambda literal, a bare
+        // reference to a top-level 2-ary `let` (`top_fn_defs`), or a bare
+        // reference to a **block-local** 2-ary `let` (`local_fn_defs` — kept
+        // shadow-coherent by the block/param/arm hooks in `mod.rs`, so a hit is
+        // always the innermost binding). Anything else (a `mut`, an extern, an
+        // imported member, a parameter) has no inlinable body — reject.
+        //
+        // `same_frame` marks a folder whose free variables already resolve in the
+        // call site's own Python frame — a lambda (by construction) or a local
+        // named folder (its `def` and the fold share one frame, and Pyfun `let`
+        // shadowing lowers to reassignment of the same Python name, so inlining
+        // preserves resolution). A *top-level* named folder's frees resolve at
+        // module scope instead, so it keeps the P8 free-variable disjointness
+        // check below.
+        let (params, body, same_frame): (Vec<Param>, Expr, bool) = match &folder.kind {
             ExprKind::Fn { params, body } if params.len() == 2 => {
-                (params.clone(), (**body).clone())
+                (params.clone(), (**body).clone(), true)
             }
-            ExprKind::Var(f) if !locals.contains(f) => match self.top_fn_defs.get(f) {
-                Some((ps, b)) if ps.len() == 2 => (ps.clone(), b.clone()),
+            ExprKind::Var(f) if locals.contains(f) => match self.local_fn_defs.get(f) {
+                Some((ps, b)) if ps.len() == 2 => (ps.clone(), b.clone(), true),
+                _ => return Ok(None),
+            },
+            ExprKind::Var(f) => match self.top_fn_defs.get(f) {
+                Some((ps, b)) if ps.len() == 2 => (ps.clone(), b.clone(), false),
                 _ => return Ok(None),
             },
             _ => return Ok(None),
@@ -105,7 +154,7 @@ impl Lowerer {
         for frame in &self.fn_local_stack {
             enclosing.extend(frame.iter().cloned());
         }
-        let Some(plan) = self.plan_fold(&params, &body, init, xs, is_lambda, locals, &enclosing)
+        let Some(plan) = self.plan_fold(&params, &body, init, xs, same_frame, locals, &enclosing)
         else {
             return Ok(None);
         };
@@ -122,28 +171,28 @@ impl Lowerer {
         body: &'a Expr,
         init: &'a Expr,
         xs: &'a Expr,
-        is_lambda: bool,
+        same_frame: bool,
         locals: &HashSet<String>,
         enclosing: &HashSet<String>,
     ) -> Option<FoldPlan<'a>> {
         let acc_param = params[0].name.clone();
         let elem_param = params[1].name.clone();
 
-        // P3 + P4: classify the accumulator shape and its fresh init.
+        // P3 + P4: classify the accumulator shape. Each slot's init must be a
+        // fresh literal (`Map.empty`/`Set.empty`/a list literal) or a bare `Var`
+        // (bound by a defensive copy or an alias — classified after the tail
+        // walk below, which reveals whether the slot is mutated in place).
         let (single, slots, step_body, inits): (bool, Vec<String>, &'a Expr, Vec<&'a Expr>) =
             if let Some((names, arm_body)) = tuple_destructure(body, &acc_param) {
-                // Tuple accumulator: the init must be a literal tuple of the same
-                // arity whose every slot is `Map.empty`/`Set.empty`/a list literal.
                 let ExprKind::Tuple { elems } = &init.kind else {
                     return None;
                 };
-                if elems.len() != names.len() || !elems.iter().all(is_fresh_init) {
+                if elems.len() != names.len() || !elems.iter().all(is_allowed_init) {
                     return None;
                 }
                 (false, names, arm_body, elems.iter().collect())
             } else {
-                // Single accumulator: the init must itself be a fresh literal.
-                if !is_fresh_init(init) {
+                if !is_allowed_init(init) {
                     return None;
                 }
                 (true, vec![acc_param.clone()], body, vec![init])
@@ -171,11 +220,11 @@ impl Lowerer {
             return None;
         }
 
-        // P8 (free-var half): a NAMED folder's free variable that is also an
-        // enclosing local would resolve to the local at runtime after inlining
-        // (A9). A lambda's free vars are the call site's own scope by construction,
-        // so it is lowered under the site locals and this check is skipped.
-        if !is_lambda {
+        // P8 (free-var half): a TOP-LEVEL named folder's free variable that is
+        // also an enclosing local would resolve to the local at runtime after
+        // inlining (A9). A lambda's — or a block-local folder's — free vars are
+        // the call site's own frame by construction, so the check is skipped.
+        if !same_frame {
             let mut bound: HashSet<String> = sensitive.clone();
             bound.insert(elem_param.clone());
             let mut free = HashSet::new();
@@ -190,13 +239,37 @@ impl Lowerer {
             return None;
         }
 
-        // Locals for lowering the inlined body: the folder's own scope. A named
-        // folder sees only its params + slots (matching its own `def`, so
-        // `lower_var` rerouting is identical); a lambda additionally sees the call
-        // site's locals (where its free vars resolve).
+        // P4 (second half): classify each slot's init. A `Var` init needs the
+        // tail walk's verdict on whether the slot is mutated in place — if so, a
+        // defensive shallow copy whose constructor comes from the op family; if
+        // not (pass-through / reset-only), a plain alias. A `Var` init whose name
+        // is one of the loop-introduced names would read the slot before its
+        // first assignment (Python's function-wide locals) — reject.
+        let ctors = slot_ctors(step_body, &slots, &acc_param, single)?;
+        let mut init_kinds = Vec::with_capacity(inits.len());
+        for (i, e) in inits.iter().enumerate() {
+            let kind = match &e.kind {
+                ExprKind::Var(v) => {
+                    if introduced.contains(v) {
+                        return None;
+                    }
+                    match ctors[i] {
+                        Some(ctor) => InitKind::Copy(ctor),
+                        None => InitKind::Alias,
+                    }
+                }
+                _ => InitKind::Fresh,
+            };
+            init_kinds.push(kind);
+        }
+
+        // Locals for lowering the inlined body: the folder's own scope. A
+        // top-level named folder sees only its params + slots (matching its own
+        // `def`, so `lower_var` rerouting is identical); a lambda or local folder
+        // additionally sees the call site's locals (where its free vars resolve).
         let mut base_locals: HashSet<String> = sensitive.clone();
         base_locals.insert(elem_param.clone());
-        if is_lambda {
+        if same_frame {
             base_locals.extend(locals.iter().cloned());
         }
 
@@ -206,6 +279,7 @@ impl Lowerer {
             slots,
             acc_param,
             inits,
+            init_kinds,
             xs,
             step_body,
             site_locals: locals.clone(),
@@ -251,6 +325,13 @@ impl Lowerer {
                 }
                 let last = stmts.len() - 1;
                 stmts.iter().enumerate().all(|(i, s)| match s {
+                    // A *parameterized* local `let` is a nested function: its body
+                    // defers like a lambda, so a captured sensitive name would
+                    // observe a future mutation — hold it to the closure rule
+                    // (no sensitive mention at all), not the immediate-read rule.
+                    BlockStmt::Let(b) if !b.params.is_empty() => {
+                        !mentions_sensitive(&b.value, sensitive)
+                    }
                     BlockStmt::Let(b) => value_ok(&b.value, sensitive),
                     BlockStmt::Expr(e) if i == last => {
                         self.validate_fold_tail(e, slots, acc_param, single, sensitive)
@@ -265,15 +346,23 @@ impl Lowerer {
     /// The transform (only reached on a successful [`Lowerer::plan_fold`]).
     fn emit_fold_loop(&mut self, plan: &FoldPlan) -> Lowered {
         let mut stmts = Vec::new();
-        // A fresh accumulator per slot (P4). Lowered under the site locals; init
-        // literals have no free variables, so this only carries any (there are
-        // none) hoisted statements.
-        for (slot, init) in plan.slots.iter().zip(&plan.inits) {
+        // The accumulator per slot (P4), lowered under the site locals: a fresh
+        // literal binds directly, a mutated `Var` binds a defensive shallow copy
+        // (`dict(v)` — the original stays intact, exactly as under the
+        // copy-returning reduce form), an unmutated `Var` binds as an alias.
+        for ((slot, init), kind) in plan.slots.iter().zip(&plan.inits).zip(&plan.init_kinds) {
             let (s, v) = self.lower_value(init, &plan.site_locals)?;
             stmts.extend(s);
+            let value = match kind {
+                InitKind::Copy(ctor) => PyExpr::Call {
+                    func: Box::new(PyExpr::Name((*ctor).to_string())),
+                    args: vec![v],
+                },
+                InitKind::Fresh | InitKind::Alias => v,
+            };
             stmts.push(PyStmt::Assign {
                 target: slot.clone(),
-                value: v,
+                value,
             });
         }
         // The collection, evaluated once after the inits (P10), under site locals.
@@ -324,10 +413,14 @@ impl Lowerer {
                 let mut cases = Vec::new();
                 for arm in arms {
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let arm_locals = super::extend(locals, &super::pattern_bindings(&arm.pattern));
+                    let bindings = super::pattern_bindings(&arm.pattern);
+                    let arm_locals = super::extend(locals, &bindings);
+                    // Pattern binders shadow same-named local folders.
+                    let shadowed = self.shadow_local_fns(&bindings);
                     let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                     let body =
                         self.lower_fold_step(&arm.body, &arm_locals, slots, acc_param, single)?;
+                    self.unshadow_local_fns(shadowed);
                     cases.push(PyCase {
                         pattern,
                         guard,
@@ -344,10 +437,13 @@ impl Lowerer {
                 let mut out = Vec::new();
                 let mut locals = locals.clone();
                 let last = stmts.len().saturating_sub(1);
+                // Block scope for the local-folder registry (see `lower_block_return`).
+                let saved_local_fns = self.local_fn_defs.clone();
                 for (i, st) in stmts.iter().enumerate() {
                     match st {
                         BlockStmt::Let(b) => {
                             self.lower_let(b, &locals, &mut out)?;
+                            self.note_block_let(b);
                             locals.insert(b.name.clone());
                         }
                         BlockStmt::Expr(e) if i == last => {
@@ -362,6 +458,7 @@ impl Lowerer {
                         }
                     }
                 }
+                self.local_fn_defs = saved_local_fns;
                 Ok(out)
             }
             _ => self.lower_fold_leaf(body, locals, slots, acc_param, single),
@@ -369,9 +466,12 @@ impl Lowerer {
     }
 
     /// Lower one tail leaf to its in-place mutation statements (P7). Every op
-    /// argument is lowered (and hoisted to a temp when non-atomic) in copy-form
-    /// order *first*, then the mutations are emitted in slot order — so reads see
-    /// pre-mutation values and effect order matches the reduce form.
+    /// argument is lowered (and hoisted to a temp when non-atomic) *first*, then
+    /// the mutations are emitted in slot order — resets before their slot's ops,
+    /// chain ops innermost-first. Sound because the reduce form never mutates
+    /// anything: every read of a slot name there sees the iteration-start value,
+    /// which is exactly what hoisting all reads before all mutations preserves
+    /// (and the folder is pure, so hoist order among reads is unobservable).
     fn lower_fold_leaf(
         &mut self,
         leaf: &Expr,
@@ -380,39 +480,55 @@ impl Lowerer {
         acc_param: &str,
         single: bool,
     ) -> Result<Vec<PyStmt>, LowerError> {
-        let ops = classify_leaf(leaf, slots, acc_param, single).ok_or_else(|| LowerError {
+        let plans = classify_leaf(leaf, slots, acc_param, single).ok_or_else(|| LowerError {
             message: "internal error: fold tail leaf unclassifiable after validation".to_string(),
         })?;
 
         enum LoweredMut {
-            Noop,
+            Reset(String, PyExpr),
             MapAdd(String, PyExpr, PyExpr),
+            MapRemove(String, PyExpr),
             Append(String, PyExpr),
             Extend(String, PyExpr),
             SetAdd(String, PyExpr),
+            SetRemove(String, PyExpr),
         }
 
         let mut pre = Vec::new();
-        let mut lowered = Vec::with_capacity(ops.len());
-        for (i, op) in ops.iter().enumerate() {
-            match op {
-                SlotOp::Passthrough => lowered.push(LoweredMut::Noop),
-                SlotOp::MapAdd { key, val } => {
-                    let k = self.lower_hoist(key, &mut pre, locals)?;
-                    let v = self.lower_hoist(val, &mut pre, locals)?;
-                    lowered.push(LoweredMut::MapAdd(slots[i].clone(), k, v));
-                }
-                SlotOp::ListAppend { elem } => {
-                    let e = self.lower_hoist(elem, &mut pre, locals)?;
-                    lowered.push(LoweredMut::Append(slots[i].clone(), e));
-                }
-                SlotOp::ListExtend { ys } => {
-                    let y = self.lower_hoist(ys, &mut pre, locals)?;
-                    lowered.push(LoweredMut::Extend(slots[i].clone(), y));
-                }
-                SlotOp::SetAdd { elem } => {
-                    let x = self.lower_hoist(elem, &mut pre, locals)?;
-                    lowered.push(LoweredMut::SetAdd(slots[i].clone(), x));
+        let mut lowered = Vec::new();
+        for (i, plan) in plans.iter().enumerate() {
+            let slot = &slots[i];
+            if let Some(init) = plan.reset {
+                let v = self.lower_hoist(init, &mut pre, locals)?;
+                lowered.push(LoweredMut::Reset(slot.clone(), v));
+            }
+            for op in &plan.ops {
+                match op {
+                    SlotOp::MapAdd { key, val } => {
+                        let k = self.lower_hoist(key, &mut pre, locals)?;
+                        let v = self.lower_hoist_arg(val, &mut pre, locals, slots)?;
+                        lowered.push(LoweredMut::MapAdd(slot.clone(), k, v));
+                    }
+                    SlotOp::MapRemove { key } => {
+                        let k = self.lower_hoist(key, &mut pre, locals)?;
+                        lowered.push(LoweredMut::MapRemove(slot.clone(), k));
+                    }
+                    SlotOp::ListAppend { elem } => {
+                        let e = self.lower_hoist_arg(elem, &mut pre, locals, slots)?;
+                        lowered.push(LoweredMut::Append(slot.clone(), e));
+                    }
+                    SlotOp::ListExtend { ys } => {
+                        let y = self.lower_hoist(ys, &mut pre, locals)?;
+                        lowered.push(LoweredMut::Extend(slot.clone(), y));
+                    }
+                    SlotOp::SetAdd { elem } => {
+                        let x = self.lower_hoist_arg(elem, &mut pre, locals, slots)?;
+                        lowered.push(LoweredMut::SetAdd(slot.clone(), x));
+                    }
+                    SlotOp::SetRemove { elem } => {
+                        let x = self.lower_hoist(elem, &mut pre, locals)?;
+                        lowered.push(LoweredMut::SetRemove(slot.clone(), x));
+                    }
                 }
             }
         }
@@ -420,15 +536,24 @@ impl Lowerer {
         let mut out = pre;
         for m in lowered {
             match m {
-                LoweredMut::Noop => {}
+                LoweredMut::Reset(slot, v) => out.push(PyStmt::Assign {
+                    target: slot,
+                    value: v,
+                }),
                 LoweredMut::MapAdd(slot, k, v) => out.push(PyStmt::SubscriptAssign {
                     obj: PyExpr::Name(slot),
                     index: k,
                     value: v,
                 }),
-                LoweredMut::Append(slot, e) => out.push(method_call(slot, "append", e)),
-                LoweredMut::Extend(slot, y) => out.push(method_call(slot, "extend", y)),
-                LoweredMut::SetAdd(slot, x) => out.push(method_call(slot, "add", x)),
+                LoweredMut::MapRemove(slot, k) => {
+                    out.push(method_call2(slot, "pop", k, Some(PyExpr::NoneLit)));
+                }
+                LoweredMut::Append(slot, e) => out.push(method_call2(slot, "append", e, None)),
+                LoweredMut::Extend(slot, y) => out.push(method_call2(slot, "extend", y, None)),
+                LoweredMut::SetAdd(slot, x) => out.push(method_call2(slot, "add", x, None)),
+                LoweredMut::SetRemove(slot, x) => {
+                    out.push(method_call2(slot, "discard", x, None));
+                }
             }
         }
         Ok(out)
@@ -456,16 +581,43 @@ impl Lowerer {
             Ok(PyExpr::Name(tmp))
         }
     }
+
+    /// [`Lowerer::lower_hoist`] for a *stored-value* position, which may legally
+    /// be the whole object of a slot reset in the same leaf (`validate_leaf`).
+    /// Such a bare slot name is **force-hoisted** to a temp even though a name is
+    /// atomic: the mutation phase may rebind the slot (the reset) before this op
+    /// runs, and the store must capture the pre-reset reference.
+    fn lower_hoist_arg(
+        &mut self,
+        e: &Expr,
+        pre: &mut Vec<PyStmt>,
+        locals: &HashSet<String>,
+        slots: &[String],
+    ) -> Result<PyExpr, LowerError> {
+        if let ExprKind::Var(v) = &e.kind
+            && slots.contains(v)
+        {
+            let tmp = self.fresh_tmp();
+            pre.push(PyStmt::Assign {
+                target: tmp.clone(),
+                value: PyExpr::Name(v.clone()),
+            });
+            return Ok(PyExpr::Name(tmp));
+        }
+        self.lower_hoist(e, pre, locals)
+    }
 }
 
-/// `recv.method(arg)` as a bare-expression statement.
-fn method_call(recv: String, method: &str, arg: PyExpr) -> PyStmt {
+/// `recv.method(arg[, arg2])` as a bare-expression statement.
+fn method_call2(recv: String, method: &str, arg: PyExpr, arg2: Option<PyExpr>) -> PyStmt {
+    let mut args = vec![arg];
+    args.extend(arg2);
     PyStmt::Expr(PyExpr::Call {
         func: Box::new(PyExpr::Attribute {
             value: Box::new(PyExpr::Name(recv)),
             attr: method.to_string(),
         }),
-        args: vec![arg],
+        args,
     })
 }
 
@@ -519,8 +671,7 @@ fn tuple_destructure<'a>(body: &'a Expr, acc_param: &str) -> Option<(Vec<String>
 }
 
 /// P4: a syntactically fresh accumulator init — `Map.empty`, `Set.empty`, or a
-/// list literal. (A `Var` init is rejected: mutating a named binding in place
-/// could corrupt a value read after the fold.)
+/// list literal.
 fn is_fresh_init(e: &Expr) -> bool {
     if matches!(&e.kind, ExprKind::List { .. }) {
         return true;
@@ -531,22 +682,37 @@ fn is_fresh_init(e: &Expr) -> bool {
     )
 }
 
-/// P6: classify a tail leaf into a per-slot update plan, or `None` if it is not a
+/// P4: an acceptable slot init — a fresh literal, or a bare `Var` (bound via a
+/// defensive copy or an alias; classified after the tail walk in `plan_fold`).
+/// Mutating a named binding *in place* would corrupt a value read after the
+/// fold, so a `Var` init is never mutated directly — only its shallow copy is.
+fn is_allowed_init(e: &Expr) -> bool {
+    is_fresh_init(e) || matches!(&e.kind, ExprKind::Var(_))
+}
+
+/// P6: classify a tail leaf into per-slot update plans, or `None` if it is not a
 /// valid tail form. `Var(acc)` (or an all-pass-through tuple) is a no-op.
 fn classify_leaf<'a>(
     leaf: &'a Expr,
     slots: &[String],
     acc_param: &str,
     single: bool,
-) -> Option<Vec<SlotOp<'a>>> {
+) -> Option<Vec<SlotPlan<'a>>> {
     // `Var(acc)` — the accumulator returned unchanged (tuple: all slots).
     if let ExprKind::Var(v) = &leaf.kind
         && v == acc_param
     {
-        return Some((0..slots.len()).map(|_| SlotOp::Passthrough).collect());
+        return Some(
+            (0..slots.len())
+                .map(|_| SlotPlan {
+                    reset: None,
+                    ops: vec![],
+                })
+                .collect(),
+        );
     }
     if single {
-        Some(vec![classify_slot_op(leaf, &slots[0])?])
+        Some(vec![classify_slot(leaf, &slots[0])?])
     } else {
         let ExprKind::Tuple { elems } = &leaf.kind else {
             return None;
@@ -554,52 +720,79 @@ fn classify_leaf<'a>(
         if elems.len() != slots.len() {
             return None;
         }
-        let mut ops = Vec::with_capacity(elems.len());
+        let mut plans = Vec::with_capacity(elems.len());
         for (i, el) in elems.iter().enumerate() {
-            // A slot returned bare must be *its own* slot (position-preserving),
-            // never another (a swap `(b, a)` or duplication `(m, m)`).
-            if let ExprKind::Var(v) = &el.kind {
-                if v == &slots[i] {
-                    ops.push(SlotOp::Passthrough);
-                    continue;
-                }
-                return None;
-            }
-            ops.push(classify_slot_op(el, &slots[i])?);
+            // A slot returned bare must be *its own* slot (position-preserving) —
+            // a swap `(b, a)` or duplication `(m, m)` rejects in `classify_slot`
+            // (a foreign `Var` matches neither the slot nor any update form).
+            plans.push(classify_slot(el, &slots[i])?);
         }
-        Some(ops)
+        Some(plans)
     }
 }
 
-/// Recognize a single whitelisted update op whose collection argument is exactly
-/// `Var(slot)` in the position the copy helper mutates (P6). Position matters:
-/// `List.concat [e] M` (prepend) is **not** an update.
-fn classify_slot_op<'a>(e: &'a Expr, slot: &str) -> Option<SlotOp<'a>> {
+/// Classify one slot's tail expression as a **chain** of whitelisted update ops
+/// over a base that is either the slot itself (`Var(slot)`) or a fresh re-init
+/// (`Map.add k v (Map.remove k0 m)`, `(Map.empty, runs)`, …). Each op's
+/// collection argument must sit in exactly the position the copy helper mutates
+/// (P6) — `List.concat [e] M` (prepend) is **not** an update. Ops come out
+/// innermost-first, matching the value the copy chain would build.
+fn classify_slot<'a>(e: &'a Expr, slot: &str) -> Option<SlotPlan<'a>> {
+    if is_var(e, slot) {
+        return Some(SlotPlan {
+            reset: None,
+            ops: vec![],
+        });
+    }
+    if is_fresh_init(e) {
+        return Some(SlotPlan {
+            reset: Some(e),
+            ops: vec![],
+        });
+    }
     let mut args = Vec::new();
     let head = super::flatten_app(e, &mut args);
     let q = crate::types::qualified_name(head)?;
-    match q.as_str() {
-        "Map.add" if args.len() == 3 && is_var(args[2], slot) => Some(SlotOp::MapAdd {
-            key: args[0],
-            val: args[1],
-        }),
-        "Set.add" if args.len() == 2 && is_var(args[1], slot) => {
-            Some(SlotOp::SetAdd { elem: args[0] })
-        }
-        "List.concat" if args.len() == 2 && is_var(args[0], slot) => {
-            if let ExprKind::List { elems } = &args[1].kind
+    let (op, inner) = match q.as_str() {
+        "Map.add" if args.len() == 3 => (
+            SlotOp::MapAdd {
+                key: args[0],
+                val: args[1],
+            },
+            args[2],
+        ),
+        "Map.remove" if args.len() == 2 => (SlotOp::MapRemove { key: args[0] }, args[1]),
+        "Set.add" if args.len() == 2 => (SlotOp::SetAdd { elem: args[0] }, args[1]),
+        "Set.remove" if args.len() == 2 => (SlotOp::SetRemove { elem: args[0] }, args[1]),
+        "List.concat" if args.len() == 2 => {
+            let op = if let ExprKind::List { elems } = &args[1].kind
                 && elems.len() == 1
             {
-                return Some(SlotOp::ListAppend { elem: &elems[0] });
-            }
-            Some(SlotOp::ListExtend { ys: args[1] })
+                SlotOp::ListAppend { elem: &elems[0] }
+            } else {
+                SlotOp::ListExtend { ys: args[1] }
+            };
+            (op, args[0])
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    let mut plan = classify_slot(inner, slot)?;
+    plan.ops.push(op);
+    Some(plan)
 }
 
 /// P6 leaf validation: the leaf is classifiable *and* each op's non-collection
-/// arguments are occurrence-safe (extend's `ys` must mention no sensitive name).
+/// arguments are occurrence-safe (extend's `ys` must mention no sensitive name;
+/// a reset's list-literal elements are ordinary value-position reads).
+///
+/// One deliberate exception — the **store-then-reset** pattern (`([], List.concat
+/// done [cur])`, the batching idiom): a *stored value* position (`Map.add`'s
+/// val, `List.concat`'s appended element, `Set.add`'s element) may be the whole
+/// object of a slot **reset in the same leaf**. Sound because after the leaf the
+/// slot aliases a fresh container, so the stored object is never mutated through
+/// it again — exactly the object graph the copy-returning reduce form builds.
+/// (Key positions stay conservative, and the emission force-hoists the old
+/// reference before the reset rebinds the name.)
 fn validate_leaf(
     leaf: &Expr,
     slots: &[String],
@@ -607,15 +800,86 @@ fn validate_leaf(
     single: bool,
     sensitive: &HashSet<String>,
 ) -> bool {
-    let Some(ops) = classify_leaf(leaf, slots, acc_param, single) else {
+    let Some(plans) = classify_leaf(leaf, slots, acc_param, single) else {
         return false;
     };
-    ops.iter().all(|op| match op {
-        SlotOp::Passthrough => true,
-        SlotOp::MapAdd { key, val } => value_ok(key, sensitive) && value_ok(val, sensitive),
-        SlotOp::ListAppend { elem } | SlotOp::SetAdd { elem } => value_ok(elem, sensitive),
-        SlotOp::ListExtend { ys } => !mentions_sensitive(ys, sensitive),
+    // Slots reset in this leaf — their whole objects may be stored (above).
+    let reset_here: HashSet<&str> = plans
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.reset.is_some())
+        .map(|(i, _)| slots[i].as_str())
+        .collect();
+    let storable = |e: &Expr| {
+        matches!(&e.kind, ExprKind::Var(v) if reset_here.contains(v.as_str()))
+            || value_ok(e, sensitive)
+    };
+    plans.iter().all(|plan| {
+        plan.reset.is_none_or(|init| value_ok(init, sensitive))
+            && plan.ops.iter().all(|op| match op {
+                SlotOp::MapAdd { key, val } => value_ok(key, sensitive) && storable(val),
+                SlotOp::MapRemove { key } => value_ok(key, sensitive),
+                SlotOp::ListAppend { elem } | SlotOp::SetAdd { elem } => storable(elem),
+                SlotOp::SetRemove { elem } => value_ok(elem, sensitive),
+                SlotOp::ListExtend { ys } => !mentions_sensitive(ys, sensitive),
+            })
     })
+}
+
+/// The in-place-mutation constructor each slot needs for a defensive copy
+/// (`dict`/`list`/`set`), or `None` for a slot never mutated in place
+/// (pass-through / reset-only). Walks the same tail spine as
+/// `validate_fold_tail` (call only after it succeeds); a cross-family conflict
+/// (impossible for well-typed code) rejects the whole plan.
+fn slot_ctors(
+    body: &Expr,
+    slots: &[String],
+    acc_param: &str,
+    single: bool,
+) -> Option<Vec<Option<&'static str>>> {
+    fn walk(
+        body: &Expr,
+        slots: &[String],
+        acc_param: &str,
+        single: bool,
+        out: &mut Vec<Option<&'static str>>,
+    ) -> bool {
+        match &body.kind {
+            ExprKind::If { then, else_, .. } => {
+                walk(then, slots, acc_param, single, out)
+                    && walk(else_, slots, acc_param, single, out)
+            }
+            ExprKind::Match { arms, .. } => arms
+                .iter()
+                .all(|a| walk(&a.body, slots, acc_param, single, out)),
+            ExprKind::Block { stmts } => match stmts.last() {
+                Some(BlockStmt::Expr(e)) => walk(e, slots, acc_param, single, out),
+                _ => false,
+            },
+            _ => {
+                let Some(plans) = classify_leaf(body, slots, acc_param, single) else {
+                    return false;
+                };
+                for (i, plan) in plans.iter().enumerate() {
+                    for op in &plan.ops {
+                        let ctor = match op {
+                            SlotOp::MapAdd { .. } | SlotOp::MapRemove { .. } => "dict",
+                            SlotOp::ListAppend { .. } | SlotOp::ListExtend { .. } => "list",
+                            SlotOp::SetAdd { .. } | SlotOp::SetRemove { .. } => "set",
+                        };
+                        match out[i] {
+                            None => out[i] = Some(ctor),
+                            Some(prev) if prev == ctor => {}
+                            Some(_) => return false,
+                        }
+                    }
+                }
+                true
+            }
+        }
+    }
+    let mut out = vec![None; slots.len()];
+    walk(body, slots, acc_param, single, &mut out).then_some(out)
 }
 
 fn is_var(e: &Expr, name: &str) -> bool {

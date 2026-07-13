@@ -210,9 +210,24 @@ in-file `module`). Read-before-mutate and effect order are preserved by lowering
 (hoisting non-atomic ones to temps) **before** emitting the mutations. When in doubt, reject. The
 folder is always pure (an effectful folder does not typecheck against `fold`'s scheme), so the only
 ordering hazard is a value dependency between slots, which the hoisting handles. Full preconditions
-(P1–P11) live in the design memo the pass was built from. Tier B (local named folders, chained
-updates in one slot, fresh-reset slots, `Map.remove`/`Set.remove`, defensive-copy `Var` inits) is
-deferred (`ROADMAP.md`).
+(P1–P11) live in the design memo the pass was built from.
+
+**Tier B (implemented)** extends the qualifying shapes, each behind the same differential gate:
+**block-local named folders** (`dedupLegs`'s inner `step` — a scope-coherent registry
+(`local_fn_defs`) records 2-ary block `let`s, evicts on rebinding, and is *shadow-guarded* at every
+binder introduction (function parameters, match-arm patterns), so a hit is always the innermost
+binding; a local folder's frees resolve in the call site's own frame, so the top-level-folder
+free-variable check is skipped, like a lambda's); **chained updates in one slot** (`Map.add k2 v2
+(Map.add k1 v1 m)` → in-place ops innermost-first — sound because the reduce form never mutates, so
+hoisting every read before every mutation preserves what each read sees); **fresh-reset slots**
+(`([], List.concat done [cur])` — the slot rebinds to a fresh init; the *store-then-reset* exception
+licenses storing a reset slot's whole object into another slot, force-hoisting the old reference
+before the rebind); **`Map.remove`/`Set.remove`** (→ `m.pop(k, None)` / `s.discard(x)`, mirroring
+the copy helpers exactly); and **`Var` inits** (a mutated slot binds a defensive shallow copy —
+`dict(seed)`, constructor inferred from the slot's op family — so the original reads unchanged after
+the fold; an unmutated slot binds as an alias, preserving reduce's object identity). A related
+soundness fix landed with Tier B: a *parameterized* local `let` in a folder body is a deferred
+closure and is now held to the closure rule (no sensitive mention), not the immediate-read rule.
 
 ### 5.2 Inlining fully-applied pure stdlib predicates (implemented)
 

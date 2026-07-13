@@ -229,6 +229,15 @@ struct Lowerer {
     /// in-place linear-accumulation pass (`src/lowering/fold_loop.rs`, `DESIGN.md`
     /// §5). Only 2-ary defs are recorded (the folder arity).
     top_fn_defs: HashMap<String, (Vec<Param>, Expr)>,
+    /// The *block-local* counterpart of `top_fn_defs`: 2-ary `let` bindings of the
+    /// blocks currently being lowered, so a local named folder (`dedupLegs`'s
+    /// inner `step`) can be inlined too. Scope-correct by construction: each block
+    /// saves/restores the map around its statements, a non-folder rebinding
+    /// removes the name, and every shadowing binder introduction (function
+    /// parameters, match-arm pattern bindings) temporarily displaces its entry
+    /// (`shadow_local_fns`) — a stale entry must never be consulted, since the
+    /// pass would inline the *wrong* body.
+    local_fn_defs: HashMap<String, (Vec<Param>, Expr)>,
     /// Whether the in-place linear-fold optimization is enabled. Defaults to on;
     /// the `PYFUN_NO_FOLD_OPT` environment variable turns it off (a kill switch for
     /// differential testing — the rejected path is byte-identical to no-opt).
@@ -483,6 +492,7 @@ impl Lowerer {
             needed_imports: BTreeSet::new(),
             user_defs,
             top_fn_defs,
+            local_fn_defs: HashMap::new(),
             // Default the optimization on; `PYFUN_NO_FOLD_OPT` (any value) disables
             // it. Read once per module lowering — cheap, and covers every entry
             // point (`compile`/`run`/project/tests) for differential testing.
@@ -733,6 +743,50 @@ impl Lowerer {
         self.lower_binding_as(&binding.name, binding, locals, out)
     }
 
+    /// Record a block-level `let` in the local-folder registry (`local_fn_defs`):
+    /// a non-`mut` 2-ary binding (two `let` params, or a bare 2-ary lambda) is a
+    /// candidate named folder for the fold-loop pass; anything else *rebinding*
+    /// the name evicts a previous entry (the name no longer means that folder).
+    fn note_block_let(&mut self, b: &LetBinding) {
+        let folder = if b.mutable {
+            None
+        } else if b.params.len() == 2 {
+            Some((b.params.clone(), b.value.clone()))
+        } else if b.params.is_empty()
+            && let ExprKind::Fn { params, body } = &b.value.kind
+            && params.len() == 2
+        {
+            Some((params.clone(), (**body).clone()))
+        } else {
+            None
+        };
+        match folder {
+            Some(fb) => {
+                self.local_fn_defs.insert(b.name.clone(), fb);
+            }
+            None => {
+                self.local_fn_defs.remove(&b.name);
+            }
+        }
+    }
+
+    /// Temporarily displace registry entries shadowed by newly-introduced binders
+    /// (function parameters / match-arm pattern bindings), returning them for
+    /// [`Lowerer::unshadow_local_fns`]. Under a shadow, the name must not resolve
+    /// to the outer folder — the fold pass would inline the wrong body.
+    fn shadow_local_fns(&mut self, names: &[String]) -> Vec<(String, (Vec<Param>, Expr))> {
+        names
+            .iter()
+            .filter_map(|n| self.local_fn_defs.remove(n).map(|e| (n.clone(), e)))
+            .collect()
+    }
+
+    fn unshadow_local_fns(&mut self, saved: Vec<(String, (Vec<Param>, Expr))>) {
+        for (n, e) in saved {
+            self.local_fn_defs.insert(n, e);
+        }
+    }
+
     /// Lower a `let` binding, emitting it under `name` (so a module member can use
     /// its mangled `Module_member` name instead of `binding.name`).
     fn lower_binding_as(
@@ -802,9 +856,12 @@ impl Lowerer {
         nonlocals.sort();
         globals.sort();
 
+        // Parameters shadow any same-named local folder for the body's duration.
+        let shadowed = self.shadow_local_fns(params);
         self.fn_local_stack.push(bound);
         let lowered = self.lower_return(body, inner);
         self.fn_local_stack.pop();
+        self.unshadow_local_fns(shadowed);
         let mut stmts = lowered?;
 
         let mut decls = Vec::new();
@@ -843,9 +900,13 @@ impl Lowerer {
                 let mut cases = Vec::new();
                 for arm in arms {
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                    let bindings = pattern_bindings(&arm.pattern);
+                    let arm_locals = extend(locals, &bindings);
+                    // Pattern binders shadow same-named local folders (fold pass).
+                    let shadowed = self.shadow_local_fns(&bindings);
                     let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                     let body = self.lower_return(&arm.body, &arm_locals)?;
+                    self.unshadow_local_fns(shadowed);
                     cases.push(PyCase {
                         pattern,
                         guard,
@@ -877,10 +938,14 @@ impl Lowerer {
         let mut out = Vec::new();
         let mut locals = locals.clone();
         let last = stmts.len().saturating_sub(1);
+        // Block scope for the local-folder registry: entries this block adds
+        // (or evicts) must not outlive it.
+        let saved_local_fns = self.local_fn_defs.clone();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
                     self.lower_let(b, &locals, &mut out)?;
+                    self.note_block_let(b);
                     locals.insert(b.name.clone());
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
@@ -893,6 +958,7 @@ impl Lowerer {
                 }
             }
         }
+        self.local_fn_defs = saved_local_fns;
         Ok(out)
     }
 
@@ -1019,9 +1085,13 @@ impl Lowerer {
                 let mut cases = Vec::new();
                 for arm in arms {
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                    let bindings = pattern_bindings(&arm.pattern);
+                    let arm_locals = extend(locals, &bindings);
+                    // Pattern binders shadow same-named local folders (fold pass).
+                    let shadowed = self.shadow_local_fns(&bindings);
                     let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                     let (arm_stmts, arm_val) = self.lower_value(&arm.body, &arm_locals)?;
+                    self.unshadow_local_fns(shadowed);
                     cases.push(PyCase {
                         pattern,
                         guard,
@@ -1038,7 +1108,12 @@ impl Lowerer {
             ExprKind::Fn { params, body } => {
                 let names = param_names(params);
                 let inner = extend(locals, &names);
-                let (body_stmts, body_val) = self.lower_value(body, &inner)?;
+                // Lambda parameters shadow any same-named local folder while the
+                // body lowers (`lower_fn_body` re-guards the statement-body pass).
+                let shadowed = self.shadow_local_fns(&names);
+                let lowered = self.lower_value(body, &inner);
+                self.unshadow_local_fns(shadowed);
+                let (body_stmts, body_val) = lowered?;
                 if body_stmts.is_empty() {
                     Ok((
                         vec![],
@@ -1202,10 +1277,13 @@ impl Lowerer {
         let mut locals = locals.clone();
         let last = stmts.len().saturating_sub(1);
         let mut value = PyExpr::NoneLit;
+        // Block scope for the local-folder registry (see `lower_block_return`).
+        let saved_local_fns = self.local_fn_defs.clone();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
                     self.lower_let(b, &locals, &mut out)?;
+                    self.note_block_let(b);
                     locals.insert(b.name.clone());
                 }
                 BlockStmt::Expr(e) => {
@@ -1219,6 +1297,7 @@ impl Lowerer {
                 }
             }
         }
+        self.local_fn_defs = saved_local_fns;
         Ok((out, value))
     }
 
@@ -2244,7 +2323,10 @@ impl Lowerer {
         for arm in arms {
             let (cond, binds) =
                 self.ap_arm_test(&arm.pattern, &subject, locals, &mut hoisted, &mut stmts)?;
-            let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+            let bindings = pattern_bindings(&arm.pattern);
+            let arm_locals = extend(locals, &bindings);
+            // Pattern binders shadow same-named local folders (fold pass).
+            let shadowed = self.shadow_local_fns(&bindings);
             let body = match assign_to {
                 None => self.lower_return(&arm.body, &arm_locals)?,
                 Some(tmp) => {
@@ -2252,6 +2334,7 @@ impl Lowerer {
                     with_assign(s, tmp, v)
                 }
             };
+            self.unshadow_local_fns(shadowed);
             let catch_all = cond.is_none();
             chain.push((cond, binds, body));
             if catch_all {
@@ -2319,7 +2402,10 @@ impl Lowerer {
             // a failing case (or guard) falls out of the `match` and on to the
             // next arm. No recognizer is involved.
             if !self.ap_chain_supported(&arm.pattern) {
-                let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+                let bindings = pattern_bindings(&arm.pattern);
+                let arm_locals = extend(locals, &bindings);
+                // Pattern binders shadow same-named local folders (fold pass).
+                let shadowed = self.shadow_local_fns(&bindings);
                 let guard = self.lower_guard(&arm.guard, &arm_locals)?;
                 let body: Vec<PyStmt> = match (assign_to, &done) {
                     (None, _) => self.lower_return(&arm.body, &arm_locals)?,
@@ -2336,6 +2422,7 @@ impl Lowerer {
                         unreachable!("value position always allocates a sentinel")
                     }
                 };
+                self.unshadow_local_fns(shadowed);
                 let stmt = PyStmt::Match {
                     subject: PyExpr::Name(subject.to_string()),
                     cases: vec![PyCase {
@@ -2359,7 +2446,10 @@ impl Lowerer {
             let mut arm_block: Vec<PyStmt> = Vec::new();
             let (cond, binds) =
                 self.ap_arm_test(&arm.pattern, subject, locals, &mut hoisted, &mut arm_block)?;
-            let arm_locals = extend(locals, &pattern_bindings(&arm.pattern));
+            let bindings = pattern_bindings(&arm.pattern);
+            let arm_locals = extend(locals, &bindings);
+            // Pattern binders shadow same-named local folders (fold pass).
+            let shadowed = self.shadow_local_fns(&bindings);
             let guard = self.lower_guard(&arm.guard, &arm_locals)?;
             // The arm body: return it, or assign the temp and mark the sentinel.
             let body: Vec<PyStmt> = match (assign_to, &done) {
@@ -2375,6 +2465,7 @@ impl Lowerer {
                 }
                 (Some(_), None) => unreachable!("value position always allocates a sentinel"),
             };
+            self.unshadow_local_fns(shadowed);
             // binds, then the (optionally guarded) body.
             let mut inner = binds;
             match guard {
