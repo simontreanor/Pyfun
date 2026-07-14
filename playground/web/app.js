@@ -4,7 +4,15 @@
 // playground/src/lib.rs.
 import init, { compile } from "./pkg/pyfun_playground.js";
 
-const DEFAULT_SOURCE = `type Shape = Circle float | Rect float float
+// Curated examples, shown in the picker above the editor. Every one type-checks AND
+// runs in this playground (each was verified against the real compiler); the `# Try it`
+// note in each points at a single edit that makes a compiler check fire. The first entry
+// is loaded on start. Backticks in the Pyfun comments are escaped so they don't close
+// these JS template literals.
+const EXAMPLES = [
+  {
+    label: "Algebraic data types",
+    source: `type Shape = Circle float | Rect float float
 
 let area s =
   match s:
@@ -19,13 +27,91 @@ print (f"total area: {total}")
 
 # Try it: delete the \`Rect\` case above and watch the exhaustiveness error appear,
 # or hit Run to execute the compiled Python right here in the browser.
-`;
+`,
+  },
+  {
+    label: "JSON → typed records",
+    source: `# JSON into your own typed records, totally. Bad input is a value you handle, not a crash.
+type User = { name: string, age: int, roles: List string }
+
+# Build a decoder compositionally: \`field\` pulls one key, \`map3\` combines three
+# field decoders into one that constructs the record. The module threads the
+# \`Result\` railway for you, so there is no hand-written field access.
+let userDecoder =
+  Decode.map3 (fun name age roles -> User { name = name, age = age, roles = roles })
+    (Decode.field "name" Decode.string)
+    (Decode.field "age" Decode.int)
+    (Decode.field "roles" (Decode.list Decode.string))
+
+# Consuming the result is an exhaustive match: you must handle both outcomes.
+let describe r =
+  match r:
+    case Ok u: f"""{u.name} ({u.age}): {String.join ", " u.roles}"""
+    case Error e: f"decode failed ({e.errorKind}): {e.errorMessage}"
+
+print (describe (Decode.decodeString userDecoder """{"name": "ada", "age": 36, "roles": ["admin", "dev"]}"""))
+print (describe (Decode.decodeString userDecoder """{"name": "bob", "age": 40}"""))
+print (describe (Decode.decodeString userDecoder """{"name": "cy", "age": "old", "roles": []}"""))
+`,
+  },
+  {
+    label: "Typed Python FFI",
+    source: `# Typed Python FFI: call real libraries with types at the boundary, no runtime library.
+# \`extern pure\` names a Python function, gives it a Pyfun type, and promises it is
+# side-effect-free; \`pyfun compile\` lowers it to a plain \`import statistics\` + call.
+extern pure mean:  List float -> float = statistics.mean
+extern pure stdev: List float -> float = statistics.stdev
+
+type Summary = { n: int, mean: float, stdev: float }
+
+let summarize xs =
+  Summary { n = List.len xs, mean = mean xs, stdev = stdev xs }
+
+print (summarize [1.0, 2.0, 3.0, 4.0])
+`,
+  },
+  {
+    label: "Units of measure",
+    source: `# Units of measure: dimensions are checked at compile time, then erased to plain numbers.
+measure m
+measure s
+
+# Quantities combine by dimension, not just by number. Metres add to metres, and
+# dividing a distance by a time gives a derived <m/s> unit, all inferred.
+let distance = 100.0<m> + 50.0<m>
+let pace = distance / 25.0<s>
+
+print (f"{pace} m/s")
+
+# The check is real: change one 50.0<m> to 50.0<s> and it stops compiling,
+# because you cannot add metres to seconds.
+`,
+  },
+  {
+    label: "Inferred effects",
+    source: `# Effects are inferred, never annotated. Purity propagates through calls, and
+# \`let pure\` is a promise the compiler checks: a side effect in the body is an error.
+let double x = x * 2
+
+let pure triple x = x * 3
+
+# Uncomment to watch \`let pure\` reject an impure body (print performs io):
+# let pure oops x =
+#   print x
+#   x
+
+print (double 21)
+print (triple 14)
+`,
+  },
+];
 
 const editor = document.getElementById("editor");
 const output = document.getElementById("output");
 const diagnostics = document.getElementById("diagnostics");
 const runBtn = document.getElementById("run");
 const runOutput = document.getElementById("run-output");
+const examplePicker = document.getElementById("examples");
 
 // The last successfully compiled Python (what Run executes), or null when the program
 // doesn't compile.
@@ -87,6 +173,23 @@ let timer = null;
 editor.addEventListener("input", () => {
   clearTimeout(timer);
   timer = setTimeout(render, 150);
+});
+
+// Populate the example picker and load the chosen example into the editor. Selecting an
+// example replaces the editor contents (the usual playground behaviour); until then the
+// user's own edits are left alone.
+for (let i = 0; i < EXAMPLES.length; i++) {
+  const opt = document.createElement("option");
+  opt.value = String(i);
+  opt.textContent = EXAMPLES[i].label;
+  examplePicker.appendChild(opt);
+}
+examplePicker.addEventListener("change", () => {
+  const ex = EXAMPLES[Number(examplePicker.value)];
+  if (!ex) return;
+  editor.value = ex.source;
+  render();
+  editor.focus();
 });
 
 // --- Pyodide runs in a Web Worker (pyodide-worker.js), off the main thread, so loading
@@ -157,7 +260,7 @@ runBtn.addEventListener("click", async () => {
 
 async function main() {
   await init();
-  editor.value = DEFAULT_SOURCE;
+  editor.value = EXAMPLES[0].source;
   render();
 }
 

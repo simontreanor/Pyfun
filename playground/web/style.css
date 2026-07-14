@@ -77,6 +77,29 @@ main {
 #run:hover:not(:disabled) { filter: brightness(1.1); }
 #run:disabled { background: var(--border); color: var(--muted); cursor: default; }
 
+.example-pick {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+#examples {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+#examples:hover { border-color: var(--muted); }
+#examples:focus { outline: 1px solid var(--info); outline-offset: 0; }
+
 #run-output {
   border-top: 1px solid var(--border);
   padding: 10px 14px;

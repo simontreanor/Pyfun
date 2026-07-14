@@ -10,16 +10,21 @@
   <header>
     <h1>Pyfun <span>Playground</span></h1>
     <p>
-      Write Pyfun on the left; the readable Python it compiles to appears on the right,
-      type-checked live by the real compiler running in your browser via WebAssembly.
-      Hit <strong>Run</strong> to execute that Python — CPython itself, in the browser
-      (Pyodide). No server, no runtime library.
+      Pick an example and tweak it on the left; the readable Python it compiles to appears
+      on the right, type-checked live by the real compiler running in your browser via
+      WebAssembly. Hit <strong>Run</strong> to execute that Python — CPython itself, in the
+      browser (Pyodide). No server, no runtime library.
     </p>
   </header>
 
   <main>
     <section class="pane">
-      <div class="pane-label"><span>Pyfun</span></div>
+      <div class="pane-label">
+        <span>Pyfun</span>
+        <label class="example-pick">example&nbsp;
+          <select id="examples" aria-label="Load an example"></select>
+        </label>
+      </div>
       <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
       <div id="diagnostics"></div>
     </section>
