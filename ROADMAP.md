@@ -58,9 +58,11 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   + TextMate grammar + LSP4IJ wiring, free mode + legacy CE, 2024.2+); **in moderation**
   (~1–3 business days — check plugins.jetbrains.com for approval or reviewer feedback).
   Later releases automate via `gradle publishPlugin`.
-- **Zed extensions registry** — extension built and user-verified; publication = PR to
-  zed-industries/extensions (check whether a repo subdirectory is accepted or a dedicated
-  repo is needed).
+- **Zed extensions registry** — PR open
+  ([zed-industries/extensions#6814](https://github.com/zed-industries/extensions/pull/6814)):
+  the main repo as a submodule with `path = editors/zed` (no dedicated repo needed; the
+  registry required a LICENSE file inside the extension dir — added). On merge, Pyfun is
+  one-click in Zed's extension panel.
 - **Upstream registry PRs** — status after the 2026-07-14 sweep:
   - **Helix**: PR open ([helix-editor/helix#16036](https://github.com/helix-editor/helix/pull/16036)) —
     languages.toml + git/rev/subpath grammar + Helix-scope queries; their query-check/docgen run
@@ -74,7 +76,10 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
     neovim-treesitter fork org, or parser management in Neovim core — neovim/neovim#39006). A
     fully validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`, parser entry
     + queries, their linter clean) ready to retarget when the ecosystem settles.
-  - **MELPA** `pyfun-mode` recipe: PR in flight (reviews code quality, not popularity).
+  - **MELPA** `pyfun-mode` recipe: PR open
+    ([melpa/melpa#10094](https://github.com/melpa/melpa/pull/10094)); their process asked for an
+    `Assisted-by:` header on the elisp (added). MELPA reviews code, not popularity — expect
+    interactive review comments.
 - **Sublime Text Package Control** (M, new audience) and a **Pygments lexer** on PyPI (S–M;
   improves JupyterLab/nbconvert/Sphinx rendering — kernel currently declares the `fsharp`
   lexer as an approximation) — both demand-gated.
