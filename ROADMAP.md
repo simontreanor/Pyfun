@@ -54,10 +54,10 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 - **Open VSX** — DONE 2026-07-14: `pyfun.pyfun` 0.0.12 published and indexed (covers
   VSCodium/code-server/Gitpod/Theia). Future releases: `ovsx publish <vsix> -p <token>`.
-- **JetBrains Marketplace** — plugin BUILT (`editors/jetbrains/`, thin: file type + TextMate
-  grammar + LSP4IJ wiring, works in free mode + legacy CE, 2024.2+). Awaiting the one-time
-  MANUAL first upload (JetBrains rule; see `editors/jetbrains/README.md`), then moderation
-  (~1–3 days); later releases automate via `gradle publishPlugin`.
+- **JetBrains Marketplace** — plugin uploaded 2026-07-14 (`editors/jetbrains/`, thin: file type
+  + TextMate grammar + LSP4IJ wiring, free mode + legacy CE, 2024.2+); **in moderation**
+  (~1–3 business days — check plugins.jetbrains.com for approval or reviewer feedback).
+  Later releases automate via `gradle publishPlugin`.
 - **Zed extensions registry** — extension built and user-verified; publication = PR to
   zed-industries/extensions (check whether a repo subdirectory is accepted or a dedicated
   repo is needed).
