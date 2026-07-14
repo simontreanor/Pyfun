@@ -28,6 +28,7 @@ examples/interop/network-rail/chippenham-routes.md
 *.swp
 .DS_Store
 .vscode/
+.ipynb_checkpoints/
 
 # VS Code extension client (installed locally, not vendored)
 editors/vscode/node_modules/
