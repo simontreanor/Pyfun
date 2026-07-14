@@ -94,7 +94,8 @@ require('nvim-treesitter.parsers').get_parser_configs().pyfun = {
 
 ## Helix
 
-Add to `~/.config/helix/languages.toml`:
+Add to `~/.config/helix/languages.toml` (on Windows: `%AppData%\helix\languages.toml` —
+Helix does not honor `XDG_CONFIG_HOME` there):
 
 ```toml
 [language-server.pyfun]

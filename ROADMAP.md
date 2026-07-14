@@ -30,36 +30,26 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
 
-## Verification gaps (things shipped but not exercised locally — missing program, not missing code)
+## Verification gaps (things shipped but not exercised on the real surface)
 
-Everything here has a tested core (compiler-side tests, protocol tests, or upstream-docs fidelity);
-what's missing is a run on the real third-party surface, because the program isn't installed on the
-dev machine. Close each by running the listed check once; delete its line when it passes.
+Sweep completed 2026-07-14: Neovim 0.12 (5/5 headless checks: filetype/syntax/LSP attach/hover/
+diagnostics), Helix 25.07 (health + the `[[grammar]] git+subpath` fetch AND build + highlights),
+Emacs 30.2 (eglot attach + hover; note `eglot-ensure` needs interactive Emacs — batch tests must
+call `eglot--connect` directly), Tree-sitter (40 corpus goldens + themed render audit), and the
+Jupyter kernel — interrupt (CPU-bound cell aborts in ~50ms; a cell blocked in a C call does not
+interrupt promptly on Windows, verified identical in the stock python3 kernel), engine-death
+replay, and macOS/Linux/Windows via the `kernel.yml` CI matrix running `tests/kernel_e2e.py` on
+every push (all green). JupyterLab UI session user-confirmed (if cells show empty `[ ]` with no
+output, restart the Jupyter server before suspecting the kernel). Wheel/install/discovery chain
+verified against the released v0.0.9 in a clean venv.
 
-- **Neovim** (no `nvim`): the `editors/nvim/` regex syntax + ftdetect/ftplugin have never been loaded,
-  and the `vim.lsp.config` / `vim.lsp.start` snippets in `editors/README.md` are unexercised. Check:
-  open a `.pyfun` file, confirm highlighting + hover. Likewise the **nvim-treesitter** parser
-  registration (compiles `src/parser.c` + `scanner.c` via `:TSInstall pyfun`).
-- **Helix** (no `hx`): the `languages.toml` entry, the `[[grammar]] source = { git, subpath }` fetch
-  of `editors/tree-sitter-pyfun`, and the runtime-queries copy are untested. Check: `hx --grammar
-  fetch && hx --grammar build`, open a file, `:log-open` for LSP.
-- **Emacs** (not installed): the eglot and lsp-mode snippets are unexercised.
-- **PyCharm/IntelliJ** (not installed): the LSP4IJ user-defined-server steps and the TextMate-bundle
-  import of `editors/vscode/` are transcribed from LSP4IJ's docs, not clicked through.
-- **Zed**: named as a Tree-sitter beneficiary but no Zed extension exists — that's a small authored
-  artifact (extension.toml + grammar ref), not just a config; unscoped.
-- **Tree-sitter rendering**: captures are validated with `tree-sitter query`, but no themed
-  highlight render (`tree-sitter highlight` needs a configured theme) and no `test/corpus/` golden
-  trees — the gate is the zero-ERROR parse sweep + compiler-validated `test/stress.pyfun`.
-- **Jupyter kernel**: verified end-to-end via `jupyter_client` on Windows/CPython 3.14 — including,
-  against the released v0.0.9 wheel in a clean venv: the `[jupyter]` extra, `python -m
-  pyfun_kernel.install --sys-prefix`, a full cell session on the installed kernelspec, and the
-  binary-discovery fix (PYFUN_BIN → same-env → PATH; the 0.0.8 wheel had PATH-first, which a stale
-  global `pyfun` could break). A real JupyterLab UI session was user-confirmed working 2026-07-14
-  (note: the first attempt showed silent cells until the Jupyter server was restarted — if cells
-  show empty `[ ]` with no output, check Kernel menu / restart the server before suspecting the
-  kernel). Still open: (a) the engine-death replay path in `kernel.py` is code-reviewed only,
-  (b) KeyboardInterrupt during a long cell untested, (c) macOS/Linux untested.
+Still open — native-GUI click-throughs only (installed and ready, needs human eyes):
+
+- **PyCharm** (installed): the LSP4IJ user-defined-server steps + TextMate-bundle import in
+  `editors/README.md` are transcribed from LSP4IJ's docs, not yet clicked through.
+- **Zed** (installed; extension authored at `editors/zed/`, queries validated, WASM compiles):
+  install it via Extensions → Install Dev Extension and confirm highlighting + LSP in the UI.
+  Registry publication (PR to zed-industries/extensions) is a separate post-launch step.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
