@@ -2,7 +2,9 @@
 name = "pyfun"
 version = "0.0.9"
 edition = "2024"
-rust-version = "1.96"
+# Edition 2024's floor is Rust 1.85; the code uses nothing newer. The exact build
+# toolchain is pinned separately in rust-toolchain.toml.
+rust-version = "1.85"
 description = "An F#-inspired, functional-first language that compiles to readable Python."
 authors = ["Simon Treanor"]
 license = "Apache-2.0"

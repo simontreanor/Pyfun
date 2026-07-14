@@ -2,7 +2,7 @@
 name = "pyfun-playground"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.85"   # edition 2024 floor; build toolchain pinned in rust-toolchain.toml
 description = "Browser playground for Pyfun — the compiler built to WebAssembly. Not published."
 license = "Apache-2.0"
 publish = false

@@ -382,7 +382,7 @@ drives the whole graph. Clone the repo for a runnable tour in [`examples/`](http
 multi-module project (`pyfun run examples/modules/main.pyfun`).
 
 **Building from source** (or hacking on the compiler) needs [Rust](https://rustup.rs/), which
-auto-selects the pinned 1.96 toolchain:
+auto-selects the pinned 1.97 toolchain:
 
 ```bash
 cargo install --git https://github.com/simontreanor/Pyfun pyfun

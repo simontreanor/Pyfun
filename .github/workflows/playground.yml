@@ -34,7 +34,7 @@ jobs:
       # Match the toolchain pinned by rust-toolchain.toml, with the wasm target.
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.96"
+          toolchain: "1.97.0"
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
