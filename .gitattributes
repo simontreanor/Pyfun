@@ -1,0 +1,5 @@
+# Keep machine-generated / vendored files out of GitHub's language stats.
+editors/tree-sitter-pyfun/src/parser.c linguist-generated
+editors/tree-sitter-pyfun/src/tree_sitter/** linguist-generated
+editors/zed/grammars/** linguist-vendored
+editors/zed/*.wasm linguist-generated
