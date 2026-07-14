@@ -1,0 +1,194 @@
+================================================================================
+match with guard
+================================================================================
+
+let sign n =
+  match n:
+    case x if x > 0: 1
+    case 0: 0
+    case _: -1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (identifier)
+        (comparison_expression
+          (identifier)
+          (integer))
+        (integer))
+      (case_clause
+        (integer)
+        (integer))
+      (case_clause
+        (wildcard)
+        (unary_expression
+          (integer))))))
+
+================================================================================
+or-pattern with as-pattern
+================================================================================
+
+let smallness n =
+  match n:
+    case 0 | 1 as tiny: f"small {tiny}"
+    case _: "big"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (as_pattern
+          (or_pattern
+            (integer)
+            (integer))
+          (identifier))
+        (fstring
+          (string_content)
+          (interpolation
+            (identifier))))
+      (case_clause
+        (wildcard)
+        (string)))))
+
+================================================================================
+list pattern with rest
+================================================================================
+
+let classify xs =
+  match xs:
+    case []: "empty"
+    case [x]: "one"
+    case [hd, *mid, tl]: "spread"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (list_pattern)
+        (string))
+      (case_clause
+        (list_pattern
+          (identifier))
+        (string))
+      (case_clause
+        (list_pattern
+          (identifier)
+          (rest_pattern
+            (identifier))
+          (identifier))
+        (string)))))
+
+================================================================================
+constructor pattern with arguments
+================================================================================
+
+let describe shape =
+  match shape:
+    case Circle r: r
+    case Rect w h: w * h
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (constructor_pattern
+          (constructor_identifier)
+          (identifier))
+        (identifier))
+      (case_clause
+        (constructor_pattern
+          (constructor_identifier)
+          (identifier)
+          (identifier))
+        (multiplicative_expression
+          (identifier)
+          (identifier))))))
+
+================================================================================
+record pattern with punned and matched fields
+================================================================================
+
+let originish p =
+  match p:
+    case Pt { x = 0, y }: y
+    case Pt { x }: x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (record_pattern
+          (constructor_identifier)
+          (field_pattern
+            (identifier)
+            (integer))
+          (field_pattern
+            (identifier)))
+        (identifier))
+      (case_clause
+        (record_pattern
+          (constructor_identifier)
+          (field_pattern
+            (identifier)))
+        (identifier)))))
+
+================================================================================
+negative integer and tuple patterns
+================================================================================
+
+let f pair =
+  match pair:
+    case (-1, _): "neg"
+    case (a, b): "pair"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (tuple_pattern
+          (negative_integer
+            (integer))
+          (wildcard))
+        (string))
+      (case_clause
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (string)))))

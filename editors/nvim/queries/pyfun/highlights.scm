@@ -11,7 +11,7 @@
 (wildcard) @variable.builtin
 (hole) @variable.builtin
 
-(parameter) @variable.parameter
+(parameter (identifier) @variable.parameter)
 
 ; a `let` with parameters defines a function
 (let_binding
@@ -49,6 +49,7 @@
 
 (integer) @number
 (float) @number.float
+(dimensionless) @number
 (boolean) @boolean
 (string) @string
 (raw_string) @string
