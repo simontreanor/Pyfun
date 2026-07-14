@@ -52,14 +52,12 @@ dev machine. Close each by running the listed check once; delete its line when i
   highlight render (`tree-sitter highlight` needs a configured theme) and no `test/corpus/` golden
   trees — the gate is the zero-ERROR parse sweep + compiler-validated `test/stress.pyfun`.
 - **Jupyter kernel**: verified end-to-end via `jupyter_client` on Windows/CPython 3.14 — including,
-  against the released v0.0.8 wheel in a clean venv: the `[jupyter]` extra, `python -m
-  pyfun_kernel.install --sys-prefix`, and a full cell session on the installed kernelspec. Still
-  open: (a) no real JupyterLab/Notebook UI session yet, (b) the engine-death replay path in
-  `kernel.py` is code-reviewed only, (c) KeyboardInterrupt during a long cell untested, (d)
-  macOS/Linux untested. Known issue in the shipped 0.0.8 wheel (fixed in main, ships next tag):
-  `kernel.py` resolved the `pyfun` binary via PATH before the kernel's own environment, so a stale
-  global `pyfun` older than the kernel-engine protocol would break the kernel; discovery order is
-  now PYFUN_BIN → same-env Scripts/bin → PATH.
+  against the released v0.0.9 wheel in a clean venv: the `[jupyter]` extra, `python -m
+  pyfun_kernel.install --sys-prefix`, a full cell session on the installed kernelspec, and the
+  binary-discovery fix (PYFUN_BIN → same-env → PATH; the 0.0.8 wheel had PATH-first, which a stale
+  global `pyfun` could break). Still open: (a) no real JupyterLab/Notebook UI session yet, (b) the
+  engine-death replay path in `kernel.py` is code-reviewed only, (c) KeyboardInterrupt during a
+  long cell untested, (d) macOS/Linux untested.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
