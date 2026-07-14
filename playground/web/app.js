@@ -31,27 +31,30 @@ print (f"total area: {total}")
   },
   {
     label: "JSON → typed records",
-    source: `# JSON into your own typed records, totally. Bad input is a value you handle, not a crash.
-type User = { name: string, age: int, roles: List string }
+    source: `# Parse JSON into your own typed records.
+# Bad input becomes a value you handle, never a crash.
+type User = { name: string, age: int }
 
-# Build a decoder compositionally: \`field\` pulls one key, \`map3\` combines three
-# field decoders into one that constructs the record. The module threads the
-# \`Result\` railway for you, so there is no hand-written field access.
+# Build a decoder compositionally: \`field\` pulls one key,
+# \`map2\` combines the field decoders into the record.
 let userDecoder =
-  Decode.map3 (fun name age roles -> User { name = name, age = age, roles = roles })
+  Decode.map2 (fun name age -> User { name = name, age = age })
     (Decode.field "name" Decode.string)
     (Decode.field "age" Decode.int)
-    (Decode.field "roles" (Decode.list Decode.string))
 
-# Consuming the result is an exhaustive match: you must handle both outcomes.
+# Consuming a result is an exhaustive match on Ok / Error.
 let describe r =
   match r:
-    case Ok u: f"""{u.name} ({u.age}): {String.join ", " u.roles}"""
-    case Error e: f"decode failed ({e.errorKind}): {e.errorMessage}"
+    case Ok u: f"{u.name} is {u.age}"
+    case Error e: f"decode failed: {e.errorMessage}"
 
-print (describe (Decode.decodeString userDecoder """{"name": "ada", "age": 36, "roles": ["admin", "dev"]}"""))
-print (describe (Decode.decodeString userDecoder """{"name": "bob", "age": 40}"""))
-print (describe (Decode.decodeString userDecoder """{"name": "cy", "age": "old", "roles": []}"""))
+let ok      = """{"name": "ada", "age": 36}"""
+let missing = """{"name": "bob"}"""
+let wrong   = """{"name": "cy", "age": "old"}"""
+
+print (describe (Decode.decodeString userDecoder ok))
+print (describe (Decode.decodeString userDecoder missing))
+print (describe (Decode.decodeString userDecoder wrong))
 `,
   },
   {

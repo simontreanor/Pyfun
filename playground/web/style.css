@@ -46,6 +46,11 @@ main {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Without this a grid item defaults to min-width:auto, so a pane with long
+     unwrapped lines (the compiled Python) grows past its 1fr track and breaks
+     the 50/50 split. min-width:0 keeps the columns equal; long lines scroll
+     inside their own pane instead. */
+  min-width: 0;
 }
 
 .pane-label {
