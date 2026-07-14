@@ -1,0 +1,34 @@
+<idea-plugin>
+  <id>com.github.simontreanor.pyfun</id>
+  <name>Pyfun</name>
+  <vendor url="https://github.com/simontreanor/Pyfun">Simon Treanor</vendor>
+
+  <depends>com.intellij.modules.platform</depends>
+  <depends>com.redhat.devtools.lsp4ij</depends>
+  <depends>org.jetbrains.plugins.textmate</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <fileType
+        name="Pyfun"
+        implementationClass="com.github.simontreanor.pyfun.PyfunFileType"
+        fieldName="INSTANCE"
+        language="Pyfun"
+        extensions="pyfun"/>
+    <textmate.bundleProvider
+        implementation="com.github.simontreanor.pyfun.PyfunTextMateBundleProvider"/>
+  </extensions>
+
+  <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
+    <server
+        id="pyfun"
+        name="Pyfun Language Server"
+        factoryClass="com.github.simontreanor.pyfun.PyfunLanguageServerFactory">
+      <description><![CDATA[
+        The language server bundled with the Pyfun compiler (<code>pyfun lsp</code>).
+        Needs <code>pyfun</code> on PATH — install with <code>pip install pyfun-lang</code> —
+        or set the <code>PYFUN_BIN</code> environment variable.
+      ]]></description>
+    </server>
+    <languageMapping language="Pyfun" serverId="pyfun" languageId="pyfun"/>
+  </extensions>
+</idea-plugin>
