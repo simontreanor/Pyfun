@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.0
+
+- Version aligned to the 0.1.0 milestone, matching the compiler and the other editor integrations.
+
 ## 0.0.12
 
 - Darkened the light-theme syntax palette so every role meets WCAG-AA contrast on white.

@@ -1,6 +1,6 @@
 [package]
 name = "pyfun"
-version = "0.0.9"
+version = "0.1.0"
 edition = "2024"
 # Edition 2024's floor is Rust 1.85; the code uses nothing newer. The exact build
 # toolchain is pinned separately in rust-toolchain.toml.
