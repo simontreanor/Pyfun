@@ -25,7 +25,7 @@ does **not** work: VS Code only loads extensions registered in its `extensions/e
 manifest, which `--install-extension` updates.
 
 ```bash
-code-insiders --install-extension pyfun-0.0.12.vsix --force
+code-insiders --install-extension pyfun-0.1.0.vsix --force
 ```
 
 Point the extension at the built server via a setting (see below), then reload the window. An

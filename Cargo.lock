@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "pyfun"
-version = "0.0.9"
+version = "0.1.0"
 
 [[package]]
 name = "pyfun-playground"
