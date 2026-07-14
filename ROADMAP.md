@@ -61,9 +61,20 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 - **Zed extensions registry** — extension built and user-verified; publication = PR to
   zed-industries/extensions (check whether a repo subdirectory is accepted or a dedicated
   repo is needed).
-- **Upstream registry PRs** (each small; latency is review queues, not effort): nvim-lspconfig
-  server entry, nvim-treesitter parser entry, Mason registry entry, Helix `languages.toml`
-  (pairs with adding indent/textobject queries), MELPA `pyfun-mode` recipe.
+- **Upstream registry PRs** — status after the 2026-07-14 sweep:
+  - **Helix**: PR open ([helix-editor/helix#16036](https://github.com/helix-editor/helix/pull/16036)) —
+    languages.toml + git/rev/subpath grammar + Helix-scope queries; their query-check/docgen run
+    clean locally; CI awaits first-contributor approval. May face an "established language" test.
+  - **nvim-lspconfig**: PR #4476 CLOSED by maintainers — new languages need adoption evidence
+    (~100 stars informally). **Resubmit post-launch with downloads/installs/stars in hand**; until
+    then the manual `vim.lsp.config` snippet in `editors/README.md` is the documented path.
+  - **Mason registry**: PR #16012 withdrawn by us (its acceptance path was lspconfig approval).
+    Same resubmission trigger as lspconfig.
+  - **nvim-treesitter**: upstream repo ARCHIVED 2026-04, no successor yet (candidates: the
+    neovim-treesitter fork org, or parser management in Neovim core — neovim/neovim#39006). A
+    fully validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`, parser entry
+    + queries, their linter clean) ready to retarget when the ecosystem settles.
+  - **MELPA** `pyfun-mode` recipe: PR in flight (reviews code quality, not popularity).
 - **Sublime Text Package Control** (M, new audience) and a **Pygments lexer** on PyPI (S–M;
   improves JupyterLab/nbconvert/Sphinx rendering — kernel currently declares the `fsharp`
   lexer as an approximation) — both demand-gated.
