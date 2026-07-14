@@ -11,7 +11,9 @@ Prerequisite: `pyfun` on your `PATH` (`pip install pyfun-lang`).
 ## Install (dev extension)
 
 Until the extension is on the Zed registry, install it as a dev extension —
-Zed compiles it locally (needs a Rust toolchain):
+Zed compiles it locally (needs a Rust toolchain **with the `wasm32-wasip2`
+target**: `rustup target add wasm32-wasip2`, or the install fails with
+"failed to compile Rust extension"):
 
 1. Clone this repo.
 2. In Zed: **Extensions** (`ctrl-shift-x` / `cmd-shift-x`) → **Install Dev
