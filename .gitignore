@@ -35,3 +35,6 @@ editors/vscode/node_modules/
 editors/vscode/*.vsix
 .claude/worktrees/
 /LAUNCH-POSTS.md
+
+.env
+*.elc
