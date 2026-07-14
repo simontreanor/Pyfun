@@ -454,7 +454,7 @@ gatekeeper: **nothing is emitted until every check passes.**
   desugar to their natural Python (`async`/`await`, generators, railway `Result`), and units erase.
 - **No CPython fork.** Pyfun is a front end for the Python ecosystem, not a competing runtime.
 
-The full language design and rationale live in [`DESIGN.md`](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md).
+Why Pyfun makes the choices it does is in [`RATIONALE.md`](https://github.com/simontreanor/Pyfun/blob/main/RATIONALE.md); the full language specification is in [`DESIGN.md`](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md).
 
 ---
 

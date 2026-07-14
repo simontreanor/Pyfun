@@ -1,17 +1,10 @@
 # Pyfun — Design
 
-The language/semantics design spec. `GUIDE.md` is the lean operational pointer for working in
-this repo; this file is the detailed reference. **Status: MVP showcase complete** — lexer, parser,
-span-carrying AST, pretty-printer, Hindley–Milner type inference with parameterized + recursive
-**algebraic data types**, constructor patterns, exhaustiveness checking, the three **computation
-expressions** (`async`/`seq`/`result`) with monadic typing, and **units of measure** (abelian-group
-unit unification with unit polymorphism, erased at lowering), rustc-style diagnostics (`pyfun
-check`), and lowering to a Python-AST IR + runnable Python emission gated on type-checking, over the
-`measure`/`type`/`let`/`if`/`match`/`fun` subset with curried application and `|>` (see §8, §10).
-Programs are now executable: a small **prelude** of Python-builtin-backed functions
-(`print`/`abs`/`min`/`max`, plus a `unit` type) makes output observable, `pyfun run` compiles-and-
-runs, and a **lightweight offside rule** separates top-level statements. Still deferred until its
-enabling syntax exists: effect inference (and a general offside rule for nested blocks).
+The language and semantics reference, and the source of truth for any compiler or language change.
+`GUIDE.md` is the lean operational pointer for working in this repo; `RATIONALE.md` is the short
+narrative for a reader deciding whether Pyfun is worth their time; this file is the detailed design.
+It describes the language as it stands: read it before changing semantics, and update it when a
+design decision changes. What landed when is in git history, not here.
 
 ## 1. Identity
 
@@ -30,23 +23,14 @@ Mechanically Pyfun is a *transpiler* — the TypeScript-to-JavaScript relationsh
 language on a shared VM: it compiles *to* Python source (F# does not compile to C#). The F#/C#
 analogy is one of *role and philosophy*, not architecture.
 
-**Prior work & positioning.** Pyfun enters a *populated* space — bringing functional and/or
-statically-typed code to Python has several precedents, and being honest about them matters more
-than a novelty claim. [**Fable**](https://fable.io) compiles real F# to Python and is the most
-capable option (it *is* F#, with the whole language + a mature ecosystem), at the cost of the .NET
-toolchain and a runtime-library dependency (`fable_library`) in its output. [**Erg**](https://erg-lang.org)
-is a statically-typed, Python-compatible language with a rich type system and marker-based effect
-control — closest to Pyfun in ambition, but "rusty"/OO rather than ML-family, with *explicit* effect
-annotations. [**Coconut**](https://coconut-lang.org) is a functional *superset* of Python whose static
-typing is an optional MyPy add-on (no enforced gatekeeper). Dynamically-typed dialects (**Hy**
-Lisp→Python-AST, **Mochi**, **Dogelang**) round out the field. Pyfun does **not** out-feature Fable's
-F#; its bet is a narrower one — an ML-family, FP-first language with *mandatory* static checking (HM
-inference + enforced exhaustiveness + inferred effects + units) that compiles to **self-contained,
-idiomatic Python**: no runtime library (a `List` *is* a `list`), no .NET, a single dependency-free
-binary, and a language designed for Python interop first. It trades language breadth for readable,
-runtime-free output and a Python-native toolchain. Architecturally, **Hy** is the closest lowering
-precedent (source → Python AST), though it changes syntax, not philosophy; Pyfun's hard parts are
-**semantic design and interop**, not parsing. (Related but distinct: Cython = Python→C;
+**Prior work & positioning.** Pyfun enters a populated space. `RATIONALE.md` explains the design
+decisions and names the languages Pyfun borrows from; `README.md` sets it beside Fable, Erg, and
+Coconut feature by feature. In short, Pyfun does not out-feature Fable's F#, and its
+bet is a narrower one: an ML-family, FP-first language with mandatory static checking (HM inference,
+enforced exhaustiveness, inferred effects, units) that compiles to self-contained, idiomatic Python
+(a `List` *is* a `list`) with no runtime library and no .NET. Architecturally, **Hy** is the closest
+lowering precedent (source → Python AST), though it changes syntax, not philosophy, so Pyfun's hard
+parts are semantic design and interop, not parsing. (Related but distinct: Cython = Python→C;
 ty/mypy/pyright = type checkers; RustPython = a Python interpreter in Rust.)
 
 ## 2. The central idea: the compiler is the gatekeeper
@@ -70,12 +54,12 @@ What the compiler enforces, mirroring (and exceeding) F#:
 - **Type safety** — Hindley–Milner inference (no annotations required). *Optional* type annotations
   (`let x : T`, `(x: T)`) are a **non-goal** (see ROADMAP non-goals): HM inference is complete so the
   compiler needs none, their strongest concrete driver (lifting the field-name uniqueness restriction)
-  already shipped via the use-site multimap *without* annotations, and annotation-free code is the point —
+  is handled by the use-site multimap *without* annotations, and annotation-free code is the point —
   `extern` (§6) is the one place types are asked for on purpose. Everything is inferred and surfaced by
   LSP hover / `pyfun check` / REPL `:type`. Sole revisit trigger: error localization under pure inference
   becoming a real recurring pain — answered first by better HM diagnostics, not syntax.
 - **Exhaustive pattern matching** — all ADT variants must be handled.
-- **Immutable-by-default** (implemented) — `let` is immutable; `<-` reassignment of a non-`mut`
+- **Immutable-by-default** — `let` is immutable; `<-` reassignment of a non-`mut`
   binding is a compile error; `let mut` is the explicit opt-in. `mut` bindings are monomorphic and
   cannot take parameters. Reassignment requires statement **sequencing**, which Pyfun gets from
   indentation **blocks** (an indented `let … =` body); see §7's offside note. A closure that
@@ -89,8 +73,7 @@ Example diagnostics the compiler must produce (rustc-style, with spans, codes, a
 type mismatch (`add "hello" 5`), non-exhaustive `match` (missing `None` case), reassignment of an
 immutable binding.
 
-## 4. Effect system — first-class MVP goal (implemented)
-
+## 4. Effect system — first-class MVP goal
 Unlike F# (which has no real effect system, only computation expressions), Pyfun treats **purity
 and effects as part of the type system from the MVP.** This is a defining feature, not a
 later add-on, and it shapes inference and lowering — so it must be designed in from the start.
@@ -112,7 +95,7 @@ Python FFI boundary — a plain `extern` is effectful-by-default (§6), the thir
 is **canonical and deterministic**: labels render in a fixed order, `io` first (`->{io}`, `->{async}`,
 `->{io, async}`); a pure or purely-polymorphic arrow stays the familiar `->`.
 
-**Effect annotations on declared arrows (implemented).** Function arrows in *declared* types — `type`
+**Effect annotations on declared arrows.** Function arrows in *declared* types — `type`
 declarations (ADT ctor / record field types) and `extern` signatures — may carry an explicit
 annotation `->{label, …}` (e.g. `type Handler = H (string ->{io} unit)`, `extern fetch : string
 ->{async} string = httpx.get`). A bare `->` stays pure; an unknown label is a compile error. This is
@@ -125,7 +108,7 @@ does not satisfy a declared `->{io}` parameter, because two closed effect sets u
 Effect subsumption (pure ≤ io) is a **non-goal** (ROADMAP): sound subsumption is directional, so it
 would thread polarity through the symmetric unifier and risk the `let pure` guarantee on a variance
 slip. Where a declared arrow must accept any effect (a boundary callback), the HM-native answer is an
-**effect variable — implemented, extern-only**: in an `extern` signature a lowercase `->{…}` name
+**effect variable, extern-only**: in an `extern` signature a lowercase `->{…}` name
 that is not a known label is a variable (`extern each : (a ->{e} unit) -> List a ->{io, e} unit`),
 collected like type variables (`collect_effect_vars`), generalized in the extern's scheme
 (`Scheme::eff_vars`), and instantiated fresh per use site — exactly the stdlib's effect-polymorphic
@@ -134,10 +117,6 @@ variable into the innermost `{io, e}`, so `let pure` still rejects an impure pip
 the innermost arrow counts as annotated (skips the io-by-default rule, asserting "exactly the
 callback's effect"). In a `type` declaration effect variables remain an error — ADT/record fields
 would need effect-*parameterized* types, which stays out of scope.
-
-The original coarse-`IO` design intent — pure-by-default with inferred, propagating purity; effects
-tracked in the type with room to grow toward an effect row; the Python boundary inherently effectful;
-effects lowering to zero-residue Python — is fully realized above, extended to multi-label effect rows.
 
 **Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
 written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or
@@ -183,95 +162,36 @@ applied functions each need a *stable* Python representation. That representatio
 contract — emitted code and interop both depend on it — so changing it is a breaking change, not
 an implementation detail.
 
-### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`) — Tier 1 (implemented)
+### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 
-The immutable-style collections (`§6`) rebuild a fresh container on every step, so a fold that
-builds a collection by repeated `Map.add`/`List.concat`/`Set.add` is quadratic (each step copies the
-whole accumulator). A **performance-directed lowering pass** (`src/lowering/fold_loop.rs`, hooked in
-`lower_application`, defaulting on; the `PYFUN_NO_FOLD_OPT` env var is a kill switch for differential
-testing) recognizes the common case and rewrites `functools.reduce(f, xs, acc)` into a `for`-loop
-over a **mutable** accumulator, turning the copy-returning ops into in-place mutations
-(`Map.add`→`m[k]=v`, `List.concat`→`.append`/`.extend`, `Set.add`→`.add`), collapsing the build to
-linear. This adds two Python-IR nodes: `PyStmt::For` and `PyStmt::SubscriptAssign`.
+Because the collections are immutable-style (every operation returns a fresh container, §6), building a
+collection inside a fold by repeated `Map.add`/`List.concat`/`Set.add` is nominally O(n²): each
+step copies the whole accumulator. Pyfun runs the idiomatic fold-with-`Map.add` construction in
+**linear time** anyway: a `Seq.fold`/`List.fold` that threads its accumulator linearly and only grows it
+lowers to an in-place `for`-loop over a mutable accumulator (`Map.add`—`m[k]=v`, and so on). This is
+**sound because Pyfun exposes no object identity**: mutate-in-place and fresh-copy-each-step are
+indistinguishable unless a retained reference to the accumulator escapes, and the pass conservatively
+refuses whenever it cannot prove none does. The output is byte-identical to the naive lowering.
+Mechanics and the full precondition set are in `INTERNALS.md`.
 
-**Soundness is the whole game.** The rewrite is observable only through a *retained reference* to a
-mutated container, so the pass is a set of conservative **syntactic** proof obligations on the AST,
-checked with no side effects on the lowerer (a rejected fold falls through to the byte-identical
-`_pf_fold` lowering — verified by a differential gate that byte-compares both variants' output on the
-`network-rail` example). A fold qualifies only when: it is a fully-applied `Seq.fold`/`List.fold`
-(exactly 3 args); the folder is a 2-ary lambda literal or a **top-level** named `let` (an inlinable
-body, not a `mut`/extern/imported member/parameter); the accumulator is a fresh literal collection or
-a flat tuple of them (a `Var` init is rejected — it may be read after the fold); every slot is
-threaded **position-preservingly** (no swap, no duplication, no cross-slot storage, no closure
-capture, no escape to a user function — retention is unknowable, so reject); reads of a slot use a
-whitelist of ops that return scalars or fresh copies; and inlining is capture-safe (the folder's free
-variables and introduced binders are disjoint from every enclosing Python frame; rejected inside an
-in-file `module`). Read-before-mutate and effect order are preserved by lowering every op argument
-(hoisting non-atomic ones to temps) **before** emitting the mutations. When in doubt, reject. The
-folder is always pure (an effectful folder does not typecheck against `fold`'s scheme), so the only
-ordering hazard is a value dependency between slots, which the hoisting handles. Full preconditions
-(P1–P11) live in the design memo the pass was built from.
+### 5.2 Inlining fully-applied pure stdlib predicates
 
-**Tier B (implemented)** extends the qualifying shapes, each behind the same differential gate:
-**block-local named folders** (`dedupLegs`'s inner `step` — a scope-coherent registry
-(`local_fn_defs`) records 2-ary block `let`s, evicts on rebinding, and is *shadow-guarded* at every
-binder introduction (function parameters, match-arm patterns), so a hit is always the innermost
-binding; a local folder's frees resolve in the call site's own frame, so the top-level-folder
-free-variable check is skipped, like a lambda's); **chained updates in one slot** (`Map.add k2 v2
-(Map.add k1 v1 m)` → in-place ops innermost-first — sound because the reduce form never mutates, so
-hoisting every read before every mutation preserves what each read sees); **fresh-reset slots**
-(`([], List.concat done [cur])` — the slot rebinds to a fresh init; the *store-then-reset* exception
-licenses storing a reset slot's whole object into another slot, force-hoisting the old reference
-before the rebind); **`Map.remove`/`Set.remove`** (→ `m.pop(k, None)` / `s.discard(x)`, mirroring
-the copy helpers exactly); and **`Var` inits** (a mutated slot binds a defensive shallow copy —
-`dict(seed)`, constructor inferred from the slot's op family — so the original reads unchanged after
-the fold; an unmutated slot binds as an alias, preserving reduce's object identity). A related
-soundness fix landed with Tier B: a *parameterized* local `let` in a folder body is a deferred
-closure and is now held to the closure rule (no sensitive mention), not the immediate-read rule.
+A pure one-liner stdlib member that is **fully applied** lowers to the Python idiom directly rather than
+through its `_pf_*` helper: `String.contains n s`—`n in s`, `List`/`Set`/`Map.contains`—`x in xs`,
+`String.startsWith`/`endsWith`—`s.startswith(…)`/`s.endswith(…)`, `List.isEmpty xs`—`not xs`. The
+inline form is value-identical to the helper. A partial application (`String.contains "x"`) keeps the
+helper, so `List.map (String.contains "x") xs` still works. This is a readability win first; mechanics
+in `INTERNALS.md`.
 
-### 5.2 Inlining fully-applied pure stdlib predicates (implemented)
+### 5.3 Specializing statically-known `Decode` decoders
 
-Most `§6` stdlib members lower to an emitted `_pf_*` helper (a single callable so partial application
-still works). But a handful are pure, total, **one-liner** wrappers over a Python idiom, and when such
-a member is **fully applied** there is no reason to route through the helper at all — the same
-fully-applied-collapse instinct as the currying rule above. `try_inline_stdlib` (in `lower_application`,
-gated on the head being a module-qualified `Field` and the arg count matching the member's exact arity)
-emits the idiom directly: `String.contains n s`→`n in s`, `String.startsWith p s`→`s.startswith(p)`,
-`String.endsWith`→`s.endswith(…)`, `List`/`Set`/`Map.contains`→`x in xs` (a `PyExpr::Compare` with the
-`In` op, so precedence/parenthesization is free), and `List.isEmpty xs`→`not xs`. The argument order is
-taken verbatim from each helper body — an inverted operand would be a silent miscompile — so the inline
-form is value-identical to the helper (differential-gated on `network-rail`, byte-identical output).
-Anything short of full arity (a partial application like `String.contains "x"`, or a bare value
-reference) is **not** matched and falls through to the helper unchanged, so `List.map (String.contains
-"x") xs` still works. This is a rare win-win: `"CHIPNHM" in line` is both faster (one fewer call per
-invocation) and more readable than `_pf_str_contains("CHIPNHM", line)` — though the readability is the
-larger benefit: measured wall-clock the call-elimination is small (~3% on the `network-rail` example; a
-cProfile line that *looked* like ~6s was mostly the profiler's own per-call overhead on a ~1.87M-call
-trivial function, not real runtime — see `ROADMAP.md`).
-(`List`/`Set`/`Map.len` are not in this set: they already lower to a bare `len`, so a fully-applied call
-is already `len(xs)` with no helper in between.)
-
-### 5.3 Specializing statically-known `Decode` decoders (implemented)
-
-`Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures
-(§6) — and interprets it over `json.loads` output. When `dec` is a **syntactically-known composition**
-of the simple combinators (`string`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
-`succeed`/`fail`/`oneOf`, including through *top-level* `let` decoder names), the pass
-(`src/lowering/decode_spec.rs`, hooked in `lower_application`, default-on with `PYFUN_NO_DECODE_OPT`
-as the differential kill switch) deforests the interpreter into **direct dict/list access with inline
-error handling**: one `try` whose body reads like a hand-written validating parser (`t = v["name"]`,
-`if not isinstance(t, str): raise ValueError(...)`), with the handler folding any raise into
-`Error(_Exception(kind, msg))` exactly like `_pf_dec_decode_string`. The `Result` is
-**byte-identical** to the interpreter's on every input — same `Ok` payload, same error kind and
-message (a missing field is `KeyError` with the key's quoted repr) — differential-gated like the fold
-pass. Faithfulness mechanics: configuration expressions (fan-in functions, `field` names, `succeed`
-values) hoist *outside* the `try` in construction order, matching the interpreter's build-time
-evaluation; every node decodes from a bound temp so a subscript evaluates once; `oneOf` nests
-try/except per alternative, exhausting to the interpreter's exact message. Anything dynamic —
-`andThen`, a decoder passed as a value, a shadowed or cyclic named decoder, a non-literal `oneOf`
-list, an in-file `module` — rejects and falls back to the interpreter unchanged. Measured on a
-decode-dominated workload (400k-object JSON array into records, in-process best-of-5): **2.8x
-end-to-end** including the shared `json.loads`, ~4x on the decode portion itself.
+A `Decode.decodeString` whose decoder is a **syntactically-known composition** of the simple combinators
+compiles to direct dict/list access with inline error handling — a validating parser that reads like
+hand-written Python — instead of building and interpreting a runtime decoder value. The resulting
+`Result` is **byte-identical** to the interpreter's on every input (same `Ok` payload, same error kind
+and message). Anything dynamic (`andThen`, a decoder passed as a value, a non-literal `oneOf`) falls
+back to the interpreter. Measured ~2.8x end-to-end on a decode-dominated workload. Mechanics in
+`INTERNALS.md`.
 
 ## 6. Python interop — the hard boundary
 
@@ -301,7 +221,7 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 staying *unqualified* Pyfun names), plus the **unit-aware roots `sqrt : float<'u^2> -> float<'u>`**
 (√area = length) **and `cbrt : float<'u^3> -> float<'u>`** (∛volume = length; see §8.2; lower to
 `math.sqrt`/`math.cbrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
-Python `None` — the honest result of an effectful call). It also seeds the **standard combinators**
+Python `None` — the natural result of an effectful call). It also seeds the **standard combinators**
 `id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
 `flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
 `flip` is **effect-polymorphic** because it calls its function argument — flipping an impure function
@@ -312,11 +232,11 @@ n-ary, exactly as a hand-written `let flip f x y = f y x` compiles, so it is nei
 capable than that definition. Each is a *typed view over a Python builtin or `_pf_*` helper*: the single
 source of truth is `types::PRELUDE` (names + arities, read by lowering so a partial application like
 `max 0` still lowers to `functools.partial`) alongside `seed_prelude` (the type schemes). Pyfun
-names equal their Python names (or a routed helper), so there is no call-site renaming — the simplest honest interop
+names equal their Python names (or a routed helper), so there is no call-site renaming — the simplest interop
 mapping. User definitions shadow prelude names. This is deliberately tiny; collections/option/
 result helpers are the obvious next increments.
 
-**`extern` — the general FFI surface (implemented).** The "import and type an arbitrary Python
+**`extern` — the general FFI surface.** The "import and type an arbitrary Python
 function" story is now a first-class declaration:
 
 ```
@@ -381,8 +301,8 @@ boundary and be passed between calls. `extern type Conn` (optionally parameteriz
 declares exactly that: a nominal type name with an arity but **no constructors, no fields, and no
 runtime representation**. It registers like any user type (so `extern connect : string -> Conn` checks),
 but has no way to be built or `match`ed — it is only ever produced and consumed by externs — and it
-**erases** at lowering, emitting no Python class. This replaces the phantom-ADT idiom it supersedes
-(`type Conn = ConnH`, a nullary sum whose sole constructor existed only to be never used): the one-liner
+**erases** at lowering, emitting no Python class. It is preferable to a phantom-ADT workaround
+(`type Conn = ConnH`, a nullary sum whose sole constructor exists only to be never used): the one-liner
 carries the intent ("opaque, don't look inside"), drops the throwaway constructor that could be
 mistakenly applied, and emits nothing. Parsing is disambiguated by lookahead — `extern type …` is the
 handle form, `extern name : …` the value form.
@@ -401,7 +321,7 @@ target — it reaches members that are **inherited or delegated** rather than de
 named class (e.g. `urllib.response.addinfourl.read`, which exists only on an instance). All three target
 forms coexist; the plain dotted form stays right for genuine module functions and staticmethods.
 
-**Pinned keyword arguments (`= target(kw = lit, …)`, implemented).** A trailing `(kw = lit, …)` on an
+**Pinned keyword arguments (`= target(kw = lit, …)`).** A trailing `(kw = lit, …)` on an
 extern target pins **fixed Python keyword arguments**, appended to every emitted call:
 `extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")` lowers `openText path`
 to `builtins.open(path, mode="rt", encoding="utf-8")`, and the receiver-method form
@@ -419,7 +339,7 @@ kwargs-extern carries them through `functools.partial` (`openText` → `functool
 mode="rt", encoding="utf-8")`), so a later application still supplies them; only a full (or over-)
 application emits the direct `f(a, kw=v)` call.
 
-**Lists — the eager collection (implemented).** `List a` is a built-in type that **lowers to a
+**Lists — the eager collection.** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
 like Pyfun records and tuples). The big-O is Python's, *not*
 F#'s linked `list`: index/`len` are O(1), append-end O(1) amortized, prepend/concat O(n). `List` is
@@ -443,7 +363,7 @@ to the traversal arrow). The lazy counterpart already exists as the `seq {}` com
 (§8.1).
 
 The **completeness ops** — `get`/`isEmpty`/`contains`/`concat`/`sort`/`find` — round out the array,
-each with big-O honest to a Python `list`: `get : int -> List a -> Option a` is **O(1)** and
+each with big-O faithful to a Python `list`: `get : int -> List a -> Option a` is **O(1)** and
 **bounds-checked → total** (there is deliberately *no* `xs[i]` surface syntax, since bare indexing would
 risk a Python `IndexError`, violating the no-runtime-surprises rule); `isEmpty` is O(1); `contains` is
 **O(n)** linear (use `Set` for O(1) membership); `concat` is O(n+m) returning a fresh list; `sort :
@@ -457,7 +377,7 @@ in-place loop (§5.1), so the idiomatic `fold`-with-`concat`/`Map.add` construct
 time; construction otherwise stays `map`/`fold`/comprehension/`Seq`. `get`/`find` return the built-in `Option` (setting `needs_option`),
 and `get` introduced a `PyExpr::Subscript` node.
 
-**Tuples — the structural product (implemented).** `(a, b, c)` is a tuple: an anonymous, **structural**
+**Tuples — the structural product.** `(a, b, c)` is a tuple: an anonymous, **structural**
 product of two or more values — Pyfun's first structural type (records are nominal, resolved by a field
 registry; a tuple type is just its element list, `Ty::Tuple(Vec<Ty>)`, unified element-wise by arity
 then pairwise). The surface forms are symmetric: literal `(a, b)` (`ExprKind::Tuple`), pattern `(a, b)`
@@ -471,10 +391,10 @@ tuples** (`PyExpr::Tuple` → `(a, b)`; `Pattern::Tuple` → a sequence pattern 
 exhaustive on its own, and **deep exhaustiveness recurses into the element columns** (`Tag::Tuple(arity)`
 in the Maranget matrix), reporting witnesses like `` `(false, _)` is not matched ``. Tuples unblock
 multi-value return and pair lists; the stdlib follow-ons that need them — `List.zip : List a -> List b ->
-List (a, b)` and `Map.ofList`/`Map.toList` (to/from a `List (k, v)`) — have landed (see the list and map
+List (a, b)` and `Map.ofList`/`Map.toList` (to/from a `List (k, v)`) (see the list and map
 sections above).
 
-**Sets and maps — the hashed collections (implemented).** `Set a` and `Map k v` are built-in types
+**Sets and maps — the hashed collections.** `Set a` and `Map k v` are built-in types
 that **lower to a Python `set` / `dict`**. They have **no literal syntax** (`{…}` is already records
 and CE builders) and **no constructors** — built entirely from module functions, so adding them needed
 no lexer/parser/AST changes, only seeded schemes + emitted helpers. The two modules (single source of
@@ -498,7 +418,7 @@ structural `__eq__`), so `Set Color` and `Map (Point) v` work and equal values c
 is itself unhashable raises at hash time, the same way Python rejects an unhashable key. `Array` is
 **deferred** as redundant — `List` already *is* a Python list (dynamic array).
 
-**Option and Result — the built-in sum helpers (implemented).** `Option a` (constructors `Some`/`None`)
+**Option and Result — the built-in sum helpers.** `Option a` (constructors `Some`/`None`)
 is seeded exactly like `Result a e` (`Ok`/`Error`): a reserved type with global constructors that lower
 to `Some`/`None_` (resp. `Ok`/`Error`) classes (`None` is mangled off the Python keyword), emitted on
 demand. Each has a module of combinators: `Option.map`/`bind`/`filter`/`withDefault`/`isSome`/`isNone`/
@@ -507,7 +427,7 @@ mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Ma
 `Option`; the two bridge **both ways** — `Result.toOption` (`Ok v → Some v`, `Error _ → None`) and
 `Option.toResult e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
 
-**Strings — the `String` module (implemented).** Text operations over the built-in `string` type (which
+**Strings — the `String` module.** Text operations over the built-in `string` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
 `upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
 `toFloat`/`toList`/`slice`/`tryIndexOf` (single source of truth `types::STRING_PRELUDE` +
@@ -530,7 +450,7 @@ mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Py
 `Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
 prelude. Overloading `+` for strings is deferred — `String.concat` is the concatenation path.
 
-**Formatting — the `Format` module (implemented).** The typed alternative to Python's format specifiers
+**Formatting — the `Format` module.** The typed alternative to Python's format specifiers
 (the `:.2f`/`!r` mini-language, a non-goal below): checked functions that build the spec themselves, so
 a `.2f`→`.f2` typo is impossible. First cut (single source of truth `types::FORMAT_PRELUDE` +
 `seed_format_prelude`): `Format.fixed n x` (n decimals, no grouping), `Format.thousands n x` (decimals +
@@ -543,7 +463,7 @@ lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a n
 from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
 Python `datetime` `extern`).
 
-**JSON decoding — the `Decode` module (implemented).** An Elm-style (`elm/json`) decoder-combinator
+**JSON decoding — the `Decode` module.** An Elm-style (`elm/json`) decoder-combinator
 library over an opaque built-in `Decoder a`, module-qualified like the others (single source of truth
 `types::DECODE_PRELUDE` + `seed_decode_prelude`). It is the batteries-included form of the "parse, don't
 validate" pattern: instead of casting an untyped `dict` into a record (which type-checks but crashes,
@@ -567,7 +487,7 @@ the new general `PyStmt::Raise` node and the `is` comparison for `null`). The ge
 (user-registered combinators, a `Value` type for already-parsed data) is deferred; the shipped set already
 covers records, lists, options, and unions.
 
-**String interpolation — `f"..."` (implemented).** Python-style interpolated strings: an `f` prefix
+**String interpolation — `f"..."`.** Python-style interpolated strings: an `f` prefix
 (adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
 holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a
 `string`; a hole may be **any type** — the emitted Python f-string stringifies it (so `f"{p}"` for a
@@ -589,8 +509,7 @@ the character before it may not be one of `=`/`!`/`<`/`>`, so `{x==y}`/`{x != y}
 stay ordinary holes. Resolved entirely at lex time (`debug_marker` in `lex_hole`): the echo joins the
 preceding literal chunk and the hole's tokens exclude the marker, so parser, checker, lowering, and
 emitter see an ordinary literal + hole (the value is `str()`ed like any hole, not Python's `repr`;
-the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` is
-**implemented** — see the triple-quoted-strings paragraph below. **Format specifiers (`:.2f`, `!r`) are a non-goal**: a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
+the pretty-printer renders `f"{x=}"` as the equivalent `f"x={x}"`). Multi-line `f"""..."""` works — see the triple-quoted-strings paragraph below. **Format specifiers (`:.2f`, `!r`) are a non-goal**: a format spec is an *unchecked, stringly-typed sublanguage* inside a string literal — the
 compiler can't see into it, so `.2f`→`.3f` silently changes output, `.2f`→`.f2` only fails at runtime,
 and nothing enforces consistency across call sites. That is exactly the stringly-typed footgun Pyfun
 refuses elsewhere (float patterns, unchecked field access, unit mismatches), so blessing a format
@@ -599,7 +518,7 @@ formatting functions** — the **`Format` module** above (`Format.currency "£" 
 `Format.percent`, `Format.fixed`) — defined once, checked at every call, changed in one place.
 The plain-hole `f"{expr}"` interpolation stays; only the `:spec`/`!r` mini-language is excluded.
 
-**Raw strings — `r"..."` (implemented).** A raw string suppresses escape processing, so backslashes are
+**Raw strings — `r"..."`.** A raw string suppresses escape processing, so backslashes are
 literal — handy for Windows paths (`r"C:\Users\pyfun"`) and regex via `extern`. **Lexer-only, no AST /
 type / lowering change:** an *adjacent* `r"` (like `f"`; `r "x"` with a space stays `r` applied to a
 string) opens `lex_raw_string`, which reads to the closing `"` **without** decoding escapes, following
@@ -611,7 +530,7 @@ existing `string_literal` escaper re-escapes on output (`C:\path` → Python `"C
 `C:\path`), so the round-trip is faithful with zero downstream changes. Combined `rf"..."` (raw +
 interpolated) is out of scope.
 
-**Triple-quoted (multi-line) strings — `"""..."""`, `f"""..."""`, `r"""..."""` (implemented).**
+**Triple-quoted (multi-line) strings — `"""..."""`, `f"""..."""`, `r"""..."""`.**
 Python's multi-line string forms: embedded newlines (and lone `"`/`""`) are literal content, and only
 `"""` terminates. **Lexer-only for the plain and raw forms** (the raw-string model): the string-opening
 dispatch checks for **exactly three quotes at the open** — `""` stays the empty string (a following `"`
@@ -633,7 +552,7 @@ model — while `"a\nb"` is value-identical, self-contained, and keeps one escap
 pretty-printer likewise prints the escaped `"a\nb"` form, so the parse→print→parse roundtrip holds on
 value equality. `rf"""…"""` is out of scope (as is `rf"…"`).
 
-**`try` — catching exceptions into a `Result` (implemented).** Pyfun's own code never raises (it returns
+**`try` — catching exceptions into a `Result`.** Pyfun's own code never raises (it returns
 `Error`); the only reason to catch is the **Python FFI boundary** — an `extern` call can throw. So rather
 than importing Python's imperative `try/except/finally/raise` (and an exception class hierarchy Pyfun has
 no types for), the feature is a single **expression**: `try e : Result <e> Exception` (`ExprKind::Try`). It
@@ -651,9 +570,9 @@ binding): `try:  t = Ok(<body>)  except Exception as e:  t = Error(_Exception(ty
 There is deliberately **no `raise`, no `finally`, no exception hierarchy** (Pyfun signals failure with
 `Error`; the `result {}` CE + `Result` module compose the rest). Enabled by **string-literal patterns**
 (`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `string` type, so a string `match`
-still needs a wildcard), which landed alongside.
+still needs a wildcard).
 
-**Seq — the lazy module (implemented).** The `seq {}` CE produces a `Seq a` (a Python generator); the
+**Seq — the lazy module.** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
 `take`/`range` are **lazy** (they route to Python's own lazy `map`/`filter`/`itertools.islice`/`range`,
 *not* the eager `_pf_*` wrappers `List` uses); `Seq.fold`/`toList` force the sequence (`Seq.fold` reuses
@@ -681,7 +600,7 @@ serves built-in *and* user modules, and rides the shared inference path so it su
 *and* LSP editor diagnostics. Names stay **single-spelling** (no camelCase/lowercase aliases) — casing is
 load-bearing (`Upper.x` vs `lower.x`), so the hint is the forgiving path, not a second accepted name.
 
-**In-file modules (implemented).** `module Name = <indented let bindings>` declares a namespace within
+**In-file modules.** `module Name = <indented let bindings>` declares a namespace within
 a file (`Item::Module`):
 ```
 module Geometry =
@@ -698,10 +617,10 @@ shadow a built-in module or duplicate another. **MVP limits:** the body holds on
 (`type`/`measure`/`extern` inside a module are deferred), and there are no nested modules. The next
 layer is the full *file-based* module system, scoped in §6.1.
 
-### 6.1 File-based modules (Phase 2 — complete)
+### 6.1 File-based modules
 
 One module per file, referenced with an explicit `import`, compiled to a tree of readable Python files.
-**All seven slices have landed** (each marked inline below); a runnable example lives in
+a runnable example lives in
 `examples/modules/`.
 The design optimizes for **Python familiarity** (the §7.1 theme): explicit imports, real Python modules,
 no enforced visibility. All four shaping decisions were taken deliberately:
@@ -711,9 +630,9 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   existing access machinery unchanged** — `Geometry.area` is already the `Field { base: Var("Geometry"),
   name: "area" }` node that `types::qualified_name` resolves off an uppercase base. The *access* needs no
   parser change; only the `import` *statement* is new (`Item::Import { name, span }`, a new `import`
-  keyword, the name a single capitalized identifier). **The syntax has landed (slice 1):** it lexes,
+  keyword, the name a single capitalized identifier). **The syntax** lexes,
   parses (as an ordinary top-level item), pretty-prints, and round-trips; it is a no-op in single-file
-  checking and lowering until the multi-file driver (slice 2) resolves it. (Enforcing "imports before
+  checking and lowering until the multi-file driver resolves it. (Enforcing "imports before
   other items" is left to that driver, matching the cross-file declare-before-use rule.)
   `from X import y` / `open` (unqualified import) are **deferred** (`open`-everything maps to Python's
   discouraged `import *`).
@@ -724,14 +643,14 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   Python↔Pyfun interop (a Python program can `import` a compiled Pyfun module and vice-versa).
 - **All public.** Every top-level binding is exported; no `pub` keyword — Python has no enforced private
   (`_underscore` is convention only). Visibility control is **deferred**.
-- **Implicit recursion** (landed — slice 0, independent of the rest): a *function* binding (`let f x =
+- **Implicit recursion** (independent of the rest): a *function* binding (`let f x =
   …`) is in scope in its own body, like Python's `def` — no `rec` keyword (an F#/ML `let rec f x = …` is
   rejected with a hint to drop `rec`, rather than silently binding a function named `rec`). A plain value
   binding still cannot self-refer (`let x = x` stays an error, as `x = x` is a module-level `NameError` in
   Python). Mechanism:
   pre-bind `f : α` (fresh) before inferring the body, unify, then generalize (standard monomorphic-
   recursion HM); lowering is unchanged (Python functions are already recursive). **Mutual recursion**
-  (landed) extends this to *groups*: `run` builds the dependency graph among top-level `let` bindings
+  extends this to *groups*: `run` builds the dependency graph among top-level `let` bindings
   (scope-accurate free variables, `collect_free`), finds cycles by SCC (`strongly_connected`), and infers
   each all-function cycle together (`infer_mutual_group`) — pre-bind every member monomorphically, infer
   all bodies (so `isEven` sees `isOdd` and vice versa, in any order), tie each knot, then generalize each
@@ -750,22 +669,15 @@ uppercase-identifier rule for types/modules; the emitted file keeps the lowercas
 Resolution maps `import Geometry` → `geometry.pyfun` by lowercasing. (Multi-word/snake_case stems and
 nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
 
-**Resolution & ordering** (landed — slice 2, `src/project`). A multi-file **driver**: from an entry file,
+**Resolution & ordering.** A multi-file **driver**: from an entry file,
 parse it, follow `import` edges (resolved relative to the entry's directory = the source root), and build
 a dependency **graph**. The graph must be **acyclic** — a cycle is an error (Python tolerates import
 cycles only fragilely; F# forbids them, and this is the cross-file face of declare-before-use). A
 topological sort gives the compile/emit order. So "a module may only use modules declared before it"
 falls out for free — no separate mechanism, and there is **no mutual recursion across modules** (merge
-the files, as in F#). *Implementation:* `project::build(entry, load)` walks the graph depth-first with an
-injected `load: Fn(&str) -> Option<String>` loader, so the graph/cycle/topo logic is **filesystem-free
-and unit-testable**; a back-edge to a module on the DFS path is a `ProjectError::Cycle` (reported as the
-path `A -> B -> A`), a `None` from the loader is a `ProjectError::Missing` (naming the importer), a
-lex/parse failure is a `ProjectError::Compile` (naming the module), and the DFS post-order is the
-returned topological order (dependencies first, entry last). `project::build_from_path(entry)` is the thin
-`.pyfun`-file wrapper (module name = stem with first letter uppercased; `import Geometry` → `geometry.pyfun`
-in the entry's directory). Cross-module *checking* and *emit* (the next slices) consume this `Project`.
+the files, as in F#).
 
-**Cross-module checking** (landed — slice 3, `types::check_module` + `project::check`). Each module is
+**Cross-module checking.** Each module is
 type-checked in topological order, its env seeded with every imported module's **exported value schemes**
 under their qualified keys (`env.insert("Geometry.area", scheme)`) — reusing the qualified-key env the
 checker already uses for built-in/in-file modules, so the existing `Field`-node access path resolves a
@@ -788,26 +700,8 @@ idempotent (the shared-`Units` pattern), while the *same alias name mapped to a 
 two imports is a genuine conflict and errors. (Measures erase at lowering, so a `<m>`-annotated cross-module
 value round-trips to plain numerics with no lowering change.) Using a name a module does not export is the
 ordinary "`x` is not a member of `Geometry`" error, located in the importing module.
-*Implementation:* the single-file `run` was generalized to take the imports map and return the module's
-exported value schemes (which now include `extern` names), its exported sum types, **its exported records**,
-**and its measures + measure-aliases**; `check_module(module,
-imports)` seeds imported values under qualified keys and imported sum types into the decls under **qualified
-constructor keys** (`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] =
-["Geometry.Circle", …]`), plus imported records under their **bare identity name** with a qualified surface
-alias (`decls.record_aliases["Geometry.Point"] = "Point"`) and their fields appended to the field multimap,
-plus imported measures merged unqualified into `decls.measures`/`measure_aliases` (with the alias-conflict
-check), so construction (the `Record`/`Field` arms), qualified ctor/record patterns (`bind_pattern`),
-exhaustiveness (`ctor_signature`), and `<…>` unit resolution all resolve with no special cases. Transplanting a scheme across modules is sound
-because a top-level binding (and a constructor) generalizes against an env of closed schemes, so its own
-scheme is closed and `instantiate` refreshes the quantified vars in the dependent module's id space.
-`project::check` threads the `ModuleExports` map through the topological order, seeding each module from
-only the modules it actually imports (so an unimported module's members/constructors stay invisible), and
-returns errors grouped by module. *Lowering* routes a qualified constructor — in expression or pattern
-position — to the imported module's class (`geometry.Circle`, dotted class pattern `case geometry.Circle(r):`,
-with `import geometry` hoisted); a nullary imported constructor used as a value is called
-(`palette.Red()`), and imported constructor arities are threaded so a partial application still curries.
 
-**Output & the shared runtime** (landed — slice 4, `lowering::lower_in_project` + `project::compile`).
+**Output & the shared runtime.**
 Each module lowers independently to its own `.py`; a cross-module `Geometry.area` emits `geometry.area`
 (attribute access), with `import geometry` hoisted to the file header (reusing the lowerer's
 `needed_imports` set), and imported members keep **un-mangled** names (a file module is lowered as an
@@ -820,15 +714,9 @@ So those classes are hoisted into a generated **`_pyfun_rt.py`** that every modu
 native `list`/`set`/`dict`/`tuple`. The pure `_pf_*` helpers stay per-file for the MVP (duplication is
 bloat, not bug); de-duplicating them into `_pyfun_rt.py` is a follow-on. **Single-file `compile`/`run`
 output is unchanged** (`lowering::lower` still inlines the classes) — the runtime module appears only for
-a multi-file program, and only when some module actually uses `Option`/`Result`. *Implementation:* the
-`Lowerer` gained an `imported_modules` set (drives the `geometry.area` routing) and a `use_runtime` flag
-(emit `from _pyfun_rt import …` vs inline); `lower_in_project(module, ctx)` sets them and threads
-`ctx.member_arities` (the imported functions' arities) into the arity table so a **cross-module partial
-application still lowers to `functools.partial`**. `project::compile` builds each module's `ImportContext`
-from its imports, emits `<name>.py` per module, and appends `_pyfun_rt.py` (via `runtime_module()`) iff
-any module used the nominal classes.
+a multi-file program, and only when some module actually uses `Option`/`Result`.
 
-**CLI** (landed — slice 5, `src/main.rs`). `pyfun {check,compile,run} entry.pyfun` operate over the whole
+**CLI.** `pyfun {check,compile,run} entry.pyfun` operate over the whole
 graph: `check` checks all modules (errors rendered rustc-style against each module's own source, grouped
 under a `-- module `Name` (name.pyfun) --` header); `compile -o <dir>` emits the `.py` tree (+
 `_pyfun_rt.py`) into `<dir>` (no `-o` prints each file to stdout under a `# ==== name.py ====` banner);
@@ -839,7 +727,7 @@ single-file path exactly as before** (full back-compat — `compile` to stdout /
 The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
 Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
 
-**LSP** (landed — slice 6). The editor analysis gains **minimal import awareness**: `analyze_in_dir(source,
+**LSP.** The editor analysis gains **minimal import awareness**: `analyze_in_dir(source,
 dir)` resolves an imported file's export interface (via `project::resolve_imports`, a *forgiving* variant
 that reads sibling `<name>.pyfun` files, resolves transitively, and silently omits a missing/broken/cyclic
 import) and seeds the type-check (`types::check_collecting_with_imports`), so a multi-module file
@@ -847,7 +735,7 @@ type-checks `Geometry.area` cleanly instead of flagging "not a member" — while
 error is still reported. The server maps the document's `file:` URI to a directory (`uri_to_path`,
 percent-decoding + the Windows `/C:/` fixup) and passes it in; a non-`file:` URI or a no-imports file is
 analyzed exactly as before. Both former MVP limitations here (disk-only reads, no invalidation when an
-imported file changes) are fixed by the project-wide LSP cache — see §9. *Cross-file navigation:*
+imported file changes) are fixed by the project-wide LSP cache (`INTERNALS.md`). *Cross-file navigation:*
 (1) **go-to-definition crosses files** — a qualified reference to an imported file module
 (`Geometry.area`, `Geometry.Circle`) jumps to the definition in that module's `.pyfun`
 (`resolve::qualified_at` records expression-position qualified refs with spans; the server resolves the
@@ -867,7 +755,7 @@ no qualified-type syntax, so a type name appears only in its own file's annotati
 field types, `extern` types). `TypeExpr::Con` and the `type` declaration each carry a name span, the
 resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name occurrences, and
 `resolve::type_at` / `type_use_references` drive go-to-definition, find-references, and rename (a type
-renames to an uppercase type name; builtins are refused). The **project-wide LSP cache landed** (§9).
+renames to an uppercase type name; builtins are refused). The **project-wide LSP cache** is described in `INTERNALS.md`.
 
 **Post-Phase-2 follow-ons (each detailed above):** cross-module sum-type ADTs, cross-module records
 (§8.3), cross-module externs and measures, and cross-file LSP navigation. **Explicit non-goals
@@ -876,13 +764,6 @@ so enforced visibility would fight the ethos; and **TCO** — CPython has none a
 combinators are the stack-safe path, so deep self-recursion matching hand-written Python's
 `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from X import y` / `open`;
 nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
-
-**Phase 2 is complete** — all seven implementation slices landed: implicit recursion; `import` syntax;
-the `src/project` graph driver (a loader-injected, filesystem-free DFS); cross-module value checking
-(`types::check_module` + `project::check` over the topo order); shared `_pyfun_rt.py` + cross-module
-lowering + parallel-file emit (`lowering::lower_in_project` / `runtime_module` / `project::compile`);
-the import-detecting CLI (`check`/`compile`/`run`, single-file back-compat preserved); and docs + the
-runnable `examples/modules/` project.
 
 ## 7. Surface language (MVP)
 
@@ -916,7 +797,7 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
-**Doc comments (implemented).** A line starting with `##` at **column 0** is a *doc comment*: one
+**Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
 declaration (joined with newlines, the conventional single space after `##` stripped) and surface
 in LSP hover (§9). Design rationale — the minimal option that can't silently re-purpose existing
@@ -939,7 +820,7 @@ comments:
   after it (EOF, or a `measure`/`module`/`import`/expression) is accepted and dropped like a
   comment; no markdown processing — hover shows the text verbatim.
 
-**Statement separation & blocks (general offside rule, implemented).** Indentation is turned into
+**Statement separation & blocks (general offside rule).** Indentation is turned into
 block structure by a layout rule, not semicolons or braces. At lexing time a layout stack of block
 columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
 synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates two statements.
@@ -967,17 +848,15 @@ synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates t
 
 The rule is orthogonal to the brace-delimited CEs and records (§8.1).
 
-### 7.1 Numbers & arithmetic — Python-familiar (implemented)
-
+### 7.1 Numbers & arithmetic — Python-familiar
 The design for floats puts **familiarity to Python programmers first** — Pyfun brings functional
 discipline, but numeric behaviour should not surprise someone coming from Python. A Python user never
 sees the type machinery; they feel a few surface behaviours, and those are what this design pins
-down. Both steps have shipped: the division semantics + `#` comments (step a), and the `num`
-constraint with polymorphic literals (step b).
+down.
 
 **Decisions:**
 
-1. **`/` is true division; `//` floors; `%` is modulo; `**` exponentiates. ✅ implemented.** Pyfun `/`
+1. **`/` is true division; `//` floors; `%` is modulo; `**` exponentiates.** Pyfun `/`
    is Python `/` (result type `float`, `7 / 2 == 3.5`), `//` is Python floor division (`7 // 2 == 3`,
    result `int`), `%` is Python modulo (`10 % 3 == 1`, same `*`/`/` precedence tier), and `**` is Python
    exponentiation — **float-only and dimensionless** (`float -> float -> float`; a runtime exponent
@@ -992,7 +871,7 @@ constraint with polymorphic literals (step b).
    1:1 to a Python
    operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
    `//` (the type-directed-lowering problem this would otherwise create disappears).
-2. **One built-in numeric constraint, `num`. ✅ implemented.** `+ - * //` (and the prelude numerics)
+2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics)
    are typed with a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a ->
    'a`. `int` and `float` (with any units) satisfy `num`; `bool`/`string` do not (→ "expected int,
    found bool"). Generic functions like `area`/`min`/`max` stay polymorphic over int *and* float
@@ -1006,7 +885,7 @@ constraint with polymorphic literals (step b).
    than `*`/`/` and looser than application (`-f x` = `-(f x)`, `2 * -3` = `2 * (-3)`), coexists with
    the `(-)` operator section, and enables **negative integer literal patterns** (`case -1:`, the sign
    folded into the pattern, as Python's `match` allows). Lowers to Python `-x`.
-3. **Polymorphic numeric literals; default `int`. ✅ implemented.** An integer literal `1` has type
+3. **Polymorphic numeric literals; default `int`.** An integer literal `1` has type
    `num 'a => 'a` and adapts to context, so mixed-literal arithmetic just works the Python way:
    `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`, and include **scientific notation**
    (`1e6`, `2.5e-3`, `1E3`, `6.674e-11<m^3 / kg s^2>`): the lexer consumes the exponent (including its
@@ -1031,10 +910,10 @@ constraint with polymorphic literals (step b).
    steers users there. This is the one deliberate departure from Python familiarity — silent
    `+`-means-anything is exactly the dynamic mushiness Pyfun exists to replace.
 
-6. **Comparison & equality. ✅ implemented.** `< > <= >=` carry a closed built-in **`comparison`**
+6. **Comparison & equality.** `< > <= >=` carry a closed built-in **`comparison`**
    constraint, implemented like `num` (an `ord` constraint set on type variables, propagated through
    unification and generalized), so `let lt a b = a < b` infers `comparison 'a => 'a -> 'a -> bool`.
-   The constraint is satisfied by `int`/`float`/`string` **and — since derived ordering landed — by
+   The constraint is satisfied by `int`/`float`/`string` **and by
    user sum types, records, tuples, the built-in `Option`/`Result`, and `List`, compared structurally**
    (bools and functions are still rejected).
    A **sum type** orders by variant *declaration order* first, then field-by-field (`Red < Green < Blue`;
@@ -1068,12 +947,12 @@ constraint with polymorphic literals (step b).
    evaluate-once and short-circuit come for free rather than via a desugaring to `and`. Each adjacent
    pair is typed independently (operands unify; ordering links carry `comparison`, equality links
    don't), and links may mix operators (`0 <= i < n`, `a == b == c`).
-7. **Logical operators. ✅ implemented.** `and` / `or` / `not` — all keywords, lowering to the same
+7. **Logical operators.** `and` / `or` / `not` — all keywords, lowering to the same
    Python keywords. Spelled the Python way rather than F#'s `&&`/`||` to stay consistent with the
    Python-familiarity theme of this section (and to lower 1:1). `not` is `bool -> bool`, `and`/`or`
    are `bool -> bool -> bool`. Precedence mirrors Python — `or` < `and` < `not` < comparison — so
    `not a == b` is `not (a == b)` and emitted Python needs minimal parentheses.
-8. **Operator sections. ✅ implemented.** A binary operator wrapped in parentheses, `(op)`, is that
+8. **Operator sections.** A binary operator wrapped in parentheses, `(op)`, is that
    operator as a first-class curried function — `(*)`, `(+)`, `(-)`, `(/)`, `(//)`, `(==)`, `(!=)`,
    `(<)`, `(>)`, `(<=)`, `(>=)` — and `(*) 2` partially applies it (F#-style). It parses to
    `ExprKind::OpFunc(BinOp)` (the parser's `(`-atom disambiguates a lone operator-then-`)` from unit
@@ -1085,7 +964,7 @@ constraint with polymorphic literals (step b).
    function value would silently drop their short-circuit evaluation (F# excludes `&&`/`||` for the
    same reason). This makes point-free style with the `List`/`Seq` combinators natural: `List.fold (+)
    0 xs`, `List.map ((*) 2) xs`.
-9. **Function composition `>>` / `<<`. ✅ implemented.** `f >> g` is left-to-right composition
+9. **Function composition `>>` / `<<`.** `f >> g` is left-to-right composition
    (`fun x -> g (f x)`, f then g); `f << g` is right-to-left / math ∘ (`fun x -> f (g x)`, g then f).
    Two-char lexer tokens (`GtGt`/`LtLt`), lexed before single `<`/`>` and `<=`/`>=`/`<-` — so `<<` is one
    token and never opens a `5<m>` unit annotation. A new precedence level `parse_compose` sits between
@@ -1097,7 +976,7 @@ constraint with polymorphic literals (step b).
    body embeds the operands, which may reference outer variables, so the lambda parameter is picked free of
    both operands' free variables (`_pf_x`, else `_pf_x0`, …) — no capture. Pairs naturally with the
    combinators: `List.map (double >> inc) xs`.
-10. **Backward pipe `<|`. ✅ implemented.** `f <| x` == `f x` (F#'s `<|`, Haskell's `$`), added for
+10. **Backward pipe `<|`.** `f <| x` == `f x` (F#'s `<|`, Haskell's `$`), added for
     symmetry so the pipe/compose quad `|>` `<|` `>>` `<<` is complete. It's modeled as a `backward` flag on
     the existing `ExprKind::Pipe` (forward `|>` applies `rhs` to `lhs`; backward `<|` applies `lhs` to
     `rhs`), lexed as `Tok::PipeLeft` (`<|`, before single `<`), at the lowest precedence with `|>` but
@@ -1120,14 +999,7 @@ and equality/ordering for user ADTs (when those land) is the compiler's call —
 `__eq__`/`__lt__` on emitted classes the way it already generates `__repr__`. What it keeps is the
 thing that matters here: numeric and **unit** polymorphism, with Python-native surface behaviour.
 
-**Implementation status (ROADMAP #4):** (a) ✅ `/` true division, `//` floor, comments → `#`;
-(b) ✅ the `num` constraint with polymorphic literals; (c) `+ - *` stay numeric — string concat is
-deferred to a later named function (no guiding error yet); plus ✅ comparison/equality operators
-(`< > <= >= == !=`) with the `comparison` constraint and structural ADT equality; plus ✅ logical
-`and` / `or` / `not`.
-
-### 7.2 Pattern matching — Python-framed (implemented)
-
+### 7.2 Pattern matching — Python-framed
 Pyfun's original `match e with | pat -> body` framing is F#. Python 3.10+ users now know a *native*
 `match`/`case`, so the F# framing is the second false friend (§ discussion): the audience has muscle
 memory for `match x:` / `case …:` and Pyfun spells it differently for no functional gain. This section
@@ -1171,7 +1043,7 @@ value and the part that carries Pyfun's FP surface:
   (`case [Some x, *rest]:`, `case [0, y]:`) work and type-check. Lowers to a Python **list** sequence
   pattern `case [a, b, *rest]:` (brackets, `PyPattern::ListSeq`, distinct from a tuple's paren `Sequence`).
 
-**Two slots this framing frees (Python-identical), both implemented:**
+**Two slots this framing frees (Python-identical):**
 - **Or-patterns.** With arms delimited by `case`, `|` inside a pattern means alternation, as in Python:
   `case 1 | 2 | 3:`. Parsed at the constructor-application level (`Some a | None` is `(Some a) | None`),
   modelled as `Pattern::Or(Vec<Pattern>)`. Every alternative must bind the **same variables at the same
@@ -1249,8 +1121,7 @@ let grade n =
   else "F"
 ```
 
-### 7.2.1 Active patterns (implemented)
-
+### 7.2.1 Active patterns
 F#'s signature pattern-matching extension: a **named recognizer** whose cases are used like
 constructors in `case` patterns, so ad-hoc classification logic gets the same exhaustive,
 declarative surface as an ADT.
@@ -1300,7 +1171,7 @@ type's own constructor signature since the scrutinee type is the recognizer's *i
 case is a refutable leaf, and any mixing (two patterns, or literals beside cases) conservatively
 demands a wildcard.
 
-**Shape rules** (checker errors, keeping the lowering honest): an active pattern may appear as the
+**Shape rules** (checker errors, keeping the lowering correct): an active pattern may appear as the
 **whole** pattern of an arm, or as an alternative in a top-level **or-pattern whose alternatives are
 all binder-free cases** (`case Even | Odd:`, `case Small _ | Big _:`, `case DivisibleBy 3 |
 DivisibleBy 5:` — a disjunction of tests; a *binding* alternative would make the or-arm's bindings
@@ -1317,7 +1188,7 @@ application at projection paths and/or usefulness recursion into the hidden mono
 (soundness-sensitive), and each has a direct workaround (guards; bind-then-destructure in the body; a
 nested `match`).
 
-**Lowering — an honest if/elif chain.** An active pattern is a *function call*, not a structural
+**Lowering — a plain if/elif chain.** An active pattern is a *function call*, not a structural
 test, so Python's `match` cannot express it. The declaration lowers to a plain def
 (`_ap_Even_Odd(n)`) plus, for a total pattern, hidden case classes (`_Even`, `_Odd` — ordinary ADT
 classes, underscore-mangled, no ordering); a partial-Option pattern reuses `Some`/`None_`, a bool
@@ -1444,7 +1315,7 @@ Design intent:
   numbers. No runtime unit objects.
 - **MVP standard units:** a small SI base set + dimensionless, with **user-definable measures**
   (`type m`-style measure declarations). Keep the built-in set small (§11).
-- **Derived-measure aliases (implemented):** `measure N = kg m / s^2` names a compound of base
+- **Derived-measure aliases:** `measure N = kg m / s^2` names a compound of base
   measures; aliases may build on earlier aliases (`measure Pa = N / m^2`). An alias **expands** to its
   base-measure unit at declaration time (stored in `Decls::measure_aliases`) and is substituted
   wherever it appears — so `<N>` and `<kg m / s^2>` are the *same* type and unify. Consequence: the
@@ -1453,7 +1324,7 @@ Design intent:
   grammar (now also accepting `1/s` for a dimensionless numerator); aliases, like `let`s, must be
   declared before use.
 - **Unit-aware roots `sqrt : float<'u^2> -> float<'u>` and `cbrt : float<'u^3> -> float<'u>`
-  (implemented):** √area = length and ∛volume = length — `sqrt 16.0<m^2> :
+ :** √area = length and ∛volume = length — `sqrt 16.0<m^2> :
   float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, `cbrt 27.0<m^3> : float<m>`, and a **non-square** (for
   `sqrt`) or **non-cube** (for `cbrt`) unit is a
   compile-time dimensional error (`type mismatch: expected float<'a^2>, found float<m^3>`). These are
@@ -1495,18 +1366,18 @@ Design intent:
   interact with Python interop (units can't cross the boundary — they're erased, so the boundary
   sees plain numbers).
 
-### 8.3 Records (implemented — constructor-tagged literals)
+### 8.3 Records — constructor-tagged literals
 
 Named-field **product** types, complementing ADTs' sum types: `type Point = { x: int, y: int }`,
 **construction `Point { x = 1, y = 2 }`**, access `p.x`, functional update `{ p with x = 3 }`.
 Parameterized records (`type Box a = { item: a }`) are polymorphic.
 
-**Motivation for the revision.** The original literal spelling `{ x = 1, y = 2 }` is a *false friend*
+**Motivation.** A bare literal spelling `{ x = 1, y = 2 }` would be a *false friend*
 to Python readers: it reads as a `dict`, but a Python dict is `{ "x": 1 }` (colons, string keys) and a
 Pyfun record is nominal with `=` and bare field names. Pyfun has no dict/map literal (maps are built
 with `Map.ofList` / `Map.add`), so the collision is only against a reader's Python knowledge — but that
 is exactly the "basic stuff should feel familiar" surface we care about (§7.1). Tagging the literal with
-its type constructor kills the false friend, is **honest about nominality** (§ decision 1), matches
+its type constructor kills the false friend, is **explicit about nominality** (§ decision 1), matches
 Haskell's record syntax (functional pedigree) *and* Python's dataclass call `Point(x=1, y=2)` (familiar),
 and makes construction **mirror** its pattern (below).
 
@@ -1569,7 +1440,7 @@ Decisions:
    already fixes the record type, and the `with` keyword makes the form unambiguously an update (Python has
    no `{ … with … }`), so it is not a false friend and needs no tag. Lowering binds the base to a temp
    (evaluated **once**) then reconstructs positionally — `{ p with x = 3 }` → `_t = p; Point(3, _t.y)`.
-   **Nested-update sugar (implemented):** a field may be a **dotted path**, `{ p with a.b = v }`, meaning
+   **Nested-update sugar:** a field may be a **dotted path**, `{ p with a.b = v }`, meaning
    `{ p with a = { p.a with b = v } }` — the standard remedy for the deep-immutable-update pain (today you'd
    hand-write the nested reconstruction). Arbitrary depth (`a.b.c = v`), and paths mix with plain fields
    (`{ p with a.b = 1, x = 2 }`) and share prefixes (`{ p with a.b = 1, a.c = 2 }` rebuilds `a` once). It is
@@ -1616,8 +1487,7 @@ Decisions:
    - A bare `{` in expression position must be a **functional update** (`{ e with … }`); anything else is
      a parse error (the old bare-literal path is removed). A data constructor applied to a record is now
      written with the tag explicit, `Some (Point { x = 1 })`, not `Some { x = 1 }`.
-   - `.field` is a postfix binding tighter than application (`f p.x` is `f (p.x)`). (Unchanged.)
-
+   - `.field` is a postfix binding tighter than application (`f p.x` is `f (p.x)`).
 **Record patterns** in `match` are correspondingly **tagged**: `case Point { x = 0, y }:` (see §7.2). The
 form is `T { name = pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. Tagging
 makes the pattern **mirror construction** and matches the scrutinee's record type explicitly. A pattern
@@ -1640,224 +1510,29 @@ familiarity (dataclass/Haskell) and honesty. Neither option lifts field-uniquene
 
 Deferred: derived ordering on records, and lifting the unique-field-name restriction.
 
-## 9. Project layout (planned Rust crate)
+## 9. Tooling
 
-Keep modules small and single-purpose — exhaustiveness, type+effect inference, and codegen each
-grow large and must not bleed together.
+The compiler ships a language server, a REPL, typed holes, and editor support. `INTERNALS.md` documents
+the Rust crate layout and how each of these is built; the language-relevant surface is:
 
-```
-src/
-  lexer/           tokenizer, token types, lex errors
-  parser/          recursive-descent + precedence climbing; ast.rs = Expr/Pat/Ty/Stmt
-  ast/             traversal + visitor utilities, pretty-printer
-  desugar/         computation-expression desugaring (§8.1): builder{} → bind/return/…
-  types/           HM inference + effect inference/checking, exhaustiveness
-    units/         units-of-measure inference: abelian-group unit unification (§8.2)
-  lowering/        Pyfun AST → Python-AST IR; scope/name-binding analysis; unit erasure
-  python_emitter/  Python-AST IR → readable source
-  diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes
-  cli/             clap-based; subcommands compile/check/fmt/lsp
-  lsp/             front-end-first language server (stdio JSON-RPC) — IMPLEMENTED
-    json.rs        hand-rolled, dependency-free JSON value + parser + serializer
-prelude/           Pyfun/Python runtime support (Result/Option ADTs, etc.)
-editors/vscode/    minimal VS Code client that launches `pyfun lsp`
-tests/             parser tests, compile tests, .pyfun fixtures (favor snapshot/golden tests)
-```
+**Language server (`pyfun lsp`).** A dependency-free stdio server that reuses the front end: live
+diagnostics; hover showing the inferred type and its effects (the only way to *see* an inferred type
+without provoking an error, since types are never written); go-to-definition, find-references, rename,
+completion, and document symbols; cross-file across a project's modules (§6.1); over resilient parsing,
+so a half-typed file still navigates. A thin VS Code client launches it.
 
-**Build order:** `lexer` + `parser` + `ast` → `desugar` → `types` (incl. `units`) →
-`lowering` + `python_emitter` → `diagnostics` + `cli` → `lsp`.
+**Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
+infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP
+surfaces on hover. It is the type-driven-development tool from Haskell/Idris/Agda, and fits here because
+complete HM inference always knows the expected type at a hole. A hole never causes a spurious error,
+but it **blocks `compile`/`run`** (there is no value to lower) and makes `check` exit non-zero, so a
+leftover hole is caught. `check` also lists in-scope bindings that would fill the hole, including
+*refinement* fits reported applied to further holes (`String.concat ? ?`). This reaches beyond F#, which
+has no typed holes.
 
-**The LSP (implemented).** `pyfun lsp` runs a small language server over stdio. It
-speaks LSP/JSON-RPC with `Content-Length` framing; to keep the crate
-**dependency-free** (no `serde`/`lsp-types`), the JSON value type, parser, and
-serializer are hand-rolled in `src/lsp/json.rs` — the same choice as the
-hand-rolled lexer/parser. The message-handling core (`Server::handle`) is pure
-(JSON in → JSON out) so it is unit-tested without spawning a process; a separate
-integration test (`tests/lsp.rs`) drives the real binary over piped stdio. Four
-features, all reusing the existing front end:
-
-- **Diagnostics** — the existing type/effect/unit/exhaustiveness errors, streamed
-  as `textDocument/publishDiagnostics` on open/change (full document sync).
-- **Hover-for-type** — the inferred type of the narrowest expression, binding name,
-  **parameter, or pattern variable** under the cursor, **with latent effects** shown
-  on arrows (e.g. `string ->{io} unit`) plus a **dedicated `Effect:` line** summarizing
-  the concrete effect performed on full application (the union of the type's
-  *result-spine* arrows — `io`/`async`; argument arrows are a callback's effect, not
-  the value's, and pure values omit the line — `types::effect_summary`). This is the display half of the type+effect
-  system: Pyfun types are inferred and never written, so hover is the only way to
-  *see* one without provoking an error. It works because the checker, in a
-  `record`-enabled pass (`types::check_collecting`, surfaced via `analyze`),
-  accumulates a `(span, ty)` table for every expression node, binding name, function
-  parameter, and pattern variable, then resolves each entry against the final
-  substitution and renders it. Bindings carry a `name_span`, and parameters /
-  pattern variables carry their own spans, so a function name hovers to its full
-  inferred signature and a parameter hovers to its element type. **Doc comments
-  surface here too:** a `##` doc attached to a top-level `let`/`type`/`extern` (§7)
-  is appended below the type (separated by a rule) when hovering the declaration
-  name *or any reference resolving to it* (`resolve::symbol_at` → the item's `doc`);
-  a documented symbol with no recorded type (a `type` or `extern` name) hovers to
-  the doc text alone.
-- **Go-to-definition** — jump from a reference to its definition, **module-level or
-  local**. Backed by a dependency-free name resolver (`src/lsp/resolve.rs`) that
-  walks the parsed AST (independent of the type checker, so it works on any program
-  that *parses*): `definitions` collects module-level symbols (top-level `let`s with
-  their precise name span; constructors / type / record decls / `extern`s at their
-  declaration), and `references` resolves every identifier occurrence to a `Target`
-  — either a `Local` binder (function parameter, block-local `let`, pattern
-  variable, or computation-expression `let`/`let!`, resolved to the binder's own
-  span) or a `Module` symbol (resolved by name against `definitions`). The walk
-  tracks lexical scopes so an inner binding correctly shadows an outer one — every
-  local binder now carries a span, so all are resolvable.
-- **Find-references** — every occurrence of the symbol under the cursor (the
-  inverse of go-to-definition, reusing the same resolver). The cursor may sit on a
-  *use* or the *definition/binder* itself: `symbol_at` maps the offset to its
-  occurrence span and a `Target` (the narrowest enclosing reference / local-binder /
-  definition span wins), then `find_references` returns all references with that
-  target plus, when the request's `context.includeDeclaration` is set, the
-  declaration(s). Works for both locals (all binder spans are collected during the
-  walk, so even an unused binder is recognized) and module symbols.
-- **Rename** — rewrite every occurrence (declaration included) of the symbol under
-  the cursor to a new name, returned as a `WorkspaceEdit`. Built directly on
-  `symbol_at` + `find_references`. `prepareRename` validates first and returns the
-  identifier's range. Only **locals** and top-level **`let` values** are renameable
-  — their every occurrence is a precise span; constructors / types / `extern`s are
-  refused, because their declaration span covers the whole declaration and their
-  type-annotation uses aren't tracked as references, so a rename would be unsound.
-  The new name must be a valid lowercase value identifier (not a keyword). No
-  capture-avoidance check is done (renaming to a name already bound nearby can
-  shadow) — the editor shows the diff for review.
-- **Completion** — in-scope module symbols (from whatever the recovering parser
-  produced — see below, so even a partially-typed file contributes its symbols)
-  plus the always-available prelude (`PRELUDE` + `LIST_PRELUDE`), builtins
-  (`Ok`/`Error`, the builtin/reserved type names), and keywords, each tagged with a
-  `CompletionItemKind`. The static set is the fallback when nothing parses.
-- **Document symbols** — the editor outline: every module-level definition as a flat
-  `DocumentSymbol[]`, reusing the same `resolve::definitions` (each with a precise
-  `range`/`selectionRange` and an LSP `SymbolKind` icon). Works on whatever parsed,
-  so a partial file still outlines its good items.
-- **Resilient & incremental analysis** — a half-typed file still yields results.
-  The parser has an error-recovering entry point (`parser::parse_recover →
-  (Module, Vec<ParseError>)`) used by the editor (the compiler keeps the strict
-  `parse`, as it must reject any broken program): on a failed item it records the
-  error, guarantees forward progress, then `synchronize`s to the next item
-  boundary (a statement separator at block depth 0, tracking `Indent`/`Dedent` so a
-  separator *inside* a broken block isn't mistaken for it). So one broken `let` no
-  longer hides the rest of the file — the items that parse still drive hover and
-  navigation, and only the *syntax* errors are reported until the file is clean (a
-  type error over a partial module is noise), at which point the type errors take
-  over. `analyze` returns an `Analysis { module, diagnostics, types, parse_ok }`
-  bundle; **lexing errors remain fatal** (no AST) and **rename requires `parse_ok`**
-  — a partial module could hide occurrences in the unparsed region, so the mutating
-  feature stays conservative while the read-only ones degrade gracefully. The
-  "incremental" half is a per-document analysis cache keyed on a monotonic version
-  stamp: repeated requests on an unchanged document (hover, then go-to-def, then
-  references) reuse one parse + type-check instead of redoing it each time.
-- **Project-wide cache + import invalidation** — import-aware analysis
-  is cached at two levels, both validated by **content fingerprints** (a
-  `DefaultHasher` of the source text; an analysis is a pure function of the entry
-  text plus every imported source it consulted, so equal fingerprints prove an
-  equal result). (1) Each per-document cache entry (`CachedAnalysis`) records the
-  imported module files its analysis consulted — `deps: (uri, Option<fingerprint>)`,
-  with `None` recording the file's *absence* so that creating it later also
-  invalidates. A cache hit requires the document version *and* every dep
-  fingerprint to match, so editing an imported file — in an open buffer **or on
-  disk** — re-analyzes its dependents on their next request. (2) A **project-wide
-  exports cache** (`Server.exports`, `CachedExports` keyed by module-file URI)
-  memoizes each imported module's checked interface (`ModuleExports`) together
-  with its own dep list, so two open documents importing `Geometry` share one
-  parse + check of `geometry.pyfun` across requests instead of each redoing it.
-  Imported sources are read from the **open buffer when the file is open** (else
-  disk), the same convention as the other cross-file features — this is what makes
-  unsaved edits to an import visible at all. The resolver
-  (`Server::resolve_exports_cached`, driven through `lib::analyze_with_imports`,
-  which injects import resolution into the recovering analysis) mirrors the
-  forgiving `project::resolve_imports` semantics exactly — missing/broken/cyclic
-  imports are omitted — with one care point: an interface computed in an import-
-  *cycle* context is context-dependent (a different entry document resolves the
-  cycle from a different side), so such "tainted" results live only in a per-pass
-  memo (mirroring the old per-call cache) and never enter the project-wide cache.
-  Diagnostics for a dependent are still *published* only when that document is
-  next analyzed (its own open/change, or any request touching it) — proactively
-  re-publishing dependents' diagnostics on an import edit would be a behavior
-  change and stays deferred.
-
-The AST changes that enable local navigation: function/binding parameters are
-`Param { name, span }` (was `Vec<String>`), `Pattern::Var { name, span }` (was
-`Var(String)`), and the `CeItem::Let`/`LetBang` variants carry a `name_span`. The
-spans are `NodeSpan` (which compares equal unconditionally), so roundtrip/structural
-equality is unaffected; lowering erases them (`param_names`).
-
-Deferred: *truly* incremental reparsing — an edit still re-analyzes the whole
-document — and deliberately so, decided against rather than postponed:
-a whole-file lex + parse + check is milliseconds at realistic Pyfun file sizes, the
-two caches above already eliminate all *redundant* whole-file work (unchanged
-documents, unchanged imports, shared imports), and region-based reparse would
-complicate the offside-rule lexer and the recovering parser for no perceptible
-latency win at this scale. (Doc-comment hover has **shipped** — `##` doc comments,
-§7, rendered below the type.) The `editors/vscode/` client is intentionally thin —
-all language smarts live in the Rust server.
-
-**Typed holes (implemented).** A hole — `?` (anonymous) or `?name` (named) — is a
-placeholder in *expression* position that the type checker accepts and reports the
-inferred type of. It's the type-driven-development tool from Haskell/Idris/Agda,
-and it's a natural fit here because Pyfun has (a) complete HM inference, so the
-compiler always knows the expected type at a hole, and (b) an LSP to surface it. It
-reaches beyond the F# model — F# has no typed holes. Syntax: `?` is lexed as
-`Tok::Hole(Option<String>)` (a name is lexed adjacently, like `f"`/`r"`); the
-parser produces `ExprKind::Hole { name }`, which round-trips. `?` was otherwise
-unused, and is preferred over Haskell's `_` because `_` is already the wildcard
-pattern + `let _ =` discard. **Semantics:** a hole infers as a **fresh type
-variable that unifies freely**, so it never causes a spurious error and takes
-whatever type the context demands (`?body + 1` ⇒ `int`, `List.map ? xs` ⇒ a
-function type); it's recorded (`Infer::holes`) and, once the substitution is
-final, resolved and rendered (`types::Hole { name, ty, span }`). It's reported
-**informatively, not as a red error** — a hole is an intentional blank: `pyfun
-check` prints each as a **note** (`` hole `?body` has type `int` ``) and the LSP
-publishes it at **Information severity** (3) with hover showing the type (free,
-since the hole expression's type is already in the span→type table). But a hole
-**blocks `compile`/`run`** — there's no value to lower — with a clear "cannot
-compile: unfilled hole" error, and `check` exits non-zero so a leftover hole is
-caught. **Valid hole fits.** Each note also lists in-scope bindings that could fill
-the hole — the compiler searches the environment snapshotted at the hole and reports
-every binding whose type unifies with the hole's. The test is a real **trial
-unification** rolled back afterward (`Infer::hole_fits` snapshots the substitution
-maps, instantiates each candidate scheme, unifies against the resolved hole type, and
-restores — so the checker's own state is untouched). Fits are ranked most-specific
-(fewest generalized variables) first, with unqualified names (the user's own
-bindings, prelude) before qualified module members (`String.concat`), capped at 6; a
-fully-unconstrained hole (`'a`) lists none, since everything would fit. **Refinement
-fits** go further (Haskell's second mode): a function binding whose *result* — after
-applying one or two arguments — unifies with the hole's type is reported *applied to
-that many further holes* (`String.upper ?`, `String.concat ? ?`), so it reads as a
-sketch you can fill inward. `Infer::hole_refinements` peels leading arrows off each
-candidate (up to `MAX_REFINE_DEPTH` = 2) and trial-unifies the tail, skipping a
-peeled result that is a bare variable — a **structural filter** that keeps out
-trivially-general combinators (`id`, `const`) which would otherwise "refine" into
-every hole. So a `string` hole reports `` try: greeting — or: String.upper ?,
-String.fromInt ? ``. Fewest-holes-first, capped at 4, and never duplicating a direct
-fit.
-
-**Syntax highlighting (TextMate grammar).** Separate from the LSP's semantic
-smarts, `editors/vscode/pyfun.tmLanguage.json` gives static, parse-free
-highlighting (keywords, declarations, types/constructors, numbers + adjacent unit
-annotations, operators, strings/comments). One deliberate design choice: the
-**escape-hatch tokens are flagged in a caution colour** to signal the opt-outs
-from Pyfun's immutable-by-default / effect-checked defaults — `mut` (the
-mutability opt-out), `<-` (the act of mutation), and `extern` (the untyped,
-effectful-by-default Python FFI boundary). `pure` deliberately stays a neutral
-`storage.modifier` (it's an *encouraged* assertion, the opposite of an escape
-hatch), and `->` is scoped apart from `<-` so only the reassignment arrow is
-flagged. The colour is applied via **honest TextMate scopes plus a pinned
-foreground**, not by borrowing a "warning" scope: `mut` →
-`storage.modifier.mutable.pyfun`, `<-` → `keyword.operator.mutation.pyfun`,
-`extern` → `keyword.other.extern.pyfun` (each names what the token *is*), and the
-extension pins all three to an amber `#CC5E00` (no italic) via
-`contributes.configurationDefaults.editor.tokenColorCustomizations`. Pinning the
-colour rather than relying on a theme's rendering of, say, `invalid` keeps the hue
-consistent across themes and light/dark auto-switching, and avoids the semantic
-lie that these valid keywords are errors (an earlier `invalid.deprecated` scoping
-also picked up theme-specific italics). Users can still override the colour in
-their own `editor.tokenColorCustomizations`.
+**Syntax highlighting.** A TextMate grammar flags the escape-hatch tokens (`mut`, `<-`, `extern`) in a
+caution colour, marking the opt-outs from the immutable-by-default / effect-checked defaults; `pure`
+stays neutral, since it is an encouraged assertion rather than an escape hatch.
 
 ## 10. Scope & phases
 
@@ -1873,7 +1548,7 @@ compiler-pipeline and diagnostics quality over feature breadth.
 - **Phase 3 — check + CLI:** type **and effect** inference, exhaustiveness, immutability, **and
   unit inference**; `pyfun check`; good errors for reassignment, missing arms, type/effect/unit
   mismatches.
-- **Phase 4+ — tooling:** formatter (`pyfun fmt`); LSP / editor support — **landed**
+- **Phase 4+ — tooling:** formatter (`pyfun fmt`); LSP / editor support
   (`pyfun lsp`: diagnostics + hover-for-type/effect + go-to-definition + completion over stdio, plus a
   thin VS Code client; see §9); then user-defined CE builders and unit polymorphism if not already in.
 
