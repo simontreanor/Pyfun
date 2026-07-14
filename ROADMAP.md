@@ -50,6 +50,24 @@ gaps.** Post-launch follow-ups that came out of the sweep: publish the Zed exten
 registry (PR to zed-industries/extensions), and consider shipping Helix indent/textobject queries
 (`hx --health` reports them missing; highlights ship today).
 
+## Distribution (marketplace/registry presence — post-launch except where noted)
+
+- **Open VSX** — DONE 2026-07-14: `pyfun.pyfun` 0.0.12 published and indexed (covers
+  VSCodium/code-server/Gitpod/Theia). Future releases: `ovsx publish <vsix> -p <token>`.
+- **JetBrains Marketplace** — plugin BUILT (`editors/jetbrains/`, thin: file type + TextMate
+  grammar + LSP4IJ wiring, works in free mode + legacy CE, 2024.2+). Awaiting the one-time
+  MANUAL first upload (JetBrains rule; see `editors/jetbrains/README.md`), then moderation
+  (~1–3 days); later releases automate via `gradle publishPlugin`.
+- **Zed extensions registry** — extension built and user-verified; publication = PR to
+  zed-industries/extensions (check whether a repo subdirectory is accepted or a dedicated
+  repo is needed).
+- **Upstream registry PRs** (each small; latency is review queues, not effort): nvim-lspconfig
+  server entry, nvim-treesitter parser entry, Mason registry entry, Helix `languages.toml`
+  (pairs with adding indent/textobject queries), MELPA `pyfun-mode` recipe.
+- **Sublime Text Package Control** (M, new audience) and a **Pygments lexer** on PyPI (S–M;
+  improves JupyterLab/nbconvert/Sphinx rendering — kernel currently declares the `fsharp`
+  lexer as an approximation) — both demand-gated.
+
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
 - **Type annotations (`let x : T`, `(x: T)`, return types)** — annotation-free code is a selling point,

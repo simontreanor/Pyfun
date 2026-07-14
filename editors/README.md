@@ -172,6 +172,11 @@ directory of a clone (Zed compiles it locally; needs a Rust toolchain). See
 
 ## PyCharm / IntelliJ (including free mode and Community editions)
 
+A dedicated marketplace plugin lives in [`jetbrains/`](jetbrains/) (file type +
+TextMate highlighting + LSP via LSP4IJ, one-click once it clears marketplace
+moderation). Until then — or if you prefer zero plugins of ours — the manual
+route below gives the same result.
+
 Two pieces, both zero-code: an LSP client and syntax highlighting.
 
 **1. Language server via [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)**
