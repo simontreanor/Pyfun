@@ -43,13 +43,14 @@ every push (all green). JupyterLab UI session user-confirmed (if cells show empt
 output, restart the Jupyter server before suspecting the kernel). Wheel/install/discovery chain
 verified against the released v0.0.9 in a clean venv.
 
-Still open — native-GUI click-throughs only (installed and ready, needs human eyes):
+Zed user-confirmed working 2026-07-14 (dev-extension install; needs `rustup target add
+wasm32-wasip2` — documented in `editors/zed/README.md`). Registry publication (PR to
+zed-industries/extensions) is a separate post-launch step.
+
+Still open — one native-GUI click-through (installed and ready, needs human eyes):
 
 - **PyCharm** (installed): the LSP4IJ user-defined-server steps + TextMate-bundle import in
   `editors/README.md` are transcribed from LSP4IJ's docs, not yet clicked through.
-- **Zed** (installed; extension authored at `editors/zed/`, queries validated, WASM compiles):
-  install it via Extensions → Install Dev Extension and confirm highlighting + LSP in the UI.
-  Registry publication (PR to zed-industries/extensions) is a separate post-launch step.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
