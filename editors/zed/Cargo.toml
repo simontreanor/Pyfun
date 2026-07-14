@@ -1,0 +1,18 @@
+# The Zed extension is its own crate, deliberately outside the repo's Cargo
+# workspace (the empty [workspace] table below opts out) — it builds to WASM
+# with Zed's toolchain, not with the compiler's.
+[package]
+name = "zed_pyfun"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zed_extension_api = "0.7.0"

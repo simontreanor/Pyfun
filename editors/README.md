@@ -159,6 +159,16 @@ For `lsp-mode` instead of eglot:
 
 ---
 
+## Zed
+
+A full extension lives in [`zed/`](zed/) — Tree-sitter highlighting, outline,
+and the language server. Until it reaches the Zed registry, install it as a dev
+extension: **Extensions → Install Dev Extension** → select the `editors/zed`
+directory of a clone (Zed compiles it locally; needs a Rust toolchain). See
+[`zed/README.md`](zed/README.md).
+
+---
+
 ## PyCharm / IntelliJ (including free mode and Community editions)
 
 Two pieces, both zero-code: an LSP client and syntax highlighting.

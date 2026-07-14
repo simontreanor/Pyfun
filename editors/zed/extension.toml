@@ -1,0 +1,19 @@
+id = "pyfun"
+name = "Pyfun"
+description = "Pyfun language support: Tree-sitter syntax highlighting and the pyfun language server."
+version = "0.1.0"
+schema_version = 1
+authors = ["Simon Treanor"]
+repository = "https://github.com/simontreanor/Pyfun"
+
+[language_servers.pyfun]
+name = "Pyfun Language Server"
+languages = ["Pyfun"]
+
+# The grammar lives in a subdirectory of the main Pyfun repo; `path` selects it
+# (supported by Zed's GrammarManifestEntry even though the docs only show
+# repository + rev). Bump `rev` when the grammar changes.
+[grammars.pyfun]
+repository = "https://github.com/simontreanor/Pyfun"
+rev = "90502f1857052920b8f3e80f959fa81522fc535a"
+path = "editors/tree-sitter-pyfun"
