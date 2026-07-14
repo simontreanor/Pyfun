@@ -1,0 +1,39 @@
+# Cross-platform e2e for the Jupyter kernel: builds the compiler, then drives a
+# real kernel process over the Jupyter protocol (tests/kernel_e2e.py) — session
+# semantics, interrupt of a CPU-bound cell, and the engine-death replay path.
+# This is the permanent closure of the "kernel untested on macOS/Linux" gap.
+name: kernel
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Build the compiler
+        run: cargo build --release
+      - name: Install Jupyter protocol clients
+        run: pip install ipykernel jupyter_client
+      - name: Run the kernel e2e
+        shell: bash
+        run: PYFUN_BIN="$GITHUB_WORKSPACE/target/release/pyfun" python tests/kernel_e2e.py

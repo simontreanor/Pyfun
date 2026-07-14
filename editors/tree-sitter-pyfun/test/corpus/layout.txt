@@ -1,0 +1,156 @@
+================================================================================
+let with indented block body
+================================================================================
+
+let counter =
+  let mut n = 0
+  n <- n + 1
+  n
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (let_binding
+      (identifier)
+      (integer))
+    (assignment
+      (identifier)
+      (additive_expression
+        (identifier)
+        (integer)))
+    (identifier)))
+
+================================================================================
+nested match with indented case bodies
+================================================================================
+
+let nested a b =
+  match a:
+    case Some x:
+      match b:
+        case Some y: x + y
+        case None: x
+    case None: 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (parameter
+      (identifier))
+    (match_expression
+      (identifier)
+      (case_clause
+        (constructor_pattern
+          (constructor_identifier)
+          (identifier))
+        (match_expression
+          (identifier)
+          (case_clause
+            (constructor_pattern
+              (constructor_identifier)
+              (identifier))
+            (additive_expression
+              (identifier)
+              (identifier)))
+          (case_clause
+            (constructor_pattern_name
+              (constructor_identifier))
+            (identifier))))
+      (case_clause
+        (constructor_pattern_name
+          (constructor_identifier))
+        (integer)))))
+
+================================================================================
+statement separation at same column
+================================================================================
+
+let x = 1
+let y = 2
+print (x + y)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (integer))
+  (let_binding
+    (identifier)
+    (integer))
+  (application
+    (identifier)
+    (parenthesized_expression
+      (additive_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+lambda with indented block body
+================================================================================
+
+let mkAdder n = fun m ->
+  let t = n + m
+  t
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (lambda
+      (parameter
+        (identifier))
+      (let_binding
+        (identifier)
+        (additive_expression
+          (identifier)
+          (identifier)))
+      (identifier))))
+
+================================================================================
+continuation line inside brackets
+================================================================================
+
+let xs = [1,
+          2,
+          3]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (list_expression
+      (integer)
+      (integer)
+      (integer))))
+
+================================================================================
+operator-led continuation line
+================================================================================
+
+let ok =
+  1 < 2
+  and 2 < 3
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (and_expression
+      (comparison_expression
+        (integer)
+        (integer))
+      (comparison_expression
+        (integer)
+        (integer)))))

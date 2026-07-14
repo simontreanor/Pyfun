@@ -1,0 +1,320 @@
+================================================================================
+let binding, simple
+================================================================================
+
+let x = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (integer)))
+
+================================================================================
+let binding with parameters
+================================================================================
+
+let add x y = x + y
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (parameter
+      (identifier))
+    (additive_expression
+      (identifier)
+      (identifier))))
+
+================================================================================
+let mut binding
+================================================================================
+
+let mut counter = 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (integer)))
+
+================================================================================
+let pure binding
+================================================================================
+
+let pure double n = n * 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (multiplicative_expression
+      (identifier)
+      (integer))))
+
+================================================================================
+type ADT, inline variants
+================================================================================
+
+type Color = Red | Green | Blue
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (variant
+      (constructor_identifier))
+    (variant
+      (constructor_identifier))
+    (variant
+      (constructor_identifier))))
+
+================================================================================
+type ADT, indented variants with leading bar
+================================================================================
+
+type Signal =
+  | Walk
+  | Wait
+  | Stop
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (variant
+      (constructor_identifier))
+    (variant
+      (constructor_identifier))
+    (variant
+      (constructor_identifier))))
+
+================================================================================
+type ADT, variants with fields
+================================================================================
+
+type Shape =
+  | Circle float
+  | Rect float float
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (variant
+      (constructor_identifier)
+      (type_variable))
+    (variant
+      (constructor_identifier)
+      (type_variable)
+      (type_variable))))
+
+================================================================================
+record type declaration
+================================================================================
+
+type Pt = { x: int, y: int }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (record_declaration
+      (field_declaration
+        (identifier)
+        (type_variable))
+      (field_declaration
+        (identifier)
+        (type_variable)))))
+
+================================================================================
+extern with effect annotation
+================================================================================
+
+extern slurp : string ->{io} string = builtins.open
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_declaration
+    (identifier)
+    (function_type
+      (type_variable)
+      (effect_annotation
+        (effect_label
+          (identifier)))
+      (type_variable))
+    (extern_target
+      (python_path
+        (identifier)
+        (identifier)))))
+
+================================================================================
+extern pure with kwargs target
+================================================================================
+
+extern pure loads : string -> Json = json.loads(strict=true, offset=-2, sep=", ")
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_declaration
+    (identifier)
+    (function_type
+      (type_variable)
+      (type_identifier))
+    (extern_target
+      (python_path
+        (identifier)
+        (identifier))
+      (extern_kwargs
+        (extern_kwarg
+          (identifier)
+          (boolean))
+        (extern_kwarg
+          (identifier)
+          (integer))
+        (extern_kwarg
+          (identifier)
+          (string))))))
+
+================================================================================
+extern import with alias
+================================================================================
+
+extern import numpy.linalg as la
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_import_declaration
+    (python_path
+      (identifier)
+      (identifier))
+    (identifier)))
+
+================================================================================
+extern type
+================================================================================
+
+extern type Path
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_type_definition
+    (type_identifier)))
+
+================================================================================
+measure definitions
+================================================================================
+
+measure m
+measure s
+measure N = kg m / s^2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (measure_definition
+    (identifier))
+  (measure_definition
+    (identifier))
+  (measure_definition
+    (identifier)
+    (measure
+      (measure_factor
+        (identifier))
+      (measure_factor
+        (identifier))
+      (measure_factor
+        (identifier)
+        (integer)))))
+
+================================================================================
+active pattern definition
+================================================================================
+
+let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (active_pattern_definition
+    (active_pattern_cases
+      (constructor_identifier)
+      (constructor_identifier))
+    (parameter
+      (identifier))
+    (if_expression
+      (comparison_expression
+        (multiplicative_expression
+          (identifier)
+          (integer))
+        (integer))
+      (constructor_identifier)
+      (constructor_identifier))))
+
+================================================================================
+partial active pattern definition
+================================================================================
+
+let (|DivisibleBy|_|) d n = if n % d == 0 then Some n else None
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (active_pattern_definition
+    (active_pattern_cases
+      (constructor_identifier)
+      (wildcard))
+    (parameter
+      (identifier))
+    (parameter
+      (identifier))
+    (if_expression
+      (comparison_expression
+        (multiplicative_expression
+          (identifier)
+          (identifier))
+        (integer))
+      (application
+        (constructor_identifier)
+        (identifier))
+      (constructor_identifier))))
+
+================================================================================
+module definition and import
+================================================================================
+
+import Geometry
+
+module Geom =
+  let square x = x * x
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (module_identifier))
+  (module_definition
+    (module_identifier)
+    (let_binding
+      (identifier)
+      (parameter
+        (identifier))
+      (multiplicative_expression
+        (identifier)
+        (identifier)))))

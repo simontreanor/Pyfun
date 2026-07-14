@@ -1,0 +1,288 @@
+================================================================================
+tagged record literal
+================================================================================
+
+let p = Pt { x = 1, y = 2 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (record_expression
+      (constructor_identifier)
+      (field_initializer
+        (identifier)
+        (integer))
+      (field_initializer
+        (identifier)
+        (integer)))))
+
+================================================================================
+record update expression
+================================================================================
+
+let q = { p with x = 2 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (record_update_expression
+      (identifier)
+      (field_update
+        (identifier)
+        (integer)))))
+
+================================================================================
+record update with nested field path
+================================================================================
+
+let s1 = { s0 with first.x = 99 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (record_update_expression
+      (identifier)
+      (field_update
+        (identifier)
+        (identifier)
+        (integer)))))
+
+================================================================================
+pipeline spanning multiple lines
+================================================================================
+
+let piped =
+  [1, 2, 3]
+  |> List.map (fun x -> x * 2)
+  |> List.fold (+) 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (pipe_expression
+      (pipe_expression
+        (list_expression
+          (integer)
+          (integer)
+          (integer))
+        (application
+          (field_expression
+            (constructor_identifier)
+            (identifier))
+          (parenthesized_expression
+            (lambda
+              (parameter
+                (identifier))
+              (multiplicative_expression
+                (identifier)
+                (integer))))))
+      (application
+        (application
+          (field_expression
+            (constructor_identifier)
+            (identifier))
+          (operator_section))
+        (integer)))))
+
+================================================================================
+f-string with interpolation and debug marker
+================================================================================
+
+let msg = f"value {x + 1} and {x=}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (fstring
+      (string_content)
+      (interpolation
+        (additive_expression
+          (identifier)
+          (integer)))
+      (string_content)
+      (interpolation
+        (identifier)
+        (debug_marker)))))
+
+================================================================================
+unit-of-measure literal
+================================================================================
+
+let g = 9.81<m/s^2>
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (unit_literal
+      (float)
+      (measure
+        (measure_factor
+          (identifier))
+        (measure_factor
+          (identifier)
+          (integer))))))
+
+================================================================================
+result computation expression
+================================================================================
+
+let chained =
+  result { let! x = Ok 1
+           return x }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (ce_expression
+      (ce_bind
+        (identifier)
+        (application
+          (constructor_identifier)
+          (integer)))
+      (ce_return
+        (identifier)))))
+
+================================================================================
+user-defined builder computation expression
+================================================================================
+
+let maybeSum a b =
+  Maybe { let! x = a
+          let! y = b
+          return x + y }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (parameter
+      (identifier))
+    (ce_expression
+      (module_identifier)
+      (ce_bind
+        (identifier)
+        (identifier))
+      (ce_bind
+        (identifier)
+        (identifier))
+      (ce_return
+        (additive_expression
+          (identifier)
+          (identifier))))))
+
+================================================================================
+seq computation expression with yield
+================================================================================
+
+let evens =
+  seq { yield 0
+        yield! rest }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (ce_expression
+      (ce_yield
+        (integer))
+      (ce_yield
+        (identifier)))))
+
+================================================================================
+lambda and application
+================================================================================
+
+let inc = fun n -> n + 1
+let three = inc 2
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (lambda
+      (parameter
+        (identifier))
+      (additive_expression
+        (identifier)
+        (integer))))
+  (let_binding
+    (identifier)
+    (application
+      (identifier)
+      (integer))))
+
+================================================================================
+operator section and composition
+================================================================================
+
+let prod ns = List.fold (*) 1 ns
+let f = g >> h
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (application
+      (application
+        (application
+          (field_expression
+            (constructor_identifier)
+            (identifier))
+          (operator_section))
+        (integer))
+      (identifier)))
+  (let_binding
+    (identifier)
+    (compose_expression
+      (identifier)
+      (identifier))))
+
+================================================================================
+if / elif / else expression
+================================================================================
+
+let grade x =
+  if x >= 90 then "A"
+  elif x >= 80 then "B"
+  else "C"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (if_expression
+      (comparison_expression
+        (identifier)
+        (integer))
+      (string)
+      (elif_clause
+        (comparison_expression
+          (identifier)
+          (integer))
+        (string))
+      (string))))
