@@ -34,3 +34,6 @@ examples/interop/network-rail/chippenham-routes.md
 editors/vscode/node_modules/
 editors/vscode/*.vsix
 /LAUNCH-POSTS.md
+
+.env
+*.elc
