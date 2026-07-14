@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026 Simon Treanor
 
 ;; Author: Simon Treanor
+;; Assisted-by: Claude:claude-fable-5
 ;; Maintainer: Simon Treanor
 ;; URL: https://github.com/simontreanor/Pyfun
 ;; Version: 0.1.0
