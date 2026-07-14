@@ -55,9 +55,11 @@ dev machine. Close each by running the listed check once; delete its line when i
   against the released v0.0.9 wheel in a clean venv: the `[jupyter]` extra, `python -m
   pyfun_kernel.install --sys-prefix`, a full cell session on the installed kernelspec, and the
   binary-discovery fix (PYFUN_BIN → same-env → PATH; the 0.0.8 wheel had PATH-first, which a stale
-  global `pyfun` could break). Still open: (a) no real JupyterLab/Notebook UI session yet, (b) the
-  engine-death replay path in `kernel.py` is code-reviewed only, (c) KeyboardInterrupt during a
-  long cell untested, (d) macOS/Linux untested.
+  global `pyfun` could break). A real JupyterLab UI session was user-confirmed working 2026-07-14
+  (note: the first attempt showed silent cells until the Jupyter server was restarted — if cells
+  show empty `[ ]` with no output, check Kernel menu / restart the server before suspecting the
+  kernel). Still open: (a) the engine-death replay path in `kernel.py` is code-reviewed only,
+  (b) KeyboardInterrupt during a long cell untested, (c) macOS/Linux untested.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
