@@ -35,13 +35,20 @@ The grammar is pinned by commit in several places; bump the pins:
 
 1. `editors/zed/extension.toml` — update `rev`, bump the extension `version`,
    then PR the new submodule pin to `zed-industries/extensions`.
-2. Helix — PR the new `rev` in upstream `languages.toml` (once Pyfun ships in
-   Helix).
-3. nvim-treesitter — PR the new revision in their parser registry (once merged
-   there).
+2. Helix — PR the new `rev` in upstream `languages.toml`.
+3. nvim-treesitter — PR the new revision in their parser registry.
 4. Keep `editors/nvim/queries/pyfun/highlights.scm` and
    `editors/zed/languages/pyfun/highlights.scm` in sync with
    `editors/tree-sitter-pyfun/queries/highlights.scm`.
+
+> **Gate on acceptance.** Steps 1–3 apply **only to registries whose initial
+> submission has been accepted** — check the ROADMAP *Distribution* ledger for
+> current status before opening any follow-up PR. Never send version/rev bumps
+> to a registry whose first submission is still in review (it reads as
+> pestering) or was declined (nvim-lspconfig and Mason are deferred until
+> Pyfun has adoption evidence; nvim-treesitter upstream is archived with no
+> successor). One-time PR blockers already handled: Zed's CLA is signed;
+> MELPA wanted the `Assisted-by:` header that's now in `pyfun-mode.el`.
 
 Tokens live in the gitignored `editors/.env` (`OPEN_VSX_APIKEY`,
 `JETBRAINS_PERMANENT_TOKEN`). A tag is irreversible — versions on PyPI cannot
