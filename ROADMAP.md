@@ -43,14 +43,12 @@ every push (all green). JupyterLab UI session user-confirmed (if cells show empt
 output, restart the Jupyter server before suspecting the kernel). Wheel/install/discovery chain
 verified against the released v0.0.9 in a clean venv.
 
-Zed user-confirmed working 2026-07-14 (dev-extension install; needs `rustup target add
-wasm32-wasip2` — documented in `editors/zed/README.md`). Registry publication (PR to
-zed-industries/extensions) is a separate post-launch step.
-
-Still open — one native-GUI click-through (installed and ready, needs human eyes):
-
-- **PyCharm** (installed): the LSP4IJ user-defined-server steps + TextMate-bundle import in
-  `editors/README.md` are transcribed from LSP4IJ's docs, not yet clicked through.
+Zed user-confirmed 2026-07-14 (dev-extension install; needs `rustup target add wasm32-wasip2` —
+documented in `editors/zed/README.md`). PyCharm user-confirmed 2026-07-14 (LSP4IJ + TextMate
+bundle; hover is noticeably slower than in VS Code — LSP4IJ behavior, not the server). **No open
+gaps.** Post-launch follow-ups that came out of the sweep: publish the Zed extension to the
+registry (PR to zed-industries/extensions), and consider shipping Helix indent/textobject queries
+(`hx --health` reports them missing; highlights ship today).
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
