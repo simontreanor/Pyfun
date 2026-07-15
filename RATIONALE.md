@@ -152,7 +152,7 @@ than splicing strings. `README.md` sets Pyfun beside Fable, Erg, and Coconut fea
 
 ## Try it
 
-- **Browser playground:** <https://simontreanor.github.io/Pyfun/>. The compiler runs as WebAssembly and
+- **Browser playground:** <https://simontreanor.github.io/Pyfun/playground/>. The compiler runs as WebAssembly and
   Python runs in the browser, so you can open a worked example, tweak it, and watch it compile with no
   install.
 - **Install:** `pip install pyfun-lang` (Python 3.12+).
