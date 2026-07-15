@@ -13,4 +13,4 @@ git-repository-url = "https://github.com/simontreanor/Pyfun"
 edit-url-template = "https://github.com/simontreanor/Pyfun/edit/main/docs/{path}"
 site-url = "/Pyfun/"
 additional-css = ["theme/pyfun.css"]
-additional-js = ["theme/pyfun-hljs.js"]
+additional-js = ["theme/pyfun-hljs.js", "theme/docs-run.js"]

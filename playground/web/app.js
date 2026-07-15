@@ -1,8 +1,11 @@
 // The playground front end: load the WASM compiler, recompile (debounced) on every
 // edit, render the emitted Python + diagnostics, and — on demand — run that Python in
-// CPython-via-WebAssembly (Pyodide). `compile` returns a JSON string produced by
-// playground/src/lib.rs.
-import init, { compile } from "./pkg/pyfun_playground.js";
+// CPython-via-WebAssembly (Pyodide). The compile/run plumbing lives in pyfun-run.js,
+// shared with the docs site's runnable code blocks.
+import { loadCompiler, createRunner } from "./pyfun-run.js";
+
+// Assigned in main() once the WASM loads: source -> { ok, python, diagnostics }.
+let compileFn = null;
 
 // Curated examples, shown in the picker above the editor. Every one type-checks AND
 // runs in this playground (each was verified against the real compiler); the `# Try it`
@@ -179,10 +182,11 @@ function lineCol(source, offset) {
 }
 
 function render() {
+  if (!compileFn) return; // WASM still loading; main() renders when it lands
   const source = editor.value;
   let result;
   try {
-    result = JSON.parse(compile(source));
+    result = compileFn(source);
   } catch (err) {
     output.textContent = "internal error: " + err;
     return;
@@ -257,58 +261,23 @@ copyLinkBtn.addEventListener("click", async () => {
   }, 1500);
 });
 
-// --- Pyodide runs in a Web Worker (pyodide-worker.js), off the main thread, so loading
-// the ~10 MB runtime and executing code never freeze the UI. ---
+// --- Pyodide runs in a Web Worker (pyodide-worker.js, managed by pyfun-run.js), off
+// the main thread, so loading the ~10 MB runtime and executing code never freeze the
+// UI. The UI disables Run while a run is outstanding, so at most one is in flight. ---
 
-let worker = null;
-let runSeq = 0;
-const pending = new Map();
-
-function ensureWorker() {
-  if (!worker) {
-    // A module worker (it `import`s Pyodide's .mjs), resolved relative to this module so
-    // it works at any base path (e.g. /Pyfun/).
-    worker = new Worker(new URL("./pyodide-worker.js", import.meta.url), { type: "module" });
-    worker.onmessage = (event) => {
-      const { id, out, err } = event.data;
-      const resolve = pending.get(id);
-      if (resolve) {
-        pending.delete(id);
-        resolve({ out, err });
-      }
-    };
-    worker.onerror = (e) => {
-      for (const resolve of pending.values()) {
-        resolve({ out: "", err: "worker failed to start: " + (e.message || e) });
-      }
-      pending.clear();
-    };
-  }
-  return worker;
-}
-
-// Send `code` to the worker and resolve with { out, err }. The UI disables Run while a
-// run is outstanding, so at most one is in flight — but each carries an id anyway.
-function runInWorker(code) {
-  const w = ensureWorker();
-  const id = ++runSeq;
-  return new Promise((resolve) => {
-    pending.set(id, resolve);
-    w.postMessage({ id, code });
-  });
-}
+const runner = createRunner(import.meta.url);
 
 runBtn.addEventListener("click", async () => {
   if (lastPython === null) return;
   const code = lastPython;
   runOutput.hidden = false;
   runOutput.classList.remove("run-error");
-  runOutput.textContent = worker
+  runOutput.textContent = runner.loaded()
     ? "running…"
     : "loading Python runtime… (first run downloads ~10 MB, then it's cached)";
   runBtn.disabled = true;
   try {
-    const { out, err } = await runInWorker(code);
+    const { out, err } = await runner.run(code);
     if (err) {
       runOutput.textContent = (out ? out + "\n" : "") + err;
       runOutput.classList.add("run-error");
@@ -334,7 +303,7 @@ window.addEventListener("hashchange", () => {
 });
 
 async function main() {
-  await init();
+  compileFn = await loadCompiler(import.meta.url);
   editor.value = sourceFromHash() ?? EXAMPLES[0].source;
   render();
 }
