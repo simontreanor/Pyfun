@@ -115,6 +115,47 @@ const diagnostics = document.getElementById("diagnostics");
 const runBtn = document.getElementById("run");
 const runOutput = document.getElementById("run-output");
 const examplePicker = document.getElementById("examples");
+const copyLinkBtn = document.getElementById("copy-link");
+
+// --- Permalinks: #code=<url-safe base64 of the UTF-8 source> carries a program in the
+// URL itself (no server, nothing stored); #example=<n> selects a curated example. The
+// docs site's "Open in Playground" links use #code=. ---
+
+function encodeSource(source) {
+  const bytes = new TextEncoder().encode(source);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  // Standard base64 -> URL-safe: + and / would need %-escaping in a fragment.
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeSource(encoded) {
+  const b64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+// The initial editor contents requested by the URL hash, or null to use the default.
+// A malformed hash is treated as absent rather than surfaced as an error.
+function sourceFromHash() {
+  const hash = location.hash.slice(1);
+  if (hash.startsWith("code=")) {
+    try {
+      return decodeSource(hash.slice("code=".length));
+    } catch {
+      return null;
+    }
+  }
+  if (hash.startsWith("example=")) {
+    const i = Number(hash.slice("example=".length));
+    if (EXAMPLES[i]) {
+      examplePicker.value = String(i);
+      return EXAMPLES[i].source;
+    }
+  }
+  return null;
+}
 
 // The last successfully compiled Python (what Run executes), or null when the program
 // doesn't compile.
@@ -195,6 +236,27 @@ examplePicker.addEventListener("change", () => {
   editor.focus();
 });
 
+// Copy a #code= permalink for the current editor contents, and reflect it in the
+// address bar (replaceState: no scroll jump, no history spam).
+copyLinkBtn.addEventListener("click", async () => {
+  const link =
+    location.origin + location.pathname + "#code=" + encodeSource(editor.value);
+  history.replaceState(null, "", link);
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(link);
+    copied = true;
+  } catch {
+    // Clipboard can be unavailable (permissions, non-secure context); the URL bar
+    // already holds the link, so just say so.
+  }
+  const label = copyLinkBtn.textContent;
+  copyLinkBtn.textContent = copied ? "Copied!" : "Link in URL bar";
+  setTimeout(() => {
+    copyLinkBtn.textContent = label;
+  }, 1500);
+});
+
 // --- Pyodide runs in a Web Worker (pyodide-worker.js), off the main thread, so loading
 // the ~10 MB runtime and executing code never freeze the UI. ---
 
@@ -261,9 +323,19 @@ runBtn.addEventListener("click", async () => {
   }
 });
 
+// Hash-only navigation (one permalink to another in an already-open playground)
+// changes the URL without reloading the page; apply the new program.
+window.addEventListener("hashchange", () => {
+  const linked = sourceFromHash();
+  if (linked !== null) {
+    editor.value = linked;
+    render();
+  }
+});
+
 async function main() {
   await init();
-  editor.value = EXAMPLES[0].source;
+  editor.value = sourceFromHash() ?? EXAMPLES[0].source;
   render();
 }
 

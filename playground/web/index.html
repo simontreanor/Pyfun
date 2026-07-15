@@ -21,9 +21,12 @@
     <section class="pane">
       <div class="pane-label">
         <span>Pyfun</span>
-        <label class="example-pick">example&nbsp;
-          <select id="examples" aria-label="Load an example"></select>
-        </label>
+        <span class="pane-tools">
+          <button id="copy-link" type="button" title="Copy a link to this exact program">Copy link</button>
+          <label class="example-pick">example&nbsp;
+            <select id="examples" aria-label="Load an example"></select>
+          </label>
+        </span>
       </div>
       <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off"></textarea>
       <div id="diagnostics"></div>
