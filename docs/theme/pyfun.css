@@ -22,3 +22,47 @@ code .hljs-pyfun-hole {
   color: var(--pyfun-hole);
   font-weight: 600;
 }
+
+/* Runnable code blocks (docs-run.js progressive enhancement). */
+.pyfun-run-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -8px 0 12px;
+}
+.pyfun-run-btn {
+  font: inherit;
+  font-size: 0.85em;
+  font-weight: 600;
+  padding: 2px 12px;
+  border: 1px solid var(--theme-popup-border, #ccc);
+  border-radius: 6px;
+  background: var(--theme-hover, #f2f2f2);
+  color: inherit;
+  cursor: pointer;
+}
+.pyfun-run-btn:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+.pyfun-run-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pyfun-run-hint {
+  font-size: 0.75em;
+  opacity: 0.6;
+}
+.pyfun-run-out {
+  border-left: 3px solid #7ee787;
+  padding: 8px 12px;
+  font-size: 0.875em;
+  white-space: pre-wrap;
+  margin: 0 0 16px;
+}
+.pyfun-run-out.pyfun-run-err {
+  border-left-color: #ff7b72;
+}
+code[contenteditable]:focus {
+  outline: 1px solid var(--pyfun-hole);
+  outline-offset: 2px;
+}
