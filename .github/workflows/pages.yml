@@ -1,16 +1,20 @@
-name: playground
+name: pages
 
-# Build the WASM playground and publish playground/web/ to GitHub Pages.
+# Build the docs site (mdBook) and the WASM playground, and publish both as ONE
+# GitHub Pages deployment: the book at the site root, the playground under
+# /playground/. Pages allows a single deployment per repo, so this workflow is the
+# only one that may deploy (concurrency group `pages` enforces that).
 # Enable once under Settings -> Pages -> Source: GitHub Actions.
 
 on:
   push:
     branches: [main]
     paths:
+      - "docs/**"
       - "playground/**"
       - "src/**"
       - "Cargo.toml"
-      - ".github/workflows/playground.yml"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
@@ -40,12 +44,29 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+      # Prebuilt binary: keeps the job Rust-toolchain-only, no compile, no pip.
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Build WASM
         run: wasm-pack build playground --target web --out-dir web/pkg --release
+
+      - name: Build the book
+        run: mdbook build docs
+
+      - name: Assemble site (book at root, playground under /playground/)
+        run: |
+          mkdir -p _site/playground
+          cp -r docs/book/. _site/
+          cp -r playground/web/. _site/playground/
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: playground/web
+          path: _site
       - id: deploy
         uses: actions/deploy-pages@v4

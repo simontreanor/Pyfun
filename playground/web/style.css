@@ -82,6 +82,22 @@ main {
 #run:hover:not(:disabled) { filter: brightness(1.1); }
 #run:disabled { background: var(--border); color: var(--muted); cursor: default; }
 
+.pane-tools { display: flex; align-items: center; gap: 10px; }
+
+#copy-link {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+#copy-link:hover { border-color: var(--muted); }
+
 .example-pick {
   display: flex;
   align-items: center;

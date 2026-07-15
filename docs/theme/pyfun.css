@@ -1,0 +1,24 @@
+/* Pyfun-specific styling on top of the mdBook themes. */
+
+/* The escape hatches (`mut`, `<-`, `extern`) are tinted amber, matching the
+   convention the editor extensions use: visible, deliberate, slightly warm. */
+:root {
+  --pyfun-escape: #b45309; /* readable amber on the light themes */
+  --pyfun-hole: #8250df;   /* typed holes: violet on light themes */
+}
+.navy,
+.coal,
+.ayu {
+  --pyfun-escape: #e0af68;
+  --pyfun-hole: #c792ea;
+}
+
+code .hljs-pyfun-escape {
+  color: var(--pyfun-escape);
+  font-weight: 600;
+}
+
+code .hljs-pyfun-hole {
+  color: var(--pyfun-hole);
+  font-weight: 600;
+}

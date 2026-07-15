@@ -1,0 +1,16 @@
+[book]
+title = "Pyfun"
+description = "Learn Pyfun: functional programming for the Python ecosystem."
+authors = ["Simon Treanor"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/simontreanor/Pyfun"
+edit-url-template = "https://github.com/simontreanor/Pyfun/edit/main/docs/{path}"
+site-url = "/Pyfun/"
+additional-css = ["theme/pyfun.css"]
+additional-js = ["theme/pyfun-hljs.js"]
