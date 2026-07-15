@@ -41,7 +41,7 @@ interrupt promptly on Windows, verified identical in the stock python3 kernel), 
 replay, and macOS/Linux/Windows via the `kernel.yml` CI matrix running `tests/kernel_e2e.py` on
 every push (all green). JupyterLab UI session user-confirmed (if cells show empty `[ ]` with no
 output, restart the Jupyter server before suspecting the kernel). Wheel/install/discovery chain
-verified against the released v0.0.9 in a clean venv.
+verified against the released v0.1.0 in a clean venv.
 
 Zed user-confirmed 2026-07-14 (dev-extension install; needs `rustup target add wasm32-wasip2` —
 documented in `editors/zed/README.md`). PyCharm user-confirmed 2026-07-14 (LSP4IJ + TextMate
@@ -52,7 +52,7 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **Open VSX** — DONE 2026-07-14: `pyfun.pyfun` 0.0.12 published and indexed (covers
+- **Open VSX** — DONE 2026-07-14: `pyfun.pyfun` 0.1.0 published and indexed (covers
   VSCodium/code-server/Gitpod/Theia). Future releases: `ovsx publish <vsix> -p <token>`.
 - **JetBrains Marketplace** — plugin uploaded 2026-07-14 (`editors/jetbrains/`, thin: file type
   + TextMate grammar + LSP4IJ wiring, free mode + legacy CE, 2024.2+); **in moderation**
