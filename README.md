@@ -96,8 +96,8 @@ students abandon the moment the course ends. Pyfun removes the detour.
 
 Pyfun is a real, general-purpose language, not a toy. But teaching is why it exists.
 The **[Learn Pyfun course](https://simontreanor.github.io/Pyfun/)** turns this into practice:
-sixteen short lessons with compiler-checked exercises, runnable in the browser, free to use
-and adapt in a classroom (CC BY 4.0).
+a graded course of short lessons with compiler-checked exercises, runnable in the browser, free
+to use and adapt in a classroom (CC BY 4.0).
 
 ---
 

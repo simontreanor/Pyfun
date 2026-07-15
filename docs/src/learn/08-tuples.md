@@ -47,6 +47,36 @@ Tuples also bridge lists and maps. `Map.ofList` builds a `Map` from a list of pa
 `Map.toList` turns a map back into its pairs, so a zip followed by `Map.ofList` is a compact way to
 build a lookup table from two parallel lists.
 
+## Lists destructure too
+
+The same `match` works over a `List`. A list pattern names elements in brackets, just like the
+literal that builds one: `[]` is the empty list, `[only]` matches a list of exactly one, and a
+`*rest` star soaks up any number of elements. Python allows one star per pattern, and so does Pyfun,
+but it can sit anywhere: `[x, *rest]` is head and tail, `[*init, last]` is everything but the last,
+and `[first, *mid, last]` binds the two ends with the middle collected between them.
+
+```pyfun
+let describe xs =
+  match xs:
+    case []: "empty"
+    case [only]: f"just {only}"
+    case [first, *mid, last]: f"{first} ... {last}"
+
+print (describe [])
+print (describe [7])
+print (describe [1, 2, 3, 4])
+```
+
+```console
+empty
+just 7
+1 ... 4
+```
+
+An empty-list arm plus a star arm covers every list, so a match built from `[]` and one starred
+pattern is exhaustive with no `case _`. The `[first, *mid, last]` arm needs at least two elements,
+which is why the `[]` and `[only]` arms come first to catch the shorter lists.
+
 ## Exercise
 
 `List.zip` has paired each name with its score, and the `case (name, score)` arm has already

@@ -22,6 +22,14 @@
 - [Modules and projects](learn/15-modules.md)
 - [Capstone: a typed pipeline](learn/16-capstone.md)
 
+# Going further
+
+- [Recursion](learn/17-recursion.md)
+- [Async](learn/18-async.md)
+- [Active patterns](learn/19-active-patterns.md)
+- [Build your own computation expression](learn/20-build-your-own-ce.md)
+- [Strings and numbers, in detail](learn/21-strings-and-numbers.md)
+
 # For educators
 
 - [The module at a glance](educators/README.md)

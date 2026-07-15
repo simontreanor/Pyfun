@@ -43,3 +43,7 @@ builds toward, which is letting the compiler prove your program handles every ca
 cover the workflow: type-driven development with holes, deliberate mutation, and inferred effects.
 Lessons 12 to 16 reach outward: calling Python libraries, computation expressions, units of
 measure, multi-file projects, and a capstone that puts everything together.
+
+After the capstone, a **Going further** set digs into topics the core path skips: recursion,
+async, active patterns, building your own computation expression, and the fine print of strings
+and numbers. Take them in any order once you have finished the core lessons they build on.
