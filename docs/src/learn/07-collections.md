@@ -26,7 +26,7 @@ print total
 print doubled
 print third
 print missing
-print (Set.len uniq)
+uniq |> Set.len |> print
 ```
 
 ```console

@@ -61,7 +61,7 @@ let counts =
     yield 3
   }
 
-print (Seq.toList counts)
+counts |> Seq.toList |> print
 ```
 
 ```python

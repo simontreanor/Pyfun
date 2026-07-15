@@ -12,7 +12,7 @@ let headline names =
   |> List.map ?upper
   |> String.join ", "
 
-print (headline names)
+names |> headline |> print
 ```
 
 Running `pyfun check` reports the gap rather than a failure:

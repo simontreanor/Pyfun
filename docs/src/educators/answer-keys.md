@@ -267,8 +267,11 @@ let describe r =
     case Ok b: f"{b.title}, {b.pages} pages"
     case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
 
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune", "pages": 412}"""))
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune"}"""))
+let wellFormed = """{"title": "Dune", "pages": 412}"""
+let missingField = """{"title": "Dune"}"""
+
+wellFormed |> Decode.decodeString bookDecoder |> describe |> print
+missingField |> Decode.decodeString bookDecoder |> describe |> print
 ```
 
 Expected output:

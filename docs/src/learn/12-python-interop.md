@@ -7,7 +7,7 @@ extern pure mean: List float -> float = statistics.mean
 
 let readings = [2.0, 4.0, 9.0]
 
-print (mean readings)
+readings |> mean |> print
 ```
 
 This prints `5.0`. The emitted Python is the direct call you would expect, with the import added for you:
@@ -35,8 +35,11 @@ let describe r =
     case Ok b: f"{b.title}, {b.pages} pages"
     case Error e: f"failed ({e.errorKind})"
 
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune", "pages": 412}"""))
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune"}"""))
+let wellFormed = """{"title": "Dune", "pages": 412}"""
+let missingField = """{"title": "Dune"}"""
+
+wellFormed |> Decode.decodeString bookDecoder |> describe |> print
+missingField |> Decode.decodeString bookDecoder |> describe |> print
 ```
 
 The well-formed object decodes to a typed `Book`. The object missing `pages` short-circuits to an `Error` carrying the Python exception, which `match` forces you to handle. The output is `Dune, 412 pages` then `failed (KeyError)`.
@@ -62,8 +65,11 @@ let describe r =
     case Ok b: f"{b.title}, {b.pages} pages"
     case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
 
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune", "pages": 412}"""))
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune"}"""))
+let wellFormed = """{"title": "Dune", "pages": 412}"""
+let missingField = """{"title": "Dune"}"""
+
+wellFormed |> Decode.decodeString bookDecoder |> describe |> print
+missingField |> Decode.decodeString bookDecoder |> describe |> print
 ```
 
 Expected output:
@@ -73,7 +79,7 @@ Dune, 412 pages
 failed (KeyError): 'pages'
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyaW5nLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKcHJpbnQgKGRlc2NyaWJlIChEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyICIiInsidGl0bGUiOiAiRHVuZSIsICJwYWdlcyI6IDQxMn0iIiIpKQpwcmludCAoZGVzY3JpYmUgKERlY29kZS5kZWNvZGVTdHJpbmcgYm9va0RlY29kZXIgIiIieyJ0aXRsZSI6ICJEdW5lIn0iIiIpKQo)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyaW5nLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg)
 
 <details>
 <summary>Show solution</summary>
@@ -91,8 +97,11 @@ let describe r =
     case Ok b: f"{b.title}, {b.pages} pages"
     case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
 
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune", "pages": 412}"""))
-print (describe (Decode.decodeString bookDecoder """{"title": "Dune"}"""))
+let wellFormed = """{"title": "Dune", "pages": 412}"""
+let missingField = """{"title": "Dune"}"""
+
+wellFormed |> Decode.decodeString bookDecoder |> describe |> print
+missingField |> Decode.decodeString bookDecoder |> describe |> print
 ```
 
 `Decode.string` decodes the `title` field and `Decode.int` decodes `pages`. The valid object builds a `Book`, and the incomplete one short-circuits to a `KeyError` that `describe` reports through the `Error` arm.
