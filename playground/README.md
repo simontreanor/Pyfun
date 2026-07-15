@@ -32,10 +32,21 @@ python -m http.server -d playground/web 8000
 
 ## Deploy (GitHub Pages)
 
-[`.github/workflows/playground.yml`](../.github/workflows/playground.yml) builds the
-WASM and publishes `playground/web/` to GitHub Pages on every push to `main`. Enable it
-once under **Settings → Pages → Source: GitHub Actions**; after that the playground is
-live at your Pages URL, ready to link from the README and launch posts.
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) builds the WASM **and**
+the mdBook docs site (`docs/`) into one Pages artifact on every push to `main`: the docs
+land at the site root and this playground at **`/playground/`**
+(<https://simontreanor.github.io/Pyfun/playground/>). Enable it once under
+**Settings → Pages → Source: GitHub Actions**.
+
+## Permalinks
+
+The URL hash carries a program, so lessons and posts can link to exact code:
+
+- `#code=<url-safe base64 of the UTF-8 source>` loads that program into the editor
+  (the **Copy link** button writes one for the current editor contents);
+- `#example=<n>` loads the nth curated example.
+
+A malformed hash is ignored and the default example loads instead.
 
 ## Recording the demo GIF from it
 

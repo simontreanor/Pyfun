@@ -15,9 +15,12 @@ ecosystem students rarely touch again. Pyfun keeps them in Python, with no new r
 package manager, and compiles to Python they can read, so every concept stays visible in the code
 they already understand.
 
-**▶ [Try it in your browser](https://simontreanor.github.io/Pyfun/)** — no install: write Pyfun,
+**▶ [Try it in your browser](https://simontreanor.github.io/Pyfun/playground/)** — no install: write Pyfun,
 watch it compile to readable Python live, and hit Run to execute it (the compiler runs as
 WebAssembly, the Python runs in CPython-via-WASM).
+
+**📖 [Learn Pyfun](https://simontreanor.github.io/Pyfun/)** — a short, graded course for people who
+know some Python: one idea per lesson, exercises checked by the compiler, solved in the browser.
 
 Or install it with **Python 3.12+**:
 
@@ -92,6 +95,9 @@ students abandon the moment the course ends. Pyfun removes the detour.
   the ideas you are teaching.
 
 Pyfun is a real, general-purpose language, not a toy. But teaching is why it exists.
+The **[Learn Pyfun course](https://simontreanor.github.io/Pyfun/)** turns this into practice:
+sixteen short lessons with compiler-checked exercises, runnable in the browser, free to use
+and adapt in a classroom (CC BY 4.0).
 
 ---
 
