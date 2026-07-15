@@ -5,8 +5,8 @@ units of measure) **and** Phase 2 file-based modules are complete — the langua
 its intended scope, and nothing below blocks normal use.
 
 This is the single forward-looking list of what's **not** built, so nothing is drip-fed. Design mechanics
-and rationale live in [`DESIGN.md`](./DESIGN.md); what shipped and when is in git history; current status
-is in [`GUIDE.md`](./GUIDE.md). Effort is rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
+and rationale live in [`DESIGN.md`](./DESIGN.md); what shipped and when is in git history. Effort is
+rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
 Keep this a *forward-looking* backlog — do not let it grow back into a changelog of shipped work.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)

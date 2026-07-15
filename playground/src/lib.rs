@@ -1,6 +1,6 @@
 //! WASM shim exposing the Pyfun compiler to the browser playground.
 //!
-//! A **separate crate** so the core `pyfun` crate stays dependency-free (`GUIDE.md`):
+//! A **separate crate** so the core `pyfun` crate stays dependency-free:
 //! only this thin binding depends on `wasm-bindgen`. It reuses the real, pure library
 //! entry points — [`pyfun::analyze`] (resilient diagnostics, the same engine the LSP
 //! uses) and [`pyfun::compile`] (source → readable Python) — so what the browser shows

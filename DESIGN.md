@@ -1,8 +1,8 @@
 # Pyfun — Design
 
 The language and semantics reference, and the source of truth for any compiler or language change.
-`GUIDE.md` is the lean operational pointer for working in this repo; `RATIONALE.md` is the short
-narrative for a reader deciding whether Pyfun is worth their time; this file is the detailed design.
+`RATIONALE.md` is the short narrative for a reader deciding whether Pyfun is worth their time; this
+file is the detailed design.
 It describes the language as it stands: read it before changing semantics, and update it when a
 design decision changes. What landed when is in git history, not here.
 
