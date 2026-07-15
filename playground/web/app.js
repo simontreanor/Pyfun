@@ -2,7 +2,7 @@
 // edit, render the emitted Python + diagnostics, and — on demand — run that Python in
 // CPython-via-WebAssembly (Pyodide). The compile/run plumbing lives in pyfun-run.js,
 // shared with the docs site's runnable code blocks.
-import { loadCompiler, createRunner } from "./pyfun-run.js";
+import { loadCompiler, createRunner, markRunnerUsed, runnerWasUsed } from "./pyfun-run.js";
 
 // Assigned in main() once the WASM loads: source -> { ok, python, diagnostics }.
 let compileFn = null;
@@ -269,12 +269,13 @@ const runner = createRunner(import.meta.url);
 
 runBtn.addEventListener("click", async () => {
   if (lastPython === null) return;
+  markRunnerUsed();
   const code = lastPython;
   runOutput.hidden = false;
   runOutput.classList.remove("run-error");
   runOutput.textContent = runner.loaded()
     ? "running…"
-    : "loading Python runtime… (first run downloads ~10 MB, then it's cached)";
+    : "starting Python runtime… (the first run on the site downloads ~10 MB; after that the docs and this page share one live runtime)";
   runBtn.disabled = true;
   try {
     const { out, err } = await runner.run(code);
@@ -303,6 +304,10 @@ window.addEventListener("hashchange", () => {
 });
 
 async function main() {
+  // Returning users get the Python runtime booted in the background so Run is warm.
+  if (runnerWasUsed()) {
+    runner.warm();
+  }
   compileFn = await loadCompiler(import.meta.url);
   editor.value = sourceFromHash() ?? EXAMPLES[0].source;
   render();

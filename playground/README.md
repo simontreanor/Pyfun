@@ -64,10 +64,13 @@ The playground is a normal web page, so record it natively on any OS — no `tty
   resilient `analyze`), as you type.
 - **Runs it.** The **Run** button executes the emitted Python in **CPython itself**,
   compiled to WebAssembly ([Pyodide](https://pyodide.org)), and shows stdout. Pyodide runs
-  in a **Web Worker** (`pyodide-worker.js`), off the main thread, so loading the ~10 MB
-  runtime (lazy, on first Run, then cached) and executing code never freeze the UI. Each run
-  uses a fresh namespace and captures stdout/stderr via a `StringIO` redirect; a Python
-  exception shows its traceback. Programs that only touch the stdlib (`json`, `sqlite3`,
+  in a worker (`pyodide-worker.js`), off the main thread, so loading the ~10 MB runtime
+  (lazy, on first Run) and executing code never freeze the UI. The worker is a
+  **SharedWorker** where supported: one compiler + Python runtime serves this page AND
+  every runnable code block on the docs site, so nothing reloads per page (browsers
+  without module SharedWorkers fall back to a per-page worker; runs are serialized inside
+  the worker since pages share one interpreter). Each run uses a fresh namespace and
+  captures stdout/stderr via a `StringIO` redirect; a Python exception shows its traceback. Programs that only touch the stdlib (`json`, `sqlite3`,
   `math`, `statistics`, `dataclasses`, …) run as-is; an `extern` for a third-party package
   (`numpy`, `requests`) would need `micropip` (not wired up) and network calls don't work in
   the sandbox.
