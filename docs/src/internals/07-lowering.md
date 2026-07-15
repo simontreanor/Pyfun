@@ -58,7 +58,10 @@ it flattens the head and arguments:
 ```
 
 So `x |> f |> g` lowers to `g(f(x))` with no intermediate helper, and a piped call reuses the
-same currying collapse as a written-out call.
+same currying collapse as a written-out call. The running example proves it: `let total = shapes
+|> List.fold (fun acc s -> acc + area s) 0.0` and the prefix spelling `List.fold (fun …) 0.0
+shapes` produce byte-identical Python, the `total = _pf_fold(...)` line below. The pipe exists
+for the reader of the source, not for the interpreter.
 
 ## Scope, name binding, and captured muts
 

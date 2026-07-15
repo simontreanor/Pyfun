@@ -109,16 +109,17 @@ let area s =
         case (Rect w h): (w * h)
 measure m
 let shapes = [(Circle 2.0), ((Rect 3.0) 4.0)]
-let total = (((List.fold (fun acc s -> (acc + (area s)))) 0.0) shapes)
+let total = (shapes |> ((List.fold (fun acc s -> (acc + (area s)))) 0.0))
 let side = (sqrt 16.0<m^2>)
 (print f"total {total}, side {side}")
 ```
 
 The fully-parenthesized rendering makes the tree's shape visible. `3.14159 * r * r` prints as
-`((3.14159 * r) * r)`, showing `*` is left-associative; `List.fold (fun …) 0.0 shapes` prints as a
-three-deep `App` spine, showing curried application; and `sqrt 16.0<m^2>` keeps the unit annotation
-attached to the literal, showing the adjacency decision from the [lexing chapter](01-lexing.md) has
-already been made. Because the printer is canonical, feeding this output back to the parser produces
+`((3.14159 * r) * r)`, showing `*` is left-associative; the `total` line shows two things at once:
+`|>` parses as an ordinary binary operator node (the [lowering chapter](07-lowering.md) is where it
+vanishes), and its right operand `((List.fold (fun …)) 0.0)` is a two-deep `App` spine, showing
+curried application; and `sqrt 16.0<m^2>` keeps the unit annotation attached to the literal,
+showing the adjacency decision from the [lexing chapter](01-lexing.md) has already been made. Because the printer is canonical, feeding this output back to the parser produces
 the same tree, which is what the roundtrip tests check.
 
 ## Where you would add a new expression form
