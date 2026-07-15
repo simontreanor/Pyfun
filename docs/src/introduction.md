@@ -14,7 +14,7 @@ let area s =
     case Rect w h: w * h
 
 let shapes = [Circle 2.0, Rect 3.0 4.0]
-print (List.fold (fun acc s -> acc + area s) 0.0 shapes)
+shapes |> List.fold (fun acc s -> acc + area s) 0.0 |> print
 ```
 
 Delete the `Rect` case and the compiler refuses to build the program, naming the case you forgot.

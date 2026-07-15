@@ -1,4 +1,6 @@
+/* Dark by default, light when the system asks for it (below). */
 :root {
+  color-scheme: dark;
   --bg: #0d1117;
   --panel: #161b22;
   --border: #30363d;
@@ -7,8 +9,26 @@
   --accent: #7ee787;
   --err: #ff7b72;
   --info: #79c0ff;
+  --run-bg: rgba(126, 231, 135, 0.04);
+  --run-err-bg: rgba(255, 123, 114, 0.06);
   --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #f6f8fa;
+    --border: #d0d7de;
+    --fg: #1f2328;
+    --muted: #59636e;
+    --accent: #1a7f37;
+    --err: #cf222e;
+    --info: #0969da;
+    --run-bg: rgba(26, 127, 55, 0.05);
+    --run-err-bg: rgba(207, 34, 46, 0.05);
+  }
 }
 
 * { box-sizing: border-box; }
@@ -131,9 +151,9 @@ main {
   overflow: auto;
   max-height: 45%;
   color: var(--fg);
-  background: rgba(126, 231, 135, 0.04);
+  background: var(--run-bg);
 }
-#run-output.run-error { color: var(--err); background: rgba(255, 123, 114, 0.06); }
+#run-output.run-error { color: var(--err); background: var(--run-err-bg); }
 #run-output::before {
   content: "output";
   display: block;

@@ -38,7 +38,7 @@ students see records become frozen dataclasses.
 6. Make the totality point: there is no `ns[10]` bracket indexing in Pyfun. `List.get 10 ns` returns
    an `Option`, and `Option.withDefault` supplies the fallback, so an out-of-range lookup cannot
    crash. This is the same lesson from Session 2 applied to collections.
-7. Move to tuples. Open the [Lesson 8 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5hbWVzID0gWyJhZGEiLCAiYWxhbiJdCmxldCBzY29yZXMgPSBbMTAsIDldCgpsZXQgbGluZSBwYWlyID0KICBtYXRjaCBwYWlyOgogICAgY2FzZSAobmFtZSwgc2NvcmUpOiA_CgpsZXQgbGluZXMgPSBMaXN0Lm1hcCBsaW5lIChMaXN0LnppcCBuYW1lcyBzY29yZXMpCgpwcmludCAoU3RyaW5nLmpvaW4gIiwgIiBsaW5lcykK).
+7. Move to tuples. Open the [Lesson 8 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5hbWVzID0gWyJhZGEiLCAiYWxhbiJdCmxldCBzY29yZXMgPSBbMTAsIDldCgpsZXQgbGluZSBwYWlyID0KICBtYXRjaCBwYWlyOgogICAgY2FzZSAobmFtZSwgc2NvcmUpOiA_CgpsZXQgbGluZXMgPSBMaXN0LnppcCBuYW1lcyBzY29yZXMgfD4gTGlzdC5tYXAgbGluZQoKbGluZXMgfD4gU3RyaW5nLmpvaW4gIiwgIiB8PiBwcmludAo).
    Show that `List.zip names scores` produced a list of pairs and that the single `case (name, score)`
    arm destructures each pair. Fill the hole with `f"{name}: {score}"` and Run.
 8. Close by contrasting the three shapes with one line each: a record when parts have names, a list
