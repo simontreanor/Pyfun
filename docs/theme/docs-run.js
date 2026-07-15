@@ -20,17 +20,24 @@
   }
   var playgroundBase = new URL(root + "playground/", location.href).href;
 
-  var compilerPromise = null;
+  // Everything heavy (the compiler WASM and the Python runtime) lives in the worker
+  // behind createRunner: a SharedWorker where supported, so open tabs share one
+  // runtime. A same-tab navigation still restarts it (a SharedWorker dies with its
+  // last page), so for visitors who have used Run before, plumbing() is called at
+  // page load below and the runtime boots in the background while they read.
+  var runnerPromise = null;
   var runner = null;
+  var mod = null;
 
   function plumbing() {
-    if (!compilerPromise) {
-      compilerPromise = import(playgroundBase + "pyfun-run.js").then(function (mod) {
-        runner = mod.createRunner(playgroundBase);
-        return mod.loadCompiler(playgroundBase);
+    if (!runnerPromise) {
+      runnerPromise = import(playgroundBase + "pyfun-run.js").then(function (m) {
+        mod = m;
+        runner = m.createRunner(playgroundBase);
+        return runner;
       });
     }
-    return compilerPromise;
+    return runnerPromise;
   }
 
   function attach(code) {
@@ -71,20 +78,22 @@
       out.className = "pyfun-run-out";
       out.textContent = runner && runner.loaded()
         ? "running…"
-        : "loading the compiler and Python runtime… (first run on a page downloads ~10 MB, then it is cached)";
+        : "starting the compiler and Python runtime… (the first run on the site downloads ~10 MB; every page then shares the same live runtime)";
       btn.disabled = true;
       plumbing()
-        .then(function (compile) {
-          var result = compile(code.textContent);
-          if (!result.ok) {
-            var msgs = result.diagnostics.map(function (d) {
-              return d.severity + ": " + d.message;
-            });
-            out.className = "pyfun-run-out pyfun-run-err";
-            out.textContent = msgs.length ? msgs.join("\n") : "(nothing to compile)";
-            return null;
-          }
-          return runner.run(result.python);
+        .then(function (r) {
+          mod.markRunnerUsed();
+          return r.compile(code.textContent).then(function (result) {
+            if (!result.ok) {
+              var msgs = result.diagnostics.map(function (d) {
+                return d.severity + ": " + d.message;
+              });
+              out.className = "pyfun-run-out pyfun-run-err";
+              out.textContent = msgs.length ? msgs.join("\n") : "(nothing to compile)";
+              return null;
+            }
+            return r.run(result.python);
+          });
         })
         .then(function (res) {
           if (!res) return;
@@ -105,5 +114,22 @@
     });
   }
 
-  document.querySelectorAll("code.language-pyfun").forEach(attach);
+  var blocks = document.querySelectorAll("code.language-pyfun");
+  blocks.forEach(attach);
+
+  // Background warm-up for returning users: if this visitor has clicked Run before,
+  // start the worker now so the runtime is ready by the time they click it here.
+  if (blocks.length > 0) {
+    import(playgroundBase + "pyfun-run.js")
+      .then(function (m) {
+        if (m.runnerWasUsed()) {
+          plumbing().then(function (r) {
+            r.warm();
+          });
+        }
+      })
+      .catch(function () {
+        // No worker, no warm-up; the click path reports real errors.
+      });
+  }
 })();
