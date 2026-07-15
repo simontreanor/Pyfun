@@ -84,6 +84,21 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   improves JupyterLab/nbconvert/Sphinx rendering — kernel currently declares the `fsharp`
   lexer as an approximation) — both demand-gated.
 
+## Docs & education site (live at simontreanor.github.io/Pyfun — what remains)
+
+The mdBook site shipped 2026-07-15 (learner track, educator pack, internals tour, in-page runnable
+code blocks; the playground moved to `/playground/` with `#code=` permalinks). Teaching prose is
+CC BY 4.0. When lessons change, re-verify with `python docs/verify_lessons.py` (checks every deep
+link decodes to its displayed starter and every solution's output matches). Still open:
+
+- **Notebook-format lessons** (M, demand-gated) — the same lessons as `.ipynb` files riding the
+  shipped Jupyter kernel, so instructors can distribute them through existing course
+  infrastructure. Wait for an educator to ask.
+- **CONTRIBUTING.md + curated good-first-issues** (S) — point new contributors at the internals
+  tour's "Where you would add..." notes; label a handful of well-scoped issues.
+- **Printable educator pack** (S, demand-gated) — a PDF export of the five session docs for
+  departments that circulate paper.
+
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
 - **Type annotations (`let x : T`, `(x: T)`, return types)** — annotation-free code is a selling point,

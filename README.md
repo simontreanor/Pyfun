@@ -461,6 +461,8 @@ gatekeeper: **nothing is emitted until every check passes.**
 - **No CPython fork.** Pyfun is a front end for the Python ecosystem, not a competing runtime.
 
 Why Pyfun makes the choices it does is in [`RATIONALE.md`](https://github.com/simontreanor/Pyfun/blob/main/RATIONALE.md); the full language specification is in [`DESIGN.md`](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md).
+For a guided, chapter-by-chapter walk through this pipeline in the actual source (also a good way
+to learn Rust on a real codebase), see **[Inside the compiler](https://simontreanor.github.io/Pyfun/internals/index.html)**.
 
 ---
 
