@@ -25,12 +25,12 @@ This site is the learning home for the language. Pick the track that fits you:
 - **[Learn Pyfun](learn/index.html)**: a short, graded course for people who already know some
   Python. Each lesson introduces one idea and ends with an exercise you can solve in the browser.
   The compiler checks your work as you type.
-- **For educators** *(coming soon)*: a ready-made functional programming module for an existing
-  intro-Python course, with session plans, exercises, and answer keys. Free to adapt under
-  CC BY 4.0.
-- **Inside the compiler** *(coming soon)*: a guided tour of the Rust compiler, one pipeline stage
-  per chapter. Useful if you want to learn how a language is built, read a real dependency-free
-  Rust codebase, or contribute.
+- **[For educators](educators/index.html)**: a ready-made functional programming module for an
+  existing intro-Python course, with session plans, exercises, and answer keys. Free to adapt
+  under CC BY 4.0.
+- **[Inside the compiler](internals/index.html)**: a guided tour of the Rust compiler, one
+  pipeline stage per chapter. Useful if you want to learn how a language is built, read a real
+  dependency-free Rust codebase, or contribute.
 
 ## Try it right now
 

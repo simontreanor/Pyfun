@@ -21,3 +21,28 @@
 - [Units of measure](learn/14-units-of-measure.md)
 - [Modules and projects](learn/15-modules.md)
 - [Capstone: a typed pipeline](learn/16-capstone.md)
+
+# For educators
+
+- [The module at a glance](educators/README.md)
+  - [Session 1: Functional basics in Python's clothing](educators/session-1.md)
+  - [Session 2: Making illegal states unrepresentable](educators/session-2.md)
+  - [Session 3: Data modeling](educators/session-3.md)
+  - [Session 4: The Pyfun workflow](educators/session-4.md)
+  - [Session 5: Reaching the Python ecosystem](educators/session-5.md)
+  - [Answer keys](educators/answer-keys.md)
+
+# Inside the compiler
+
+- [The tour and its running example](internals/README.md)
+  - [Orientation](internals/00-orientation.md)
+  - [Lexing](internals/01-lexing.md)
+  - [Parsing](internals/02-parsing.md)
+  - [Desugaring](internals/03-desugaring.md)
+  - [Type and effect inference](internals/04-inference.md)
+  - [Exhaustiveness](internals/05-exhaustiveness.md)
+  - [Units of measure](internals/06-units.md)
+  - [Lowering](internals/07-lowering.md)
+  - [Python emission](internals/08-emission.md)
+  - [Diagnostics](internals/09-diagnostics.md)
+  - [The compiler as a library](internals/10-tooling.md)
