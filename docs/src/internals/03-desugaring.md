@@ -33,8 +33,8 @@ so `compose` picks a parameter name (`_pf_x`, else `_pf_x0`, ...) that is free o
 free variables, ruling out capture. The pretty-printer keeps the faithful `(op)` / `(f >> g)`
 spelling regardless, so the roundtrip tests still see the source form.
 
-The running example uses an explicit lambda in its fold, `List.fold (fun acc s -> acc + area s)
-0.0 shapes`, so it does not exercise a section. But the point-free cousin `List.fold (+) 0.0` would
+The running example uses an explicit lambda in its fold, `shapes |> List.fold (fun acc s -> acc +
+area s) 0.0`, so it does not exercise a section. But the point-free cousin `List.fold (+) 0.0` would
 desugar to exactly the lambda the example spells out, which is why both styles type-check and lower
 identically.
 

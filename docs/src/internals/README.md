@@ -45,14 +45,14 @@ let area s =
 measure m
 
 let shapes = [Circle 2.0, Rect 3.0 4.0]
-let total = List.fold (fun acc s -> acc + area s) 0.0 shapes
+let total = shapes |> List.fold (fun acc s -> acc + area s) 0.0
 let side = sqrt 16.0<m^2>
 print (f"total {total}, side {side}")
 ```
 
 It is small, but it exercises a lot of the surface: an algebraic data type, a curried function
 with an exhaustive `match`, a unit-of-measure declaration and annotation, a list literal, a
-higher-order stdlib call with a lambda, and an interpolated `print`. Compiled and run, it
+pipe into a higher-order stdlib call with a lambda, and an interpolated `print`. Compiled and run, it
 produces:
 
 ```
