@@ -96,9 +96,22 @@ for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):
             continue  # file-based module example: cannot compile as a lone temp file
         proc = run_pyfun("check", block)
         if proc.returncode != 0 and not deliberate:
+            pos = text.find(block)
+            # A deliberate-error demonstration quotes its diagnostic in a console
+            # block right after the code. Recognize that, and hold the lesson to
+            # it: the quoted first error line must match the real one.
+            after = text[pos + len(block) : pos + len(block) + 600]
+            quoted = re.search(r"```console\n(error:[^\n]*)", after)
+            if quoted:
+                if quoted.group(1).strip() not in proc.stderr:
+                    problems.append(
+                        f"block {i}: quoted diagnostic differs from the real one\n"
+                        f"      quoted: {quoted.group(1).strip()[:150]!r}\n"
+                        f"      real:   {proc.stderr.strip().splitlines()[0][:150]!r}"
+                    )
+                continue
             # Starters are allowed to fail; only flag blocks BEFORE the Exercise
             # heading (worked examples must be clean).
-            pos = text.find(block)
             ex_pos = text.find("## Exercise")
             if ex_pos == -1 or pos < ex_pos:
                 problems.append(

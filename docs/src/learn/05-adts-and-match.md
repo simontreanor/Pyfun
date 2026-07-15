@@ -47,6 +47,69 @@ so the trailing `case _` guard never fires at runtime. This is what "making ille
 unrepresentable" means in practice: you model the domain so that a wrong value cannot be built, and
 then the compiler checks that your code answers for each shape that can.
 
+## Guards and or-patterns
+
+A `case` arm can carry a condition. Write `if` after the pattern and the arm only fires when the
+guard is true:
+
+```pyfun
+let sign n =
+  match n:
+    case 0: "zero"
+    case m if m > 0: "positive"
+    case _: "negative"
+
+print (sign 5)
+print (sign 0)
+print (sign (0 - 4))
+```
+
+```console
+positive
+zero
+negative
+```
+
+This is where exhaustiveness gets careful. A guarded arm might not fire, because the guard could be
+false, so the compiler does not count it toward covering the type. Drop the `case _` and keep only
+the guarded arm, and the check fails:
+
+```pyfun
+let sign n =
+  match n:
+    case 0: "zero"
+    case m if m > 0: "positive"
+```
+
+```console
+error: non-exhaustive match: add a wildcard `_` arm
+ --> 2:3
+  |
+2 |   match n:
+  |   ^^^^^^^^
+```
+
+The `case m if m > 0` covers positive numbers at runtime, but the compiler cannot see that, so it
+asks for a catch-all to answer for the values a guard might let through.
+
+An or-pattern matches any of several alternatives joined with `|`, exactly like Python's
+`case 1 | 2 | 3`. Every alternative has to bind the same variables, so here they bind none:
+
+```pyfun
+let size n =
+  match n:
+    case 1 | 2 | 3: "small"
+    case _: "big"
+
+print (size 2)
+print (size 9)
+```
+
+```console
+small
+big
+```
+
 ## Exercise
 
 A traffic light has three states, but `action` only answers for two. Run `pyfun check` and read the

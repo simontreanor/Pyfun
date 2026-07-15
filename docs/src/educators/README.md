@@ -1,6 +1,6 @@
 # Educator pack
 
-This pack turns the 16-lesson [Learn Pyfun](../learn/README.md) track into a ready-made
+This pack turns the core 16 lessons of the [Learn Pyfun](../learn/README.md) track into a ready-made
 functional-programming unit you can slot into an existing Python course. It is organized as five
 class sessions with demo scripts, exercise assignments, and an instructor answer key. You can lift
 it wholesale or adapt any part of it.
@@ -27,6 +27,11 @@ exercises.
 If your schedule favors shorter sessions, split the unit into six. The natural split point is inside
 Session 5: run lessons 12 and 13 as one session and lessons 14 through 16 as a sixth, with the
 capstone (lesson 16) as the finale. That split is noted again in the Session 5 doc.
+
+Beyond the core unit, the course has a **Going further** set (recursion, async, active patterns,
+building a computation expression, and string/number details). It works well as stretch material
+for students who finish early, as self-study after the unit, or as the seed of an extra session if
+your course has room.
 
 | Session | Title | Lessons |
 | --- | --- | --- |
