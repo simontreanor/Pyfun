@@ -24,7 +24,7 @@ let area s =
 
 # A List is a Python list; a record is a plain (frozen) dataclass.
 let shapes = [Circle 2.0, Rect 3.0 4.0]
-let total = List.fold (fun acc s -> acc + area s) 0.0 shapes
+let total = shapes |> List.fold (fun acc s -> acc + area s) 0.0
 
 print (f"total area: {total}")
 
@@ -55,9 +55,9 @@ let ok      = """{"name": "ada", "age": 36}"""
 let missing = """{"name": "bob"}"""
 let wrong   = """{"name": "cy", "age": "old"}"""
 
-print (describe (Decode.decodeString userDecoder ok))
-print (describe (Decode.decodeString userDecoder missing))
-print (describe (Decode.decodeString userDecoder wrong))
+ok |> Decode.decodeString userDecoder |> describe |> print
+missing |> Decode.decodeString userDecoder |> describe |> print
+wrong |> Decode.decodeString userDecoder |> describe |> print
 `,
   },
   {

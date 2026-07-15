@@ -175,9 +175,9 @@ let line pair =
   match pair:
     case (name, score): f"{name}: {score}"
 
-let lines = List.map line (List.zip names scores)
+let lines = List.zip names scores |> List.map line
 
-print (String.join ", " lines)
+lines |> String.join ", " |> print
 ```
 
 Expected output:
@@ -368,9 +368,9 @@ let input = """[
 let report =
   match Decode.decodeString (Decode.list runDecoder) input:
     case Ok runs:
-      let names = String.join ", " (List.map (fun r -> r.name) runs)
-      let dist = List.fold (fun a r -> a + r.distance * 1.0<m>) 0.0<m> runs
-      let time = List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s> runs
+      let names = runs |> List.map (fun r -> r.name) |> String.join ", "
+      let dist = runs |> List.fold (fun a r -> a + r.distance * 1.0<m>) 0.0<m>
+      let time = runs |> List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s>
       let avg = dist / time
       f"{names}: average speed {avg} m/s over {List.len runs} runs"
     case Error e: f"could not read input ({e.errorKind})"

@@ -37,9 +37,9 @@ let input = """[
 let report =
   match Decode.decodeString (Decode.list runDecoder) input:
     case Ok runs:
-      let names = String.join ", " (List.map (fun r -> r.name) runs)
-      let dist = List.fold (fun a r -> a + r.distance * ?) 0.0<m> runs
-      let time = List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s> runs
+      let names = runs |> List.map (fun r -> r.name) |> String.join ", "
+      let dist = runs |> List.fold (fun a r -> a + r.distance * ?) 0.0<m>
+      let time = runs |> List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s>
       let avg = dist / ?
       f"{names}: average speed {avg} m/s over {List.len runs} runs"
     case Error e: f"could not read input ({e.errorKind})"
@@ -61,7 +61,7 @@ Expected output:
 ada, bo: average speed 4.8 m/s over 2 runs
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0cmluZywgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuRGVjb2RlciA9CiAgRGVjb2RlLm1hcDMgKGZ1biBuIGQgdCAtPiBSdW4geyBuYW1lID0gbiwgZGlzdGFuY2UgPSBkLCB0aW1lID0gdCB9KQogICAgKERlY29kZS5maWVsZCAibmFtZSIgRGVjb2RlLnN0cmluZykKICAgIChEZWNvZGUuZmllbGQgImRpc3RhbmNlIiA_KQogICAgKERlY29kZS5maWVsZCAidGltZSIgRGVjb2RlLmZsb2F0KQoKbGV0IGlucHV0ID0gIiIiWwogIHsibmFtZSI6ICJhZGEiLCAiZGlzdGFuY2UiOiAxMDAuMCwgInRpbWUiOiAyMC4wfSwKICB7Im5hbWUiOiAiYm8iLCAiZGlzdGFuY2UiOiAxNDAuMCwgInRpbWUiOiAzMC4wfQpdIiIiCgpsZXQgcmVwb3J0ID0KICBtYXRjaCBEZWNvZGUuZGVjb2RlU3RyaW5nIChEZWNvZGUubGlzdCBydW5EZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gU3RyaW5nLmpvaW4gIiwgIiAoTGlzdC5tYXAgKGZ1biByIC0-IHIubmFtZSkgcnVucykKICAgICAgbGV0IGRpc3QgPSBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4gcnVucwogICAgICBsZXQgdGltZSA9IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4gcnVucwogICAgICBsZXQgYXZnID0gZGlzdCAvID8KICAgICAgZiJ7bmFtZXN9OiBhdmVyYWdlIHNwZWVkIHthdmd9IG0vcyBvdmVyIHtMaXN0LmxlbiBydW5zfSBydW5zIgogICAgY2FzZSBFcnJvciBlOiBmImNvdWxkIG5vdCByZWFkIGlucHV0ICh7ZS5lcnJvcktpbmR9KSIKCnByaW50IHJlcG9ydAo)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0cmluZywgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuRGVjb2RlciA9CiAgRGVjb2RlLm1hcDMgKGZ1biBuIGQgdCAtPiBSdW4geyBuYW1lID0gbiwgZGlzdGFuY2UgPSBkLCB0aW1lID0gdCB9KQogICAgKERlY29kZS5maWVsZCAibmFtZSIgRGVjb2RlLnN0cmluZykKICAgIChEZWNvZGUuZmllbGQgImRpc3RhbmNlIiA_KQogICAgKERlY29kZS5maWVsZCAidGltZSIgRGVjb2RlLmZsb2F0KQoKbGV0IGlucHV0ID0gIiIiWwogIHsibmFtZSI6ICJhZGEiLCAiZGlzdGFuY2UiOiAxMDAuMCwgInRpbWUiOiAyMC4wfSwKICB7Im5hbWUiOiAiYm8iLCAiZGlzdGFuY2UiOiAxNDAuMCwgInRpbWUiOiAzMC4wfQpdIiIiCgpsZXQgcmVwb3J0ID0KICBtYXRjaCBEZWNvZGUuZGVjb2RlU3RyaW5nIChEZWNvZGUubGlzdCBydW5EZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gcnVucyB8PiBMaXN0Lm1hcCAoZnVuIHIgLT4gci5uYW1lKSB8PiBTdHJpbmcuam9pbiAiLCAiCiAgICAgIGxldCBkaXN0ID0gcnVucyB8PiBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4KICAgICAgbGV0IHRpbWUgPSBydW5zIHw-IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4KICAgICAgbGV0IGF2ZyA9IGRpc3QgLyA_CiAgICAgIGYie25hbWVzfTogYXZlcmFnZSBzcGVlZCB7YXZnfSBtL3Mgb3ZlciB7TGlzdC5sZW4gcnVuc30gcnVucyIKICAgIGNhc2UgRXJyb3IgZTogZiJjb3VsZCBub3QgcmVhZCBpbnB1dCAoe2UuZXJyb3JLaW5kfSkiCgpwcmludCByZXBvcnQK)
 
 <details>
 <summary>Show solution</summary>
@@ -86,9 +86,9 @@ let input = """[
 let report =
   match Decode.decodeString (Decode.list runDecoder) input:
     case Ok runs:
-      let names = String.join ", " (List.map (fun r -> r.name) runs)
-      let dist = List.fold (fun a r -> a + r.distance * 1.0<m>) 0.0<m> runs
-      let time = List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s> runs
+      let names = runs |> List.map (fun r -> r.name) |> String.join ", "
+      let dist = runs |> List.fold (fun a r -> a + r.distance * 1.0<m>) 0.0<m>
+      let time = runs |> List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s>
       let avg = dist / time
       f"{names}: average speed {avg} m/s over {List.len runs} runs"
     case Error e: f"could not read input ({e.errorKind})"

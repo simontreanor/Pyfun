@@ -21,14 +21,14 @@ let line pair =
   match pair:
     case (name, score): f"{name}: {score}"
 
-let lines = List.map line (List.zip names scores)
+let lines = List.zip names scores |> List.map line
 
-let byName = Map.ofList (List.zip names scores)
+let byName = List.zip names scores |> Map.ofList
 let adaScore = Option.withDefault 0 (Map.tryFind "ada" byName)
 
 print (swap (1, 2))
 print lines
-print (Map.toList byName)
+byName |> Map.toList |> print
 print adaScore
 ```
 
@@ -61,9 +61,9 @@ let line pair =
   match pair:
     case (name, score): ?
 
-let lines = List.map line (List.zip names scores)
+let lines = List.zip names scores |> List.map line
 
-print (String.join ", " lines)
+lines |> String.join ", " |> print
 ```
 
 The checker reports:
@@ -83,7 +83,7 @@ Expected output:
 ada: 10, alan: 9
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5hbWVzID0gWyJhZGEiLCAiYWxhbiJdCmxldCBzY29yZXMgPSBbMTAsIDldCgpsZXQgbGluZSBwYWlyID0KICBtYXRjaCBwYWlyOgogICAgY2FzZSAobmFtZSwgc2NvcmUpOiA_CgpsZXQgbGluZXMgPSBMaXN0Lm1hcCBsaW5lIChMaXN0LnppcCBuYW1lcyBzY29yZXMpCgpwcmludCAoU3RyaW5nLmpvaW4gIiwgIiBsaW5lcykK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5hbWVzID0gWyJhZGEiLCAiYWxhbiJdCmxldCBzY29yZXMgPSBbMTAsIDldCgpsZXQgbGluZSBwYWlyID0KICBtYXRjaCBwYWlyOgogICAgY2FzZSAobmFtZSwgc2NvcmUpOiA_CgpsZXQgbGluZXMgPSBMaXN0LnppcCBuYW1lcyBzY29yZXMgfD4gTGlzdC5tYXAgbGluZQoKbGluZXMgfD4gU3RyaW5nLmpvaW4gIiwgIiB8PiBwcmludAo)
 
 <details>
 <summary>Show solution</summary>
@@ -96,9 +96,9 @@ let line pair =
   match pair:
     case (name, score): f"{name}: {score}"
 
-let lines = List.map line (List.zip names scores)
+let lines = List.zip names scores |> List.map line
 
-print (String.join ", " lines)
+lines |> String.join ", " |> print
 ```
 
 The `case (name, score)` arm binds both parts of the pair, and the f-string builds one line per
