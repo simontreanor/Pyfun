@@ -25,8 +25,6 @@
 //! classes (the set is closed); an unresolved `num` defaults to `int`. Ordering
 //! (`< > <= >=`) carries a closed `comparison` constraint (int/float/string);
 //! equality (`== !=`) and logical `and`/`or`/`not` are unconstrained over bool.
-//!
-//! Still deferred until its syntax exists: effect inference.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
