@@ -1,0 +1,65 @@
+# Expression-evaluator benchmark: ADT allocation + pattern matching, the work
+# CPython's interpreter is slowest at. Builds deterministic expression trees
+# (LCG-seeded, no randomness), evaluates each one raw and after a
+# constant-folding simplify pass, and folds everything into one checksum.
+#
+# Compute-bound on purpose: no I/O beyond the final print. The printed checksum
+# must match expr_eval_baseline.py exactly — the runner checks.
+
+type Expr =
+  | Num int
+  | Add Expr Expr
+  | Mul Expr Expr
+  | Neg Expr
+
+let nextSeed s = (s * 1103515245 + 12345) % 2147483648
+
+let build depth seed =
+  if depth == 0 then Num (seed % 100)
+  else
+    let s1 = nextSeed seed
+    let s2 = nextSeed s1
+    match seed % 4:
+      case 0: Neg (build (depth - 1) s1)
+      case 1: Mul (build (depth - 1) s1) (build (depth - 1) s2)
+      case _: Add (build (depth - 1) s1) (build (depth - 1) s2)
+
+let eval e =
+  match e:
+    case Num n: n
+    case Add a b: (eval a + eval b) % 1000003
+    case Mul a b: (eval a * eval b) % 1000003
+    case Neg a: 0 - eval a
+
+# Constant-folds the easy identities; nested constructor patterns give the
+# match compiler (and later mypyc) something realistic to chew on.
+let simplify e =
+  match e:
+    case Num n: Num n
+    case Neg a:
+      match simplify a:
+        case Num n: Num (0 - n)
+        case sa: Neg sa
+    case Add a b:
+      match (simplify a, simplify b):
+        case (Num 0, sb): sb
+        case (sa, Num 0): sa
+        case (Num x, Num y): Num ((x + y) % 1000003)
+        case (sa, sb): Add sa sb
+    case Mul a b:
+      match (simplify a, simplify b):
+        case (Num 0, _): Num 0
+        case (_, Num 0): Num 0
+        case (Num 1, sb): sb
+        case (sa, Num 1): sa
+        case (Num x, Num y): Num ((x * y) % 1000003)
+        case (sa, sb): Mul sa sb
+
+let iter acc i =
+  let tree = build 12 (nextSeed (i * 7919))
+  let v1 = eval tree
+  let v2 = eval (simplify tree)
+  (acc * 31 + v1 * 17 + v2) % 1000000007
+
+let checksum = List.range 0 400 |> List.fold iter 0
+print (f"expr_eval checksum: {checksum}")

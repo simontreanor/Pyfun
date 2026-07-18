@@ -1,0 +1,12 @@
+# Collatz benchmark: tight recursive arithmetic — function-call and integer-op
+# throughput, nothing else. Sums the total stopping time of every n in
+# [1, 120000). Compute-bound; the printed checksum must match
+# collatz_baseline.py exactly — the runner checks.
+
+let collatz steps n =
+  if n == 1 then steps
+  else if n % 2 == 0 then collatz (steps + 1) (n // 2)
+  else collatz (steps + 1) (3 * n + 1)
+
+let checksum = List.range 1 120000 |> List.fold (fun acc n -> acc + collatz 0 n) 0
+print (f"collatz checksum: {checksum}")
