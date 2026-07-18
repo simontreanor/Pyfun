@@ -128,6 +128,20 @@ interpreter unchanged. Measured on a decode-dominated workload (400k-object JSON
 in-process best-of-5): **2.8x end-to-end** including the shared `json.loads`, ~4x on the decode portion
 itself.
 
+### The `--target 3.11` emission pass
+
+Emitted code targets Python 3.12+ for exactly one construct: an f-string hole may carry a nested
+string literal reusing the outer `"` quote, or a backslash escape — both PEP 701-only.
+`pyfun compile --target 3.11` (`src/python_emitter/py311.rs`, applied by `emit_for` on a clone of the
+IR, single-file and project paths both) rewrites each f-string a 3.11 parser would reject into an
+equivalent `"template".format(args…)` call: literal chunks with `{`/`}` doubled, one positional `{}`
+per hole, hole expressions moved out of the string where no quoting rules apply. The unsafe check
+renders each hole through the emitter itself (`emit_expr`), so it is exact by construction: unsafe iff
+the rendered text contains `"` or `\`. Clean f-strings stay f-strings; default-target output is
+untouched. `case` patterns are not walked (an f-string cannot occur there, and a call would not be a
+valid pattern). This exists to unlock **PyPy** (3.11 is its ceiling as of v7.3.22); `match`/`case` is
+3.10 and fine.
+
 ## The language server (`pyfun lsp`) — implements DESIGN §9 tooling
 
 `pyfun lsp` runs a small language server over stdio. It speaks LSP/JSON-RPC with `Content-Length`

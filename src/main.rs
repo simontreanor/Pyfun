@@ -22,6 +22,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 use pyfun::diagnostics::{self, Level};
 use pyfun::project::{self, ProjectError};
+use pyfun::python_emitter::PyTarget;
 use pyfun::syntax::{Item, Module};
 
 mod kernel;
@@ -43,7 +44,7 @@ fn main() -> ExitCode {
             None => fail("`check` needs a file path"),
         },
         Some("compile") => match parse_compile_args(&args[1..]) {
-            Ok((path, out)) => compile(path, out.as_deref()),
+            Ok((path, out, target)) => compile(path, out.as_deref(), target),
             Err(msg) => fail(&msg),
         },
         Some("run") => match args.get(1) {
@@ -58,7 +59,7 @@ fn main() -> ExitCode {
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
         // Shorthand: a bare path means `compile <path>` to stdout.
-        Some(path) => compile(path, None),
+        Some(path) => compile(path, None, PyTarget::default()),
     }
 }
 
@@ -70,6 +71,12 @@ fn help() {
     eprintln!("  pyfun compile <file.pyfun> [-o <out>]     type-check then lower to Python");
     eprintln!(
         "                                            (-o is a file for one module, a dir for a project)"
+    );
+    eprintln!(
+        "                [--target 3.11|3.12]        emission target (default 3.12; 3.11 avoids"
+    );
+    eprintln!(
+        "                                            PEP 701 f-strings so the output runs on PyPy)"
     );
     eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
@@ -147,16 +154,16 @@ fn check(path: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn compile(path: &str, out: Option<&str>) -> ExitCode {
+fn compile(path: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
     if let Ok(module) = pyfun::parse(&source)
         && has_imports(&module)
     {
-        return compile_project(path, out);
+        return compile_project(path, out, target);
     }
-    let python = match pyfun::compile(&source) {
+    let python = match pyfun::compile_targeting(&source, target) {
         Ok(py) => py,
         Err(e) => {
             eprintln!(
@@ -304,8 +311,11 @@ fn check_project(entry: &str) -> ExitCode {
 }
 
 /// Lower a checked project to its Python files, or render a lowering error.
-fn lower_project(project: &project::Project) -> Result<Vec<(String, String)>, ExitCode> {
-    match project::compile(project) {
+fn lower_project(
+    project: &project::Project,
+    target: PyTarget,
+) -> Result<Vec<(String, String)>, ExitCode> {
+    match project::compile_targeting(project, target) {
         Ok(compiled) => Ok(compiled.files),
         Err(e) => {
             eprintln!("error: lowering failed: {}", e.message);
@@ -314,7 +324,7 @@ fn lower_project(project: &project::Project) -> Result<Vec<(String, String)>, Ex
     }
 }
 
-fn compile_project(entry: &str, out: Option<&str>) -> ExitCode {
+fn compile_project(entry: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
     let project = match resolve_project(entry) {
         Ok(p) => p,
         Err(code) => return code,
@@ -323,7 +333,7 @@ fn compile_project(entry: &str, out: Option<&str>) -> ExitCode {
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project) {
+    let files = match lower_project(&project, target) {
         Ok(f) => f,
         Err(code) => return code,
     };
@@ -362,7 +372,7 @@ fn run_project(entry: &str) -> ExitCode {
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project) {
+    let files = match lower_project(&project, PyTarget::default()) {
         Ok(f) => f,
         Err(code) => return code,
     };
@@ -429,10 +439,12 @@ fn parse_only(path: &str) -> ExitCode {
     }
 }
 
-/// Parse `compile` arguments: a required path and an optional `-o <out>`.
-fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>), String> {
+/// Parse `compile` arguments: a required path, an optional `-o <out>`, and an
+/// optional `--target 3.11|3.12` (default 3.12 — see `python_emitter::PyTarget`).
+fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget), String> {
     let mut path = None;
     let mut out = None;
+    let mut target = PyTarget::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -440,12 +452,23 @@ fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>), String>
                 i += 1;
                 out = Some(args.get(i).ok_or("`-o` needs a path")?.clone());
             }
+            "--target" => {
+                i += 1;
+                target = match args.get(i).map(String::as_str) {
+                    Some("3.11") => PyTarget::Py311,
+                    Some("3.12") => PyTarget::Py312,
+                    Some(other) => {
+                        return Err(format!("`--target` must be 3.11 or 3.12, got `{other}`"));
+                    }
+                    None => return Err("`--target` needs a version (3.11 or 3.12)".to_string()),
+                };
+            }
             p if path.is_none() => path = Some(p),
             other => return Err(format!("unexpected argument `{other}`")),
         }
         i += 1;
     }
-    Ok((path.ok_or("`compile` needs a file path")?, out))
+    Ok((path.ok_or("`compile` needs a file path")?, out, target))
 }
 
 fn read(path: &str) -> Option<String> {

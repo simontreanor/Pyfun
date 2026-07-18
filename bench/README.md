@@ -2,8 +2,8 @@
 
 Compute-bound benchmarks for measuring Pyfun's emitted code against hand-written
 Python, and for measuring alternative ways of *running* the output (CPython
-versions, GraalPy, PyPy via a future `--target 3.11`, mypyc-compiled — see
-`ROADMAP.md`, "Performance beyond CPython").
+versions, GraalPy, PyPy via `--target 3.11`, mypyc-compiled — see `ROADMAP.md`,
+"Performance beyond CPython").
 
 Each benchmark exists twice: `<name>.pyfun` (compiled by the runner to
 `out/<name>.py`) and `<name>_baseline.py`, the program a Pythonista would write
@@ -31,6 +31,7 @@ python bench/run.py --bench collatz  # one benchmark
 python bench/run.py --python graalpy # time both sides on another interpreter
 python bench/run.py --runs 10        # more samples
 python bench/run.py --skip-compile   # reuse out/*.py (e.g. hand-edited for a mypyc experiment)
+python bench/run.py --target 3.11 --python pypy3   # 3.11-target emit (bench/out-3.11/) on PyPy
 ```
 
 The runner uses `target/release/pyfun` or `target/debug/pyfun` if built,
