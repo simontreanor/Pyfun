@@ -1,0 +1,25 @@
+# Map benchmark: builds a string-keyed Map inside a fold — the accumulator
+# shape the fold pass proves, so `Map.add` lowers to an in-place dict insert —
+# then hammers it with lookups. Exercises the fold-pass dict lowering,
+# `Map.tryFind`/`Option.withDefault`, and f-string key construction.
+#
+# The accumulator must stay a bare Map for the pass to fire: threading extra
+# state (e.g. an LCG seed) through a tuple slot is a known rejecting shape
+# (ROADMAP.md, "fold-pass residual shapes") that falls back to copy-per-insert.
+# Keys are therefore hashed from the index directly.
+#
+# Compute-bound; the printed line must match map_build_baseline.py exactly —
+# the runner checks.
+
+let key i = f"key{(i * 1103515245 + 12345) % 2147483648 % 20011}"
+
+let step m i = Map.add (key i) i m
+
+let table n = List.range 0 n |> List.fold step Map.empty
+
+let m = table 500000
+
+let lookupStep acc i = acc + Option.withDefault 0 (Map.tryFind (key (i * 3)) m)
+
+let checksum = List.range 0 500000 |> List.fold lookupStep 0
+print (f"map_build size: {Map.len m} checksum: {checksum}")

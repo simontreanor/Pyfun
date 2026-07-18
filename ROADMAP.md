@@ -18,10 +18,10 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   list slicing/splicing, not an append), folds inside in-file `module`s (P8 mangling), and anything the
   occurrence discipline can't prove. Pick one up only when a real hot fold rejects on it. (A
   persistent-map/HAMT `Map` would kill the O(n²) generally but still loses to a bare `dict` on this
-  pattern.) The ceiling framing stands and caps all perf work: Pyfun targets un-JIT'd CPython, so the goal
-  is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs behind an
-  `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain **non-goals**
-  (below).
+  pattern.) The ceiling framing stands and caps all *emitted-code* perf work: Pyfun targets un-JIT'd CPython, so
+  the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs
+  behind an `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain
+  **non-goals** (below). What runs the output is a separate axis — see **Performance beyond CPython**.
 - **Larger prelude / package manager** — added on demand: prelude functions when a real program misses
   one; the package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
@@ -29,6 +29,51 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   §5.3: statically-known decoders deforest to direct dict/list access, byte-identical `Result`s, 2.8x
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
+
+## Performance beyond CPython (scoped 2026-07-18)
+
+The lowering work above closed the *emitted-code* axis: output within ~1.3× of hand-written Python,
+further tiers measured out (non-goals below). This section is the other axis — changing what runs the
+output. Ordered by effort; each entry carries its own gate. Draft write-up:
+`local/article-draft-how-fast-could-it-get.md`. Measurement infrastructure: `bench/` (added
+2026-07-18) — three compute-bound benchmarks (expr_eval / collatz / map_build), each paired with a
+hand-written Python baseline as the ceiling reference, `bench/run.py` wall-clock runner
+(median-of-N, output-equivalence-checked, `--python` selects the interpreter — the same harness
+measures every option below). CPython 3.14.6 status quo: expr_eval 2.37×, collatz 1.18×,
+map_build 1.64× vs hand-written.
+
+- **Faster host runtimes** (S) — the output is plain, JIT-friendly Python (stable types, no
+  monkey-patching, fixed class shapes), so it runs anywhere Python runs. **GraalPy** advertises a
+  Python 3.12-compliant runtime and should run emitted output unchanged — verify once (incl. PEP 701
+  nested-quote f-strings) and quote a measured number in the docs. **CPython's own JIT** (experimental
+  since 3.13) accrues to every program for free. **PyPy** tops out at Python 3.11 (v7.3.22,
+  2026-04); the *only* 3.12 feature the emitter relies on is PEP 701 (match/case is 3.10), so a
+  `--target 3.11` emission switch that escapes nested quotes in f-strings unlocks PyPy for every
+  program. Deliverables: the switch + a docs note ("compute-bound? run the output on a faster
+  Python"). Worth a real 2–10× on interpreter-bound code for near-zero compiler work.
+- **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**) —
+  the checker knows every binding's inferred type, so the emitter could produce fully annotated
+  Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
+  with the interop story intact (the result is still an ordinary extension module). Real blockers
+  make this a feature, not a flag: mypyc does not yet compile `match` statements
+  (python/mypy#12362) and every Pyfun pattern match lowers to one, so native mode needs an alternate
+  `if`/`elif` match lowering; nested closures (partial application), generators (`seq`), and
+  `_pyfun_rt.py` all need a compatibility audit; and mypyc needs a C toolchain on the user's
+  machine, so this is opt-in only — `pip install pyfun` stays toolchain-free. **Gate first:**
+  hand-annotate one compute-bound example's emitted Python, run it through mypyc, measure (an
+  afternoon). Build only if the multiple justifies an L.
+- **Native backend** (not planned — recorded as a design-space note so the property it rests on
+  stays deliberate) — the semantics are AOT-compilable: static HM types (no dynamic dispatch),
+  default immutability (aggressive optimization is sound), tracked effects (pure code may be
+  reordered), exhaustive ADTs (matches become jump tables), units already erase. That is OCaml's
+  profile; nothing in the language *requires* a dynamic runtime, and that stays true by design. The
+  cost center is the boundary: a native Pyfun embeds CPython and every `extern` crosses worlds,
+  where cost = crossing *frequency* × data marshalling, not callee speed (bulk data can share
+  zero-copy via the buffer protocol; chatty per-element crossings are fatal). Pyfun's edge if ever
+  built: externs are typed and effect-tracked, so every crossing is statically known — the compiler
+  could warn on chatty boundaries inside hot loops, or batch them. Two-tier precedent: Codon, Mojo —
+  both multi-year funded-team efforts. Rewriting Python libraries in Pyfun to remove the boundary is
+  rejected outright (the ecosystem is the asset). Reopen only with a funded reason.
 
 ## Verification gaps (things shipped but not exercised on the real surface)
 
