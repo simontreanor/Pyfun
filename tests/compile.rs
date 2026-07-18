@@ -1359,6 +1359,63 @@ fn e2e_interpolation_hole_with_nested_string() {
 }
 
 #[test]
+fn target_311_rewrites_pep701_fstring_to_format() {
+    // Under `--target 3.11` a hole whose emitted text carries a `"` (or any
+    // backslash) cannot stay inside an f-string (PEP 701 is 3.12+); the
+    // f-string becomes an equivalent `"template".format(args…)` call.
+    let py = pyfun::compile_targeting(
+        "
+        let s = \"a}b\"
+        let r = f\"contains: {String.contains \"}\" s}\"
+        ",
+        pyfun::python_emitter::PyTarget::Py311,
+    )
+    .unwrap();
+    assert!(
+        py.contains("r = \"contains: {}\".format(\"}\" in s)"),
+        "expected a .format rewrite, got:\n{py}"
+    );
+}
+
+#[test]
+fn target_311_keeps_safe_fstrings() {
+    // A hole with no quotes or backslashes is valid on 3.11 — it stays an
+    // f-string, so 3.11-target output only changes where it must.
+    let py = pyfun::compile_targeting(
+        "let x = 5\nlet r = f\"x is {x}\"",
+        pyfun::python_emitter::PyTarget::Py311,
+    )
+    .unwrap();
+    assert!(py.contains("r = f\"x is {x}\""), "{py}");
+    assert!(!py.contains(".format("), "{py}");
+}
+
+#[test]
+fn e2e_target_311_format_rewrite_runs_identically() {
+    // The rewritten output is plain 3.x Python — it must produce the same
+    // values as the default target (checked here on whatever interpreter is
+    // local; 3.11-syntax output parses on every later version too).
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let source = "
+        let s = \"a}b\"
+        let r = f\"contains: {String.contains \"}\" s}\"
+        let brace = f\"lit {{x}} and {String.contains \"}\" s}\"
+        ";
+    let mut program =
+        pyfun::compile_targeting(source, pyfun::python_emitter::PyTarget::Py311).unwrap();
+    program.push_str("\nprint(r)\nprint(brace)\n");
+    let stdout = run_python(&python, &program);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec!["contains: True", "lit {x} and True"],
+        "program:\n{program}"
+    );
+}
+
+#[test]
 fn string_functions_lower_to_builtins_and_helpers() {
     let py = pyfun::compile(
         "let n = String.len \"hi\"\n\

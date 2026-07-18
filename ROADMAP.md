@@ -52,11 +52,17 @@ map_build 1.64× vs hand-written.
   GraalPy currently punishes allocation-heavy trees of small class instances, which is Pyfun's core
   data shape. Docs line: GraalPy runs Pyfun unchanged; try it for long-running arithmetic-heavy
   work; measure with `bench/run.py --python graalpy`, don't assume. CPython 3.14 is the best
-  all-round host measured. **PyPy** still tops out at 3.11 (v7.3.22, 2026-04); the only 3.12
-  feature the emitter relies on is PEP 701 (match/case is 3.10), so a `--target 3.11` switch that
-  escapes nested quotes in f-strings unlocks it — untested and worth testing (different GC; the
-  GraalPy ADT result does not transfer automatically). **CPython's own JIT** (experimental since
-  3.13) accrues to every program for free.
+  all-round *stock* host. **PyPy TESTED 2026-07-18 — the best host measured for emitted Pyfun**
+  (7.3.23/3.11.15, docker `pypy:3.11`; artifacts `local/pypy-verification/`): the **`--target 3.11`
+  switch SHIPPED** the same day (`src/python_emitter/py311.rs` — PEP 701-dependent f-strings rewrite
+  to `"…".format(…)` calls, exact check on rendered holes, everything else Pyfun emits is
+  3.10-compatible; `bench/run.py --target 3.11` compiles into `bench/out-3.11/`). Results, cold:
+  emitted code runs **1.5–3.6× faster than CPython 3.14** (expr_eval 3.6×, map_build 2.7×, collatz
+  1.5×), outputs byte-identical; the GraalPy ADT pathology does **not** transfer (steady ~0.4s/iter
+  on the probe), and cold PyPy even beats the mypyc-compiled figure on expr_eval (0.525s vs 0.824s)
+  with zero user toolchain. Weak spot: recursion (collatz 7.36× vs PyPy's own iterative baseline —
+  absolute time still beats CPython). Docs line earned: "compute-bound? `--target 3.11` + PyPy."
+  **CPython's own JIT** (experimental since 3.13) accrues to every program for free.
 - **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed

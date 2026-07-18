@@ -133,11 +133,20 @@ pub fn analyze_with_imports(
     }
 }
 
-/// Compile `source` all the way to Python source text.
+/// Compile `source` all the way to Python source text (default 3.12+ target).
 ///
 /// The compiler is the gatekeeper (`DESIGN.md` §2): lowering only runs once the
 /// program type-checks, so emitted Python is always well-typed Pyfun.
 pub fn compile(source: &str) -> Result<String, CompileError> {
+    compile_targeting(source, python_emitter::PyTarget::default())
+}
+
+/// [`compile`] with an explicit emission target (`--target 3.11` rewrites
+/// PEP 701-dependent f-strings so the output parses on Python 3.11 / PyPy).
+pub fn compile_targeting(
+    source: &str,
+    target: python_emitter::PyTarget,
+) -> Result<String, CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
@@ -159,7 +168,7 @@ pub fn compile(source: &str) -> Result<String, CompileError> {
     // types actually compared (`DESIGN.md` §7.1).
     let py = lowering::lower(&module, &floats, lowering::OrderPolicy::OnDemand(ordered))
         .map_err(CompileError::Lower)?;
-    Ok(python_emitter::emit(&py))
+    Ok(python_emitter::emit_for(&py, target))
 }
 
 /// The spans of expressions whose inferred type is `float` (dimensionless or

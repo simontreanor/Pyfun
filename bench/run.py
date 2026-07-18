@@ -29,8 +29,6 @@ from pathlib import Path
 
 BENCH_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCH_DIR.parent
-OUT_DIR = BENCH_DIR / "out"
-
 BENCHES = ["expr_eval", "collatz", "map_build"]
 
 
@@ -44,12 +42,13 @@ def find_compiler():
     return ["cargo", "run", "--quiet", "--"]
 
 
-def compile_bench(name, compiler):
+def compile_bench(name, compiler, out_dir, target=None):
     src = BENCH_DIR / f"{name}.pyfun"
-    dst = OUT_DIR / f"{name}.py"
-    OUT_DIR.mkdir(exist_ok=True)
+    dst = out_dir / f"{name}.py"
+    out_dir.mkdir(exist_ok=True)
+    extra = ["--target", target] if target else []
     result = subprocess.run(
-        compiler + ["compile", str(src), "-o", str(dst)],
+        compiler + ["compile", str(src), "-o", str(dst)] + extra,
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -100,10 +99,14 @@ def main():
                         help="interpreter to time both sides with")
     parser.add_argument("--runs", type=int, default=5, help="timed runs (default 5)")
     parser.add_argument("--skip-compile", action="store_true",
-                        help="reuse existing bench/out/*.py")
+                        help="reuse existing out dir *.py")
+    parser.add_argument("--target", choices=["3.11", "3.12"],
+                        help="pyfun emission target; 3.11 output lands in "
+                             "bench/out-3.11/ (for PyPy)")
     args = parser.parse_args()
 
     selected = args.bench or BENCHES
+    out_dir = BENCH_DIR / (f"out-{args.target}" if args.target else "out")
     compiler = None if args.skip_compile else find_compiler()
 
     version = subprocess.run([args.python, "-VV"], capture_output=True, text=True)
@@ -115,7 +118,11 @@ def main():
     print("-" * len(header))
 
     for name in selected:
-        emitted = OUT_DIR / f"{name}.py" if args.skip_compile else compile_bench(name, compiler)
+        emitted = (
+            out_dir / f"{name}.py"
+            if args.skip_compile
+            else compile_bench(name, compiler, out_dir, args.target)
+        )
         if not emitted.exists():
             sys.exit(f"{emitted} missing -- run once without --skip-compile")
         baseline = BENCH_DIR / f"{name}_baseline.py"

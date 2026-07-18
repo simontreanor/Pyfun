@@ -4,10 +4,35 @@
 //! strings, and the emitter turns it into human-readable Python. The IR covers
 //! only what Phase 2 lowering produces; it grows as the language does.
 
+mod py311;
+
 /// A Python module: a flat list of top-level statements.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PyModule {
     pub body: Vec<PyStmt>,
+}
+
+/// The Python version the emitted source must parse under. [`PyTarget::Py312`]
+/// (the default) may lean on PEP 701 f-strings; [`PyTarget::Py311`] runs the
+/// [`py311`] compatibility pass first, unlocking 3.11-only runtimes (PyPy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PyTarget {
+    #[default]
+    Py312,
+    Py311,
+}
+
+/// Emit `module` for `target`: [`emit`] as-is for 3.12+, or with the
+/// [`py311`] f-string rewrite applied for 3.11.
+pub fn emit_for(module: &PyModule, target: PyTarget) -> String {
+    match target {
+        PyTarget::Py312 => emit(module),
+        PyTarget::Py311 => {
+            let mut compat = module.clone();
+            py311::rewrite_module(&mut compat);
+            emit(&compat)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -200,6 +200,15 @@ pub struct CompiledProject {
 /// This lowers only; the caller is expected to have run [`check`] first (the CLI
 /// gates compilation on a clean check, like the single-file path).
 pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_targeting(project, crate::python_emitter::PyTarget::default())
+}
+
+/// [`compile`] with an explicit emission target — every module (and the shared
+/// `_pyfun_rt.py`) is emitted for `target`.
+pub fn compile_targeting(
+    project: &Project,
+    target: crate::python_emitter::PyTarget,
+) -> Result<CompiledProject, crate::lowering::LowerError> {
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
 
@@ -277,13 +286,13 @@ pub fn compile(project: &Project) -> Result<CompiledProject, crate::lowering::Lo
         needs_runtime |= lowered.uses_runtime;
         files.push((
             module_py_name(&module.name),
-            python_emitter::emit(&lowered.py),
+            python_emitter::emit_for(&lowered.py, target),
         ));
     }
     if needs_runtime {
         files.push((
             "_pyfun_rt.py".to_string(),
-            python_emitter::emit(&lowering::runtime_module()),
+            python_emitter::emit_for(&lowering::runtime_module(), target),
         ));
     }
     Ok(CompiledProject { files })
