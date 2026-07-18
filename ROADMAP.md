@@ -42,15 +42,21 @@ hand-written Python baseline as the ceiling reference, `bench/run.py` wall-clock
 measures every option below). CPython 3.14.6 status quo: expr_eval 2.37×, collatz 1.18×,
 map_build 1.64× vs hand-written.
 
-- **Faster host runtimes** (S) — the output is plain, JIT-friendly Python (stable types, no
-  monkey-patching, fixed class shapes), so it runs anywhere Python runs. **GraalPy** advertises a
-  Python 3.12-compliant runtime and should run emitted output unchanged — verify once (incl. PEP 701
-  nested-quote f-strings) and quote a measured number in the docs. **CPython's own JIT** (experimental
-  since 3.13) accrues to every program for free. **PyPy** tops out at Python 3.11 (v7.3.22,
-  2026-04); the *only* 3.12 feature the emitter relies on is PEP 701 (match/case is 3.10), so a
-  `--target 3.11` emission switch that escapes nested quotes in f-strings unlocks PyPy for every
-  program. Deliverables: the switch + a docs note ("compute-bound? run the output on a faster
-  Python"). Worth a real 2–10× on interpreter-bound code for near-zero compiler work.
+- **Faster host runtimes** (S for the PyPy switch) — **GraalPy VERIFIED 2026-07-18** (3.12.8 /
+  GraalVM CE 25.1.3, container; artifacts `local/graalpy-verification/`): emitted output runs
+  *unchanged* — PEP 701 nested-quote f-strings, class-pattern `match`, dataclass ADTs/records, full
+  bench suite byte-identical. Performance is **workload-dependent, not a blanket win**: collatz
+  1.7× faster than CPython 3.14, map_build ~1.6× slower, expr_eval ~4× slower. Warmup probes show
+  why: the hand-written *tuple*-based baseline JIT-warms to 2× faster than CPython, while every
+  ADT-as-classes variant (match or isinstance, dataclass or `__slots__`) stays flat or degrades —
+  GraalPy currently punishes allocation-heavy trees of small class instances, which is Pyfun's core
+  data shape. Docs line: GraalPy runs Pyfun unchanged; try it for long-running arithmetic-heavy
+  work; measure with `bench/run.py --python graalpy`, don't assume. CPython 3.14 is the best
+  all-round host measured. **PyPy** still tops out at 3.11 (v7.3.22, 2026-04); the only 3.12
+  feature the emitter relies on is PEP 701 (match/case is 3.10), so a `--target 3.11` switch that
+  escapes nested quotes in f-strings unlocks it — untested and worth testing (different GC; the
+  GraalPy ADT result does not transfer automatically). **CPython's own JIT** (experimental since
+  3.13) accrues to every program for free.
 - **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
