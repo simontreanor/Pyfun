@@ -59,9 +59,19 @@ map_build 1.64× vs hand-written.
   (python/mypy#12362) and every Pyfun pattern match lowers to one, so native mode needs an alternate
   `if`/`elif` match lowering; nested closures (partial application), generators (`seq`), and
   `_pyfun_rt.py` all need a compatibility audit; and mypyc needs a C toolchain on the user's
-  machine, so this is opt-in only — `pip install pyfun` stays toolchain-free. **Gate first:**
-  hand-annotate one compute-bound example's emitted Python, run it through mypyc, measure (an
-  afternoon). Build only if the multiple justifies an L.
+  machine, so this is opt-in only — `pip install pyfun` stays toolchain-free. **Gate MEASURED
+  2026-07-18** (hand-made `--native` mock-up of `bench/expr_eval` — annotations + `if`/`isinstance`
+  match lowering + monomorphized fold; mypyc 1.19 in a python:3.12 container, gcc; artifacts in
+  `local/mypyc-experiment/`): vs the hand-written baseline, emitted **4.25×** → rewrite-only
+  (interpreted) **2.16×** → mypyc-compiled **1.26×**. Net: **~3.4× faster than today's emitted
+  output** on the ADT-heavy workload, landing near hand-written speed — the L is justified on these
+  numbers. Two riders: (1) roughly half the gap closed *before* compilation — CPython's
+  class-pattern `match` dispatch is expensive (Windows 3.14 ablation: 2.31× → 1.44× from the
+  rewrite alone), so the `if`/`isinstance` lowering mypyc forces is also a candidate lever on its
+  own, though it trades away the readable `match`/`case` output the default emitter promises —
+  native-mode-only unless a real workload demands otherwise; (2) frozen-dataclass ADTs compiled
+  fine — mypyc's remaining headroom (native classes vs dataclasses, boxed union fields) is upside
+  not yet claimed.
 - **Native backend** (not planned — recorded as a design-space note so the property it rests on
   stays deliberate) — the semantics are AOT-compilable: static HM types (no dynamic dispatch),
   default immutability (aggressive optimization is sound), tracked effects (pure code may be
