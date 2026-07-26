@@ -427,9 +427,7 @@ impl Lowerer {
                         body,
                     });
                 }
-                if !super::has_catch_all(arms) {
-                    cases.push(super::non_exhaustive_guard());
-                }
+                super::seal_cases(arms, &mut cases);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }

@@ -1248,7 +1248,10 @@ fn collect_exported_types(module: &Module, decls: &Decls) -> Vec<ExportedType> {
     let mut out = Vec::new();
     for item in &module.items {
         let Item::Type(decl) = item else { continue };
-        if !matches!(decl.kind, TypeDeclKind::Sum(_)) {
+        // Newtypes export exactly like single-ctor sums: their constructor is in
+        // `ctors`/`type_ctors` under the type's own name, so the same collection
+        // gives the consumer construction, patterns, and exhaustiveness.
+        if !matches!(decl.kind, TypeDeclKind::Sum(_) | TypeDeclKind::Newtype(_)) {
             continue;
         }
         let Some(&arity) = decls.type_arity.get(&decl.name) else {
@@ -1492,9 +1495,10 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                 decls
                     .type_arity
                     .insert(decl.name.clone(), decl.params.len());
-                // Only sum types have a constructor set (used by exhaustiveness);
-                // records resolve through their field registry instead.
-                if let TypeDeclKind::Sum(_) = decl.kind {
+                // Only sum types and newtypes have a constructor set (used by
+                // exhaustiveness); records resolve through their field registry
+                // instead.
+                if matches!(decl.kind, TypeDeclKind::Sum(_) | TypeDeclKind::Newtype(_)) {
                     decls.type_ctors.insert(decl.name.clone(), Vec::new());
                 }
             }
@@ -1565,6 +1569,53 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
                     if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
                         list.push(variant.name.clone());
                     }
+                }
+            }
+            // A newtype (`opaque type UserId = string`) checks exactly like a
+            // single-constructor sum whose constructor shares the type's name
+            // (`UserId : string -> UserId`), so pattern checking and
+            // exhaustiveness need nothing new; only lowering differs (erasure).
+            TypeDeclKind::Newtype(underlying) => {
+                if decls.ctors.contains_key(&decl.name) {
+                    errors.push(TypeError {
+                        message: format!("constructor `{}` is already defined", decl.name),
+                        span,
+                    });
+                    continue;
+                }
+                let result_ty = Ty::Con(
+                    decl.name.clone(),
+                    (0..decl.params.len() as u32).map(Ty::Var).collect(),
+                );
+                // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
+                match resolve(
+                    underlying,
+                    &param_map,
+                    &decls.type_arity,
+                    span,
+                    &HashMap::new(),
+                ) {
+                    Ok(field_ty) => {
+                        let ctor_ty =
+                            Ty::Fun(Box::new(field_ty), Box::new(result_ty), Effect::pure());
+                        let scheme = Scheme {
+                            vars: (0..decl.params.len() as u32).collect(),
+                            uvars: vec![],
+                            num_vars: vec![],
+                            ord_vars: vec![],
+                            eff_vars: vec![],
+                            mutable: false,
+                            ty: ctor_ty,
+                        };
+                        env.insert(decl.name.clone(), scheme.clone());
+                        decls
+                            .ctors
+                            .insert(decl.name.clone(), CtorInfo { scheme, arity: 1 });
+                        if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
+                            list.push(decl.name.clone());
+                        }
+                    }
+                    Err(e) => errors.push(e),
                 }
             }
             TypeDeclKind::Record(fields) => {

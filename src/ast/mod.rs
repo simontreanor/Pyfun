@@ -132,11 +132,12 @@ fn print_unit(unit: &UnitExpr) -> String {
 }
 
 fn print_type_decl(decl: &TypeDecl) -> String {
-    // An opaque handle type has no body: `extern type Conn [a b …]`.
-    let mut s = if matches!(decl.kind, TypeDeclKind::Opaque) {
-        String::from("extern type ")
-    } else {
-        String::from("type ")
+    // An opaque handle type has no body: `extern type Conn [a b …]`. A newtype
+    // prints its `opaque type` head; sums/records print plain `type`.
+    let mut s = match decl.kind {
+        TypeDeclKind::Opaque => String::from("extern type "),
+        TypeDeclKind::Newtype(_) => String::from("opaque type "),
+        _ => String::from("type "),
     };
     s.push_str(&decl.name);
     for param in &decl.params {
@@ -155,6 +156,10 @@ fn print_type_decl(decl: &TypeDecl) -> String {
             s.push_str(&format!("{{ {} }}", fields.join(", ")));
         }
         TypeDeclKind::Opaque => {}
+        TypeDeclKind::Newtype(underlying) => {
+            s.push_str(" = ");
+            s.push_str(&print_type(underlying));
+        }
     }
     s
 }

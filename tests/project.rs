@@ -709,6 +709,96 @@ fn a_shared_base_measure_across_two_imports_does_not_conflict() {
     assert!(errors.is_empty(), "unexpected errors: {errors:?}");
 }
 
+// ---------- cross-module opaque types (newtypes) ----------
+
+#[test]
+fn a_cross_module_newtype_erases_in_the_consumer_too() {
+    // `Ids.UserId` constructs, matches, and references first-class from Main —
+    // all erased: no class anywhere, wraps are bare values, a first-class
+    // reference is the `_pf_id` identity helper.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Ids",
+                "opaque type UserId = string\n\
+                 let greet u =\n  match u:\n    case UserId s: String.concat \"hi \" s",
+            ),
+            (
+                "Main",
+                "import Ids\n\
+                 let uid = Ids.UserId \"ana\"\n\
+                 let g = Ids.greet uid\n\
+                 let unwrapped =\n  match uid:\n    case Ids.UserId s: s\n\
+                 let mapped = List.map Ids.UserId [\"a\", \"b\"]",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("uid = \"ana\""), "{main}");
+    assert!(main.contains("_pf_map(_pf_id,"), "{main}");
+    assert!(!main.contains("class UserId"), "{main}");
+    assert!(!main.contains("UserId("), "{main}");
+    assert!(
+        !file(&files, "ids.py").contains("class UserId"),
+        "the exporting module erases the newtype as well"
+    );
+}
+
+#[test]
+fn e2e_a_cross_module_newtype_round_trips() {
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Ids",
+                "opaque type UserId = string\n\
+                 let greet u =\n  match u:\n    case UserId s: String.concat \"hi \" s",
+            ),
+            (
+                "Main",
+                "import Ids\n\
+                 let uid = Ids.UserId \"ana\"\n\
+                 let unwrapped =\n  match uid:\n    case Ids.UserId s: s\n\
+                 let mapped = List.map Ids.UserId [\"a\", \"b\"]\n\
+                 print (Ids.greet uid)\n\
+                 print unwrapped\n\
+                 print (List.len mapped)",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_newtype");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "hi ana\nana\n2");
+    }
+}
+
+#[test]
+fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
+    // The nominal wall crosses the boundary: a raw string is not an `Ids.UserId`.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Ids",
+                "opaque type UserId = string\n\
+                 let greet u =\n  match u:\n    case UserId s: s",
+            ),
+            ("Main", "import Ids\nlet bad = Ids.greet \"raw\""),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].name, "Main");
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("expected UserId, found string"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
 // ---------- slice 6: import-aware editor analysis ----------
 
 #[test]

@@ -212,6 +212,31 @@ fn repl_adt_round_trips_across_entries() {
 }
 
 #[test]
+fn repl_newtype_erases_and_matches_across_entries() {
+    if !have_python() {
+        eprintln!("skipping repl newtype test: no python interpreter");
+        return;
+    }
+    // An opaque type declared in one entry wraps in the next and unwraps in a
+    // later match — the type echo names the newtype, while the erased value
+    // flows through the worker as the bare underlying string.
+    let out = repl(
+        "opaque type UserId = string\n\
+         let u = UserId \"ana\"\n\
+         :{\n\
+         match u:\n\
+         \x20   case UserId s: print (String.concat \"id \" s)\n\
+         :}\n\
+         :quit\n",
+    );
+    assert!(
+        out.contains("u : UserId"),
+        "type echo names the newtype:\n{out}"
+    );
+    assert!(out.contains("id ana"), "unwrapped payload printed:\n{out}");
+}
+
+#[test]
 fn repl_unit_expression_prints_no_none() {
     if !have_python() {
         eprintln!("skipping repl unit test: no python interpreter");
