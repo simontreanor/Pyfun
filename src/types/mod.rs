@@ -392,6 +392,8 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("concat", 2),
     ("sort", 1),
     ("find", 2),
+    ("choose", 2),
+    ("collect", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -2641,6 +2643,30 @@ fn seed_list_prelude(env: &mut Env) {
             pure_fn(
                 arrow_e(Ty::Var(0), Ty::Bool),
                 arrow_e(list(Ty::Var(0)), option(Ty::Var(0))),
+            ),
+        ),
+    );
+    // List.choose : (a ->{e} Option b) -> List a ->{e} List b   (keep the `Some`
+    // payloads — F#'s `choose`, a fused filter+map in one pass)
+    env.insert(
+        "List.choose".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(Ty::Var(0), option(Ty::Var(1))),
+                arrow_e(list(Ty::Var(0)), list(Ty::Var(1))),
+            ),
+        ),
+    );
+    // List.collect : (a ->{e} List b) -> List a ->{e} List b   (map + concatenate —
+    // F#'s `collect`; `List.collect (fun x -> x)` flattens a list of lists)
+    env.insert(
+        "List.collect".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(Ty::Var(0), list(Ty::Var(1))),
+                arrow_e(list(Ty::Var(0)), list(Ty::Var(1))),
             ),
         ),
     );

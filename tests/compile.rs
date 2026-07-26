@@ -1052,6 +1052,44 @@ fn list_completeness_ops_lower_to_helpers() {
 }
 
 #[test]
+fn choose_and_collect_lower_to_helpers() {
+    let py = pyfun::compile(
+        "let a = List.choose (fun x -> if x > 1 then Some x else None) [1, 2]\n\
+         let b = List.collect (fun x -> [x, x]) [1, 2]",
+    )
+    .unwrap();
+    // choose: an eager append-loop discriminating Some via isinstance.
+    assert!(py.contains("def _pf_choose(f, xs):"), "{py}");
+    assert!(py.contains("if isinstance(y, Some):"), "{py}");
+    assert!(py.contains("out.append(y._0)"), "{py}");
+    // collect: an eager extend-loop.
+    assert!(py.contains("def _pf_collect(f, xs):"), "{py}");
+    assert!(py.contains("out.extend(f(x))"), "{py}");
+}
+
+#[test]
+fn e2e_list_choose_and_collect() {
+    run_and_check(
+        "
+        let xs = [1, 2, 3]
+        let a = List.choose (fun x -> if x > 1 then Some (x * 10) else None) xs
+        let b = List.collect (fun x -> [x, x]) xs
+        let c = List.collect (fun x -> x) [[1], [2, 3]]
+        let keepOdd = List.choose (fun x -> if x % 2 == 1 then Some x else None)
+        let d = keepOdd xs
+        let e = xs |> List.collect (fun x -> [x, 0])
+        ",
+        &[
+            ("a", "[20, 30]"),
+            ("b", "[1, 1, 2, 2, 3, 3]"),
+            ("c", "[1, 2, 3]"),
+            ("d", "[1, 3]"),
+            ("e", "[1, 0, 2, 0, 3, 0]"),
+        ],
+    );
+}
+
+#[test]
 fn e2e_list_completeness_ops() {
     run_and_check(
         "

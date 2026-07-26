@@ -445,6 +445,50 @@ fn rejects_ill_typed_list_ops() {
 }
 
 #[test]
+fn accepts_list_choose_and_collect() {
+    // choose keeps the Some payloads (filter+map fused).
+    assert!(
+        pyfun::check(
+            "let r = List.choose (fun x -> if x > 1 then Some (x * 10) else None) [1, 2, 3]"
+        )
+        .is_ok()
+    );
+    // choose can change the element type: int in, string out.
+    assert!(
+        pyfun::check(
+            "let r = List.choose (fun x -> Some (String.fromInt x)) [1, 2]\n\
+             let n = List.map String.len r"
+        )
+        .is_ok()
+    );
+    // collect maps and concatenates (flatMap).
+    assert!(pyfun::check("let r = List.collect (fun x -> [x, x]) [1, 2]").is_ok());
+    // collect with the identity flattens a List (List a).
+    assert!(
+        pyfun::check("let r = List.collect (fun x -> x) [[1], [2, 3]]\nlet n = List.sum r").is_ok()
+    );
+}
+
+#[test]
+fn rejects_ill_typed_choose_and_collect() {
+    // choose's function must return an Option, not a bare value.
+    assert_error_contains("let r = List.choose (fun x -> x * 10) [1, 2]", "Option");
+    // collect's function must return a List, not an Option.
+    assert_error_contains("let r = List.collect (fun x -> Some x) [1, 2]", "List");
+}
+
+#[test]
+fn choose_and_collect_are_effect_polymorphic() {
+    // Pure argument functions keep the traversal pure.
+    assert!(pyfun::check("let pure dup xs = List.collect (fun x -> [x, x]) xs").is_ok());
+    // An impure chooser makes the whole call `io`, so a `pure` binding is rejected.
+    assert_error_contains(
+        "let pure f xs = List.choose (fun x -> Some (print x)) xs",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
 fn accepts_modulo() {
     assert!(pyfun::check("let r = 10 % 3").is_ok());
     assert!(pyfun::check("let isEven n = n % 2 == 0").is_ok());
