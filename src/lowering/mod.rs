@@ -1985,6 +1985,13 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_list_find")
             }
+            // `choose` discriminates `Some`/`None_` results, so flag the Option
+            // prelude (the classes must exist for the isinstance check).
+            "List.choose" => {
+                self.needs_option = true;
+                coll(self, "_pf_choose")
+            }
+            "List.collect" => list(self, "_pf_collect"),
             // Set
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
@@ -3815,6 +3822,34 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
             ),
             // _pf_sort(xs) -> sorted(xs)   (a fresh list, O(n log n))
             "_pf_sort" => def("_pf_sort", &["xs"], call("sorted", vec![name("xs")])),
+            // _pf_collect(f, xs): map + concatenate (F#'s List.collect), an eager
+            // extend-loop rather than a chained iterator.
+            //   out = []
+            //   for x in xs: out.extend(f(x))
+            //   return out
+            "_pf_collect" => PyStmt::FuncDef {
+                name: "_pf_collect".to_string(),
+                params: vec!["f".to_string(), "xs".to_string()],
+                body: vec![
+                    PyStmt::Assign {
+                        target: "out".to_string(),
+                        value: PyExpr::List(vec![]),
+                    },
+                    PyStmt::For {
+                        target: "x".to_string(),
+                        iter: name("xs"),
+                        body: vec![PyStmt::Expr(PyExpr::Call {
+                            func: Box::new(PyExpr::Attribute {
+                                value: Box::new(name("out")),
+                                attr: "extend".to_string(),
+                            }),
+                            args: vec![call("f", vec![name("x")])],
+                        })],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
+                is_async: false,
+            },
             other => unreachable!("unknown list helper {other}"),
         })
         .collect()
@@ -4173,6 +4208,43 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         call0("None_"),
                     ],
                 ),
+            ),
+            // List.choose(f, xs): keep the payloads of the `Some` results of `f`
+            // (F#'s List.choose — filter + map fused into one eager pass).
+            //   out = []
+            //   for x in xs:
+            //       y = f(x)
+            //       if isinstance(y, Some): out.append(y._0)
+            //   return out
+            "_pf_choose" => def(
+                helper,
+                &["f", "xs"],
+                vec![
+                    PyStmt::Assign {
+                        target: "out".to_string(),
+                        value: PyExpr::List(vec![]),
+                    },
+                    PyStmt::For {
+                        target: "x".to_string(),
+                        iter: name("xs"),
+                        body: vec![
+                            PyStmt::Assign {
+                                target: "y".to_string(),
+                                value: call("f", vec![name("x")]),
+                            },
+                            PyStmt::If {
+                                test: is_some("y"),
+                                body: vec![PyStmt::Expr(method(
+                                    name("out"),
+                                    "append",
+                                    vec![attr(name("y"), "_0")],
+                                ))],
+                                orelse: vec![],
+                            },
+                        ],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
             ),
             // Seq.take(n, xs) -> itertools.islice(xs, n)  (reorders args; stays lazy)
             "_pf_seq_take" => def1(

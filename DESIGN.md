@@ -369,7 +369,15 @@ risk a Python `IndexError`, violating the no-runtime-surprises rule); `isEmpty` 
 **O(n)** linear (use `Set` for O(1) membership); `concat` is O(n+m) returning a fresh list; `sort :
 comparison a => List a -> List a` is O(n log n) (`sorted`, so it carries the `comparison` constraint —
 ADT ordering is out of scope); and `find : (a ->{e} bool) -> List a ->{e} Option a` is O(n),
-**first-match/lazy** (`next(map(Some, filter …))`) and effect-polymorphic like `filter`. There is
+**first-match/lazy** (`next(map(Some, filter …))`) and effect-polymorphic like `filter`. Two fused
+higher-order ops complete the F# core set: `choose : (a ->{e} Option b) -> List a ->{e} List b` keeps
+the payloads of the `Some` results (F#'s `List.choose` — `filter`+`map` in one O(n) pass; an
+extend/append loop in the helper), and `collect : (a ->{e} List b) -> List a ->{e} List b` maps and
+concatenates (F#'s `List.collect`, i.e. flatMap; `List.collect (fun x -> x)` flattens a list of
+lists). Both are effect-polymorphic like `map`. **Naming note:** Pyfun's `concat` (append two lists)
+diverges from F#, where `concat` *flattens* and `append` joins two — a deliberate cost: to a
+Pythonista "concat two lists" is the natural reading (`+`), and the flattening op remains reachable as
+`collect` with the identity function (a dedicated `flatten` can ride later if demand shows). There is
 deliberately **no cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal); and
 because the ops are immutable-style, building a list by repeated `concat` is *nominally* O(n²) —
 though a `Seq.fold`/`List.fold` that builds a collection linearly is recognized and lowered to an
