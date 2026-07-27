@@ -2252,6 +2252,21 @@ fn map_of_an_impure_function_is_impure() {
 }
 
 #[test]
+fn input_is_a_prelude_builtin_with_the_io_effect() {
+    // input : string ->{io} string — Python's input(prompt), name-for-name.
+    assert!(pyfun::check("let ask u = input \"? \"").is_ok());
+    // Composes with the total parse into Option int.
+    assert!(pyfun::check("let n = String.toInt (input \"n? \")").is_ok());
+    // The io effect flows out: a `pure` binding using input is rejected.
+    assert_error_contains(
+        "let pure ask u = input \"? \"",
+        "declared `pure` but performs `io`",
+    );
+    // The prompt is a string.
+    assert_error_contains("let x = input 3", "string");
+}
+
+#[test]
 fn rejects_redefining_builtin_list() {
     assert_error_contains("type List a = Empty | More a", "already defined");
 }

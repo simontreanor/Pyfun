@@ -76,6 +76,7 @@ const PROGRAMS: &[&str] = &[
     "let hit = List.find (fun x -> x > 0) xs",
     "let kept = List.choose f xs",
     "let flat = List.collect f xs",
+    "let name = input \"who? \"",
     // `5<m>` (adjacent, in the units section below) is a unit annotation, whereas
     // `5 < m` (spaced) is a comparison — the printer keeps them distinct.
     "let r = 5 < m",

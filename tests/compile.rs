@@ -1176,6 +1176,51 @@ fn choose_and_collect_lower_to_helpers() {
 }
 
 #[test]
+fn input_lowers_name_for_name() {
+    let py = pyfun::compile("let name = input \"who? \"\nprint name").unwrap();
+    assert!(py.contains("name = input(\"who? \")"), "{py}");
+}
+
+#[test]
+fn e2e_input_reads_a_line_from_stdin() {
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let program =
+        pyfun::compile("let name = input \"who? \"\nprint (String.concat \"hi \" name)").unwrap();
+    // `python -` (the run_python helper) reads ALL of stdin as the program, so
+    // write the program to a file and pipe the input line as real stdin.
+    let dir = std::env::temp_dir().join("pyfun_input_e2e");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    let path = dir.join("main.py");
+    std::fs::write(&path, &program).expect("write program");
+    let mut child = Command::new(&python)
+        .arg(&path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn python");
+    child
+        .stdin
+        .take()
+        .expect("python stdin")
+        .write_all(b"ana\n")
+        .expect("write input line");
+    let output = child.wait_with_output().expect("wait for python");
+    assert!(
+        output.status.success(),
+        "python exited with {}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // The prompt is echoed to stdout (no tty), then the greeting.
+    assert!(stdout.contains("hi ana"), "{stdout}");
+}
+
+#[test]
 fn e2e_list_choose_and_collect() {
     run_and_check(
         "

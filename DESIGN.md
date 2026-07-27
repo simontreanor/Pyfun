@@ -601,8 +601,13 @@ mechanism needed **no parser change**: `Module.member` is parsed as the ordinary
 `Field { base: Var("List"), name: "map" }`; `types::qualified_name` recognizes an **uppercase** base
 (value identifiers are lowercase, so `Upper.x` is only ever module access — a record-field base is a
 lowercase value), and the checker + lowering resolve the dotted member against the module instead of as
-record-field access. A genuinely global handful stay unqualified (`print`/`abs`/`min`/`max` in
-`PRELUDE`), matching F# (`List.map` qualified, `abs` global). An unknown member gets a **"did you
+record-field access. A genuinely global handful stay unqualified (`print`/`input`/`abs`/`min`/`max` in
+`PRELUDE`), matching F# (`List.map` qualified, `abs` global). `input : string ->{io} string` is
+Python's `input(prompt)` name-for-name (`input ""` for promptless) — the io effect coming *in*,
+pairing with `print`'s going out; `input "n? " |> String.toInt : Option int` is the idiomatic total
+parse. Environment caveats: the REPL's worker protocol runs over stdin, so `input` inside the REPL
+consumes protocol bytes (the documented stdin hazard), and the Pyodide playground cannot block on
+stdin — scripts via `pyfun run` (and Jupyter, whose kernel routes stdin) are its home turf. An unknown member gets a **"did you
 mean"** hint — `` `startswith` is not a member of `String` (did you mean `String.startsWith`?) `` —
 computed by `closest_member` (a case-insensitive match first, then edit distance ≤ ~⅓ the name, then a
 prefix relation for abbreviation slips like `length`→`len`). It scans the env's qualified keys, so it

@@ -348,6 +348,7 @@ const MAX_ORD_DEPTH: usize = 100;
 /// call-site renaming is needed — the simplest honest interop surface.
 pub const PRELUDE: &[(&str, usize)] = &[
     ("print", 1),
+    ("input", 1),
     ("abs", 1),
     ("min", 2),
     ("max", 2),
@@ -2371,7 +2372,7 @@ const RESERVED_VARS: u32 = 5;
 /// and returns `unit`; `abs`/`min`/`max` are polymorphic over the numeric base
 /// (`num`) *and* the unit, i.e. `num 'a => 'a<'u> -> …`.
 fn seed_prelude(env: &mut Env) {
-    // print : 'a ->{io} unit  — the prelude's one effectful builtin.
+    // print : 'a ->{io} unit  — effects going out.
     env.insert(
         "print".to_string(),
         Scheme {
@@ -2382,6 +2383,23 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit), Effect::io()),
+        },
+    );
+    // input : string ->{io} string  — effects coming in: prompt → one line of
+    // stdin, exactly Python's `input(prompt)` (`input ""` for promptless).
+    // Monomorphic and name-for-name like the rest of the prelude. NB the REPL's
+    // worker protocol runs over stdin, so `input` there consumes protocol bytes
+    // (the documented stdin hazard); scripts via `pyfun run` are the home turf.
+    env.insert(
+        "input".to_string(),
+        Scheme {
+            vars: vec![],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![],
+            mutable: false,
+            ty: Ty::Fun(Box::new(Ty::Str), Box::new(Ty::Str), Effect::io()),
         },
     );
     let num_u = || Ty::Num(PRELUDE_NUMVAR, Unit::var(PRELUDE_UVAR));
