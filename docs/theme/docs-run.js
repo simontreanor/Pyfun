@@ -73,6 +73,20 @@
     }
     code.spellcheck = false;
 
+    // mdBook's global hotkeys (arrow-key chapter navigation, `?` for the help
+    // popup, the search hotkeys) guard against input/textarea targets but not
+    // against contenteditable, so typing in this block would page away on a
+    // caret move, open help on `?` (which exercises need for typed holes), or
+    // pull focus into search. While the caret is here, every key belongs to
+    // the editor: stop the events at the block. Propagation only, never
+    // default, so the caret and typing behave normally.
+    function keepKeys(e) {
+      e.stopPropagation();
+    }
+    code.addEventListener("keydown", keepKeys);
+    code.addEventListener("keyup", keepKeys);
+    code.addEventListener("keypress", keepKeys);
+
     btn.addEventListener("click", function () {
       out.hidden = false;
       out.className = "pyfun-run-out";
