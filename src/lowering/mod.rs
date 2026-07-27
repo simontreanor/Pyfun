@@ -97,6 +97,9 @@ pub struct ImportContext {
     /// Qualified names of imported **nullary** constructors (`Palette.Red`), which
     /// must lower to a call (`palette.Red()`) when referenced as a value.
     pub nullary_ctors: HashSet<String>,
+    /// Qualified names of imported newtype constructors (`Ids.UserId`), erased at
+    /// every use site exactly like the defining module's bare name.
+    pub newtype_ctors: HashSet<String>,
     /// Imported records' declared field order, keyed by **qualified** surface tag
     /// (`Geometry.Point` → `["x", "y"]`), so a cross-module literal/update emits a
     /// positional constructor call in the exporting class's `__init__` order.
@@ -131,6 +134,9 @@ pub fn lower_in_project(
     lowerer.float_literals = float_literals.clone();
     lowerer.imported_modules = ctx.modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
+    lowerer
+        .newtype_ctors
+        .extend(ctx.newtype_ctors.iter().cloned());
     lowerer.use_runtime = true;
     lowerer.project_mode = true;
     for (name, arity) in &ctx.member_arities {
@@ -193,6 +199,10 @@ struct Lowerer {
     /// application and to know which bare references are nullary (and so must be
     /// emitted as `Ctor()`).
     ctor_arity: std::collections::HashMap<String, usize>,
+    /// Newtype constructors (`opaque type UserId = string`) — erased at lowering:
+    /// a fully-applied wrap is the bare argument, a first-class reference is
+    /// `_pf_id`, and the single-case pattern recurses into its payload.
+    newtype_ctors: HashSet<String>,
     /// Declared field order of each record type, so literals and updates emit a
     /// positional constructor call in the class's `__init__` order.
     record_fields: std::collections::HashMap<String, Vec<String>>,
@@ -343,6 +353,7 @@ impl Lowerer {
         let mut top_fn_defs: HashMap<String, (Vec<Param>, Expr)> = HashMap::new();
         let mut top_val_defs: HashMap<String, Expr> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
+        let mut newtype_ctors = HashSet::new();
         for item in &module.items {
             match item {
                 Item::Extern(decl) => {
@@ -425,6 +436,13 @@ impl Lowerer {
                     }
                     // An opaque handle type erases — no constructor, no class.
                     TypeDeclKind::Opaque => {}
+                    // A newtype's constructor is registered (arity 1, so
+                    // application/partial-application resolve like any ctor) but
+                    // flagged for erasure at every use site.
+                    TypeDeclKind::Newtype(_) => {
+                        ctor_arity.insert(decl.name.clone(), 1);
+                        newtype_ctors.insert(decl.name.clone());
+                    }
                 },
                 // A module's members register their arity under the qualified name
                 // (`Geometry.area`), matching how `Field` heads are looked up.
@@ -499,6 +517,7 @@ impl Lowerer {
             arities,
             ap_uses,
             ctor_arity,
+            newtype_ctors,
             record_fields,
             field_to_record,
             extern_targets,
@@ -592,6 +611,8 @@ impl Lowerer {
                     }
                     // An opaque handle type erases — it emits no Python class.
                     TypeDeclKind::Opaque => {}
+                    // A newtype erases — its wrap/unwrap sites vanish too.
+                    TypeDeclKind::Newtype(_) => {}
                 }
             }
         }
@@ -978,9 +999,7 @@ impl Lowerer {
                         body,
                     });
                 }
-                if !has_catch_all(arms) {
-                    cases.push(non_exhaustive_guard());
-                }
+                seal_cases(arms, &mut cases);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }
@@ -1163,9 +1182,7 @@ impl Lowerer {
                         body: with_assign(arm_stmts, &tmp, arm_val),
                     });
                 }
-                if !has_catch_all(arms) {
-                    cases.push(non_exhaustive_guard());
-                }
+                seal_cases(arms, &mut cases);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok((stmts, PyExpr::Name(tmp)))
             }
@@ -1697,6 +1714,31 @@ impl Lowerer {
             return Ok((stmts, call));
         }
 
+        // A fully-applied newtype wrap erases: `UserId x` (or the imported
+        // `Ids.UserId x`) lowers to `x`. Any extra arguments (an underlying
+        // function value being applied) chain onto the unwrapped value as an
+        // ordinary call.
+        let newtype_head = match &head.kind {
+            ExprKind::Var(name) => self.newtype_ctors.contains(name),
+            ExprKind::Field { .. } => {
+                crate::types::qualified_name(head).is_some_and(|q| self.newtype_ctors.contains(&q))
+            }
+            _ => false,
+        };
+        if newtype_head && !args_ast.is_empty() {
+            let (mut stmts, first) = self.lower_value(args_ast[0], locals)?;
+            if args_ast.len() == 1 {
+                return Ok((stmts, first));
+            }
+            let mut rest = Vec::with_capacity(args_ast.len() - 1);
+            for arg in &args_ast[1..] {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                rest.push(arg_val);
+            }
+            return Ok((stmts, self.build_call(first, None, rest)));
+        }
+
         let arity = match &head.kind {
             // A bare reference to a sibling member inside a module — its arity is
             // registered under the qualified name (`Geometry.area`).
@@ -1921,6 +1963,12 @@ impl Lowerer {
                 },
                 _ => PyExpr::Name(class),
             };
+        }
+        // A first-class reference to a newtype constructor (`List.map UserId xs`)
+        // is the identity function — the wrap is erased.
+        if self.newtype_ctors.contains(name) {
+            self.needed_combinators.insert("_pf_id");
+            return PyExpr::Name("_pf_id".to_string());
         }
         match self.ctor_arity.get(name) {
             Some(0) => PyExpr::Call {
@@ -2173,6 +2221,13 @@ impl Lowerer {
             // (`geometry.area`, with `import geometry` hoisted); an in-file
             // `module` declaration uses the flat mangled name (`Geometry_area`).
             other => {
+                // An imported newtype constructor (`Ids.UserId`) referenced
+                // first-class erases to the identity — there is no class in the
+                // exporting module either.
+                if self.newtype_ctors.contains(other) {
+                    self.needed_combinators.insert("_pf_id");
+                    return PyExpr::Name("_pf_id".to_string());
+                }
                 let (base, member) = other.split_once('.').unwrap_or((other, ""));
                 if self.imported_modules.contains(base) {
                     let module = base.to_lowercase();
@@ -2243,6 +2298,14 @@ impl Lowerer {
             Pattern::Str(s) => PyPattern::Literal(PyExpr::Str(s.clone())),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
             Pattern::Ctor { name, args, .. } => {
+                // A newtype pattern erases: `case UserId s:` matches the bare
+                // underlying value, so lower straight into the payload pattern.
+                // (The checker guarantees exactly one argument.)
+                if self.newtype_ctors.contains(name)
+                    && let [payload] = args.as_slice()
+                {
+                    return self.lower_pattern(payload);
+                }
                 if name == "Ok" || name == "Error" {
                     self.needs_result = true;
                 }
@@ -4633,6 +4696,39 @@ fn non_exhaustive_guard() -> PyCase {
         body: vec![PyStmt::RaiseRuntimeError(
             "non-exhaustive match".to_string(),
         )],
+    }
+}
+
+/// Whether a lowered case matches unconditionally: guard-free with a pattern
+/// Python itself deems irrefutable (a bare capture or wildcard). Newtype erasure
+/// can turn a source-refutable constructor pattern (`case UserId s:`) into a bare
+/// capture, and Python rejects any `case` after an irrefutable one as a
+/// SyntaxError ("makes remaining patterns unreachable") — so this must be judged
+/// on the *lowered* pattern, not the source arm.
+fn py_catch_all(case: &PyCase) -> bool {
+    case.guard.is_none() && py_irrefutable(&case.pattern)
+}
+
+fn py_irrefutable(pattern: &PyPattern) -> bool {
+    match pattern {
+        PyPattern::Wildcard | PyPattern::Capture(_) => true,
+        PyPattern::As { pattern, .. } => py_irrefutable(pattern),
+        PyPattern::Or(alts) => alts.iter().any(py_irrefutable),
+        // Class/sequence/literal patterns are never syntactically irrefutable to
+        // Python, whatever the checker proved about them.
+        _ => false,
+    }
+}
+
+/// Finalize a lowered `match`'s case list: drop cases made unreachable by an
+/// earlier unconditional case (Python would reject them), and append the
+/// defensive non-exhaustive raise only when neither the lowered cases nor the
+/// source arms already catch everything.
+fn seal_cases(arms: &[crate::parser::ast::MatchArm], cases: &mut Vec<PyCase>) {
+    if let Some(i) = cases.iter().position(py_catch_all) {
+        cases.truncate(i + 1);
+    } else if !has_catch_all(arms) {
+        cases.push(non_exhaustive_guard());
     }
 }
 

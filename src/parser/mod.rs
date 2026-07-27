@@ -258,6 +258,12 @@ impl Parser {
             // `extern type Conn` declares an opaque handle type; `extern import m`
             // a boundary module import; `extern name : …` a value.
             Tok::Extern if *self.peek2() == Tok::Type => Ok(Item::Type(self.parse_extern_type()?)),
+            // `opaque type UserId = string` — a zero-cost newtype. `opaque` is a
+            // contextual keyword: only the exact `opaque type` sequence triggers it
+            // (`opaque` alone stays an ordinary identifier).
+            Tok::Ident(name) if name == "opaque" && *self.peek2() == Tok::Type => {
+                Ok(Item::Type(self.parse_opaque_type()?))
+            }
             Tok::Extern if *self.peek2() == Tok::Import => self.parse_extern_import(),
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
@@ -507,6 +513,36 @@ impl Parser {
             name_span,
             params,
             kind: TypeDeclKind::Opaque,
+            span,
+        })
+    }
+
+    /// `opaque type UserId = string` (or parameterized, `opaque type Tag a = List a`)
+    /// — a zero-cost newtype (`DESIGN.md` §7.3). The body is a single type
+    /// expression (the underlying type), inline after `=`; the constructor and the
+    /// single-case pattern are derived from the type name, so there is no variant
+    /// list and no offside body form.
+    fn parse_opaque_type(&mut self) -> Result<TypeDecl, ParseError> {
+        let start = self.cur_start();
+        // The dispatcher matched `Tok::Ident("opaque")` followed by `type`.
+        self.bump();
+        self.expect(&Tok::Type, "`type`")?;
+        let name_start = self.cur_start();
+        let name = self.parse_upper_ident("type name")?;
+        let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
+        let mut params = Vec::new();
+        while let Tok::Ident(_) = self.peek() {
+            params.push(self.parse_ident("type parameter")?);
+        }
+        self.expect(&Tok::Eq, "`=`")?;
+        let underlying = self.parse_type()?;
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(TypeDecl {
+            doc: None,
+            name,
+            name_span,
+            params,
+            kind: TypeDeclKind::Newtype(underlying),
             span,
         })
     }

@@ -185,6 +185,16 @@ const PROGRAMS: &[&str] = &[
     "extern type Conn",
     "extern type Ref a",
     "extern type Pair a b",
+    // Opaque types (zero-cost newtypes): plain, parameterized, a compound
+    // underlying, a wrap, and a match with newtype patterns. `opaque` is a
+    // contextual keyword — only before `type` — so a binding named `opaque`
+    // still parses.
+    "opaque type UserId = string",
+    "opaque type Tag a = List a",
+    "opaque type Pairz = (int, string)",
+    "opaque type UserId = string\nlet uid = UserId \"u\"",
+    "opaque type Cents = int\nlet f c =\n  match c:\n    case Cents 0: \"free\"\n    case Cents n: \"costs\"",
+    "let opaque = 1",
     // List literals: empty, simple, nested, and compound elements.
     "let xs = [1, 2, 3]",
     "let e = []",

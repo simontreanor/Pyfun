@@ -305,7 +305,9 @@ but has no way to be built or `match`ed — it is only ever produced and consume
 (`type Conn = ConnH`, a nullary sum whose sole constructor exists only to be never used): the one-liner
 carries the intent ("opaque, don't look inside"), drops the throwaway constructor that could be
 mistakenly applied, and emits nothing. Parsing is disambiguated by lookahead — `extern type …` is the
-handle form, `extern name : …` the value form.
+handle form, `extern name : …` the value form. (For a value Pyfun *does* construct and inspect but
+wants nominally distinct at zero cost — `UserId` over `string` — see **opaque types**, §7.3: same
+erasure, but with a constructor and a single-case pattern.)
 
 **Instance-access externs (`= .member`).** A leading dot marks the target as a *member path applied to
 the first argument* — the receiver — rather than a module-qualified free function. Trailing `()` is the
@@ -1231,6 +1233,46 @@ def describe(n):
     else:
         raise RuntimeError("non-exhaustive match")
 ```
+
+### 7.3 Opaque types — zero-cost newtypes
+
+`opaque type UserId = string` (optionally parameterized, `opaque type Tag a = List a`) declares a
+**newtype**: a nominal type distinct from its underlying type everywhere, with **zero runtime cost**.
+The spelling is Scala 3's, and so is the pitch — domain distinctions (`UserId` vs `Email`, both
+`string`) enforced by the checker, erased by the emitter. Pyfun adapts the semantics to its own
+ground rules:
+
+- **Wrap** with the constructor of the same name (`UserId : string -> UserId`, pure, curried like any
+  constructor); **unwrap** with the single-case pattern (`case UserId s:`), which participates in
+  exhaustiveness exactly like a one-constructor sum (a missing case reports the witness `UserId _`;
+  the payload position takes any pattern, so `case Cents 0:` refines on the underlying value).
+  Checker-side a newtype *is* a single-case sum — no new inference rules.
+- **Erasure.** No Python class is emitted. A fully-applied wrap lowers to its argument
+  (`uid = "u-1001"`), a first-class constructor reference (`List.map UserId xs`) lowers to the
+  `_pf_id` identity helper, and the pattern lowers to the bare payload pattern. One consequence
+  needed care: after erasure `case UserId s:` is an *irrefutable* Python pattern, and Python rejects
+  any `case` after an irrefutable one as a SyntaxError — so lowering seals a match's case list by
+  truncating at the first unconditional lowered case (judged on the **lowered** pattern, not the
+  source arm) instead of appending the defensive `case _: raise`.
+- **The interop payoff.** Because the runtime value *is* the underlying value, an `extern` may be
+  typed with the newtype directly — `extern save : UserId -> unit` hands Python the bare `str` it
+  expects while the Pyfun side enforces the distinction. This is the difference from the single-case
+  ADT idiom (`type UserId = UserId string`), which allocates a wrapper object that would leak across
+  the boundary; the emitted-representation contract (§5) is why single-case sums are *not* silently
+  erased — a newtype is the author's explicit promise that the type never has a runtime identity.
+- **Distinct everywhere, not scope-transparent.** Scala's opaque types are transparent inside the
+  defining scope and abstract outside; that scoping needs visibility control, which Pyfun
+  deliberately does not have (§6.1 — everything is public). So the Pyfun version enforces
+  distinctness everywhere and leaves the constructor public: the safety story is *accidental-mixing
+  prevention*, not information hiding. If visibility control ever lands, scoped abstraction can be
+  layered on without breaking this design.
+- **Modules.** Newtypes cross file-module boundaries like sums: `Ids.UserId` constructs, patterns,
+  and passes first-class in a consumer, erased on both sides (the export interface carries the
+  newtype flag so the consumer's lowering erases too).
+- **Positioning.** Units of measure (§8.2) remain the tool for *numeric* quantities (they compose
+  algebraically: `m/s^2`); opaque types cover the non-numeric ground (ids, tokens, sanitized
+  strings) and non-algebraic wrappers generally. `extern type` (§6) remains the third corner:
+  maximally opaque handles with no constructor at all, for values only Python looks inside.
 
 ## 8. Showcase features (MVP): computation expressions & units of measure
 

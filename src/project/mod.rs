@@ -224,6 +224,11 @@ pub fn compile_targeting(
         .iter()
         .map(|m| (m.name.clone(), export_nullary_ctors(&m.ast)))
         .collect();
+    let newtypes: HashMap<String, HashSet<String>> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), export_newtypes(&m.ast)))
+        .collect();
     // Each module's public records (name → declared field order), so a cross-module
     // literal/update lowers to the exporting class in `__init__` order.
     let records: HashMap<String, HashMap<String, Vec<String>>> = project
@@ -269,6 +274,11 @@ pub fn compile_targeting(
             if let Some(ctors) = nullary.get(import) {
                 for ctor in ctors {
                     ctx.nullary_ctors.insert(format!("{import}.{ctor}"));
+                }
+            }
+            if let Some(names) = newtypes.get(import) {
+                for name in names {
+                    ctx.newtype_ctors.insert(format!("{import}.{name}"));
                 }
             }
             if let Some(recs) = records.get(import) {
@@ -392,6 +402,22 @@ fn export_arities(module: &Module) -> HashMap<String, usize> {
                 }
             }
             _ => {}
+        }
+    }
+    out
+}
+
+/// The bare names of a module's newtype declarations (`opaque type UserId =
+/// string`), so an importing module erases `Ids.UserId` wraps/patterns exactly as
+/// the defining module does — there is no class on either side.
+fn export_newtypes(module: &Module) -> HashSet<String> {
+    use crate::parser::ast::TypeDeclKind;
+    let mut out = HashSet::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && matches!(decl.kind, TypeDeclKind::Newtype(_))
+        {
+            out.insert(decl.name.clone());
         }
     }
     out

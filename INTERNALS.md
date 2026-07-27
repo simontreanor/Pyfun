@@ -34,6 +34,24 @@ tests/             parser tests, compile tests, .pyfun fixtures (favor snapshot/
 **Build order:** `lexer` + `parser` + `ast` → `desugar` → `types` (incl. `units`) →
 `lowering` + `python_emitter` → `diagnostics` + `cli` → `lsp`.
 
+## Opaque types (newtype erasure) — implements DESIGN §7.3
+
+Where each rule lives. **Parse:** `parse_opaque_type` (`src/parser/mod.rs`; `opaque` is a contextual
+keyword — the item dispatcher matches `Ident("opaque")` + `Tok::Type` lookahead), producing
+`TypeDeclKind::Newtype(TypeExpr)` (`src/parser/ast.rs`). **Check:** `build_decls` pass 2
+(`src/types/mod.rs`) registers the constructor as a single-ctor sum sharing the type's name
+(`ctors`/`type_ctors`), so inference, pattern checking, and Maranget exhaustiveness need no new
+rules; `collect_exported_types` includes newtypes so they cross file modules. **Lower:** the
+`Lowerer.newtype_ctors` set (`src/lowering/mod.rs`, seeded in `Lowerer::new`; project mode extends
+it with imported qualified names via `ImportContext.newtype_ctors` ← `project::export_newtypes`).
+Erasure sites: fully-applied wrap → the bare argument (early branch in application lowering,
+Var and qualified Field heads); first-class reference → `_pf_id` (in `lower_var` and
+`lower_module_member`); `Pattern::Ctor` → its payload pattern (`lower_pattern`); no class emitted.
+Because an erased pattern can become irrefutable, `seal_cases` finalizes every lowered `match`:
+truncate at the first unconditional **lowered** case, else append the defensive raise — Python
+rejects any `case` after an irrefutable one as a SyntaxError, so this is judged on `PyPattern`, not
+the source arm.
+
 ## Lowering passes
 
 The lowering strategy and its observable contracts are in `DESIGN.md` §5. The performance-directed

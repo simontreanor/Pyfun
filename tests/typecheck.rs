@@ -587,6 +587,101 @@ fn rejects_redefining_builtin_result() {
     assert_error_contains("type Result a b = Ok a | Bad b", "already defined");
 }
 
+// ---------- opaque types (zero-cost newtypes) ----------
+
+#[test]
+fn accepts_opaque_type_wrap_and_unwrap() {
+    // The constructor wraps the underlying; the single-ctor match unwraps it.
+    let src = "opaque type UserId = string\n\
+               let uid = UserId \"u-1\"\n\
+               let name u =\n  match u:\n    case UserId s: s\n\
+               let n = name uid";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_parameterized_opaque_type() {
+    // `Tag a` wraps `List a`; wrapping and unwrapping instantiate the parameter.
+    let src = "opaque type Tag a = List a\n\
+               let t = Tag [1, 2]\n\
+               let unwrapTag tg =\n  match tg:\n    case Tag xs: xs\n\
+               let xs = unwrapTag t";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_opaque_type_in_an_extern_signature() {
+    // A newtype names a position in an extern's declared type like any nominal type.
+    let src = "opaque type UserId = string\n\
+               extern pure upperId: UserId -> string = str.upper\n\
+               let r = upperId (UserId \"abc\")";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn accepts_wrapping_through_a_pipe() {
+    // The constructor is an ordinary curried function, so it sits after `|>`.
+    assert!(pyfun::check("opaque type UserId = string\nlet uid = \"u\" |> UserId").is_ok());
+}
+
+#[test]
+fn newtype_constructor_is_first_class() {
+    // `List.map UserId` has type `List string -> List UserId`, and the result is
+    // consumed by a function matching newtype patterns.
+    let src = "opaque type UserId = string\n\
+               let firstLen ids =\n  match ids:\n    case [UserId s, *_]: String.len s\n    case []: 0\n\
+               let n = firstLen (List.map UserId [\"ab\", \"c\"])";
+    assert!(pyfun::check(src).is_ok());
+}
+
+#[test]
+fn rejects_newtype_where_underlying_expected() {
+    // Nominal distinctness: a `UserId` is not a `string`.
+    assert_error_contains(
+        "opaque type UserId = string\nlet bad = String.len (UserId \"x\")",
+        "expected string, found UserId",
+    );
+}
+
+#[test]
+fn rejects_underlying_where_newtype_expected() {
+    // …and a raw `string` is not a `UserId`.
+    assert_error_contains(
+        "opaque type UserId = string\n\
+         let name u =\n  match u:\n    case UserId s: s\n\
+         let bad = name \"raw\"",
+        "expected UserId, found string",
+    );
+}
+
+#[test]
+fn rejects_non_exhaustive_newtype_match() {
+    // A literal payload covers only that value; the witness names the newtype ctor.
+    assert_error_contains(
+        "opaque type UserId = string\n\
+         let f u =\n  match u:\n    case UserId \"root\": 1",
+        "`UserId _` is not matched",
+    );
+}
+
+#[test]
+fn rejects_duplicate_opaque_type_declaration() {
+    assert_error_contains(
+        "opaque type X = int\nopaque type X = int",
+        "already defined",
+    );
+}
+
+#[test]
+fn rejects_unknown_underlying_type() {
+    assert_error_contains("opaque type X = Nope", "unknown type");
+}
+
+#[test]
+fn rejects_opaque_type_clashing_with_an_existing_type() {
+    assert_error_contains("type X = A | B\nopaque type X = int", "already defined");
+}
+
 // ---------- ill-typed programs ----------
 
 #[test]

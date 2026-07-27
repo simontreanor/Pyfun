@@ -216,6 +216,14 @@ pub enum TypeDeclKind {
     /// matched — it only ever crosses the `extern` boundary. Replaces the phantom-ADT
     /// idiom `type Conn = ConnH` (`DESIGN.md` §6).
     Opaque,
+    /// `opaque type UserId = string` — a zero-cost newtype (Scala 3's opaque
+    /// types, adapted): nominally distinct from its underlying type everywhere,
+    /// wrapped by the constructor of the same name (`UserId : string -> UserId`)
+    /// and unwrapped by the single-case pattern (`case UserId s:`) — and **fully
+    /// erased** at lowering: no Python class, wrap compiles to the bare value, so
+    /// the underlying value is what crosses the `extern` boundary (`DESIGN.md`
+    /// §7.3). The payload is the underlying type expression.
+    Newtype(TypeExpr),
 }
 
 /// One constructor of a sum [`TypeDecl`], e.g. `Cons a (List a)`.

@@ -103,6 +103,114 @@ fn extern_type_replaces_the_phantom_adt_in_the_instance_extern_pattern() {
     assert!(!py.contains("class C"), "{py}");
 }
 
+// ---------- opaque types (zero-cost newtypes) ----------
+
+#[test]
+fn newtype_erases_to_the_bare_underlying_value() {
+    // No Python class is emitted; a wrap is the bare argument and the single
+    // newtype case erases to a bare capture pattern.
+    let py = pyfun::compile(
+        "opaque type UserId = string\n\
+         let uid = UserId \"u-1001\"\n\
+         let f u =\n  match u:\n    case UserId s: s",
+    )
+    .unwrap();
+    assert!(py.contains("uid = \"u-1001\""), "{py}");
+    assert!(py.contains("case s:"), "{py}");
+    assert!(!py.contains("class UserId"), "{py}");
+    assert!(!py.contains("UserId("), "{py}");
+}
+
+#[test]
+fn first_class_newtype_constructor_is_the_identity_helper() {
+    // `List.map UserId xs` cannot erase the ctor at the call site, so the
+    // reference lowers to the emitted `_pf_id` identity helper.
+    let py =
+        pyfun::compile("opaque type UserId = string\nlet ids = List.map UserId [\"a\"]").unwrap();
+    assert!(py.contains("_pf_map(_pf_id,"), "{py}");
+    assert!(!py.contains("class UserId"), "{py}");
+}
+
+#[test]
+fn irrefutable_newtype_case_truncates_later_arms_and_the_guard() {
+    // After erasure `case Cents n:` is a bare irrefutable capture; Python rejects
+    // any case after one (SyntaxError), so the later wildcard arm and the
+    // defensive raise must both be dropped.
+    let py = pyfun::compile(
+        "opaque type Cents = int\n\
+         let f c =\n  match c:\n    case Cents n: n\n    case _: 0",
+    )
+    .unwrap();
+    assert!(py.contains("case n:"), "{py}");
+    assert!(!py.contains("case _:"), "{py}");
+    assert!(
+        !py.contains("raise RuntimeError(\"non-exhaustive match\")"),
+        "{py}"
+    );
+}
+
+#[test]
+fn e2e_newtype_wrap_unwrap_round_trips() {
+    run_and_check(
+        "
+        opaque type UserId = string
+        let uid = UserId \"u-1001\"
+        let unwrapped =
+          match uid:
+            case UserId s: s
+        ",
+        &[("unwrapped", "u-1001")],
+    );
+}
+
+#[test]
+fn e2e_newtype_literal_payload_selects_arms() {
+    // The payload pattern may be a literal — arm selection happens on the erased
+    // underlying value.
+    run_and_check(
+        "
+        opaque type Cents = int
+        let describe c =
+          match c:
+            case Cents 0: \"free\"
+            case Cents n: \"costs\"
+        let a = describe (Cents 0)
+        let b = describe (Cents 42)
+        ",
+        &[("a", "free"), ("b", "costs")],
+    );
+}
+
+#[test]
+fn e2e_mapping_a_newtype_constructor_is_identity() {
+    // Wrap a whole list first-class, then unwrap each element in a fold.
+    run_and_check(
+        "
+        opaque type UserId = string
+        let total =
+          [\"ab\", \"c\"]
+          |> List.map UserId
+          |> List.fold (fun acc u ->
+            match u:
+                case UserId s: acc + String.len s) 0
+        ",
+        &[("total", "3")],
+    );
+}
+
+#[test]
+fn e2e_newtype_crosses_the_extern_boundary_bare() {
+    // An extern typed with the newtype receives the bare underlying value.
+    run_and_check(
+        "
+        opaque type UserId = string
+        extern pure upperId: UserId -> string = str.upper
+        let r = upperId (UserId \"abc\")
+        ",
+        &[("r", "ABC")],
+    );
+}
+
 #[test]
 fn instance_method_extern_lowers_to_a_method_call() {
     // `= .read()` calls the method on the first argument (the receiver).

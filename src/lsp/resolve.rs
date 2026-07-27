@@ -75,7 +75,7 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                 let kind = match decl.kind {
                     TypeDeclKind::Sum(_) => SymbolKind::Type,
                     TypeDeclKind::Record(_) => SymbolKind::Record,
-                    TypeDeclKind::Opaque => SymbolKind::Type,
+                    TypeDeclKind::Opaque | TypeDeclKind::Newtype(_) => SymbolKind::Type,
                 };
                 out.push(Symbol {
                     name: decl.name.clone(),
@@ -458,6 +458,8 @@ impl Resolver {
             }
             // An opaque handle type has no field annotations to walk.
             TypeDeclKind::Opaque => {}
+            // A newtype's underlying type is a use site like any field annotation.
+            TypeDeclKind::Newtype(underlying) => self.walk_type(underlying),
         }
     }
 
