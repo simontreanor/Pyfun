@@ -54,6 +54,7 @@ module.exports = grammar({
 
     _item: $ => choice(
       $.type_definition,
+      $.opaque_type_definition,
       $.extern_type_definition,
       $.measure_definition,
       $.module_definition,
@@ -142,6 +143,17 @@ module.exports = grammar({
       'extern', 'type',
       field('name', $._type_identifier),
       repeat(field('type_parameter', $._type_variable)),
+    ),
+
+    // `opaque type UserId = string` — a zero-cost newtype (DESIGN.md §7.3).
+    // `opaque` is contextual in the reference parser (only before `type`);
+    // tree-sitter's word-token rule gives the same behavior for free.
+    opaque_type_definition: $ => seq(
+      'opaque', 'type',
+      field('name', $._type_identifier),
+      repeat(field('type_parameter', $._type_variable)),
+      '=',
+      field('underlying', $._type),
     ),
 
     measure_definition: $ => seq(

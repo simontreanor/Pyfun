@@ -36,7 +36,7 @@
 
 (defconst pyfun-mode--keywords
   '("let" "mut" "pure" "if" "then" "else" "elif" "match" "case" "with"
-    "fun" "type" "return" "yield" "do" "measure" "extern" "module"
+    "fun" "type" "opaque" "return" "yield" "do" "measure" "extern" "module"
     "import" "try" "as" "not" "and" "or")
   "Pyfun reserved words.")
 

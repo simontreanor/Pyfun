@@ -68,6 +68,7 @@
   "mut"
   "pure"
   "type"
+  "opaque"
   "measure"
   "module"
   "extern"
