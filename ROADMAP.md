@@ -30,14 +30,13 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
 
-- **Module-alias shadowing, local-binder residual** (S, demand-driven) — the top-level case is
-  **fixed** (2026-07-27): `import Ids` + `let ids = …` now emits `import ids as _pf_ids` and routes
-  every qualified reference through the alias (`lowering::py_module_ref`; un-collided programs keep
-  the readable plain `import ids`). Residual: a *local* binder with the colliding name (a parameter
-  or block `let` named `ids` in a function that also calls `Ids.…` qualified) still shadows within
-  that one function — the alias decision is per-module and keys off top-level `user_defs` only.
-  Fixing it means a whole-tree binder scan feeding the same alias switch; pick it up if a real
-  program hits it.
+- ~~Module-alias shadowing~~ **CLOSED 2026-07-27** — `import Ids` + any same-named binder (top-level
+  `let`, parameter, block `let` anywhere in the function, lambda parameter, match-pattern capture at
+  any level, native-CE binder) now emits `import ids as _pf_ids` at the affected sites
+  (`lowering::py_module_ref` consults `user_defs` + `module_binders` + the `fn_local_stack` scope
+  frames; plain and aliased imports coexist, so un-collided sites keep readable output). No known
+  residual; the per-shape regression test is
+  `tests/project.rs::local_binders_colliding_with_a_module_alias_also_get_the_mangled_import`.
 
 ## Performance beyond CPython (scoped 2026-07-18)
 

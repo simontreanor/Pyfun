@@ -203,6 +203,13 @@ struct Lowerer {
     /// a fully-applied wrap is the bare argument, a first-class reference is
     /// `_pf_id`, and the single-case pattern recurses into its payload.
     newtype_ctors: HashSet<String>,
+    /// Every binder name appearing ANYWHERE in the module — top-level bindings,
+    /// parameters, block `let`s, lambda parameters, match-pattern captures, CE
+    /// binders ([`collect_binders`]). Drives the module-alias shadow check
+    /// ([`Lowerer::py_module_ref`]): a whole-module overapproximation, so the
+    /// check never has to model Python's function-wide local hoisting and stays
+    /// independent of the fold pass's and closure capture's scope machinery.
+    binder_names: HashSet<String>,
     /// Declared field order of each record type, so literals and updates emit a
     /// positional constructor call in the class's `__init__` order.
     record_fields: std::collections::HashMap<String, Vec<String>>,
@@ -354,6 +361,35 @@ impl Lowerer {
         let mut top_val_defs: HashMap<String, Expr> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
         let mut newtype_ctors = HashSet::new();
+        // Every binder name in the module, for the module-alias shadow check
+        // (`py_module_ref`) — see `collect_binders`.
+        let mut binder_names = HashSet::new();
+        for item in &module.items {
+            match item {
+                Item::Let(binding) => {
+                    binder_names.insert(binding.name.clone());
+                    binder_names.extend(param_names(&binding.params));
+                    collect_binders(&binding.value, &mut binder_names);
+                }
+                Item::Expr(e) => collect_binders(e, &mut binder_names),
+                Item::Module { items, .. } => {
+                    for member in items {
+                        binder_names.insert(member.name.clone());
+                        binder_names.extend(param_names(&member.params));
+                        collect_binders(&member.value, &mut binder_names);
+                    }
+                }
+                Item::ActivePattern(decl) => {
+                    binder_names.extend(param_names(&decl.params));
+                    collect_binders(&decl.value, &mut binder_names);
+                }
+                Item::Type(_)
+                | Item::Measure { .. }
+                | Item::Import { .. }
+                | Item::ExternImport { .. }
+                | Item::Extern(_) => {}
+            }
+        }
         for item in &module.items {
             match item {
                 Item::Extern(decl) => {
@@ -518,6 +554,7 @@ impl Lowerer {
             ap_uses,
             ctor_arity,
             newtype_ctors,
+            binder_names,
             record_fields,
             field_to_record,
             extern_targets,
@@ -1513,23 +1550,20 @@ impl Lowerer {
         Ok((stmts, values))
     }
 
-    /// The import spec a used extern target needs — `"datetime"` or
-    /// `"numpy as np"` — or `None` for a bare builtin. Declared `extern import`s
-    /// are consulted first (`DESIGN.md` §6): an *aliased* declaration matches a
-    /// target rooted at its alias name; an unaliased one matches the longest
-    /// declared path that strictly prefixes the target. Only when no declaration
-    /// matches does the lowercase-prefix heuristic ([`extern_import`]) decide.
     /// The Python name this module's emitted code uses for an imported file
     /// module — normally the lowercase module name (`Geometry` → `geometry`,
-    /// matching `import geometry`). When a top-level binding already claims that
-    /// name (`import Ids` + `let ids = …`), the module-level assignment would
-    /// clobber the module object, so the import is aliased (`import ids as
-    /// _pf_ids`) and every qualified reference routes through the alias. (A
-    /// *local* binder of the same name still shadows within its own function —
-    /// tracked in `ROADMAP.md` as residual.)
+    /// matching `import geometry`). When ANY binder anywhere in the module
+    /// claims that name (`binder_names`: top-level bindings, parameters, block
+    /// `let`s, lambda parameters, match-pattern captures, CE binders — Python
+    /// hoists locals, so even a binder *after* the reference shadows it for its
+    /// whole function), the import is aliased (`import ids as _pf_ids`) and
+    /// every qualified reference routes through the alias. The decision is
+    /// deliberately whole-module: one collision anywhere costs only the alias
+    /// spelling, and keeps this check independent of the scope machinery the
+    /// fold pass and closure capture rely on.
     fn py_module_ref(&mut self, base: &str) -> String {
         let module = base.to_lowercase();
-        if self.user_defs.contains(&module) {
+        if self.binder_names.contains(&module) {
             let alias = format!("_pf_{module}");
             self.needed_imports.insert(format!("{module} as {alias}"));
             alias
@@ -1539,6 +1573,12 @@ impl Lowerer {
         }
     }
 
+    /// The import spec a used extern target needs — `"datetime"` or
+    /// `"numpy as np"` — or `None` for a bare builtin. Declared `extern import`s
+    /// are consulted first (`DESIGN.md` §6): an *aliased* declaration matches a
+    /// target rooted at its alias name; an unaliased one matches the longest
+    /// declared path that strictly prefixes the target. Only when no declaration
+    /// matches does the lowercase-prefix heuristic ([`extern_import`]) decide.
     fn extern_import_spec(&self, target: &[String]) -> Option<String> {
         let mut best: Option<&(Vec<String>, Option<String>)> = None;
         for decl in &self.extern_module_imports {
@@ -4696,6 +4736,119 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         ExprKind::Fn { .. }
         | ExprKind::Ce { .. }
         | ExprKind::Int(_)
+        | ExprKind::Float(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Unit
+        | ExprKind::OpFunc(_)
+        | ExprKind::Hole { .. }
+        | ExprKind::Var(_) => {}
+    }
+}
+
+/// Collect every binder name in an expression tree, ENTERING nested scopes
+/// (functions, lambdas, CE bodies) — unlike [`scan_scope`], which stops at
+/// scope boundaries because it feeds per-scope machinery. This feeds the
+/// module-alias shadow check ([`Lowerer::py_module_ref`]), where a deliberate
+/// whole-module overapproximation is what keeps the check simple and total:
+/// block `let`s, match-pattern captures, lambda/function parameters, and CE
+/// binders all lower to Python assignments or parameters that shadow a plain
+/// `import <name>` somewhere.
+fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::Assign { value, .. } => collect_binders(value, out),
+        ExprKind::Block { stmts } => {
+            for stmt in stmts {
+                match stmt {
+                    BlockStmt::Let(b) => {
+                        out.insert(b.name.clone());
+                        out.extend(param_names(&b.params));
+                        collect_binders(&b.value, out);
+                    }
+                    BlockStmt::Expr(e) => collect_binders(e, out),
+                }
+            }
+        }
+        ExprKind::If { cond, then, else_ } => {
+            collect_binders(cond, out);
+            collect_binders(then, out);
+            collect_binders(else_, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_binders(scrutinee, out);
+            for arm in arms {
+                out.extend(pattern_bindings(&arm.pattern));
+                if let Some(guard) = &arm.guard {
+                    collect_binders(guard, out);
+                }
+                collect_binders(&arm.body, out);
+            }
+        }
+        ExprKind::App { func, arg } => {
+            collect_binders(func, out);
+            collect_binders(arg, out);
+        }
+        ExprKind::Pipe { lhs, rhs, .. } | ExprKind::Compose { lhs, rhs, .. } => {
+            collect_binders(lhs, out);
+            collect_binders(rhs, out);
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            collect_binders(lhs, out);
+            collect_binders(rhs, out);
+        }
+        ExprKind::Unary { expr, .. } => collect_binders(expr, out),
+        ExprKind::Compare { first, rest } => {
+            collect_binders(first, out);
+            for (_, operand) in rest {
+                collect_binders(operand, out);
+            }
+        }
+        ExprKind::Try { body } => collect_binders(body, out),
+        ExprKind::Annot { value, .. } => collect_binders(value, out),
+        ExprKind::List { elems } | ExprKind::Tuple { elems } => {
+            for e in elems {
+                collect_binders(e, out);
+            }
+        }
+        ExprKind::Interp { parts } => {
+            for part in parts {
+                if let InterpPart::Expr(e) = part {
+                    collect_binders(e, out);
+                }
+            }
+        }
+        ExprKind::Record { fields, .. } => {
+            for f in fields {
+                collect_binders(&f.value, out);
+            }
+        }
+        ExprKind::RecordUpdate { base, fields } => {
+            collect_binders(base, out);
+            for f in fields {
+                collect_binders(&f.value, out);
+            }
+        }
+        ExprKind::Field { base, .. } => collect_binders(base, out),
+        ExprKind::Fn { params, body } => {
+            out.extend(param_names(params));
+            collect_binders(body, out);
+        }
+        ExprKind::Ce { items, .. } => {
+            for item in items {
+                match item {
+                    CeItem::LetBang { name, value, .. } | CeItem::Let { name, value, .. } => {
+                        out.insert(name.clone());
+                        collect_binders(value, out);
+                    }
+                    CeItem::DoBang(e)
+                    | CeItem::Return(e)
+                    | CeItem::ReturnBang(e)
+                    | CeItem::Yield(e)
+                    | CeItem::YieldBang(e) => collect_binders(e, out),
+                }
+            }
+        }
+        ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Str(_)
         | ExprKind::Bool(_)
