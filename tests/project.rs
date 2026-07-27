@@ -799,6 +799,52 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
     );
 }
 
+#[test]
+fn a_binding_colliding_with_a_module_alias_gets_a_mangled_import() {
+    // `import Ids` + `let ids = …` used to emit `ids = …` after `import ids`,
+    // clobbering the module object. The collided import is now aliased and every
+    // qualified reference routes through the alias.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Ids",
+                "let greet s = String.concat \"hi \" s\nlet tag = \"x\"",
+            ),
+            (
+                "Main",
+                "import Ids\n\
+                 let ids = [1, 2, 3]\n\
+                 let g = Ids.greet \"ana\"\n\
+                 print g\n\
+                 print (List.len ids)",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("import ids as _pf_ids"), "{main}");
+    assert!(main.contains("_pf_ids.greet"), "{main}");
+    let dir = Scratch::new("alias_collision");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "hi ana\n3");
+    }
+}
+
+#[test]
+fn an_uncollided_module_import_stays_unmangled() {
+    // No collision → the readable plain `import ids` is preserved.
+    let files = compile(
+        "Main",
+        &[
+            ("Ids", "let greet s = String.concat \"hi \" s"),
+            ("Main", "import Ids\nprint (Ids.greet \"ana\")"),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("import ids\n"), "{main}");
+    assert!(!main.contains("_pf_ids"), "{main}");
+}
+
 // ---------- slice 6: import-aware editor analysis ----------
 
 #[test]

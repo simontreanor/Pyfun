@@ -62,6 +62,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "opaque_type_definition"
+        },
+        {
+          "type": "SYMBOL",
           "name": "extern_type_definition"
         },
         {
@@ -599,6 +603,50 @@
               "type": "SYMBOL",
               "name": "_type_variable"
             }
+          }
+        }
+      ]
+    },
+    "opaque_type_definition": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "opaque"
+        },
+        {
+          "type": "STRING",
+          "value": "type"
+        },
+        {
+          "type": "FIELD",
+          "name": "name",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_type_identifier"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "FIELD",
+            "name": "type_parameter",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_type_variable"
+            }
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "="
+        },
+        {
+          "type": "FIELD",
+          "name": "underlying",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_type"
           }
         }
       ]

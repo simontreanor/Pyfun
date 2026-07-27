@@ -7,7 +7,7 @@ if exists('b:current_syntax')
 endif
 
 " Declarations and control flow
-syn keyword pyfunDeclaration let mut pure type measure module extern import fun
+syn keyword pyfunDeclaration let mut pure type opaque measure module extern import fun
 syn keyword pyfunConditional if then elif else
 syn keyword pyfunKeyword match case with do in return yield
 syn keyword pyfunOperatorWord and or not

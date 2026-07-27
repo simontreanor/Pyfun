@@ -3027,6 +3027,66 @@
     }
   },
   {
+    "type": "opaque_type_definition",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "type_parameter": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "type_variable",
+            "named": true
+          }
+        ]
+      },
+      "underlying": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_application",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          },
+          {
+            "type": "type_variable",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "operator_section",
     "named": true,
     "fields": {}
@@ -4023,6 +4083,10 @@
           "named": true
         },
         {
+          "type": "opaque_type_definition",
+          "named": true
+        },
+        {
           "type": "type_definition",
           "named": true
         }
@@ -4730,6 +4794,10 @@
   },
   {
     "type": "not",
+    "named": false
+  },
+  {
+    "type": "opaque",
     "named": false
   },
   {

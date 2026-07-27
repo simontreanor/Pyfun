@@ -218,6 +218,30 @@ extern type Path
     (type_identifier)))
 
 ================================================================================
+opaque type (zero-cost newtype)
+================================================================================
+
+opaque type UserId = string
+opaque type Tag a = List a
+let opaque = 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (opaque_type_definition
+    (type_identifier)
+    (type_variable))
+  (opaque_type_definition
+    (type_identifier)
+    (type_variable)
+    (type_application
+      (type_identifier)
+      (type_variable)))
+  (let_binding
+    (identifier)
+    (integer)))
+
+================================================================================
 measure definitions
 ================================================================================
 

@@ -70,6 +70,7 @@
   "let"
   "mut"
   "type"
+  "opaque"
   "measure"
   "module"
   "extern"

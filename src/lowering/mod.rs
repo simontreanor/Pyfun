@@ -1519,6 +1519,26 @@ impl Lowerer {
     /// target rooted at its alias name; an unaliased one matches the longest
     /// declared path that strictly prefixes the target. Only when no declaration
     /// matches does the lowercase-prefix heuristic ([`extern_import`]) decide.
+    /// The Python name this module's emitted code uses for an imported file
+    /// module — normally the lowercase module name (`Geometry` → `geometry`,
+    /// matching `import geometry`). When a top-level binding already claims that
+    /// name (`import Ids` + `let ids = …`), the module-level assignment would
+    /// clobber the module object, so the import is aliased (`import ids as
+    /// _pf_ids`) and every qualified reference routes through the alias. (A
+    /// *local* binder of the same name still shadows within its own function —
+    /// tracked in `ROADMAP.md` as residual.)
+    fn py_module_ref(&mut self, base: &str) -> String {
+        let module = base.to_lowercase();
+        if self.user_defs.contains(&module) {
+            let alias = format!("_pf_{module}");
+            self.needed_imports.insert(format!("{module} as {alias}"));
+            alias
+        } else {
+            self.needed_imports.insert(module.clone());
+            module
+        }
+    }
+
     fn extern_import_spec(&self, target: &[String]) -> Option<String> {
         let mut best: Option<&(Vec<String>, Option<String>)> = None;
         for decl in &self.extern_module_imports {
@@ -2230,8 +2250,7 @@ impl Lowerer {
                 }
                 let (base, member) = other.split_once('.').unwrap_or((other, ""));
                 if self.imported_modules.contains(base) {
-                    let module = base.to_lowercase();
-                    self.needed_imports.insert(module.clone());
+                    let module = self.py_module_ref(base);
                     let attr = PyExpr::Attribute {
                         value: Box::new(PyExpr::Name(module)),
                         // A member may be a constructor (`Geometry.Circle`), so
@@ -2265,8 +2284,7 @@ impl Lowerer {
         if let Some((base, member)) = name.split_once('.')
             && self.imported_modules.contains(base)
         {
-            let module = base.to_lowercase();
-            self.needed_imports.insert(module.clone());
+            let module = self.py_module_ref(base);
             format!("{module}.{}", py_ctor_name(member))
         } else {
             py_ctor_name(name)
@@ -2282,8 +2300,7 @@ impl Lowerer {
         if let Some((base, rec)) = tag.split_once('.')
             && self.imported_modules.contains(base)
         {
-            let module = base.to_lowercase();
-            self.needed_imports.insert(module.clone());
+            let module = self.py_module_ref(base);
             format!("{module}.{}", py_record_class(rec))
         } else {
             py_record_class(tag)
