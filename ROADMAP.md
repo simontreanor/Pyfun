@@ -30,12 +30,14 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
 
-- **Module-alias shadowing in emitted Python** (S, **recommended** — a silent-miscompile class) — a
-  top-level binding whose name equals an imported module's lowercase alias (`import Ids` + `let ids =
-  …`) emits `ids = …` after `import ids`, clobbering the module object; any later qualified call
-  (`ids.greet(...)`) then breaks at runtime. Found 2026-07-27 writing the cross-module newtype tests.
-  Fix direction: mangle the emitted import alias (`import ids as _pf_mod_ids`) or reject/rename the
-  colliding binding at lowering; either is small and mechanical.
+- **Module-alias shadowing, local-binder residual** (S, demand-driven) — the top-level case is
+  **fixed** (2026-07-27): `import Ids` + `let ids = …` now emits `import ids as _pf_ids` and routes
+  every qualified reference through the alias (`lowering::py_module_ref`; un-collided programs keep
+  the readable plain `import ids`). Residual: a *local* binder with the colliding name (a parameter
+  or block `let` named `ids` in a function that also calls `Ids.…` qualified) still shadows within
+  that one function — the alias decision is per-module and keys off top-level `user_defs` only.
+  Fixing it means a whole-tree binder scan feeding the same alias switch; pick it up if a real
+  program hits it.
 
 ## Performance beyond CPython (scoped 2026-07-18)
 
