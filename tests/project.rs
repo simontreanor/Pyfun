@@ -831,6 +831,47 @@ fn a_binding_colliding_with_a_module_alias_gets_a_mangled_import() {
 }
 
 #[test]
+fn local_binders_colliding_with_a_module_alias_also_get_the_mangled_import() {
+    // Python hoists locals, so ANY binder in a function scope named like the
+    // import alias shadows it for the whole function: parameters, block `let`s
+    // (even after the qualified call), lambda parameters, match-pattern
+    // captures, top-level pattern captures, and CE binders (which become
+    // captures inside the generated def). Each shape used to break at runtime.
+    let files = compile(
+        "Main",
+        &[
+            ("Ids", "let greet s = String.concat \"hi \" s"),
+            (
+                "Main",
+                "import Ids\n\
+                 let viaParam ids = List.map (fun n -> Ids.greet n) ids\n\
+                 let hoisted u =\n    let g = Ids.greet u\n    let ids = [1, 2]\n    List.len ids + String.len g\n\
+                 let viaLambda xs = List.map (fun ids -> Ids.greet ids) xs\n\
+                 let fromMatch xs =\n  match xs:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
+                 let fromCe =\n  result {\n    let! ids = Ok [1]\n    return Ids.greet \"g\"\n  }\n\
+                 let topLevel =\n  match [\"f\"]:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
+                 print (List.len (viaParam [\"a\", \"b\"]))\n\
+                 print (hoisted \"c\")\n\
+                 print (List.len (viaLambda [\"d\"]))\n\
+                 print (fromMatch [\"e\"])\n\
+                 print (Result.withDefault \"err\" fromCe)\n\
+                 print topLevel",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("import ids as _pf_ids"), "{main}");
+    assert!(!main.contains("return ids.greet"), "{main}");
+    let dir = Scratch::new("alias_local_collision");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(
+            out.replace("\r\n", "\n").trim(),
+            "2\n6\n1\nhi e\nhi g\nhi f"
+        );
+    }
+}
+
+#[test]
 fn an_uncollided_module_import_stays_unmangled() {
     // No collision → the readable plain `import ids` is preserved.
     let files = compile(
