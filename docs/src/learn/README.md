@@ -45,5 +45,6 @@ Lessons 12 to 16 reach outward: calling Python libraries, computation expression
 measure, multi-file projects, and a capstone that puts everything together.
 
 After the capstone, a **Going further** set digs into topics the core path skips: recursion,
-async, active patterns, building your own computation expression, and the fine print of strings
-and numbers. Take them in any order once you have finished the core lessons they build on.
+async, active patterns, building your own computation expression, the fine print of strings and
+numbers, and opaque types. Take them in any order once you have finished the core lessons they
+build on.
