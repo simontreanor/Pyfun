@@ -218,6 +218,7 @@ fn print_extern_arg(arg: &ExternArg) -> String {
         ExternArg::Int(n) => n.to_string(),
         ExternArg::Float(f) => format!("{f:?}"),
         ExternArg::Bool(b) => b.to_string(),
+        ExternArg::Slot => "...".to_string(),
     }
 }
 

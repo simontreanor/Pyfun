@@ -379,7 +379,9 @@ impl Parser {
         // `= .read()` calls the method (`resp.read()`), `= .text` reads the
         // attribute/property (`resp.text`) — trailing `()` is the "call" marker.
         // A trailing `(kw = lit, …)` pins fixed Python keyword arguments on the
-        // target, appended to every emitted call (`open(path, encoding="utf-8")`).
+        // target, appended to every emitted call (`open(path, encoding="utf-8")`);
+        // a `kw = ...` slot instead takes one of the caller's arguments.
+        let kw_start = self.cur_start();
         let (target, receiver, kwargs) = if self.eat(&Tok::Eq) {
             let dotted = self.eat(&Tok::Dot);
             let mut segs = vec![self.parse_ident("Python target")?];
@@ -407,6 +409,35 @@ impl Parser {
         } else {
             (vec![name.clone()], None, Vec::new())
         };
+        // A `...` slot consumes one argument of the declared arrow, so the type must
+        // have an argument to spare. A receiver takes the first one, and a nullary
+        // extern's only argument is the `unit` that lowering drops, so neither leaves
+        // anything for a slot to claim.
+        let slots = kwargs.iter().filter(|(_, v)| *v == ExternArg::Slot).count();
+        if slots > 0 {
+            let kw_span = Span::new(kw_start, self.prev_end());
+            if type_is_unit_domain(&ty) {
+                return Err(ParseError {
+                    message: "`...` needs an argument to take, but this extern's only \
+                              argument is the `unit` that a nullary call drops"
+                        .to_string(),
+                    span: kw_span,
+                });
+            }
+            let available = type_arrow_arity(&ty) - usize::from(receiver.is_some());
+            if slots > available {
+                let slot_s = if slots == 1 { "" } else { "s" };
+                let arg_s = if available == 1 { "" } else { "s" };
+                return Err(ParseError {
+                    message: format!(
+                        "{slots} `...` slot{slot_s}, but the type leaves only \
+                         {available} argument{arg_s} to fill {}",
+                        if slots == 1 { "it" } else { "them" }
+                    ),
+                    span: kw_span,
+                });
+            }
+        }
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(ExternDecl {
             doc: None,
@@ -449,9 +480,13 @@ impl Parser {
         Ok(kwargs)
     }
 
-    /// Parse a single pinned keyword-argument literal: a string, an int (with an
-    /// optional leading unary minus), a float (likewise), or a bool.
+    /// Parse a single keyword-argument value: `...` (a caller-supplied slot), or a
+    /// pinned literal — a string, an int (with an optional leading unary minus), a
+    /// float (likewise), or a bool.
     fn parse_extern_arg(&mut self) -> Result<ExternArg, ParseError> {
+        if self.eat(&Tok::Ellipsis) {
+            return Ok(ExternArg::Slot);
+        }
         // A leading `-` negates the following numeric literal.
         if self.eat(&Tok::Minus) {
             return match self.peek().clone() {
@@ -487,7 +522,7 @@ impl Parser {
                 self.bump();
                 Ok(ExternArg::Bool(false))
             }
-            _ => Err(self.error("expected a string, number, or bool literal")),
+            _ => Err(self.error("expected `...` or a string, number, or bool literal")),
         }
     }
 
@@ -2074,6 +2109,24 @@ fn attach_doc(item: &mut Item, doc: Option<String>) {
     }
 }
 
+/// The number of leading arrows in a surface type — how many arguments an `extern`
+/// of that type takes. (Lowering has its own copy for the lowered form; this one
+/// keeps the parser from depending on a later phase.)
+fn type_arrow_arity(ty: &TypeExpr) -> usize {
+    match ty {
+        TypeExpr::Fun(_, ret, _) => 1 + type_arrow_arity(ret),
+        TypeExpr::Con(..) | TypeExpr::Tuple(_) => 0,
+    }
+}
+
+/// Whether an `extern`'s first parameter is `unit` — a *nullary* Python callable
+/// whose single argument lowering drops (`time.time ()` → `time.time()`).
+fn type_is_unit_domain(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Fun(domain, _, _)
+        if matches!(domain.as_ref(),
+            TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty()))
+}
+
 /// A short human-readable name for a token, used in error messages.
 fn describe(tok: &Tok) -> String {
     match tok {
@@ -2144,6 +2197,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Comma => ",",
         Tok::Colon => ":",
         Tok::Dot => ".",
+        Tok::Ellipsis => "...",
         Tok::Underscore => "_",
         _ => "token",
     }

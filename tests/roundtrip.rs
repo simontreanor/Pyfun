@@ -273,6 +273,12 @@ const PROGRAMS: &[&str] = &[
     "extern connect: string -> a = sqlite3.connect(timeout=5, check_same_thread=false)",
     "extern gzipOpen: string -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
     "extern open: string -> a = open(mode=\"rt\")",
+    // A `...` slot takes its value from the caller instead of the declaration, and
+    // mixes freely with pinned literals on all three target forms.
+    "extern parseInt: string -> int -> int = int(base=...)",
+    "extern openText: string -> string -> Seq string = builtins.open(mode=\"rt\", encoding=...)",
+    "extern writeText: a -> string -> string -> int = .write_text(encoding=...)",
+    "extern mix: string -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)",
     // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
     // as written, so single, multi, and argument-position annotations roundtrip.
     "extern fetch: string ->{async} string = httpx.get",

@@ -1941,6 +1941,10 @@
             "named": true
           },
           {
+            "type": "extern_slot",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -4727,6 +4731,10 @@
   {
     "type": "extern",
     "named": false
+  },
+  {
+    "type": "extern_slot",
+    "named": true
   },
   {
     "type": "f\"",

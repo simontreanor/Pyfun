@@ -209,8 +209,11 @@ module.exports = grammar({
     extern_kwarg: $ => seq(
       field('name', $.identifier),
       '=',
-      field('value', $._extern_literal),
+      field('value', choice($._extern_literal, $.extern_slot)),
     ),
+
+    // `...` — the value comes from the caller rather than the declaration.
+    extern_slot: _ => '...',
 
     _extern_literal: $ => choice(
       $.string,
