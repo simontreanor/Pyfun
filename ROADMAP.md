@@ -29,6 +29,19 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   §5.3: statically-known decoders deforest to direct dict/list access, byte-identical `Result`s, 2.8x
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
+- **Caller-varying keyword arguments at the `extern` boundary** (M) — pinned kwargs (`DESIGN.md` §6)
+  accept only *literals fixed at the declaration*, so a call whose keyword value comes from the caller
+  (`requests.get(url, timeout = t)`) needs a separate extern per call shape. Python's API culture is
+  optional-kwargs-with-defaults, so this is the boundary friction a real user is likeliest to meet first,
+  and it is the one place where the declaration count scales with the *call shapes* used rather than with
+  the functions called. The shape is open and the bar is Pythonista familiarity, so offer the
+  alternatives before shipping one: a marked slot in the existing pinned list (`= requests.get(timeout = _)`, filled by the next argument) is the smallest
+  step and needs no new type machinery, since the slot consumes an ordinary arrow and only the emitted
+  call shape changes; a record-of-options argument types better but wants optional fields, which nothing
+  else in the language has. Distinct from the **`extern` stub generator** non-goal below: that one
+  automates *writing* signatures, this one makes a signature expressible at all. The complementary cost,
+  that every user re-derives the same wrapper lines independently, is the façade half of **Larger prelude
+  / package manager** above.
 
 - ~~Module-alias shadowing~~ **CLOSED 2026-07-27** — `import Ids` + any same-named binder (top-level
   `let`, parameter, block `let` anywhere in the function, lambda parameter, match-pattern capture at
