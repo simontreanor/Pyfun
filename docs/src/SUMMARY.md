@@ -43,6 +43,7 @@
 
 # Inside the compiler
 
+- [Learning Rust through this compiler](internals/rust-primer.md)
 - [The tour and its running example](internals/README.md)
   - [Orientation](internals/00-orientation.md)
   - [Lexing](internals/01-lexing.md)
