@@ -1010,11 +1010,24 @@
           "type": "FIELD",
           "name": "value",
           "content": {
-            "type": "SYMBOL",
-            "name": "_extern_literal"
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "SYMBOL",
+                "name": "_extern_literal"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "extern_slot"
+              }
+            ]
           }
         }
       ]
+    },
+    "extern_slot": {
+      "type": "STRING",
+      "value": "..."
     },
     "_extern_literal": {
       "type": "CHOICE",

@@ -794,6 +794,13 @@ impl<'a> Lexer<'a> {
             self.push(Tok::PipeLeft, start);
             return Ok(());
         }
+        // `...` — the `extern` kwarg slot marker, lexed before the single `.` so the
+        // three dots are one token (and `. .  .` stays three).
+        if c == b'.' && self.peek2() == Some(b'.') && self.src.get(self.pos + 2) == Some(&b'.') {
+            self.pos += 3;
+            self.push(Tok::Ellipsis, start);
+            return Ok(());
+        }
         // Two-char comparison / equality operators (checked before `=` `!` `<` `>`).
         if let Some(tok) = match (c, self.peek2()) {
             (b'=', Some(b'=')) => Some(Tok::EqEq),
@@ -1146,6 +1153,37 @@ mod tests {
         // A float still wins over a leading-digit `.`; `.` only stands alone
         // between identifiers.
         assert_eq!(kinds("2.5"), vec![Tok::Float(2.5), Tok::Eof]);
+    }
+
+    #[test]
+    fn lexes_ellipsis_as_one_token() {
+        // The `extern` kwarg slot marker is a single lexeme, so a dotted target's
+        // separate dots stay separate and spaced-out dots are not an ellipsis.
+        assert_eq!(kinds("..."), vec![Tok::Ellipsis, Tok::Eof]);
+        assert_eq!(
+            kinds("f(k=...)"),
+            vec![
+                Tok::Ident("f".to_string()),
+                Tok::LParen,
+                Tok::Ident("k".to_string()),
+                Tok::Eq,
+                Tok::Ellipsis,
+                Tok::RParen,
+                Tok::Eof
+            ]
+        );
+        assert_eq!(kinds(". . ."), vec![Tok::Dot, Tok::Dot, Tok::Dot, Tok::Eof]);
+        assert_eq!(
+            kinds("a.b.c"),
+            vec![
+                Tok::Ident("a".to_string()),
+                Tok::Dot,
+                Tok::Ident("b".to_string()),
+                Tok::Dot,
+                Tok::Ident("c".to_string()),
+                Tok::Eof
+            ]
+        );
     }
 
     #[test]

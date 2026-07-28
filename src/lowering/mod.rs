@@ -231,11 +231,12 @@ struct Lowerer {
     /// Externs with a `unit` domain (`unit -> a`, e.g. `time.time`): a *nullary*
     /// Python callable, applied to `()` as a zero-argument call (`time.time()`).
     nullary_externs: HashSet<String>,
-    /// `extern` name → its pinned Python keyword arguments (already lowered to their
-    /// `PyExpr` literals), appended to every emitted call (`open(path,
-    /// encoding="utf-8")`). Under-application routes them through
-    /// `functools.partial` so they are never dropped (`DESIGN.md` §6).
-    extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>>,
+    /// `extern` name → its Python keyword arguments (literals already lowered to
+    /// `PyExpr`, `...` slots left to be filled from the call), appended to every
+    /// emitted call (`open(path, encoding="utf-8")`). Under-application routes
+    /// literals through `functools.partial`, and anything with an unfilled slot
+    /// through a lambda, so nothing is ever dropped (`DESIGN.md` §6).
+    extern_kwargs: std::collections::HashMap<String, Vec<(String, KwSource)>>,
     /// Python modules an *used* extern needs imported (the first segment of a
     /// dotted target, e.g. `math` for `math.sqrt`). Bare builtins import nothing.
     needed_imports: BTreeSet<String>,
@@ -354,7 +355,7 @@ impl Lowerer {
         let mut extern_module_imports: Vec<(Vec<String>, Option<String>)> = Vec::new();
         let mut receiver_externs = std::collections::HashMap::new();
         let mut nullary_externs = HashSet::new();
-        let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, PyExpr)>> =
+        let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, KwSource)>> =
             std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
         let mut top_fn_defs: HashMap<String, (Vec<Param>, Expr)> = HashMap::new();
@@ -693,15 +694,15 @@ impl Lowerer {
                                 self.needed_imports.insert(module);
                             }
                             // A plain extern with pinned kwargs binds to a
-                            // `functools.partial` that carries them; otherwise to the
+                            // `functools.partial` that carries them (or, with a `...`
+                            // slot, to a lambda that places it); otherwise to the
                             // bare dotted target.
                             if kwargs.is_empty() {
                                 dotted_path(&decl.target)
                             } else {
-                                self.build_call_kw(
+                                self.build_call_kw_bare(
                                     dotted_path(&decl.target),
                                     Some(arrow_arity(&decl.ty)),
-                                    vec![],
                                     kwargs,
                                 )
                             }
@@ -1669,7 +1670,15 @@ impl Lowerer {
                     receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs),
                 ));
             }
-            let recv = arg_vals.remove(0);
+            let mut recv = arg_vals.remove(0);
+            let method_arity = arity.map(|k| k.saturating_sub(1));
+            // An under-applied `...` slot puts the call inside a lambda, so the
+            // receiver must be bound out here to keep evaluating at application time.
+            let defers =
+                slot_count(&kwargs) > 0 && method_arity.is_some_and(|k| arg_vals.len() < k);
+            if defers {
+                recv = self.hoist_tmp(recv, &mut stmts);
+            }
             let accessed = attr_path(recv, &member);
             let result = match kind {
                 // Property: `recv.text`; any further args are over-application calls.
@@ -1677,16 +1686,19 @@ impl Lowerer {
                     func: Box::new(f),
                     args: vec![a],
                 }),
-                // A method extern with pinned kwargs routes every arity through
-                // `build_call_kw` so the kwargs are appended (full/over) or carried
-                // by `functools.partial` (receiver-only / method-partial) — never lost.
+                // A method extern with kwargs routes every arity through
+                // `build_call_kw` so they are appended (full/over) or carried by
+                // `functools.partial` / a lambda (receiver-only, method-partial) —
+                // never lost.
                 Receiver::Method if !kwargs.is_empty() => {
-                    let method_arity = arity.map(|k| k.saturating_sub(1));
-                    self.build_call_kw(accessed, method_arity, arg_vals, kwargs)
+                    let mut hoist = Vec::new();
+                    let call =
+                        self.build_call_kw(accessed, method_arity, arg_vals, kwargs, &mut hoist);
+                    stmts.extend(hoist);
+                    call
                 }
                 Receiver::Method => {
                     // The method itself takes one fewer argument than the arity.
-                    let method_arity = arity.map(|k| k.saturating_sub(1));
                     if arg_vals.is_empty() {
                         match method_arity {
                             // A nullary method: call it now (`resp.read()`).
@@ -1727,11 +1739,16 @@ impl Lowerer {
             // Drop the leading unit argument; call the target with no arguments
             // (plus any pinned kwargs, `time.time()` → `f(tz=…)`).
             let base = match self.extern_kwargs.get(name).cloned() {
-                Some(kwargs) => PyExpr::CallKw {
-                    func: Box::new(dotted_path(&target)),
-                    args: vec![],
-                    kwargs,
-                },
+                // A nullary extern has no argument to spare, so the parser rejects a
+                // `...` slot on one and these kwargs are all pinned literals.
+                Some(spec) => {
+                    let (_, kwargs) = bind_kwargs(&spec, Vec::new());
+                    PyExpr::CallKw {
+                        func: Box::new(dotted_path(&target)),
+                        args: vec![],
+                        kwargs,
+                    }
+                }
                 None => PyExpr::Call {
                     func: Box::new(dotted_path(&target)),
                     args: vec![],
@@ -1748,11 +1765,12 @@ impl Lowerer {
             return Ok((stmts, result));
         }
 
-        // A plain (non-receiver, non-nullary) extern that pins fixed Python kwargs:
+        // A plain (non-receiver, non-nullary) extern carrying Python kwargs:
         // `openText path` → `builtins.open(path, mode="rt", encoding="utf-8")`.
-        // Full/over-application appends the kwargs to the direct call; under-
-        // application carries them through `functools.partial` (`build_call_kw`), so
-        // a partial or bare reference never silently drops them (`DESIGN.md` §6).
+        // Full/over-application places them on the direct call, a `...` slot taking
+        // its value from the trailing arguments; under-application carries pinned
+        // literals through `functools.partial` and an unfilled slot through a lambda
+        // (`build_call_kw`), so nothing is ever silently dropped (`DESIGN.md` §6).
         if let ExprKind::Var(name) = &head.kind
             && !locals.contains(name)
             && !self.user_defs.contains(name)
@@ -1770,7 +1788,10 @@ impl Lowerer {
                 stmts.extend(arg_stmts);
                 arg_vals.push(arg_val);
             }
-            let call = self.build_call_kw(dotted_path(&target), arity, arg_vals, kwargs);
+            let mut hoist = Vec::new();
+            let call =
+                self.build_call_kw(dotted_path(&target), arity, arg_vals, kwargs, &mut hoist);
+            stmts.extend(hoist);
             return Ok((stmts, call));
         }
 
@@ -1954,17 +1975,18 @@ impl Lowerer {
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
                 return nullary_lambda(&target, kwargs);
             }
-            // A bare reference to a plain extern that pins kwargs carries them via
+            // A bare reference to a plain extern carrying kwargs keeps them via
             // `functools.partial` (`openText` → `functools.partial(builtins.open,
-            // mode="rt", encoding="utf-8")`), so the kwargs survive later
-            // application. Applied references are handled in `lower_application`.
+            // mode="rt", encoding="utf-8")`), or via a lambda when a `...` slot has
+            // yet to be filled, so they survive later application. Applied
+            // references are handled in `lower_application`.
             if let Some(kwargs) = self.extern_kwargs.get(name).cloned() {
                 let target = self.extern_targets[name].clone();
                 if let Some(module) = self.extern_import_spec(&target) {
                     self.needed_imports.insert(module);
                 }
                 let arity = self.arities.get(name).copied();
-                return self.build_call_kw(dotted_path(&target), arity, vec![], kwargs);
+                return self.build_call_kw_bare(dotted_path(&target), arity, kwargs);
             }
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
@@ -3123,61 +3145,123 @@ impl Lowerer {
         }
     }
 
-    /// Like [`Self::build_call`] but for an `extern` whose target pins fixed Python
-    /// keyword arguments. The pinned `kwargs` ride along at every arity:
-    /// full/over-application appends them to the direct call (`f(a, kw=v)`); under-
-    /// application hands them to `functools.partial` (`functools.partial(f, a,
-    /// kw=v)`), so a later application supplies the remaining positional arguments
-    /// and the kwargs are never dropped.
+    /// Like [`Self::build_call`] but for an `extern` whose target carries Python
+    /// keyword arguments. The `spec` rides along at every arity, so nothing is ever
+    /// dropped: full/over-application emits the direct call (`f(a, kw=v)`), and
+    /// under-application either hands the pinned literals to `functools.partial`
+    /// (`functools.partial(f, a, kw=v)`) or, when a `...` slot is still unfilled,
+    /// closes over a lambda that takes the remaining arguments.
+    ///
+    /// Any statements needed to keep the already-supplied arguments evaluating at
+    /// application time (rather than inside a lambda body) are pushed onto `hoist`.
     fn build_call_kw(
         &mut self,
         head: PyExpr,
         arity: Option<usize>,
         args: Vec<PyExpr>,
-        kwargs: Vec<(String, PyExpr)>,
+        spec: Vec<(String, KwSource)>,
+        hoist: &mut Vec<PyStmt>,
     ) -> PyExpr {
         let n = args.len();
-        match arity {
-            Some(k) if n < k => {
+        let slots = slot_count(&spec);
+        // An unknown arity is treated as n-ary, but it still has to leave room for
+        // the slots, so a bare reference to a slot extern becomes a lambda.
+        let k = arity.unwrap_or(n.max(slots));
+        if n < k {
+            if slots == 0 {
                 // Partial application: `functools.partial` carries the positional
                 // args *and* the pinned keyword args.
                 self.needs_functools = true;
                 let mut partial_args = Vec::with_capacity(n + 1);
                 partial_args.push(head);
                 partial_args.extend(args);
-                PyExpr::CallKw {
+                let (_, kwargs) = bind_kwargs(&spec, Vec::new());
+                return PyExpr::CallKw {
                     func: Box::new(PyExpr::Attribute {
                         value: Box::new(PyExpr::Name("functools".to_string())),
                         attr: "partial".to_string(),
                     }),
                     args: partial_args,
                     kwargs,
-                }
-            }
-            Some(k) if n > k => {
-                // Over-application: full (kw-carrying) call, then apply the rest.
-                let mut rest = args;
-                let first = rest.drain(..k).collect();
-                let mut call = PyExpr::CallKw {
-                    func: Box::new(head),
-                    args: first,
-                    kwargs,
                 };
-                for extra in rest {
-                    call = PyExpr::Call {
-                        func: Box::new(call),
-                        args: vec![extra],
-                    };
-                }
-                call
             }
-            // Exact arity, or unknown arity (treated as n-ary).
-            _ => PyExpr::CallKw {
-                func: Box::new(head),
-                args,
-                kwargs,
-            },
+            // `functools.partial` cannot carry a keyword whose value has not arrived,
+            // so a slot extern's partial application is a lambda over the missing
+            // arguments. Bind what was supplied first, so it evaluates now — exactly
+            // when `functools.partial` would have evaluated it.
+            let bound: Vec<PyExpr> = args.into_iter().map(|a| self.hoist_tmp(a, hoist)).collect();
+            let params: Vec<String> = (0..k - n).map(|i| format!("_pf_k{i}")).collect();
+            let mut all = bound;
+            all.extend(params.iter().cloned().map(PyExpr::Name));
+            let (positional, kwargs) = bind_kwargs(&spec, all);
+            return PyExpr::Lambda {
+                params,
+                body: Box::new(PyExpr::CallKw {
+                    func: Box::new(head),
+                    args: positional,
+                    kwargs,
+                }),
+            };
         }
+        if n > k {
+            // Over-application: full (kw-carrying) call, then apply the rest.
+            let mut rest = args;
+            let first: Vec<PyExpr> = rest.drain(..k).collect();
+            let (positional, kwargs) = bind_kwargs(&spec, first);
+            let mut call = PyExpr::CallKw {
+                func: Box::new(head),
+                args: positional,
+                kwargs,
+            };
+            for extra in rest {
+                call = PyExpr::Call {
+                    func: Box::new(call),
+                    args: vec![extra],
+                };
+            }
+            return call;
+        }
+        let (positional, kwargs) = bind_kwargs(&spec, args);
+        PyExpr::CallKw {
+            func: Box::new(head),
+            args: positional,
+            kwargs,
+        }
+    }
+
+    /// [`Self::build_call_kw`] for a reference that supplies no arguments, and so
+    /// has nothing to hoist.
+    fn build_call_kw_bare(
+        &mut self,
+        head: PyExpr,
+        arity: Option<usize>,
+        spec: Vec<(String, KwSource)>,
+    ) -> PyExpr {
+        let mut hoist = Vec::new();
+        let call = self.build_call_kw(head, arity, Vec::new(), spec, &mut hoist);
+        debug_assert!(
+            hoist.is_empty(),
+            "a bare reference supplies no arguments to hoist"
+        );
+        call
+    }
+
+    /// Bind `value` to a fresh temporary (pushed onto `hoist`) so that placing it
+    /// inside a lambda body does not defer its evaluation. A literal is already
+    /// stable and is returned unchanged.
+    fn hoist_tmp(&mut self, value: PyExpr, hoist: &mut Vec<PyStmt>) -> PyExpr {
+        if matches!(
+            value,
+            PyExpr::Str(_) | PyExpr::Int(_) | PyExpr::Float(_) | PyExpr::Bool(_)
+        ) {
+            return value;
+        }
+        let tmp = self.fresh_tmp();
+        hoist.push(PyStmt::Assign {
+            target: tmp.clone(),
+            value,
+        });
+        PyExpr::Name(tmp)
     }
 
     fn fresh_tmp(&mut self) -> String {
@@ -3278,15 +3362,57 @@ const PY_BUILTIN_TYPES: &[&str] = &[
 /// Lower a pinned `extern` keyword-argument literal to its Python IR expression.
 /// A negative int/float is emitted as a `Neg` of the magnitude, matching how the
 /// emitter renders unary minus (`compresslevel=-1`).
-fn lower_extern_arg(arg: &ExternArg) -> PyExpr {
+fn lower_extern_arg(arg: &ExternArg) -> KwSource {
     match arg {
-        ExternArg::Str(s) => PyExpr::Str(s.clone()),
-        ExternArg::Int(n) if *n < 0 => PyExpr::Neg(Box::new(PyExpr::Int(-n))),
-        ExternArg::Int(n) => PyExpr::Int(*n),
-        ExternArg::Float(f) if *f < 0.0 => PyExpr::Neg(Box::new(PyExpr::Float(-f))),
-        ExternArg::Float(f) => PyExpr::Float(*f),
-        ExternArg::Bool(b) => PyExpr::Bool(*b),
+        ExternArg::Str(s) => KwSource::Lit(PyExpr::Str(s.clone())),
+        ExternArg::Int(n) if *n < 0 => KwSource::Lit(PyExpr::Neg(Box::new(PyExpr::Int(-n)))),
+        ExternArg::Int(n) => KwSource::Lit(PyExpr::Int(*n)),
+        ExternArg::Float(f) if *f < 0.0 => KwSource::Lit(PyExpr::Neg(Box::new(PyExpr::Float(-f)))),
+        ExternArg::Float(f) => KwSource::Lit(PyExpr::Float(*f)),
+        ExternArg::Bool(b) => KwSource::Lit(PyExpr::Bool(*b)),
+        ExternArg::Slot => KwSource::Slot,
     }
+}
+
+/// Where an `extern` target's keyword argument gets its value: a literal pinned at
+/// the declaration, or a `...` slot filled from the call's arguments
+/// (`DESIGN.md` §6).
+#[derive(Debug, Clone, PartialEq)]
+enum KwSource {
+    Lit(PyExpr),
+    Slot,
+}
+
+/// How many of an extern's arguments its `...` slots claim.
+fn slot_count(spec: &[(String, KwSource)]) -> usize {
+    spec.iter().filter(|(_, v)| *v == KwSource::Slot).count()
+}
+
+/// Bind a keyword spec to concrete values: the leading `args` fill the positional
+/// parameters and the rest fill the `...` slots in written order. Returns the
+/// positional arguments and the resolved `kw=value` pairs.
+///
+/// `args` must hold exactly the positional count plus the slot count; callers
+/// arrange that (by padding with lambda parameters when under-applied).
+fn bind_kwargs(
+    spec: &[(String, KwSource)],
+    args: Vec<PyExpr>,
+) -> (Vec<PyExpr>, Vec<(String, PyExpr)>) {
+    let positional = args.len() - slot_count(spec);
+    let mut rest = args;
+    let leading: Vec<PyExpr> = rest.drain(..positional).collect();
+    let mut fills = rest.into_iter();
+    let kwargs = spec
+        .iter()
+        .map(|(k, v)| {
+            let value = match v {
+                KwSource::Lit(e) => e.clone(),
+                KwSource::Slot => fills.next().expect("a fill per slot"),
+            };
+            (k.clone(), value)
+        })
+        .collect();
+    (leading, kwargs)
 }
 
 /// Build a Python expression from a dotted path: `["math", "sqrt"]` → `math.sqrt`,
@@ -3322,7 +3448,7 @@ fn receiver_lambda(
     member: &[String],
     arity: usize,
     kind: Receiver,
-    kwargs: Vec<(String, PyExpr)>,
+    spec: Vec<(String, KwSource)>,
 ) -> PyExpr {
     let recv = "_pf_recv".to_string();
     let accessed = attr_path(PyExpr::Name(recv.clone()), member);
@@ -3332,17 +3458,20 @@ fn receiver_lambda(
             body: Box::new(accessed),
         };
     }
+    // The lambda takes every argument after the receiver; a `...` slot claims one of
+    // them and lands as a keyword instead of a positional.
     let args: Vec<String> = (1..arity.max(1)).map(|i| format!("_pf_a{i}")).collect();
     let call_args: Vec<PyExpr> = args.iter().cloned().map(PyExpr::Name).collect();
-    let body = if kwargs.is_empty() {
+    let body = if spec.is_empty() {
         PyExpr::Call {
             func: Box::new(accessed),
             args: call_args,
         }
     } else {
+        let (positional, kwargs) = bind_kwargs(&spec, call_args);
         PyExpr::CallKw {
             func: Box::new(accessed),
-            args: call_args,
+            args: positional,
             kwargs,
         }
     };
@@ -3356,14 +3485,16 @@ fn receiver_lambda(
 
 /// A lambda for a bare reference to a nullary extern: `lambda *_: time.time()`. The
 /// `*_` swallows the unit argument Pyfun passes at a `unit -> a` call site, so the
-/// value works however it is later applied. Any pinned `kwargs` are appended.
-fn nullary_lambda(target: &[String], kwargs: Vec<(String, PyExpr)>) -> PyExpr {
-    let body = if kwargs.is_empty() {
+/// value works however it is later applied. Any pinned `kwargs` are appended (a
+/// nullary extern has no argument to spare, so the parser rejects `...` on one).
+fn nullary_lambda(target: &[String], spec: Vec<(String, KwSource)>) -> PyExpr {
+    let body = if spec.is_empty() {
         PyExpr::Call {
             func: Box::new(dotted_path(target)),
             args: vec![],
         }
     } else {
+        let (_, kwargs) = bind_kwargs(&spec, Vec::new());
         PyExpr::CallKw {
             func: Box::new(dotted_path(target)),
             args: vec![],

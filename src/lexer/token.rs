@@ -91,6 +91,11 @@ pub enum Tok {
     Comma,      // ,
     Colon,      // :
     Dot,        // . (record field access)
+    /// `...` — the caller-supplied slot marker in an `extern` target's keyword
+    /// arguments (`= requests.get(timeout = ...)`, `DESIGN.md` §6), spelled as in a
+    /// Python stub file. Lexed as one token so `. . .` is not the same thing, and
+    /// unused elsewhere in the grammar.
+    Ellipsis,
     Underscore, // _
 
     /// A typed hole in expression position: `?` (anonymous) or `?name` (named, the

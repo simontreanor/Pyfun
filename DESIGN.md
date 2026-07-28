@@ -341,6 +341,34 @@ kwargs-extern carries them through `functools.partial` (`openText` → `functool
 mode="rt", encoding="utf-8")`), so a later application still supplies them; only a full (or over-)
 application emits the direct `f(a, kw=v)` call.
 
+**Caller-supplied keyword slots (`= target(kw = ...)`).** Python's API culture is optional keyword
+arguments with defaults, and pinning a literal only covers the value that is fixed for every call. A
+`...` in place of the literal makes the keyword's value come from the **caller** instead:
+
+```
+extern parseInt : string -> int -> int = int(base = ...)          # parseInt "ff" 16 → int("ff", base=16)
+extern openText : string -> string -> Seq string = builtins.open(mode = "rt", encoding = ...)
+extern writeText : Path -> string -> string -> int = .write_text(encoding = ...)
+```
+
+The spelling is Python's own stub-file placeholder (`def get(url, timeout=...)`), lexed as one token.
+The **binding rule** is positional and mirrors a Python call: the target takes the leading arguments
+positionally and the `...` slots take the **trailing** ones, in the order the keywords are written;
+pinned literals consume no argument, so they may sit anywhere among the slots
+(`m.f(a = 1, b = ..., c = "x", d = ...)` at arity 3 emits `m.f(s, a=1, b=i, c="x", d=b)`). A slot claims
+one argument of the declared arrow, so the type must have one to spare: a receiver takes the first
+argument, and a nullary extern's only argument is the `unit` that lowering drops, so both are rejected
+with a diagnostic rather than silently mis-lowered.
+
+A slot changes only *where* an argument lands in the emitted call, so like a pinned literal it stays
+**invisible to the type** (`parseInt` is an ordinary `string -> int -> int`), to inference, and to
+effects. Under-application still never drops anything, but it cannot use `functools.partial`, which has
+no way to carry a keyword whose value has not arrived. An under-applied slot extern becomes a **lambda**
+over the remaining arguments (`parseInt "ff"` → `lambda _pf_k0: int("ff", base=_pf_k0)`; a bare
+`parseInt` → `lambda _pf_k0, _pf_k1: int(_pf_k0, base=_pf_k1)`). The arguments already supplied are
+bound to temporaries first, so they evaluate at application time exactly as `functools.partial` would
+have evaluated them, rather than once per later call; a receiver is bound the same way.
+
 **Lists — the eager collection.** `List a` is a built-in type that **lowers to a
 Python `list`** (a dynamic array), with literal syntax `[1, 2, 3]` (comma-separated, like Python and
 like Pyfun records and tuples). The big-O is Python's, *not*

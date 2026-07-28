@@ -191,6 +191,36 @@ extern pure loads : string -> Json = json.loads(strict=true, offset=-2, sep=", "
           (string))))))
 
 ================================================================================
+extern with a caller-supplied kwarg slot
+================================================================================
+
+extern openText : string -> string -> Seq string = builtins.open(mode="rt", encoding=...)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (extern_declaration
+    (identifier)
+    (function_type
+      (type_variable)
+      (function_type
+        (type_variable)
+        (type_application
+          (type_identifier)
+          (type_variable))))
+    (extern_target
+      (python_path
+        (identifier)
+        (identifier))
+      (extern_kwargs
+        (extern_kwarg
+          (identifier)
+          (string))
+        (extern_kwarg
+          (identifier)
+          (extern_slot))))))
+
+================================================================================
 extern import with alias
 ================================================================================
 

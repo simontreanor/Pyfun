@@ -147,22 +147,29 @@ pub struct ExternDecl {
     /// importing) the receiver's class, and reaches inherited/delegated members the
     /// unbound `Class.member` form cannot.
     pub receiver: Option<Receiver>,
-    /// Fixed Python keyword arguments pinned on the target (`DESIGN.md` §6), from a
-    /// `(kw = lit, …)` suffix on the `= …` clause. Appended to every emitted call
-    /// (`open(path, mode="rt", encoding="utf-8")`); empty when absent. Purely a
-    /// lowering concern — invisible to the Pyfun type (the arrow type is unchanged).
+    /// Python keyword arguments on the target (`DESIGN.md` §6), from a
+    /// `(kw = lit | ..., …)` suffix on the `= …` clause. Appended to every emitted
+    /// call (`open(path, mode="rt", encoding="utf-8")`); empty when absent. A
+    /// pinned literal is purely a lowering concern, invisible to the Pyfun type; a
+    /// `...` slot consumes one argument of the declared arrow, so it changes where
+    /// that argument lands in the emitted call but not the type either.
     pub kwargs: Vec<(String, ExternArg)>,
     pub span: NodeSpan,
 }
 
-/// A literal value pinned as a keyword argument on an `extern` target. Only the
-/// literal forms Python needs at the boundary — no Pyfun expressions.
+/// A value bound to a keyword argument on an `extern` target: either a literal
+/// pinned at the declaration, or a `...` slot the caller fills. Only the literal
+/// forms Python needs at the boundary — no Pyfun expressions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExternArg {
     Str(String),
     Int(i64),
     Float(f64),
     Bool(bool),
+    /// `...` — a caller-supplied slot (`DESIGN.md` §6). Consumes one argument of
+    /// the declared arrow: the target takes the leading arguments positionally and
+    /// the slots take the trailing ones, in the order the keywords are written.
+    Slot,
 }
 
 /// How an instance-access `extern` (`= .member`) uses its first argument.

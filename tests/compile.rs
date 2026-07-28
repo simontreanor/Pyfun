@@ -456,6 +456,139 @@ fn e2e_extern_kwargs_produce_observable_output() {
 }
 
 #[test]
+fn extern_kwarg_slot_takes_a_trailing_argument() {
+    // `kw = ...` makes the keyword's value come from the caller: the target takes
+    // the leading arguments positionally and the slots take the trailing ones.
+    let py = pyfun::compile(
+        "extern openText : string -> string -> Seq string = builtins.open(mode=\"rt\", encoding=...)\n\
+         let f path enc = openText path enc",
+    )
+    .unwrap();
+    assert!(
+        py.contains("return builtins.open(path, mode=\"rt\", encoding=enc)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn extern_kwarg_slots_fill_in_the_order_the_keywords_are_written() {
+    // Pinned literals consume no argument; the slots take the trailing arguments
+    // left to right, wherever they sit among the literals.
+    let py = pyfun::compile(
+        "extern mix : string -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)\n\
+         let f s i b = mix s i b",
+    )
+    .unwrap();
+    assert!(py.contains("return m.f(s, a=1, b=i, c=\"x\", d=b)"), "{py}");
+}
+
+#[test]
+fn receiver_method_extern_kwarg_slot_takes_a_trailing_argument() {
+    // The receiver still claims the first argument; a slot claims one of the rest.
+    let py = pyfun::compile(
+        "extern type P\n\
+         extern writeText : P -> string -> string -> int = .write_text(encoding=...)\n\
+         let f p text enc = writeText p text enc",
+    )
+    .unwrap();
+    assert!(
+        py.contains("return p.write_text(text, encoding=enc)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn extern_kwarg_slot_partial_application_becomes_a_lambda() {
+    // `functools.partial` cannot carry a keyword whose value has not arrived, so an
+    // under-applied slot extern closes over a lambda that takes the rest. A bare
+    // reference takes every argument, including the positional ones.
+    let py = pyfun::compile(
+        "extern parseInt : string -> int -> int = int(base=...)\n\
+         let bare = parseInt\n\
+         let partial = parseInt \"ff\"",
+    )
+    .unwrap();
+    assert!(
+        py.contains("bare = lambda _pf_k0, _pf_k1: int(_pf_k0, base=_pf_k1)"),
+        "{py}"
+    );
+    assert!(
+        py.contains("partial = lambda _pf_k0: int(\"ff\", base=_pf_k0)"),
+        "{py}"
+    );
+    assert!(
+        !py.contains("functools"),
+        "no partial is possible here: {py}"
+    );
+}
+
+#[test]
+fn extern_kwarg_slot_partial_evaluates_supplied_arguments_eagerly() {
+    // The supplied arguments must evaluate at application time, exactly as
+    // `functools.partial` would have evaluated them — not once per later call. They
+    // are bound to temporaries, and the lambda closes over those. The receiver of a
+    // method extern is bound the same way.
+    let py = pyfun::compile(
+        "extern parseInt : string -> int -> int = int(base=...)\n\
+         extern src : unit -> string = get.line\n\
+         let partial = parseInt (src ())",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_t0 = get.line()"), "{py}");
+    assert!(
+        py.contains("partial = lambda _pf_k0: int(_pf_t0, base=_pf_k0)"),
+        "{py}"
+    );
+
+    let py = pyfun::compile(
+        "extern type P\n\
+         extern toPath : string -> P = pathlib.Path\n\
+         extern writeText : P -> string -> string -> int = .write_text(encoding=...)\n\
+         let partial = writeText (toPath \"a.txt\") \"body\"",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_t0 = pathlib.Path(\"a.txt\")"), "{py}");
+    assert!(
+        py.contains("partial = lambda _pf_k0: _pf_t0.write_text(\"body\", encoding=_pf_k0)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn extern_kwarg_slot_rejects_a_type_with_no_argument_to_spare() {
+    // A slot consumes an argument of the declared arrow, so the type must have one
+    // going spare: a receiver takes the first, and a nullary extern's only argument
+    // is the `unit` that lowering drops.
+    let err = pyfun::compile("extern bad : string -> a = f(x=..., y=...)").unwrap_err();
+    assert!(err.to_string().contains("2 `...` slots"), "{err}");
+    assert!(err.to_string().contains("only 1 argument"), "{err}");
+
+    let err = pyfun::compile("extern bad : string -> a = .attr(k=...)").unwrap_err();
+    assert!(err.to_string().contains("1 `...` slot,"), "{err}");
+    assert!(err.to_string().contains("only 0 arguments"), "{err}");
+
+    let err = pyfun::compile("extern bad : unit -> a = time.time(tz=...)").unwrap_err();
+    assert!(
+        err.to_string().contains("`unit` that a nullary call drops"),
+        "{err}"
+    );
+}
+
+#[test]
+fn e2e_extern_kwarg_slot_produces_observable_output() {
+    // `int`'s real `base` kwarg, supplied by the caller rather than pinned: the same
+    // extern parses hex and binary, and a partial application of it still works.
+    run_and_check(
+        "extern parseIn : string -> int -> int = int(base=...)\n\
+         let hex = parseIn \"ff\" 16\n\
+         let bin = parseIn \"1011\" 2\n\
+         let ff = parseIn \"ff\"\n\
+         let also = ff 16",
+        &[("hex", "255"), ("bin", "11"), ("also", "255")],
+    );
+}
+
+#[test]
 fn list_literal_lowers_to_a_python_list() {
     let py = pyfun::compile("let xs = [1, 2, 3]").unwrap();
     assert!(py.contains("xs = [1, 2, 3]"), "{py}");
