@@ -78,6 +78,16 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   wrapper is needed. And where a library defines its API on `+`/`-` (as `datetime` does),
   Python's `operator` module exposes every operator as a plain function: `= operator.add`
   is a ready-made extern target (`datetime.pyfun`).
+- **Keyword arguments on the target.** A trailing `(kw = value, …)` puts Python keyword
+  arguments on every emitted call, reaching keyword-only and deep-positional parameters
+  without the positional fillers needed to skip past them. A literal is pinned at the
+  declaration (`extern openText : string -> a = builtins.open(mode = "rt")`), and `...`
+  takes the value from the caller, so one extern covers every call shape instead of one per
+  fixed value: `extern parseInt : string -> int -> int = int(base = ...)` lowers
+  `parseInt "ff" 16` to `int("ff", base=16)`. Pinned literals consume no argument, so the
+  two mix (`= builtins.open(mode = "rt", encoding = ...)`), and both work on a receiver
+  method (`= .write_text(encoding = ...)`). A partially applied slot extern keeps working:
+  `parseInt "ff"` is a function awaiting the base.
 - **`extern import` when the heuristic can't see the module.** A dotted target's module is
   guessed by its lowercase prefix, which mis-reads a lowercase *class* (or value attribute)
   as a submodule. Declare it explicitly — Python's own import statement, `as` and all:

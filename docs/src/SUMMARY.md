@@ -30,6 +30,7 @@
 - [Build your own computation expression](learn/20-build-your-own-ce.md)
 - [Strings and numbers, in detail](learn/21-strings-and-numbers.md)
 - [Opaque types](learn/22-opaque-types.md)
+- [Keyword arguments at the boundary](learn/23-keyword-arguments.md)
 
 # For educators
 
