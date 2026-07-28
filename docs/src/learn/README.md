@@ -46,5 +46,5 @@ measure, multi-file projects, and a capstone that puts everything together.
 
 After the capstone, a **Going further** set digs into topics the core path skips: recursion,
 async, active patterns, building your own computation expression, the fine print of strings and
-numbers, and opaque types. Take them in any order once you have finished the core lessons they
-build on.
+numbers, opaque types, and keyword arguments at the Python boundary. Take them in any order once
+you have finished the core lessons they build on.
