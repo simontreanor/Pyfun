@@ -953,3 +953,56 @@ fn e2e_an_option_crosses_the_module_boundary() {
         assert_eq!(out.trim(), "7");
     }
 }
+
+#[test]
+fn an_importing_module_keeps_its_own_functions_polymorphic() {
+    // An imported scheme arrives holding the *exporting* module's variable ids,
+    // which this module allocates too. Before those ids were refreshed at the
+    // boundary, one collision let `env_free_vars` rewrite the imported scheme and
+    // leak local variables into the environment's free set — blocking
+    // generalization of Main's own bindings, so `f1` went monomorphic and its
+    // second use was rejected. Main does not even use the import; the exact shapes
+    // matter only in that they make the two modules' id ranges overlap.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Helper\nlet f0 a b = (a, b)\nlet f1 a b = (a, b)\nprint (f1 1 2)\nprint (f1 \"x\" \"y\")",
+            ),
+            ("Helper", "let id x = x\nlet id2 y = y"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(
+        errors.is_empty(),
+        "an importing module's own function must stay polymorphic: {errors:?}"
+    );
+}
+
+#[test]
+fn an_under_generalized_export_does_not_cascade_to_a_consumer() {
+    // The contagious half, one module further along: `Middle` imports `Helper`,
+    // and the blocked generalization above made `Middle.f1` *export* with nothing
+    // quantified — so `Main` received one shared type variable for every use site
+    // and its second use was rejected, naming a function two modules away.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Middle\nprint (Middle.f1 1 2)\nprint (Middle.f1 \"x\" \"y\")",
+            ),
+            (
+                "Middle",
+                "import Helper\nlet f0 a b = (a, b)\nlet f1 a b = (a, b)",
+            ),
+            ("Helper", "let id x = x\nlet id2 y = y"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(
+        errors.is_empty(),
+        "an exported polymorphic function must instantiate freshly per use: {errors:?}"
+    );
+}

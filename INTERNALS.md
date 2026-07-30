@@ -339,7 +339,14 @@ plus imported measures merged unqualified into `decls.measures`/`measure_aliases
 check), so construction (the `Record`/`Field` arms), qualified ctor/record patterns (`bind_pattern`),
 exhaustiveness (`ctor_signature`), and `<…>` unit resolution all resolve with no special cases. Transplanting a scheme across modules is sound
 because a top-level binding (and a constructor) generalizes against an env of closed schemes, so its own
-scheme is closed and `instantiate` refreshes the quantified vars in the dependent module's id space.
+scheme is closed — but *closed is not enough*: every module allocates variable ids from its own counter
+starting at `RESERVED_VARS`, so an imported scheme arrives holding ids the consumer will hand out again.
+`instantiate` alone survives that (it refreshes the quantified vars before substituting), yet `env_free_vars`
+applies the **local** substitution to every env scheme, so a single id collision rewrote the imported scheme
+and leaked local variables into the "free in the env" set — blocking generalization of the consumer's own
+bindings, which then exported un-quantified and cascaded onward (#26). Every imported scheme is therefore
+alpha-renamed into the consumer's id space as it is seeded (`Infer::refresh_scheme`, values and constructors
+alike, in sorted order so the ids do not depend on `HashMap` iteration).
 `project::check` threads the `ModuleExports` map through the topological order, seeding each module from
 only the modules it actually imports (so an unimported module's members/constructors stay invisible), and
 returns errors grouped by module. *Lowering* routes a qualified constructor — in expression or pattern

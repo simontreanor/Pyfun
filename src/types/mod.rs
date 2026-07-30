@@ -1001,14 +1001,24 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     let mut env = ctor_env;
     // Seed imported modules' exported values (under qualified keys like
     // `Geometry.area`) and constructors (`Geometry.Circle`) so the `Field` access
-    // path resolves cross-module references.
-    for (module_name, exports) in imports {
-        for (member, scheme) in &exports.schemes {
-            env.insert(format!("{module_name}.{member}"), scheme.clone());
+    // path resolves cross-module references. Each scheme is alpha-renamed into
+    // this module's variable space first ([`Infer::refresh_scheme`]) — it arrives
+    // holding the exporting module's ids, which this module allocates too.
+    // Sorted so the ids handed out do not depend on `HashMap` iteration order.
+    let mut import_names: Vec<&String> = imports.keys().collect();
+    import_names.sort();
+    for module_name in import_names {
+        let exports = &imports[module_name];
+        let mut members: Vec<&String> = exports.schemes.keys().collect();
+        members.sort();
+        for member in members {
+            let scheme = inf.refresh_scheme(&exports.schemes[member]);
+            env.insert(format!("{module_name}.{member}"), scheme);
         }
         for ty in &exports.types {
             for (ctor, info) in &ty.ctors {
-                env.insert(format!("{module_name}.{ctor}"), info.scheme.clone());
+                let scheme = inf.refresh_scheme(&info.scheme);
+                env.insert(format!("{module_name}.{ctor}"), scheme);
             }
         }
     }
@@ -6266,6 +6276,82 @@ impl Infer {
             }
         }
         subst_all(&scheme.ty, &tmap, &umap, &nmap, &emap)
+    }
+
+    /// Alpha-rename an imported scheme into *this* module's variable space.
+    ///
+    /// Every module's inference allocates ids from its own counter starting at
+    /// [`RESERVED_VARS`], so a scheme transplanted from a dependency arrives
+    /// holding ids this module will hand out again. [`Infer::instantiate`] is safe
+    /// on its own (it refreshes the quantified vars before substituting), but
+    /// [`Infer::env_free_vars`] applies the **local** substitution to every env
+    /// scheme — so one collision silently rewrites the imported scheme *and* leaks
+    /// local variables into the "free in the environment" set, which then blocks
+    /// generalization of this module's own bindings (an importing module's
+    /// `let f a b = (a, b)` going monomorphic). Refreshing every id once, at the
+    /// boundary, makes the collision impossible.
+    ///
+    /// Renames free ids as well as quantified ones: a scheme should arrive closed,
+    /// but a free id is exactly the case that must not alias a local variable.
+    fn refresh_scheme(&mut self, scheme: &Scheme) -> Scheme {
+        let mut t_ids = scheme.vars.clone();
+        free_type_vars(&scheme.ty, &mut |v| {
+            if !t_ids.contains(&v) {
+                t_ids.push(v);
+            }
+        });
+        let mut u_ids = scheme.uvars.clone();
+        free_unit_vars(&scheme.ty, &mut |v| {
+            if !u_ids.contains(&v) {
+                u_ids.push(v);
+            }
+        });
+        let mut n_ids = scheme.num_vars.clone();
+        free_num_vars(&scheme.ty, &mut |v| {
+            if !n_ids.contains(&v) {
+                n_ids.push(v);
+            }
+        });
+        let mut e_ids = scheme.eff_vars.clone();
+        free_eff_vars(&scheme.ty, &mut |v| {
+            if !e_ids.contains(&v) {
+                e_ids.push(v);
+            }
+        });
+
+        let tmap: HashMap<u32, u32> = t_ids.into_iter().map(|v| (v, self.fresh_id())).collect();
+        let umap: HashMap<u32, u32> = u_ids.into_iter().map(|v| (v, self.fresh_id())).collect();
+        let nmap: HashMap<u32, u32> = n_ids.into_iter().map(|v| (v, self.fresh_id())).collect();
+        let emap: HashMap<u32, u32> = e_ids.into_iter().map(|v| (v, self.fresh_id())).collect();
+
+        let rename = |ids: &[u32], map: &HashMap<u32, u32>| -> Vec<u32> {
+            ids.iter().map(|v| *map.get(v).unwrap_or(v)).collect()
+        };
+        let ty = subst_all(
+            &scheme.ty,
+            &tmap
+                .iter()
+                .map(|(old, new)| (*old, Ty::Var(*new)))
+                .collect(),
+            &umap
+                .iter()
+                .map(|(old, new)| (*old, Unit::var(*new)))
+                .collect(),
+            &nmap,
+            &emap
+                .iter()
+                .map(|(old, new)| (*old, Effect::var(*new)))
+                .collect(),
+        );
+        Scheme {
+            vars: rename(&scheme.vars, &tmap),
+            uvars: rename(&scheme.uvars, &umap),
+            num_vars: rename(&scheme.num_vars, &nmap),
+            ord_vars: rename(&scheme.ord_vars, &tmap),
+            eff_vars: rename(&scheme.eff_vars, &emap),
+            mutable: scheme.mutable,
+            ty,
+        }
     }
 
     fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
