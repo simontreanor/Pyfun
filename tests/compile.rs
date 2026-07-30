@@ -4603,3 +4603,20 @@ fn e2e_an_effectful_recursive_loop_runs() {
     let out = run_python(&python, &program).replace("\r\n", "\n");
     assert_eq!(out.trim(), "tick\ntick\ntick\n0");
 }
+
+#[test]
+fn matching_an_option_pulls_in_the_option_prelude() {
+    // Consuming an Option needs its classes as much as building one does — the
+    // emitted `case Some(k)` / `case None_()` name them. Only construction sites
+    // used to flag the prelude, so a function that merely *matches* one emitted
+    // `None_` with nothing defining it.
+    let py = pyfun::compile(
+        "let probe o =
+  match o:
+    case None: \"none\"
+    case Some k: k",
+    )
+    .unwrap();
+    assert!(py.contains("class Some:"), "{py}");
+    assert!(py.contains("class None_:"), "{py}");
+}
