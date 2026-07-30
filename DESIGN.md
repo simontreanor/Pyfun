@@ -162,6 +162,20 @@ applied functions each need a *stable* Python representation. That representatio
 contract — emitted code and interop both depend on it — so changing it is a breaking change, not
 an implementation detail.
 
+**Names Python already owns.** A Pyfun name is emitted as itself, with one exception: the emitted
+module is a Python namespace the compiler is also using. A binding whose name is a Python **keyword**
+cannot be emitted at all (`lambda = 1` is a `SyntaxError`), and one that claims a **builtin the
+emitter calls** shadows it at module scope, so an emitted `set([…])` or `len(xs)` would find the
+user's value instead — a runtime `TypeError` far from the binding that caused it. Such names
+therefore gain a trailing underscore in the output (`set` → `set_`, `lambda` → `lambda_`), the same
+dodge that has always applied to the constructor `None` → `None_`, and PEP 8's own convention. The
+rule is a pure function of the name, so a definition and every reference to it — including across a
+module boundary — agree with no coordination. Record *fields* only dodge keywords: an attribute lives
+in its object's namespace, so `q.set` needs nothing. Imported Python modules are a moving target
+rather than a fixed list, so an `import` shadowed by a binding is **aliased** instead
+(`import math as _pf_math`), leaving the user's `math` binding untouched. Programs that claim none of
+these names — nearly all of them — emit byte-identical output either way.
+
 ### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 
 Because the collections are immutable-style (every operation returns a fresh container, §6), building a

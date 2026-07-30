@@ -29,7 +29,7 @@ use std::collections::HashSet;
 use crate::parser::ast::{BlockStmt, CeItem, Expr, ExprKind, InterpPart, Param, Pattern};
 use crate::python_emitter::{PyCase, PyExpr, PyStmt};
 
-use super::{LowerError, Lowered, Lowerer};
+use super::{LowerError, Lowered, Lowerer, py_value_name};
 
 /// One recognized in-place update at a fold tail leaf, with the (still-unlowered)
 /// argument expressions the mutation needs.
@@ -361,7 +361,7 @@ impl Lowerer {
                 InitKind::Fresh | InitKind::Alias => v,
             };
             stmts.push(PyStmt::Assign {
-                target: slot.clone(),
+                target: py_value_name(slot),
                 value,
             });
         }
@@ -377,15 +377,20 @@ impl Lowerer {
             plan.single,
         )?;
         stmts.push(PyStmt::For {
-            target: plan.elem_param.clone(),
+            target: py_value_name(&plan.elem_param),
             iter,
             body,
         });
         // The result: the mutated accumulator(s) — a fresh container graph (P11).
         let value = if plan.single {
-            PyExpr::Name(plan.slots[0].clone())
+            PyExpr::Name(py_value_name(&plan.slots[0]))
         } else {
-            PyExpr::Tuple(plan.slots.iter().map(|s| PyExpr::Name(s.clone())).collect())
+            PyExpr::Tuple(
+                plan.slots
+                    .iter()
+                    .map(|s| PyExpr::Name(py_value_name(s)))
+                    .collect(),
+            )
         };
         Ok((stmts, value))
     }
@@ -535,11 +540,11 @@ impl Lowerer {
         for m in lowered {
             match m {
                 LoweredMut::Reset(slot, v) => out.push(PyStmt::Assign {
-                    target: slot,
+                    target: py_value_name(&slot),
                     value: v,
                 }),
                 LoweredMut::MapAdd(slot, k, v) => out.push(PyStmt::SubscriptAssign {
-                    obj: PyExpr::Name(slot),
+                    obj: PyExpr::Name(py_value_name(&slot)),
                     index: k,
                     value: v,
                 }),
@@ -612,7 +617,8 @@ fn method_call2(recv: String, method: &str, arg: PyExpr, arg2: Option<PyExpr>) -
     args.extend(arg2);
     PyStmt::Expr(PyExpr::Call {
         func: Box::new(PyExpr::Attribute {
-            value: Box::new(PyExpr::Name(recv)),
+            // `recv` is an accumulator slot, i.e. a Pyfun binder name.
+            value: Box::new(PyExpr::Name(py_value_name(&recv))),
             attr: method.to_string(),
         }),
         args,
