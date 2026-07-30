@@ -4583,3 +4583,23 @@ fn fold_reject_parameterized_local_let_closure() {
                let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
     assert_fold_fallback(src, &[("out", "[(1, 0), (2, 1), (3, 2)]")]);
 }
+
+#[test]
+fn e2e_an_effectful_recursive_loop_runs() {
+    // Recursion is the only way to write a loop (no `while`), so "recursive,
+    // several parameters, does I/O" is the shape of every game loop, REPL and
+    // menu. It was rejected outright before the effect knot was solved exactly;
+    // this checks the accepted program also *runs* and counts down correctly.
+    let Some(python) = python_cmd() else {
+        eprintln!("skipping end-to-end check: no python interpreter found");
+        return;
+    };
+    let src = "let countdown label n =\n\
+               \x20 let _ = print label\n\
+               \x20 if n <= 0 then 0 else countdown label (n - 1)\n\
+               let done = countdown \"tick\" 2";
+    let mut program = pyfun::compile(src).unwrap();
+    program.push_str("\nprint(done)\n");
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(out.trim(), "tick\ntick\ntick\n0");
+}
