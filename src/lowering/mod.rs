@@ -2385,8 +2385,16 @@ impl Lowerer {
                 {
                     return self.lower_pattern(payload);
                 }
+                // Matching a built-in constructor needs its classes as much as
+                // constructing one does: the emitted `case Some(x)` / `case None_()`
+                // names them. Only construction sites used to flag `Option`, so a
+                // module that merely *consumed* one — the producer being an import
+                // or another module's stdlib call — emitted `None_` with no import.
                 if name == "Ok" || name == "Error" {
                     self.needs_result = true;
+                }
+                if name == "Some" || name == "None" {
+                    self.needs_option = true;
                 }
                 let mut lowered = Vec::with_capacity(args.len());
                 for arg in args {

@@ -1006,3 +1006,34 @@ fn an_under_generalized_export_does_not_cascade_to_a_consumer() {
         "an exported polymorphic function must instantiate freshly per use: {errors:?}"
     );
 }
+
+#[test]
+fn a_module_that_only_matches_an_imported_option_imports_it() {
+    // The producer is in the other module, so nothing in Main constructs an
+    // Option — but Main's emitted patterns still name Some/None_, which must come
+    // from the shared runtime or the module raises NameError at import time.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Helper
+let probe xs =
+  match Helper.firstOf xs:
+    case None: \"none\"
+    case Some k: k
+print (probe [\"A\", \"B\"])",
+            ),
+            ("Helper", "let firstOf xs = List.get 0 xs"),
+        ],
+    );
+    assert!(
+        file(&files, "main.py").contains("from _pyfun_rt import Some, None_"),
+        "{}",
+        file(&files, "main.py")
+    );
+    let dir = Scratch::new("e2e_option_match_only");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "A");
+    }
+}
