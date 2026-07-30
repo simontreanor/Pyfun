@@ -225,6 +225,15 @@ impl Effect {
         }
     }
 
+    /// This effect without `v` — the solution to `v = self` when `self` mentions
+    /// `v` (union is idempotent, so removing the recursive occurrence is exact).
+    fn without_var(&self, v: u32) -> Effect {
+        Effect {
+            labels: self.labels.clone(),
+            vars: self.vars.iter().copied().filter(|x| *x != v).collect(),
+        }
+    }
+
     /// Render the concrete labels in canonical order, e.g. `io, async` — the
     /// deterministic body of a displayed `->{io, async}` arrow and of `let pure`
     /// violation messages.
@@ -3686,6 +3695,23 @@ impl Infer {
         }
         if a.vars.is_empty() && b.vars.is_empty() {
             return false; // two closed effects, their label sets differ
+        }
+        // A bare variable meeting an effect that *contains* it — `X = S ∪ X`. This
+        // is what tying a recursive knot produces: the arrow's latent variable was
+        // performed into the body's effect, so the body's effect mentions it. Union
+        // is idempotent, so `X := S` (the other side with `X` removed) solves it
+        // exactly, leaving every other variable in `S` open. Widening instead would
+        // close them all to the joined labels, which for a curried function stamps
+        // the body's effect onto the *outer* arrows that only build closures.
+        if let Some(v) = a.as_single_var() {
+            let rest = b.without_var(v);
+            self.eff_subst.insert(v, rest);
+            return true;
+        }
+        if let Some(v) = b.as_single_var() {
+            let rest = a.without_var(v);
+            self.eff_subst.insert(v, rest);
+            return true;
         }
         // Conservatively widen: close every involved variable to the joined labels.
         let joined = Effect {

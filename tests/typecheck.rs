@@ -1865,6 +1865,62 @@ fn pure_higher_order_with_impure_argument_at_call_site_is_fine() {
 
 // ---------- effect labels + declared-arrow annotations (DESIGN §4) ----------
 
+/// The shape of every game loop, REPL and server loop: recursive, several
+/// parameters, does I/O. Each application in the body performs a fresh latent
+/// effect variable, so tying the recursive knot meets the *inner* arrow's
+/// variable against an effect that contains it. Closing every variable in that
+/// equation to the joined labels also stamped `io` onto the **outer** currying
+/// arrow, which only builds a closure — and the binding's own type says that
+/// arrow is pure, so the two disagreed and arity >= 2 was rejected outright.
+const IO_LOOP: &str = "let loop2 x n =\n  let _ = print x\n  if n <= 0 then 0 else loop2 x (n - 1)";
+
+#[test]
+fn a_recursive_function_of_arity_two_can_perform_io() {
+    let analysis = pyfun::analyze(IO_LOOP);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    // The effect lands on the innermost arrow, exactly as for a declared extern.
+    assert!(
+        analysis
+            .types
+            .iter()
+            .any(|t| t.ty == "'a -> int ->{io} int"),
+        "expected `'a -> int ->{{io}} int`, got {:?}",
+        analysis.types
+    );
+}
+
+#[test]
+fn an_effectful_recursive_function_still_leaks_its_effect() {
+    // The other side of the fix: solving the knot exactly must not *lose* the
+    // effect. Fully applying the loop performs `io`, so `let pure` rejects it.
+    assert_error_contains(
+        &format!("{IO_LOOP}\nlet pure caller = loop2 \"a\" 1"),
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn partially_applying_an_effectful_recursive_function_is_pure() {
+    // The outer arrow stays open and resolves to pure: supplying one of two
+    // arguments only builds a closure.
+    assert!(pyfun::check(&format!("{IO_LOOP}\nlet pure prep = loop2 \"a\"")).is_ok());
+}
+
+#[test]
+fn mutually_recursive_functions_of_arity_two_can_perform_io() {
+    assert!(
+        pyfun::check(
+            "let ping x n =\n  let _ = print x\n  if n <= 0 then 0 else pong x (n - 1)\n\
+             let pong x n =\n  let _ = print \"pong\"\n  ping x (n - 1)"
+        )
+        .is_ok()
+    );
+}
+
 #[test]
 fn annotated_async_extern_carries_the_async_label() {
     // The `->{async}` annotation is trusted as written: `fetch` performs `async`

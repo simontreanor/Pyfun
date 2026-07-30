@@ -271,6 +271,30 @@ complicate the offside-rule lexer and the recovering parser for no perceptible l
 scale. The `editors/vscode/` client is intentionally thin — all language smarts live in the Rust
 server.
 
+## Solving effect equations (`Infer::unify_eff`) — implements DESIGN §4
+
+An `Effect` is a set of concrete labels plus a set of effect variables, so unification is over an
+idempotent union semilattice, not a free algebra. `unify_eff` resolves both sides through the effect
+substitution and then tries, in order:
+
+1. **equal** — nothing to do;
+2. **a bare variable absent from the other side** (`X ~ S`, `X ∉ S`) — bind `X := S`, the
+   most-general solution;
+3. **a bare variable that *occurs* in the other side** (`X ~ S ∪ X`) — bind `X := S`, i.e. the other
+   side with the recursive occurrence removed. Idempotence makes this exact, and every other variable
+   in `S` stays open;
+4. **two closed effects with different labels** — fail (declared effects are exact, DESIGN §4);
+5. **anything else** — widen conservatively: close every variable involved to the joined label set.
+
+Case 3 exists because tying a recursive knot produces exactly that equation. Each application in a
+body performs a *fresh* latent variable into `cur_eff` (`infer_apply`), so a recursive call of arity
+n contributes n of them, and the binding's own type puts the accumulated body effect on the innermost
+arrow with the currying arrows pure (`infer_binding`). `unify` recurses into the codomain before
+unifying an arrow's own effect, so the innermost equation — which mentions the *outer* arrows'
+variables — is solved first. Widening it (case 5) closed those outer variables to `{io}` as well,
+contradicting the pure outer arrow and rejecting every effectful recursive function of arity ≥ 2:
+the shape of every loop in a language with no `while`.
+
 ## Typed holes — implements DESIGN §7 (typed-hole semantics)
 
 The surface semantics (a `?`/`?name` hole is a typed blank the checker reports and that blocks
