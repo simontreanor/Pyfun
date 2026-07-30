@@ -2026,12 +2026,12 @@ fn e2e_sort_a_sum_type_by_variant_order() {
     run_and_check(
         "
         type Color = Red | Green | Blue
-        let sorted = List.sort [Blue, Red, Green]
+        let ordered = List.sort [Blue, Red, Green]
         let a = Red < Green
         let b = Green < Blue
         ",
         &[
-            ("sorted", "[Red, Green, Blue]"),
+            ("ordered", "[Red, Green, Blue]"),
             ("a", "True"),
             ("b", "True"),
         ],
@@ -2073,10 +2073,10 @@ fn e2e_sort_a_recursive_type() {
     run_and_check(
         "
         type Tree = Leaf int | Node Tree Tree
-        let sorted = List.sort [Node (Leaf 2) (Leaf 3), Leaf 5, Leaf 1]
+        let ordered = List.sort [Node (Leaf 2) (Leaf 3), Leaf 5, Leaf 1]
         ",
         // Leaf (variant 0) < Node (variant 1); Leaf 1 < Leaf 5 by field.
-        &[("sorted", "[Leaf(1), Leaf(5), Node(Leaf(2), Leaf(3))]")],
+        &[("ordered", "[Leaf(1), Leaf(5), Node(Leaf(2), Leaf(3))]")],
     );
 }
 
@@ -4619,4 +4619,101 @@ fn matching_an_option_pulls_in_the_option_prelude() {
     .unwrap();
     assert!(py.contains("class Some:"), "{py}");
     assert!(py.contains("class None_:"), "{py}");
+}
+
+// ---------- names Python already owns (keywords, builtins, imported modules) ----------
+
+/// Compile `src`, run it, and return its stdout with line endings normalized.
+fn run_source(src: &str) -> Option<String> {
+    let python = python_cmd()?;
+    let program = pyfun::compile(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
+    Some(run_python(&python, &program).replace("\r\n", "\n"))
+}
+
+#[test]
+fn e2e_a_binding_named_after_an_emitted_builtin_does_not_shadow_it() {
+    // `Set.ofList` lowers to `set([…])`, so a module-level `set` binding used to
+    // shadow the builtin and the emitted call died with "'int' object is not
+    // callable" — far from the binding that caused it.
+    let out = run_source(
+        "let set = 1\nlet s = Set.ofList [\"a\"]\nprint (Set.contains \"a\" s)\nprint set",
+    );
+    if let Some(out) = out {
+        assert_eq!(out.trim(), "True\n1");
+    }
+}
+
+#[test]
+fn e2e_a_local_binding_named_after_a_builtin_does_not_shadow_it() {
+    // Python resolves the global at call time, so a *local* binder breaks the
+    // emitted call inside its own function just as a top-level one does.
+    let out = run_source(
+        "let f xs =\n  let dict = 1\n  let m = Map.ofList [(\"a\", dict)]\n  Map.len m\nprint (f [])",
+    );
+    if let Some(out) = out {
+        assert_eq!(out.trim(), "1");
+    }
+}
+
+#[test]
+fn e2e_bindings_named_after_python_keywords_emit_valid_python() {
+    // A keyword cannot be emitted verbatim at all: `pass = 1` is a SyntaxError,
+    // not a shadowing. Every binder position has to dodge it — top-level, local,
+    // parameter, lambda parameter, match capture, and record field.
+    let out = run_source(
+        "type P = { lambda: int }\n\
+         let f class = class + 1\n\
+         let g o =\n  match o:\n    case Some def: def\n    case None: 0\n\
+         let h = List.map (fun global -> global + 1) [1]\n\
+         let k n =\n  let pass = n + 1\n  pass * 2\n\
+         let p = P { lambda = 7 }\n\
+         print (f 1)\nprint (g (Some 3))\nprint h\nprint (k 3)\nprint p.lambda",
+    );
+    if let Some(out) = out {
+        assert_eq!(out.trim(), "2\n3\n[2]\n8\n7");
+    }
+}
+
+#[test]
+fn an_extern_module_import_is_aliased_when_a_binding_claims_its_name() {
+    // `import math` is shadowed by a module-level `math` binding, and Python
+    // resolves `math.sqrt` at call time — so the call found the user's value
+    // ("'int' object has no attribute 'sqrt'"). Alias the import instead.
+    let src = "extern sq : float -> float = math.sqrt\nlet math = 1\nprint (sq 4.0)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("import math as _pf_math"), "{py}");
+    assert!(py.contains("_pf_math.sqrt(4.0)"), "{py}");
+    if let Some(out) = run_source(src) {
+        assert_eq!(out.trim(), "2.0");
+    }
+}
+
+#[test]
+fn an_uncollided_extern_import_stays_plain() {
+    // The alias is a collision dodge, not a default: ordinary output is untouched.
+    let py = pyfun::compile("extern sq : float -> float = math.sqrt\nprint (sq 4.0)").unwrap();
+    assert!(py.contains("import math\n"), "{py}");
+    assert!(!py.contains("_pf_math"), "{py}");
+}
+
+#[test]
+fn an_aliased_or_dotted_extern_import_re_roots_around_a_collision() {
+    // `import numpy as np` is referenced through its alias, so the alias is the
+    // name that collides. A dotted `import os.path` binds only `os`, and the
+    // aliased form binds the *submodule*, so the alias replaces both segments:
+    // `import os.path as _pf_os` makes the reference `_pf_os.join`, not
+    // `_pf_os.path.join`.
+    let aliased = pyfun::compile(
+        "extern import numpy as np\nextern zeros : int -> string = np.zeros\nlet np = 1\nprint (zeros 3)",
+    )
+    .unwrap();
+    assert!(aliased.contains("import numpy as _pf_np"), "{aliased}");
+    assert!(aliased.contains("_pf_np.zeros(3)"), "{aliased}");
+
+    let dotted = pyfun::compile(
+        "extern import os.path\nextern joinp : string -> string -> string = os.path.join\nlet os = 1\nprint (joinp \"a\" \"b\")",
+    )
+    .unwrap();
+    assert!(dotted.contains("import os.path as _pf_os"), "{dotted}");
+    assert!(dotted.contains("_pf_os.join(\"a\", \"b\")"), "{dotted}");
 }

@@ -1037,3 +1037,33 @@ print (probe [\"A\", \"B\"])",
         assert_eq!(out.trim(), "A");
     }
 }
+
+#[test]
+fn a_value_named_after_a_python_builtin_crosses_a_module_boundary() {
+    // The mangling is a pure function of the name, so the defining module and
+    // every reference to it agree without coordination.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Helper\nprint (Helper.set + 1)\nprint (Helper.len [\"a\", \"b\"])",
+            ),
+            ("Helper", "let set = 41\nlet len xs = List.len xs"),
+        ],
+    );
+    assert!(
+        file(&files, "helper.py").contains("set_ = 41"),
+        "{}",
+        file(&files, "helper.py")
+    );
+    assert!(
+        file(&files, "main.py").contains("helper.set_"),
+        "{}",
+        file(&files, "main.py")
+    );
+    let dir = Scratch::new("e2e_builtin_name_cross_module");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "42\n2");
+    }
+}

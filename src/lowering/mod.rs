@@ -641,7 +641,7 @@ impl Lowerer {
                     TypeDeclKind::Record(fields) => {
                         classes.push(PyStmt::ClassDef {
                             name: decl.name.clone(),
-                            fields: fields.iter().map(|f| f.name.clone()).collect(),
+                            fields: fields.iter().map(|f| py_field_name(&f.name)).collect(),
                             field_types: fields.iter().map(|f| py_annotation(&f.ty)).collect(),
                             order: ordered.then_some(0),
                             record: true,
@@ -685,30 +685,25 @@ impl Lowerer {
                         } else if is_unit_domain(&decl.ty) {
                             // A nullary extern binds to a lambda that ignores its
                             // unit argument, so a cross-module `Mod.now ()` works.
-                            if let Some(module) = self.extern_import_spec(&decl.target) {
-                                self.needed_imports.insert(module);
-                            }
-                            nullary_lambda(&decl.target, kwargs)
+                            nullary_lambda(&self.extern_path(&decl.target), kwargs)
                         } else {
-                            if let Some(module) = self.extern_import_spec(&decl.target) {
-                                self.needed_imports.insert(module);
-                            }
+                            let path = self.extern_path(&decl.target);
                             // A plain extern with pinned kwargs binds to a
                             // `functools.partial` that carries them (or, with a `...`
                             // slot, to a lambda that places it); otherwise to the
                             // bare dotted target.
                             if kwargs.is_empty() {
-                                dotted_path(&decl.target)
+                                dotted_path(&path)
                             } else {
                                 self.build_call_kw_bare(
-                                    dotted_path(&decl.target),
+                                    dotted_path(&path),
                                     Some(arrow_arity(&decl.ty)),
                                     kwargs,
                                 )
                             }
                         };
                         code.push(PyStmt::Assign {
-                            target: decl.name.clone(),
+                            target: py_value_name(&decl.name),
                             value,
                         });
                     }
@@ -732,7 +727,7 @@ impl Lowerer {
                             is_async: false,
                         });
                         code.push(PyStmt::Assign {
-                            target: binding.name.clone(),
+                            target: py_value_name(&binding.name),
                             value: PyExpr::Call {
                                 func: Box::new(PyExpr::Name(fname)),
                                 args: vec![],
@@ -752,7 +747,7 @@ impl Lowerer {
                     let body = self.lower_fn_body(&names, &decl.value, &inner)?;
                     code.push(PyStmt::FuncDef {
                         name: ap_py_fn(decl),
-                        params: names,
+                        params: py_param_names(&names),
                         body,
                         is_async: false,
                     });
@@ -765,7 +760,7 @@ impl Lowerer {
                     let members = items.iter().map(|m| m.name.clone()).collect();
                     self.cur_module = Some((name.clone(), members));
                     for member in items {
-                        let mangled = format!("{name}_{}", member.name);
+                        let mangled = format!("{name}_{}", py_value_name(&member.name));
                         self.lower_binding_as(&mangled, member, &HashSet::new(), &mut code)?;
                     }
                     self.cur_module = None;
@@ -920,17 +915,20 @@ impl Lowerer {
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
+        // The emitted spelling of the binding (a `Module_member` name arrives here
+        // already composed, and is never itself reserved).
+        let py_name = py_value_name(name);
         if binding.params.is_empty() {
             let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
             // A binding whose value already *is* the (already-assigned) target — an
             // in-place fold whose accumulator slot is named like the binding
             // (`let m = List.fold (fun m x -> …)`) — would emit a no-op `m = m`.
             // Suppress it: the hoisted statements have already bound the name.
-            let redundant = !stmts.is_empty() && matches!(&value, PyExpr::Name(n) if n == name);
+            let redundant = !stmts.is_empty() && matches!(&value, PyExpr::Name(n) if *n == py_name);
             out.append(&mut stmts);
             if !redundant {
                 out.push(PyStmt::Assign {
-                    target: name.to_string(),
+                    target: py_name,
                     value,
                 });
             }
@@ -941,8 +939,8 @@ impl Lowerer {
             let inner = extend(locals, &names);
             let body = self.lower_fn_body(&names, &binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
-                name: name.to_string(),
-                params: names,
+                name: py_name,
+                params: py_param_names(&names),
                 body,
                 is_async: false,
             });
@@ -990,10 +988,10 @@ impl Lowerer {
 
         let mut decls = Vec::new();
         if !globals.is_empty() {
-            decls.push(PyStmt::Global(globals));
+            decls.push(PyStmt::Global(py_param_names(&globals)));
         }
         if !nonlocals.is_empty() {
-            decls.push(PyStmt::Nonlocal(nonlocals));
+            decls.push(PyStmt::Nonlocal(py_param_names(&nonlocals)));
         }
         decls.append(&mut stmts);
         Ok(decls)
@@ -1238,7 +1236,7 @@ impl Lowerer {
                     Ok((
                         vec![],
                         PyExpr::Lambda {
-                            params: names,
+                            params: py_param_names(&names),
                             body: Box::new(body_val),
                         },
                     ))
@@ -1248,7 +1246,7 @@ impl Lowerer {
                     let def_body = self.lower_fn_body(&names, body, &inner)?;
                     let def = PyStmt::FuncDef {
                         name: name.clone(),
-                        params: names,
+                        params: py_param_names(&names),
                         body: def_body,
                         is_async: false,
                     };
@@ -1371,7 +1369,7 @@ impl Lowerer {
                     stmts,
                     PyExpr::Attribute {
                         value: Box::new(value),
-                        attr: name.clone(),
+                        attr: py_field_name(name),
                     },
                 ))
             }
@@ -1381,7 +1379,7 @@ impl Lowerer {
             ExprKind::Assign { target, value } => {
                 let (mut stmts, v) = self.lower_value(value, locals)?;
                 stmts.push(PyStmt::Assign {
-                    target: target.clone(),
+                    target: py_value_name(target),
                     value: v,
                 });
                 // An assignment is a Python statement; its value is unit.
@@ -1508,7 +1506,7 @@ impl Lowerer {
         for field in &order {
             let attr = PyExpr::Attribute {
                 value: Box::new(base_py.clone()),
-                attr: field.clone(),
+                attr: py_field_name(field),
             };
             match by_field.remove(field) {
                 // Not updated: copy from the base.
@@ -1572,6 +1570,44 @@ impl Lowerer {
             self.needed_imports.insert(module.clone());
             module
         }
+    }
+
+    /// Register the Python import a used `extern` target needs, and return the
+    /// path its emitted reference should be built from.
+    ///
+    /// A plain `import math` is shadowed by any module-level binding named `math`,
+    /// and Python resolves `math.sqrt` at *call* time, so the call finds the user's
+    /// value: `'int' object has no attribute 'sqrt'`. When a binder anywhere in the
+    /// module claims the name the reference is rooted at, the import is aliased
+    /// (`import math as _pf_math`) and the path re-rooted — the same dodge
+    /// [`Lowerer::py_module_ref`] applies to imported *Pyfun* modules. A dotted
+    /// import binds only its first segment (`import os.path` binds `os`), so the
+    /// alias replaces however many segments the module spec covers
+    /// (`import os.path as _pf_os` ⇒ `_pf_os.join`).
+    fn extern_path(&mut self, target: &[String]) -> Vec<String> {
+        let Some(spec) = self.extern_import_spec(target) else {
+            // A bare builtin root (`bytes.decode`) — nothing to import, and
+            // `py_value_name` keeps user bindings off those names.
+            return target.to_vec();
+        };
+        let Some(root) = target.first() else {
+            return target.to_vec();
+        };
+        if !self.binder_names.contains(root) {
+            self.needed_imports.insert(spec);
+            return target.to_vec();
+        }
+        // `spec` is either `module` or `module as alias`; an aliased import is
+        // referenced through its alias, which is one segment.
+        let (module, consumed) = match spec.split_once(" as ") {
+            Some((module, _)) => (module.to_string(), 1),
+            None => (spec.clone(), spec.split('.').count()),
+        };
+        let alias = format!("_pf_{root}");
+        self.needed_imports.insert(format!("{module} as {alias}"));
+        let mut path = vec![alias];
+        path.extend(target.iter().skip(consumed).cloned());
+        path
     }
 
     /// The import spec a used extern target needs — `"datetime"` or
@@ -1725,10 +1761,7 @@ impl Lowerer {
             && !locals.contains(name)
             && self.nullary_externs.contains(name)
         {
-            let target = self.extern_targets[name].clone();
-            if let Some(module) = self.extern_import_spec(&target) {
-                self.needed_imports.insert(module);
-            }
+            let target = self.extern_path(&self.extern_targets[name].clone());
             let mut stmts = Vec::new();
             let mut arg_vals = Vec::with_capacity(args_ast.len());
             for arg in &args_ast {
@@ -1776,11 +1809,8 @@ impl Lowerer {
             && !self.user_defs.contains(name)
             && let Some(kwargs) = self.extern_kwargs.get(name).cloned()
         {
-            let target = self.extern_targets[name].clone();
+            let target = self.extern_path(&self.extern_targets[name].clone());
             let arity = self.arities.get(name).copied();
-            if let Some(module) = self.extern_import_spec(&target) {
-                self.needed_imports.insert(module);
-            }
             let mut stmts = Vec::new();
             let mut arg_vals = Vec::with_capacity(args_ast.len());
             for arg in &args_ast {
@@ -1948,7 +1978,7 @@ impl Lowerer {
             && let Some((m, members)) = &self.cur_module
             && members.contains(name)
         {
-            return PyExpr::Name(format!("{m}_{name}"));
+            return PyExpr::Name(format!("{m}_{}", py_value_name(name)));
         }
         // A local parameter or a user top-level binding shadows a seeded name
         // (extern routing), so skip rerouting in that case. Module members
@@ -1968,10 +1998,7 @@ impl Lowerer {
             // ignores its argument (`now` → `lambda *_: time.time()`); applied
             // references are handled directly in `lower_application`.
             if self.nullary_externs.contains(name) {
-                let target = self.extern_targets[name].clone();
-                if let Some(module) = self.extern_import_spec(&target) {
-                    self.needed_imports.insert(module);
-                }
+                let target = self.extern_path(&self.extern_targets[name].clone());
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
                 return nullary_lambda(&target, kwargs);
             }
@@ -1981,20 +2008,15 @@ impl Lowerer {
             // yet to be filled, so they survive later application. Applied
             // references are handled in `lower_application`.
             if let Some(kwargs) = self.extern_kwargs.get(name).cloned() {
-                let target = self.extern_targets[name].clone();
-                if let Some(module) = self.extern_import_spec(&target) {
-                    self.needed_imports.insert(module);
-                }
+                let target = self.extern_path(&self.extern_targets[name].clone());
                 let arity = self.arities.get(name).copied();
                 return self.build_call_kw_bare(dotted_path(&target), arity, kwargs);
             }
             // An `extern` reference lowers to its dotted Python target (e.g.
             // `math.sqrt`), recording any module that must be imported.
             if let Some(target) = self.extern_targets.get(name).cloned() {
-                if let Some(module) = self.extern_import_spec(&target) {
-                    self.needed_imports.insert(module);
-                }
-                return dotted_path(&target);
+                let path = self.extern_path(&target);
+                return dotted_path(&path);
             }
             // Prelude functions that live in Python's `math` (not bare builtins):
             // `floor`/`ceil`/`truncate` → `math.floor`/`ceil`/`trunc`, and the
@@ -2058,7 +2080,7 @@ impl Lowerer {
                 args: vec![],
             },
             Some(_) => PyExpr::Name(py_ctor_name(name)),
-            None => PyExpr::Name(name.to_string()),
+            None => PyExpr::Name(py_value_name(name)),
         }
     }
 
@@ -2315,10 +2337,12 @@ impl Lowerer {
                     let module = self.py_module_ref(base);
                     let attr = PyExpr::Attribute {
                         value: Box::new(PyExpr::Name(module)),
-                        // A member may be a constructor (`Geometry.Circle`), so
-                        // mangle it the same way its defining module did
-                        // (`None` → `None_`); value members are unaffected.
-                        attr: py_ctor_name(member),
+                        // A member may be a constructor (`Geometry.Circle`) or a
+                        // value (`Geometry.set`), so mangle it exactly as its
+                        // defining module did. `py_value_name` covers both: it
+                        // agrees with `py_ctor_name` on `None`/`True`/`False` and
+                        // leaves every other (capitalized) constructor alone.
+                        attr: py_value_name(member),
                     };
                     // A nullary constructor used as a value is an instance, so call
                     // it (`palette.Red()`), matching the single-module behavior.
@@ -2331,7 +2355,12 @@ impl Lowerer {
                         attr
                     }
                 } else {
-                    PyExpr::Name(other.replace('.', "_"))
+                    // An in-file `module` member: the flat `Geometry_area` name its
+                    // definition emitted (mangled the same way).
+                    PyExpr::Name(match other.split_once('.') {
+                        Some((m, member)) => format!("{m}_{}", py_value_name(member)),
+                        None => py_value_name(other),
+                    })
                 }
             }
         }
@@ -2372,7 +2401,7 @@ impl Lowerer {
     fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
         match pattern {
             Pattern::Wildcard => PyPattern::Wildcard,
-            Pattern::Var { name, .. } => PyPattern::Capture(name.clone()),
+            Pattern::Var { name, .. } => PyPattern::Capture(py_value_name(name)),
             Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
             Pattern::Str(s) => PyPattern::Literal(PyExpr::Str(s.clone())),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
@@ -2410,7 +2439,7 @@ impl Lowerer {
                 // field names match its attributes, so emit a keyword class pattern.
                 let lowered = fields
                     .iter()
-                    .map(|f| (f.name.clone(), self.lower_pattern(&f.pattern)))
+                    .map(|f| (py_field_name(&f.name), self.lower_pattern(&f.pattern)))
                     .collect();
                 PyPattern::ClassKw {
                     name: self.record_class_name(ty),
@@ -2431,7 +2460,7 @@ impl Lowerer {
             } => {
                 let elems = prefix.iter().map(|p| self.lower_pattern(p)).collect();
                 let star = rest.as_deref().map(|r| match r {
-                    Pattern::Var { name, .. } => name.clone(),
+                    Pattern::Var { name, .. } => py_value_name(name),
                     // `*_` and any other rest binder discard into a wildcard capture.
                     _ => "_".to_string(),
                 });
@@ -2448,7 +2477,7 @@ impl Lowerer {
             }
             Pattern::As { pattern, name, .. } => PyPattern::As {
                 pattern: Box::new(self.lower_pattern(pattern)),
-                name: name.clone(),
+                name: py_value_name(name),
             },
         }
     }
@@ -2769,7 +2798,7 @@ impl Lowerer {
             Pattern::Var { name, .. } => Ok((
                 None,
                 vec![PyStmt::Assign {
-                    target: name.clone(),
+                    target: py_value_name(name),
                     value: subj(),
                 }],
             )),
@@ -2938,7 +2967,7 @@ impl Lowerer {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {
-                        target: name.clone(),
+                        target: py_value_name(name),
                         value: v,
                     });
                     locals.insert(name.clone());
@@ -3002,7 +3031,7 @@ impl Lowerer {
             CeItem::Let { name, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 s.push(PyStmt::Assign {
-                    target: name.clone(),
+                    target: py_value_name(name),
                     value: v,
                 });
                 let mut locals = locals.clone();
@@ -3015,7 +3044,11 @@ impl Lowerer {
                 let mut inner_locals = locals.clone();
                 inner_locals.insert(name.clone());
                 let rest_stmts = self.lower_result_items(rest, &inner_locals)?;
-                s.push(self.result_bind_match(v, PyPattern::Capture(name.clone()), rest_stmts));
+                s.push(self.result_bind_match(
+                    v,
+                    PyPattern::Capture(py_value_name(name)),
+                    rest_stmts,
+                ));
                 Ok(s)
             }
             CeItem::DoBang(e) => {
@@ -3069,7 +3102,7 @@ impl Lowerer {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {
-                        target: name.clone(),
+                        target: py_value_name(name),
                         value: PyExpr::Await(Box::new(v)),
                     });
                     locals.insert(name.clone());
@@ -3078,7 +3111,7 @@ impl Lowerer {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
                     body.push(PyStmt::Assign {
-                        target: name.clone(),
+                        target: py_value_name(name),
                         value: v,
                     });
                     locals.insert(name.clone());
@@ -3566,6 +3599,77 @@ fn ap_case_class(case: &str) -> String {
 /// Mangle a constructor name to a valid, non-keyword Python identifier.
 fn py_ctor_name(name: &str) -> String {
     if matches!(name, "None" | "True" | "False") {
+        format!("{name}_")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Python's reserved words (plus the soft keywords that are reserved in the
+/// positions Pyfun emits into). A user binding named after one of these cannot be
+/// emitted verbatim at all — `lambda = 1` is a `SyntaxError`, not a shadowing.
+const PY_KEYWORDS: &[&str] = &[
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield",
+];
+
+/// Python builtins **this emitter calls** in code that runs after user bindings
+/// are in scope: prelude helper bodies (`_pf_map` calls `list`/`map`) and inline
+/// stdlib expansions (`Set.ofList` → `set([…])`). A user binding claiming one of
+/// these names shadows it at module scope, so the emitted call finds the user's
+/// value instead of the builtin — `'int' object is not callable`, far from the
+/// binding that caused it.
+///
+/// Deliberately *only* the names that are emitted with no Pyfun name of their own.
+/// `print`/`abs`/`min`/`max`/`round` are absent on purpose: those lower name-for-
+/// name from an identically spelled Pyfun prelude binding, so a user binding of
+/// that name shadows the Pyfun name too and the checker settles it. `id` is absent
+/// because Pyfun's `id` lowers to `_pf_id` (Python's `id` returns an address), and
+/// `let id x = x` is common enough that mangling it would be a visible tax for no
+/// collision.
+const PY_EMITTED_BUILTINS: &[&str] = &[
+    "filter",
+    "isinstance",
+    "iter",
+    "len",
+    "map",
+    "next",
+    "reversed",
+    "sorted",
+    "sum",
+    "zip",
+];
+
+/// The emitted Python name for a user **value** binding or reference: the name as
+/// written, unless Python's own namespace claims it, in which case it gains a
+/// trailing underscore (`set` → `set_`, `lambda` → `lambda_`) — the same dodge
+/// [`py_ctor_name`] applies to `None`, and PEP 8's own convention.
+///
+/// A pure function of the name, so a definition and every reference to it — in
+/// this module or across a module boundary — mangle identically without any
+/// coordination. `_pf`-prefixed names are the emitter's own namespace and cannot
+/// be written in Pyfun source, so they need no protection here.
+fn py_value_name(name: &str) -> String {
+    // The builtin *types* join the list because an `extern` may be rooted at one
+    // (`bytes.decode`, `int.from_bytes`) — and because the emitter names several
+    // of them directly (`set([…])`, `dict(…)`, `list(…)`).
+    if PY_KEYWORDS.contains(&name)
+        || PY_EMITTED_BUILTINS.contains(&name)
+        || PY_BUILTIN_TYPES.contains(&name)
+    {
+        format!("{name}_")
+    } else {
+        name.to_string()
+    }
+}
+
+/// The emitted Python name for a **record field**. An attribute lives in its
+/// object's namespace, so it cannot collide with a builtin (`q.set` is fine) —
+/// only Python's keywords are unusable (`p.lambda` does not parse).
+fn py_field_name(name: &str) -> String {
+    if PY_KEYWORDS.contains(&name) {
         format!("{name}_")
     } else {
         name.to_string()
@@ -5051,6 +5155,14 @@ fn extend(base: &HashSet<String>, names: &[String]) -> HashSet<String> {
 /// names; their source spans (carried for the LSP) are erased here.
 fn param_names(params: &[Param]) -> Vec<String> {
     params.iter().map(|p| p.name.clone()).collect()
+}
+
+/// Emitted Python parameter names ([`py_value_name`] over each). Scope tracking
+/// (`locals`, `scan_scope`, the fold pass) works in *Pyfun* name space, so names
+/// are mangled only where they are written into the Python IR — never in the sets
+/// those passes consult.
+fn py_param_names(names: &[String]) -> Vec<String> {
+    names.iter().map(|n| py_value_name(n)).collect()
 }
 
 /// Append `target = value` to a (possibly empty) statement list.

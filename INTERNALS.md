@@ -271,6 +271,35 @@ complicate the offside-rule lexer and the recovering parser for no perceptible l
 scale. The `editors/vscode/` client is intentionally thin — all language smarts live in the Rust
 server.
 
+## Names Python already owns — implements DESIGN §5
+
+Two mechanisms, both in `src/lowering/mod.rs`, for the two shapes of collision between user names
+and the namespace the emitter shares with them.
+
+**Mangling** (`py_value_name`, and `py_field_name` for record attributes) is a pure function over
+three fixed lists — `PY_KEYWORDS`, `PY_EMITTED_BUILTINS` (the non-type builtins the emitter calls:
+`len`, `map`, `filter`, `isinstance`, …) and `PY_BUILTIN_TYPES` (also the legal roots of a dotted
+`extern` target) — appending `_` to any name they claim. Being a pure function is what lets a
+definition and a cross-module reference agree without coordination, so it must stay one. Two names
+are deliberately absent: `print`/`abs`/`min`/`max`/`round` lower name-for-name from identically
+spelled *Pyfun* prelude bindings, so a user binding shadows the Pyfun name too and the checker settles
+it; and `id` never reaches the output (Pyfun's `id` is `_pf_id`), so mangling `let id x = x` would be
+a tax with no collision behind it.
+
+It is applied **only where a name is written into the Python IR** — parameters (`py_param_names`),
+`lower_binding_as`, `lower_var`, pattern captures, `<-` targets, `nonlocal`/`global` lists, CE
+binders, qualified member references, the in-file `Module_member` spelling, and the fold pass's slot
+and loop variables. Scope tracking (`locals`, `scan_scope`, `fn_local_stack`, `binder_names`, the fold
+pass's plan) stays in **Pyfun** name space: mangling a set those passes consult would silently break
+shadowing.
+
+**Aliasing** (`Lowerer::extern_path`) covers imported Python modules, which are arbitrary
+(`math`, `numpy`, `httpx`) and so cannot be a fixed list. It consults the same whole-module
+`binder_names` set `py_module_ref` uses for imported *Pyfun* modules: on a collision the import
+becomes `import math as _pf_math` and the reference is re-rooted, leaving the user's binding alone. A
+dotted import binds only its first segment (`import os.path` binds `os`), so the alias replaces as
+many segments as the module spec covers.
+
 ## Solving effect equations (`Infer::unify_eff`) — implements DESIGN §4
 
 An `Effect` is a set of concrete labels plus a set of effect variables, so unification is over an
