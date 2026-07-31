@@ -724,6 +724,18 @@ lazy module exists: `Seq.initInfinite (fun i -> i * 2) |> Seq.take 5 |> Seq.toLi
 `Seq.find` over an endless sequence stops at the first match. Anything that forces the whole sequence
 (`len`, `sum`, `toList`) does not terminate on one, which its documentation says.
 
+**Set and Map — the traversal half.** Both started as containers with membership and construction
+but no way to *walk* them, so transforming either meant a round trip through `toList`. They now carry
+`isEmpty`/`map`/`filter`/`fold`/`exists`/`forall`/`partition`, plus `isSubset`/`isSuperset`/`max`/`min`
+for `Set` (the last two `Option`-answering and `comparison`-constrained, like `List.max`) and `union`
+for `Map` (the second map winning a shared key). Every `Map` member takes the **key and the value**,
+since a map's element is the pair, and walks `m.items()` so each entry is read once — a loop over keys
+with `m[k]` inside would hash every key twice. `Set.map` can return a *smaller* set, since two elements
+may map onto one, and its result type is free (`Set a -> Set b`); `Map.map` keeps the keys and frees
+only the value type (`Map k v -> Map k w`). `Set.fold` walks in Python's set order, which is not sorted
+— a fold whose result depends on order should sort first. All the higher-order members are
+effect-polymorphic like `List.map`.
+
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The

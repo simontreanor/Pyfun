@@ -1688,6 +1688,106 @@ fn rejects_field_declared_twice_in_one_record() {
     assert_error_contains("type P = { x: int, x: int }", "field `x` is declared twice");
 }
 
+// ---------- the Map/Set sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn set_traversals_keep_the_set_type() {
+    assert!(
+        pyfun::check(
+            "let s = Set.ofList [1, 2, 3]\n\
+             let e = Set.isEmpty s\n\
+             let m = Set.map (fun x -> x * 2) s\n\
+             let f = Set.filter (fun x -> x > 1) s\n\
+             let t = Set.fold (fun acc x -> acc + x) 0 s\n\
+             let p = Set.partition (fun x -> x > 1) s"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn set_map_may_change_the_element_type() {
+    // Two elements can map onto one, so this is a `Set b`, not a relabelling.
+    assert!(
+        pyfun::check("let s = Set.map (fun x -> String.fromInt x) (Set.ofList [1, 2])").is_ok()
+    );
+}
+
+#[test]
+fn set_max_and_min_answer_with_option() {
+    assert_error_contains(
+        "let m = Set.max (Set.ofList [1])\nlet bad = m + 1",
+        "Option",
+    );
+}
+
+#[test]
+fn set_subset_checks_take_two_sets() {
+    assert!(
+        pyfun::check(
+            "let a = Set.isSubset (Set.ofList [1]) (Set.ofList [1, 2])\n\
+             let b = Set.isSuperset (Set.ofList [1, 2]) (Set.ofList [1])"
+        )
+        .is_ok()
+    );
+    assert_error_contains("let bad = Set.isSubset (Set.ofList [1]) [1, 2]", "Set");
+}
+
+#[test]
+fn map_traversals_take_the_key_and_the_value() {
+    // A map's element is the pair, so every higher-order member sees both.
+    assert!(
+        pyfun::check(
+            "let m = Map.ofList [(1, \"a\")]\n\
+             let e = Map.isEmpty m\n\
+             let mapped = Map.map (fun k v -> String.concat v \"!\") m\n\
+             let kept = Map.filter (fun k v -> k > 0) m\n\
+             let total = Map.fold (fun acc k v -> acc + k) 0 m\n\
+             let any = Map.exists (fun k v -> k > 0) m\n\
+             let all = Map.forall (fun k v -> k > 0) m\n\
+             let split = Map.partition (fun k v -> k > 0) m"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn map_map_keeps_the_keys_and_may_change_the_values() {
+    // `Map k v -> Map k w`: the key type is fixed, the value type is not.
+    assert!(
+        pyfun::check(
+            "let m = Map.ofList [(1, \"a\")]\n\
+             let lengths = Map.map (fun k v -> String.len v) m\n\
+             let n = Map.findOr 1 0 lengths"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn map_union_needs_two_maps_of_one_type() {
+    assert!(
+        pyfun::check("let u = Map.union (Map.ofList [(1, \"a\")]) (Map.ofList [(2, \"b\")])")
+            .is_ok()
+    );
+    assert_error_contains(
+        "let bad = Map.union (Map.ofList [(1, \"a\")]) (Map.ofList [(2, 3)])",
+        "int",
+    );
+}
+
+#[test]
+fn map_and_set_traversals_carry_their_effect() {
+    assert_error_contains(
+        "let pure go = Set.map (fun x -> print x) (Set.ofList [1])",
+        "io",
+    );
+    assert_error_contains(
+        "let pure go = Map.map (fun k v -> print v) (Map.ofList [(1, 2)])",
+        "io",
+    );
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]

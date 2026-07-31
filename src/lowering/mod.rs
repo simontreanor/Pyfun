@@ -2266,6 +2266,34 @@ impl Lowerer {
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
             "Set.ofList" => bare("set"),
+            "Set.isEmpty" => coll(self, "_pf_set_is_empty"),
+            "Set.map" => coll(self, "_pf_set_map"),
+            "Set.filter" => coll(self, "_pf_set_filter"),
+            "Set.fold" => {
+                self.needs_functools = true;
+                list(self, "_pf_fold")
+            }
+            "Set.exists" => coll(self, "_pf_set_exists"),
+            "Set.forall" => coll(self, "_pf_set_forall"),
+            "Set.partition" => coll(self, "_pf_set_partition"),
+            "Set.isSubset" => coll(self, "_pf_set_is_subset"),
+            "Set.isSuperset" => coll(self, "_pf_set_is_superset"),
+            "Set.max" => {
+                self.needs_option = true;
+                coll(self, "_pf_set_max")
+            }
+            "Set.min" => {
+                self.needs_option = true;
+                coll(self, "_pf_set_min")
+            }
+            "Map.isEmpty" => coll(self, "_pf_map_is_empty"),
+            "Map.map" => coll(self, "_pf_map_map"),
+            "Map.filter" => coll(self, "_pf_map_filter"),
+            "Map.fold" => coll(self, "_pf_map_fold"),
+            "Map.exists" => coll(self, "_pf_map_exists"),
+            "Map.forall" => coll(self, "_pf_map_forall"),
+            "Map.partition" => coll(self, "_pf_map_partition"),
+            "Map.union" => coll(self, "_pf_map_union"),
             "Set.toList" => bare("list"),
             "Set.add" => coll(self, "_pf_set_add"),
             "Set.remove" => coll(self, "_pf_set_remove"),
@@ -5861,6 +5889,337 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         })],
                     },
                     PyStmt::Return(PyExpr::NoneLit),
+                ],
+            ),
+            // ---- Set: the traversal half (a Python `set`) ----
+            // Set.isEmpty(s) -> not s
+            "_pf_set_is_empty" => {
+                def1("_pf_set_is_empty", &["s"], PyExpr::Not(Box::new(name("s"))))
+            }
+            // Set.map(f, s) -> set(map(f, s))
+            "_pf_set_map" => def1(
+                "_pf_set_map",
+                &["f", "s"],
+                call("set", vec![call("map", vec![name("f"), name("s")])]),
+            ),
+            // Set.filter(f, s) -> set(filter(f, s))
+            "_pf_set_filter" => def1(
+                "_pf_set_filter",
+                &["f", "s"],
+                call("set", vec![call("filter", vec![name("f"), name("s")])]),
+            ),
+            // Set.exists(f, s) -> any(map(f, s))
+            "_pf_set_exists" => def1(
+                "_pf_set_exists",
+                &["f", "s"],
+                call("any", vec![call("map", vec![name("f"), name("s")])]),
+            ),
+            // Set.forall(f, s) -> all(map(f, s))
+            "_pf_set_forall" => def1(
+                "_pf_set_forall",
+                &["f", "s"],
+                call("all", vec![call("map", vec![name("f"), name("s")])]),
+            ),
+            // Set.partition(f, s) -> (passing, failing), testing each element once
+            "_pf_set_partition" => def(
+                "_pf_set_partition",
+                &["f", "s"],
+                vec![
+                    PyStmt::Assign {
+                        target: "yes".to_string(),
+                        value: call("set", vec![]),
+                    },
+                    PyStmt::Assign {
+                        target: "no".to_string(),
+                        value: call("set", vec![]),
+                    },
+                    PyStmt::For {
+                        target: "x".to_string(),
+                        iter: name("s"),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![name("x")],
+                            },
+                            body: vec![PyStmt::Expr(method(name("yes"), "add", vec![name("x")]))],
+                            orelse: vec![PyStmt::Expr(method(name("no"), "add", vec![name("x")]))],
+                        }],
+                    },
+                    PyStmt::Return(PyExpr::Tuple(vec![name("yes"), name("no")])),
+                ],
+            ),
+            // Set.isSubset(a, b) -> a.issubset(b)
+            "_pf_set_is_subset" => def1(
+                "_pf_set_is_subset",
+                &["a", "b"],
+                method(name("a"), "issubset", vec![name("b")]),
+            ),
+            // Set.isSuperset(a, b) -> a.issuperset(b)
+            "_pf_set_is_superset" => def1(
+                "_pf_set_is_superset",
+                &["a", "b"],
+                method(name("a"), "issuperset", vec![name("b")]),
+            ),
+            // Set.max(s) -> Some(max(s)) if s else None_()
+            "_pf_set_max" => def1(
+                "_pf_set_max",
+                &["s"],
+                PyExpr::IfExp {
+                    body: Box::new(call("Some", vec![call("max", vec![name("s")])])),
+                    test: Box::new(name("s")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // Set.min(s) -> Some(min(s)) if s else None_()
+            "_pf_set_min" => def1(
+                "_pf_set_min",
+                &["s"],
+                PyExpr::IfExp {
+                    body: Box::new(call("Some", vec![call("min", vec![name("s")])])),
+                    test: Box::new(name("s")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // ---- Map: the traversal half (a Python `dict`) ----
+            // Every one takes the key *and* the value, since a map's element is the
+            // pair, and every one walks `m.items()` in insertion order.
+            // Map.isEmpty(m) -> not m
+            "_pf_map_is_empty" => {
+                def1("_pf_map_is_empty", &["m"], PyExpr::Not(Box::new(name("m"))))
+            }
+            // Map.map(f, m): fresh dict, same keys, f(k, v) values
+            "_pf_map_map" => def(
+                "_pf_map_map",
+                &["f", "m"],
+                vec![
+                    PyStmt::Assign {
+                        target: "out".to_string(),
+                        value: call("dict", vec![]),
+                    },
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::SubscriptAssign {
+                            obj: name("out"),
+                            index: PyExpr::Subscript {
+                                value: Box::new(name("kv")),
+                                index: Box::new(PyExpr::Int(0)),
+                            },
+                            value: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            },
+                        }],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // Map.filter(f, m): the entries whose key and value pass
+            "_pf_map_filter" => def(
+                "_pf_map_filter",
+                &["f", "m"],
+                vec![
+                    PyStmt::Assign {
+                        target: "out".to_string(),
+                        value: call("dict", vec![]),
+                    },
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            },
+                            body: vec![PyStmt::SubscriptAssign {
+                                obj: name("out"),
+                                index: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(0)),
+                                },
+                                value: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(1)),
+                                },
+                            }],
+                            orelse: vec![],
+                        }],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // Map.fold(f, acc, m) -> acc threaded through f(acc, k, v)
+            "_pf_map_fold" => def(
+                "_pf_map_fold",
+                &["f", "acc", "m"],
+                vec![
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::Assign {
+                            target: "acc".to_string(),
+                            value: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    name("acc"),
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            },
+                        }],
+                    },
+                    PyStmt::Return(name("acc")),
+                ],
+            ),
+            // Map.exists(f, m) / Map.forall(f, m): short-circuiting walks
+            "_pf_map_exists" => def(
+                "_pf_map_exists",
+                &["f", "m"],
+                vec![
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            },
+                            body: vec![PyStmt::Return(PyExpr::Bool(true))],
+                            orelse: vec![],
+                        }],
+                    },
+                    PyStmt::Return(PyExpr::Bool(false)),
+                ],
+            ),
+            "_pf_map_forall" => def(
+                "_pf_map_forall",
+                &["f", "m"],
+                vec![
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Not(Box::new(PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            })),
+                            body: vec![PyStmt::Return(PyExpr::Bool(false))],
+                            orelse: vec![],
+                        }],
+                    },
+                    PyStmt::Return(PyExpr::Bool(true)),
+                ],
+            ),
+            // Map.partition(f, m) -> (passing, failing), testing each entry once
+            "_pf_map_partition" => def(
+                "_pf_map_partition",
+                &["f", "m"],
+                vec![
+                    PyStmt::Assign {
+                        target: "yes".to_string(),
+                        value: call("dict", vec![]),
+                    },
+                    PyStmt::Assign {
+                        target: "no".to_string(),
+                        value: call("dict", vec![]),
+                    },
+                    PyStmt::For {
+                        target: "kv".to_string(),
+                        iter: method(name("m"), "items", vec![]),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(0)),
+                                    },
+                                    PyExpr::Subscript {
+                                        value: Box::new(name("kv")),
+                                        index: Box::new(PyExpr::Int(1)),
+                                    },
+                                ],
+                            },
+                            body: vec![PyStmt::SubscriptAssign {
+                                obj: name("yes"),
+                                index: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(0)),
+                                },
+                                value: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(1)),
+                                },
+                            }],
+                            orelse: vec![PyStmt::SubscriptAssign {
+                                obj: name("no"),
+                                index: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(0)),
+                                },
+                                value: PyExpr::Subscript {
+                                    value: Box::new(name("kv")),
+                                    index: Box::new(PyExpr::Int(1)),
+                                },
+                            }],
+                        }],
+                    },
+                    PyStmt::Return(PyExpr::Tuple(vec![name("yes"), name("no")])),
+                ],
+            ),
+            // Map.union(a, b): a fresh dict, b winning a shared key
+            "_pf_map_union" => def(
+                "_pf_map_union",
+                &["a", "b"],
+                vec![
+                    PyStmt::Assign {
+                        target: "out".to_string(),
+                        value: call("dict", vec![name("a")]),
+                    },
+                    PyStmt::Expr(method(name("out"), "update", vec![name("b")])),
+                    PyStmt::Return(name("out")),
                 ],
             ),
             other => unreachable!("unknown collection helper {other}"),
