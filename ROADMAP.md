@@ -9,6 +9,98 @@ and rationale live in [`DESIGN.md`](./DESIGN.md); what shipped and when is in gi
 rough: **S** ≈ a sitting, **M** ≈ a focused day, **L** ≈ multi-day.
 Keep this a *forward-looking* backlog — do not let it grow back into a changelog of shipped work.
 
+## Dogfooding findings (2026-07-31, first real interactive program)
+
+A dogfooded interactive terminal game (private repo) hit six gaps that a compiler test suite does not
+reach: the first Pyfun program to be *interactive*, *stateful across turns*, and written to a module
+layout chosen before the compiler had an opinion. Each root cause below is verified in the source, not
+inferred from the symptom. All six are accepted work, and the two that carried an open decision (the
+size of the standard-library sweep, and which of three shapes answers the recursion gap) were settled
+on 2026-07-31; each entry records what was chosen and what was turned down with it.
+
+1. **Imported types cannot appear in a `type` declaration** (S) — `types::run` calls `build_decls`
+   (which resolves every record field and ADT variant against `type_arity`) *before*
+   `merge_imported_types`, so an imported type is not registered yet when local type bodies resolve.
+   `type Holder = { item: Placed }` fails with "unknown type" even though the bare name is exactly how
+   imported records register; the qualified spelling `Shapes.Placed` additionally does not parse
+   (`parse_type_atom` accepts a bare `Ident`). Fix: register imported names and arities in a pre-pass,
+   then allow dotted names in type position. **Highest language impact of the six**: it forces every
+   record mentioning another module's type into a single file, which collapsed a board module and a
+   rules module into one 340-line engine in the dogfooded program. This is the only finding that
+   changed a program's architecture rather than its phrasing. **Follow-up it creates** (S, LSP): a type
+   name can now be written in a file other than the one declaring it, so rename and find-references
+   for *type* names, which are in-file only, can leave stale references behind. Cross-file type nav was
+   never built because qualified type syntax did not exist; it does now, and `resolve::type_at` needs
+   the cross-file dimension the value and constructor paths already have (`symbol_occurrences`).
+2. **Field access picks its record before the base type is known** (S) — `Infer::infer_field` calls
+   `record_of_field` (the name-only multimap) and infers the base one line later, so two records
+   sharing a field name collide at *every* use site even where the base's type is already solved. The
+   dogfooded program paid for it in Hungarian prefixes (`cRow`, `cCol`, `cLetter`, plus nine
+   `g`-prefixed fields on the game state), which is a wart in an ML-family language, and the suggested
+   workaround (pattern-match to disambiguate) means destructuring at every use site. Fix: infer the
+   base first and use its solved `Ty::Con` when that record declares the field, keeping the multimap
+   as the fallback for a still-unsolved base. That is F#'s own rule, and it needs no new syntax.
+3. **Single-file `pyfun run` cannot feed the program stdin** (S) — `main::run` pipes the emitted
+   source to `python -`, so the program's stdin *is* its own source text and the first read raises
+   `EOFError`. Interactive programs are therefore un-runnable by the tool whose job is running
+   programs. The project path (`main::run_project`) already materializes to a temp directory and
+   inherits stdio, so a multi-module interactive program works today: the fix is making the
+   single-file path do what the project path does. Tooling, not language design.
+4. **No tuple patterns in function or lambda parameters** (M) — `parse_param` is `parse_ident`, so
+   `fun (t, sq) -> …` does not parse and anything folding over pairs needs a named helper wrapping a
+   `match` (five such one-line functions in the dogfooded program). Widening `Param` to a pattern
+   reaches the LSP, where `Param{name,span}` feeds hover, go-to-definition and rename. **Follow-ups**
+   (S each, both wanted 2026-07-31): **record patterns in parameters**
+   (`fun (Cell { letter }) -> …`), which are irrefutable and so belong in the admitted set, but need
+   attribute-reading lowering rather than tuple unpacking; and **narrowing the self-tail-call capture
+   guard** below to true free variables (see #6).
+5. **Standard library completion** (L, sliced per module) — the dogfooded program wrote 11 scaffolding
+   functions before it could start on the game, and defined `takeN`/`dropN` index-based over
+   zip-with-indices because the natural recursive definitions are stack-unsafe (item 6). Confirmed
+   missing across the prelude: `fst`/`snd` (no tuple accessors at all), `List.take`/`drop`/`head`/
+   `tail`/`last`/`map2`/`indexed`/`exists`/`forall`/`sortBy`/`distinct`/`max`/`min`/`partition`/
+   `updateAt` and more; `Seq` carries 7 members against `List`'s 16; `Map` and `Set` have no
+   `map`/`filter`/`fold`; `Option` and `Result` have no `map2`/`orElse`/`iter`. The standing "prelude
+   functions on demand" policy (under Deferred) is what produced this backlog one program at a time,
+   so the decision is to complete the surface in one sweep instead. **Decided 2026-07-31**: the full
+   sweep, about 90 members, F# core as the reference, then a member-by-member `FSharp.Core` audit to
+   catch what this list missed; excluded is anything needing type classes or an un-Pythonic lowering.
+   Five PRs split by module. Three conventions settled with it, and the first two were already the
+   house style rather than new rules: **total functions** (`String.slice` clamps, so `take`/`drop`
+   clamp), **bare names returning `Option`** for accessors that can fail (`head : List a -> Option a`,
+   following the existing `List.get`/`List.find`, diverging from F# where `head` raises), and
+   **`take`/`drop`** rather than F#'s `take`/`skip` (the `concat` divergence already set that
+   precedent). `String.tryIndexOf` is the one member out of step with the accessor convention; it
+   stays as-is unless the audit turns up more of them. The positional-update family
+   (`updateAt`/`insertAt`/`removeAt`) is the most directly game-shaped gap: a board update has no
+   vocabulary at all today.
+6. **Unbounded recursion has no stack-safe form** (M, decided) — an interactive turn loop is not a
+   collection traversal, so the Non-goals answer below ("iteration is the `List`/`Seq` combinators
+   plus recursion") does not cover it: every turn and every rejected input is a frame that never
+   returns until the game ends, and the dogfooded program calls `setRecursionLimit 20000` at startup
+   to survive a long game. This is the first genuine evidence against that non-goal, and it is
+   narrower than the non-goal's scope: the shape at issue is a *self* tail call driving a loop, not
+   general TCO and not `while`. **Decided 2026-07-31**: lower a direct, saturated self tail call to
+   `while True` with parameter rebinding. It is contained in `src/lowering`, needs no surface change,
+   emits the `while` loop a Python programmer would have written by hand (so it costs nothing in
+   readability), and it also makes the natural recursive `take`/`drop` stack-safe, which pays part of
+   item 5. The precision requirement is the work: the tail-position walk covers match arms, `if`
+   branches, block tails and `let` bodies, and must not fire where the function is partially applied
+   or captured. Rejected alongside it: a state-in/state-out `Loop` combinator (stack-safe for free and
+   S effort, but a second loop idiom that goes redundant the moment this lands, and it does nothing
+   for recursive list functions), and reopening `while` (it needs `let mut` to be useful and fights
+   the expression orientation, and this covers the actual complaint without it). Mutual-recursion
+   trampolining stays out: it costs the readable output that lowering exists to protect.
+   **Known over-rejection** (S to fix): the capture precondition compares *every name mentioned*
+   inside a nested function against the names this frame binds, so it also rejects two shapes that are
+   in fact safe — a lambda whose own parameter merely shares a name with one of ours
+   (`fun n -> n + 1` inside a function whose parameter is `n`: no capture at all), and a closure that
+   genuinely captures but is consumed within the iteration and never escapes
+   (`List.fold (fun acc x -> acc + x * n) 0 xs`). Subtracting the names bound *inside* the nested
+   function fixes the first outright and is strictly sound; the second needs escape analysis and is
+   not worth it. Rejections are silent, which is the real cost: a program keeps its recursion without
+   saying why.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
@@ -22,8 +114,8 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
   the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs
   behind an `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain
   **non-goals** (below). What runs the output is a separate axis — see **Performance beyond CPython**.
-- **Larger prelude / package manager** — added on demand: prelude functions when a real program misses
-  one; the package/façade story (publish typed extern façades once, `import` many) is a whole axis that
+- **Larger prelude / package manager** — the *prelude* half is superseded by Dogfooding findings #5
+  (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
   non-goal, below — not part of this bucket.) (Decode specialization shipped 2026-07-13 — `DESIGN.md`
   §5.3: statically-known decoders deforest to direct dict/list access, byte-identical `Result`s, 2.8x
@@ -192,6 +284,10 @@ link decodes to its displayed starter and every solution's output matches). Stil
   not full `let` annotations. `DESIGN.md` §3, §8.3.
 - **Visibility (`pub`)** — all-public is the Python-natural model; enforced privacy fights the ethos.
 - **Tail-call optimization** — CPython has none; the stack-safe path is the `List`/`Seq` combinators.
+  **Partially reopened 2026-07-31**: the combinators answer holds for collection traversal and does not
+  cover an unbounded interactive loop (Dogfooding findings #6). General and mutual TCO stay out; a
+  direct, saturated *self* tail call is accepted work as a lowering-only transform (`while True` plus
+  parameter rebinding), which is a change to emitted code, not to the language.
 - **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
 - **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
   Python dispatches operators at runtime.
@@ -223,7 +319,8 @@ link decodes to its displayed starter and every solution's output matches). Stil
   idiom is stack-unsafe without TCO. Sequence patterns on the existing `List` (`case [x, *rest]`, done) are
   the Python-native, big-O-honest answer.
 - **Imperative loops (`while` / `for … in`)** — iteration is the `List`/`Seq` combinators plus recursion;
-  `let mut` is for local accumulation inside an expression, not to drive a loop.
+  `let mut` is for local accumulation inside an expression, not to drive a loop. (The interactive-loop
+  gap this leaves is Dogfooding findings #6, where reopening `while` is option (c) of three.)
 - **Else-less `if`** — `if` is an *expression*, so both branches are required; a conditional side effect is
   `if c then eff else ()`.
 - **Imperative `raise` / `finally` / exception hierarchy** — Pyfun signals failure with `Error`; the
