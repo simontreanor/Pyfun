@@ -777,10 +777,13 @@ a multi-file program, and only when some module actually uses `Option`/`Result`.
 graph: `check` checks all modules (errors rendered rustc-style against each module's own source, grouped
 under a `-- module `Name` (name.pyfun) --` header); `compile -o <dir>` emits the `.py` tree (+
 `_pyfun_rt.py`) into `<dir>` (no `-o` prints each file to stdout under a `# ==== name.py ====` banner);
-`run` materializes the tree to a temp dir and executes `python entry.py` with the dir on the path (then
-cleans up). Each command **detects imports** by parsing the entry: a file with **no imports takes the
-single-file path exactly as before** (full back-compat — `compile` to stdout / one file with the classes
-*inlined*, `run` piped to `python -`), and only a file that actually `import`s engages the graph driver.
+`run` materializes the tree to a temp dir and executes `python <dir>/entry.py` (the script's own directory
+leads `sys.path`, so siblings resolve, and the *working* directory is left alone so the program's relative
+paths still mean what they meant on the command line), then cleans up. Each command **detects imports** by
+parsing the entry: a file with **no imports takes the single-file path** (`compile` to stdout / one file
+with the classes *inlined*, `run` staging one `_pyfun_main.py` the same way), and only a file that actually
+`import`s engages the graph driver. `run` never pipes the program to `python -`: that would spend the
+program's own stdin on its source text, so the first `input` in an interactive program would hit `EOFError`.
 The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
 Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
 
