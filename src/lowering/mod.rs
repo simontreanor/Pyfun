@@ -3474,6 +3474,15 @@ impl Lowerer {
         let n = args.len();
         match arity {
             Some(k) if n < k => {
+                // A partially applied **lambda** closes over the argument directly
+                // rather than being wrapped: `List.map ((+) 2)` is
+                // `lambda b: 2 + b`, not `functools.partial(lambda a, b: a + b, 2)`.
+                // Operator sections are lambdas, so this is the shape that made the
+                // idiomatic spelling emit worse Python than the longhand it stands
+                // in for (`DESIGN.md` §5).
+                if let Some(reduced) = beta_reduce(&head, &args) {
+                    return reduced;
+                }
                 // Partial application.
                 self.needs_functools = true;
                 let mut partial_args = Vec::with_capacity(n + 1);
@@ -3848,6 +3857,141 @@ fn nullary_lambda(target: &[String], spec: Vec<(String, KwSource)>) -> PyExpr {
     PyExpr::Lambda {
         params: vec!["*_pf_a".to_string()],
         body: Box::new(body),
+    }
+}
+
+/// Close a partially applied **lambda** over its arguments instead of wrapping it:
+/// `(lambda a, b: a + b)` applied to `2` becomes `lambda b: 2 + b`.
+///
+/// Operator sections lower to lambdas, so this is what keeps `List.map ((+) 2)`
+/// from emitting worse Python than the `fun y -> y + 2` it stands in for — one
+/// fewer call layer, no `functools` pulled in for this alone, and it reads like the
+/// rest of the n-ary-collapse strategy (`DESIGN.md` §5).
+///
+/// Three conditions, each protecting something the wrapper gave for free:
+///
+/// 1. **Every argument is atomic** (a name or a literal). `functools.partial`
+///    evaluates its arguments *now*; a lambda body evaluates them on each call. For
+///    a name or a literal those are the same thing, and for anything else they are
+///    not — so anything else keeps the wrapper.
+/// 2. **No argument's name is rebound by the remaining parameters**, or
+///    substituting it would capture: `((+) b)` inside a scope with its own `b`
+///    must not fold into `lambda b: b + b`.
+/// 3. **The lambda takes exactly the parameters the arity promised**, so the
+///    substitution lines up positionally with what the caller supplied.
+fn beta_reduce(head: &PyExpr, args: &[PyExpr]) -> Option<PyExpr> {
+    let PyExpr::Lambda { params, body } = head else {
+        return None;
+    };
+    if args.len() >= params.len() || !args.iter().all(is_atomic) {
+        return None;
+    }
+    let (bound, rest) = params.split_at(args.len());
+    if args
+        .iter()
+        .any(|a| matches!(a, PyExpr::Name(n) if rest.contains(n)))
+    {
+        return None;
+    }
+    let mut reduced = (**body).clone();
+    for (param, arg) in bound.iter().zip(args) {
+        reduced = subst_name(&reduced, param, arg);
+    }
+    Some(PyExpr::Lambda {
+        params: rest.to_vec(),
+        body: Box::new(reduced),
+    })
+}
+
+/// Whether an expression can be moved inside a lambda body without changing when
+/// (or how often) it is evaluated: a name or a literal, nothing else.
+fn is_atomic(expr: &PyExpr) -> bool {
+    matches!(
+        expr,
+        PyExpr::Name(_)
+            | PyExpr::Int(_)
+            | PyExpr::Float(_)
+            | PyExpr::Str(_)
+            | PyExpr::Bool(_)
+            | PyExpr::NoneLit
+    )
+}
+
+/// Replace every free occurrence of `name` in `expr` with `value`. A nested lambda
+/// that rebinds the name shadows it, and its body is left alone.
+fn subst_name(expr: &PyExpr, name: &str, value: &PyExpr) -> PyExpr {
+    let go = |e: &PyExpr| subst_name(e, name, value);
+    let boxed = |e: &PyExpr| Box::new(subst_name(e, name, value));
+    match expr {
+        PyExpr::Name(n) if n == name => value.clone(),
+        PyExpr::Lambda { params, body } if params.iter().any(|p| p == name) => PyExpr::Lambda {
+            params: params.clone(),
+            body: body.clone(),
+        },
+        PyExpr::Lambda { params, body } => PyExpr::Lambda {
+            params: params.clone(),
+            body: boxed(body),
+        },
+        PyExpr::BinOp { op, left, right } => PyExpr::BinOp {
+            op: *op,
+            left: boxed(left),
+            right: boxed(right),
+        },
+        PyExpr::Compare {
+            left,
+            ops,
+            comparators,
+        } => PyExpr::Compare {
+            left: boxed(left),
+            ops: ops.clone(),
+            comparators: comparators.iter().map(go).collect(),
+        },
+        PyExpr::Call { func, args } => PyExpr::Call {
+            func: boxed(func),
+            args: args.iter().map(go).collect(),
+        },
+        PyExpr::CallKw { func, args, kwargs } => PyExpr::CallKw {
+            func: boxed(func),
+            args: args.iter().map(go).collect(),
+            kwargs: kwargs.iter().map(|(k, v)| (k.clone(), go(v))).collect(),
+        },
+        PyExpr::IfExp { body, test, orelse } => PyExpr::IfExp {
+            body: boxed(body),
+            test: boxed(test),
+            orelse: boxed(orelse),
+        },
+        PyExpr::Attribute { value, attr } => PyExpr::Attribute {
+            value: boxed(value),
+            attr: attr.clone(),
+        },
+        PyExpr::Subscript { value, index } => PyExpr::Subscript {
+            value: boxed(value),
+            index: boxed(index),
+        },
+        PyExpr::Slice {
+            value,
+            lower,
+            upper,
+        } => PyExpr::Slice {
+            value: boxed(value),
+            lower: boxed(lower),
+            upper: boxed(upper),
+        },
+        PyExpr::Await(e) => PyExpr::Await(boxed(e)),
+        PyExpr::Not(e) => PyExpr::Not(boxed(e)),
+        PyExpr::Neg(e) => PyExpr::Neg(boxed(e)),
+        PyExpr::List(es) => PyExpr::List(es.iter().map(go).collect()),
+        PyExpr::Tuple(es) => PyExpr::Tuple(es.iter().map(go).collect()),
+        PyExpr::FStr(parts) => PyExpr::FStr(
+            parts
+                .iter()
+                .map(|p| match p {
+                    PyFStrPart::Expr(e) => PyFStrPart::Expr(go(e)),
+                    PyFStrPart::Lit(l) => PyFStrPart::Lit(l.clone()),
+                })
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }
 

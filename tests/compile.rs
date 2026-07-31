@@ -1550,14 +1550,57 @@ fn e2e_unary_minus() {
 
 #[test]
 fn operator_section_lowers_to_a_curried_lambda() {
-    // `(*)` lowers to the binary lambda; a partial application curries via
-    // `functools.partial` (arity 2 is known), like any 2-arity function.
+    // `(*)` lowers to the binary lambda; a partial application closes over the
+    // argument rather than wrapping the lambda, so the idiomatic spelling emits
+    // the same Python the longhand would (`DESIGN.md` §5).
     let py = pyfun::compile("let mul = (*)\nlet double = (*) 2").unwrap();
     assert!(py.contains("mul = lambda a, b: a * b"), "{py}");
+    assert!(py.contains("double = lambda b: 2 * b"), "{py}");
+    assert!(!py.contains("functools.partial"), "{py}");
+}
+
+#[test]
+fn a_section_in_argument_position_closes_over_its_argument() {
+    // The shape from the report: `List.map ((+) 2)` used to emit worse Python than
+    // the `fun y -> y + 2` it stands in for, which is the wrong way round.
+    let py = pyfun::compile(
+        "let c xs = xs |> List.map ((+) 2)\nlet a x xs = xs |> List.filter ((==) x)",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_map(lambda b: 2 + b, xs)"), "{py}");
+    assert!(py.contains("_pf_filter(lambda b: x == b, xs)"), "{py}");
+    // Nothing here needs `functools` any more.
+    assert!(!py.contains("import functools"), "{py}");
+}
+
+#[test]
+fn a_bare_operator_is_still_the_binary_lambda() {
+    // Only a *partial* application folds; a fully-applied section is unchanged.
+    let py = pyfun::compile("let e xs = xs |> List.fold (+) 0").unwrap();
+    assert!(py.contains("_pf_fold(lambda a, b: a + b, 0, xs)"), "{py}");
+}
+
+#[test]
+fn a_section_argument_that_would_be_captured_keeps_the_wrapper() {
+    // The argument is named `b`, which is also the section lambda's remaining
+    // parameter: folding it in would read as `lambda b: b + b`.
+    let py = pyfun::compile("let shadow b xs = List.map ((+) b) xs").unwrap();
     assert!(
-        py.contains("double = functools.partial(lambda a, b: a * b, 2)"),
+        py.contains("functools.partial(lambda a, b: a + b, b)"),
         "{py}"
     );
+}
+
+#[test]
+fn a_non_atomic_section_argument_keeps_the_wrapper() {
+    // `functools.partial` evaluates its arguments once, now; a lambda body would
+    // re-evaluate on every call. Only names and literals can move inside.
+    let py = pyfun::compile(
+        "extern effect : int -> int = builtins.print\n\
+         let costly xs = List.map ((+) (effect 1)) xs",
+    )
+    .unwrap();
+    assert!(py.contains("functools.partial"), "{py}");
 }
 
 #[test]
