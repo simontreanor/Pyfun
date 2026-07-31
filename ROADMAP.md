@@ -14,7 +14,9 @@ Keep this a *forward-looking* backlog — do not let it grow back into a changel
 A dogfooded interactive terminal game (private repo) hit six gaps that a compiler test suite does not
 reach: the first Pyfun program to be *interactive*, *stateful across turns*, and written to a module
 layout chosen before the compiler had an opinion. Each root cause below is verified in the source, not
-inferred from the symptom. Items 1 to 4 are accepted work; 5 and 6 carry an open decision.
+inferred from the symptom. All six are accepted work, and the two that carried an open decision (the
+size of the standard-library sweep, and which of three shapes answers the recursion gap) were settled
+on 2026-07-31; each entry records what was chosen and what was turned down with it.
 
 1. **Imported types cannot appear in a `type` declaration** (S) — `types::run` calls `build_decls`
    (which resolves every record field and ADT variant against `type_arity`) *before*
@@ -52,21 +54,35 @@ inferred from the symptom. Items 1 to 4 are accepted work; 5 and 6 carry an open
    `updateAt` and more; `Seq` carries 7 members against `List`'s 16; `Map` and `Set` have no
    `map`/`filter`/`fold`; `Option` and `Result` have no `map2`/`orElse`/`iter`. The standing "prelude
    functions on demand" policy (under Deferred) is what produced this backlog one program at a time,
-   so the decision is to complete the surface in one sweep instead. **Open: the exact member list**
-   (proposed per module, F# core as the reference, excluding anything needing type classes or a
-   non-Pythonic lowering).
-6. **Unbounded recursion has no stack-safe form** (open decision) — an interactive turn loop is not a
+   so the decision is to complete the surface in one sweep instead. **Decided 2026-07-31**: the full
+   sweep, about 90 members, F# core as the reference, then a member-by-member `FSharp.Core` audit to
+   catch what this list missed; excluded is anything needing type classes or an un-Pythonic lowering.
+   Five PRs split by module. Three conventions settled with it, and the first two were already the
+   house style rather than new rules: **total functions** (`String.slice` clamps, so `take`/`drop`
+   clamp), **bare names returning `Option`** for accessors that can fail (`head : List a -> Option a`,
+   following the existing `List.get`/`List.find`, diverging from F# where `head` raises), and
+   **`take`/`drop`** rather than F#'s `take`/`skip` (the `concat` divergence already set that
+   precedent). `String.tryIndexOf` is the one member out of step with the accessor convention; it
+   stays as-is unless the audit turns up more of them. The positional-update family
+   (`updateAt`/`insertAt`/`removeAt`) is the most directly game-shaped gap: a board update has no
+   vocabulary at all today.
+6. **Unbounded recursion has no stack-safe form** (M, decided) — an interactive turn loop is not a
    collection traversal, so the Non-goals answer below ("iteration is the `List`/`Seq` combinators
    plus recursion") does not cover it: every turn and every rejected input is a frame that never
    returns until the game ends, and the dogfooded program calls `setRecursionLimit 20000` at startup
    to survive a long game. This is the first genuine evidence against that non-goal, and it is
    narrower than the non-goal's scope: the shape at issue is a *self* tail call driving a loop, not
-   general TCO and not `while`. Options on the table: (a) lower a direct, saturated self tail call to
-   `while True` with parameter rebinding, contained in `src/lowering`, no surface change, and it also
-   makes the natural recursive `take`/`drop` safe; (b) add a state-in/state-out `Loop` combinator to
-   the prelude, which is stack-safe with no language change at all and lands with item 5; (c) reopen
-   `while` (kept as a non-goal so far). Mutual-recursion trampolining stays out: it costs the readable
-   output that lowering exists to protect.
+   general TCO and not `while`. **Decided 2026-07-31**: lower a direct, saturated self tail call to
+   `while True` with parameter rebinding. It is contained in `src/lowering`, needs no surface change,
+   emits the `while` loop a Python programmer would have written by hand (so it costs nothing in
+   readability), and it also makes the natural recursive `take`/`drop` stack-safe, which pays part of
+   item 5. The precision requirement is the work: the tail-position walk covers match arms, `if`
+   branches, block tails and `let` bodies, and must not fire where the function is partially applied
+   or captured. Rejected alongside it: a state-in/state-out `Loop` combinator (stack-safe for free and
+   S effort, but a second loop idiom that goes redundant the moment this lands, and it does nothing
+   for recursive list functions), and reopening `while` (it needs `let mut` to be useful and fights
+   the expression orientation, and this covers the actual complaint without it). Mutual-recursion
+   trampolining stays out: it costs the readable output that lowering exists to protect.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
@@ -253,7 +269,8 @@ link decodes to its displayed starter and every solution's output matches). Stil
 - **Tail-call optimization** — CPython has none; the stack-safe path is the `List`/`Seq` combinators.
   **Partially reopened 2026-07-31**: the combinators answer holds for collection traversal and does not
   cover an unbounded interactive loop (Dogfooding findings #6). General and mutual TCO stay out; a
-  direct self tail call is under review as a lowering-only transform.
+  direct, saturated *self* tail call is accepted work as a lowering-only transform (`while True` plus
+  parameter rebinding), which is a change to emitted code, not to the language.
 - **`Array` type** — redundant: `List` already *is* a Python list (O(1) index/len).
 - **User-extensible type classes / SRTP** — `num` and `comparison` are deliberately *closed* constraints;
   Python dispatches operators at runtime.
