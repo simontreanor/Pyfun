@@ -1,5 +1,18 @@
 # Changelog
 
+The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
+`pyfun --version` and the installed client always agree. A release with no client changes says so.
+
+## 0.3.0
+
+- Version aligned to the compiler's 0.3.0 release. No client changes; the language server it drives
+  gains `input`, caller-supplied `extern` keyword slots, and fixes to cross-module inference,
+  effectful recursion, `Option` matching, and emitted-name collisions.
+
+## 0.2.0
+
+- Version aligned to the compiler's 0.2.0 release, with `opaque` added to the syntax palette.
+
 ## 0.1.0
 
 - Version aligned to the 0.1.0 milestone, matching the compiler and the other editor integrations.
