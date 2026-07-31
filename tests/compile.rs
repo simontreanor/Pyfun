@@ -2314,6 +2314,75 @@ fn e2e_string_sweep() {
     );
 }
 
+// ---------- the Option/Result sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn result_map2_reports_the_first_error() {
+    // Order matters: `a` is checked before `b`, so the earliest failure wins.
+    let py = pyfun::compile("let r = Result.map2 (fun a b -> a + b) (Ok 1) (Ok 2)").unwrap();
+    let first = py.find("isinstance(a, Error)").expect("checks a");
+    let second = py.find("isinstance(b, Error)").expect("checks b");
+    assert!(first < second, "{py}");
+}
+
+#[test]
+fn e2e_option_sweep() {
+    run_and_check(
+        "
+        let some1 = Some 1
+        let some2 = Some 2
+        let none = List.head (List.drop 9 [1])
+        let both = Option.map2 (fun a b -> a + b) some1 some2
+        let missing = Option.map2 (fun a b -> a + b) some1 none
+        let kept = Option.orElse some2 some1
+        let fellBack = Option.orElse some2 none
+        let flat = Option.flatten (Some (Some 5))
+        let flatNone = Option.flatten (Some none)
+        let listed = Option.toList some1
+        let empty = Option.toList none
+        let holds = Option.exists (fun x -> x > 0) some1
+        let holdsNot = Option.exists (fun x -> x > 0) none
+        ",
+        &[
+            ("both", "Some(3)"),
+            ("missing", "None_"),
+            ("kept", "Some(1)"),
+            ("fellBack", "Some(2)"),
+            ("flat", "Some(5)"),
+            ("flatNone", "None_"),
+            ("listed", "[1]"),
+            ("empty", "[]"),
+            ("holds", "True"),
+            ("holdsNot", "False"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_result_sweep() {
+    run_and_check(
+        "
+        let ok1 = Ok 1
+        let ok2 = Ok 2
+        let bad = Error \"boom\"
+        let both = Result.map2 (fun a b -> a + b) ok1 ok2
+        let failed = Result.map2 (fun a b -> a + b) bad ok2
+        let kept = Result.orElse ok2 ok1
+        let fellBack = Result.orElse ok2 bad
+        let listed = Result.toList ok1
+        let empty = Result.toList bad
+        ",
+        &[
+            ("both", "Ok(3)"),
+            ("failed", "Error('boom')"),
+            ("kept", "Ok(1)"),
+            ("fellBack", "Ok(2)"),
+            ("listed", "[1]"),
+            ("empty", "[]"),
+        ],
+    );
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]

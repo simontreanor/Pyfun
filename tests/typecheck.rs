@@ -1824,6 +1824,81 @@ fn string_of_list_inverts_to_list() {
     assert_error_contains("let bad = String.ofList [1, 2]", "string");
 }
 
+// ---------- the Option/Result sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn option_map2_combines_two_options() {
+    assert!(pyfun::check("let s = Option.map2 (fun a b -> a + b) (Some 1) (Some 2)").is_ok());
+    // The two payloads need not share a type, but the function must agree.
+    assert_error_contains(
+        "let bad = Option.map2 (fun a b -> a + b) (Some 1) (Some \"x\")",
+        "string",
+    );
+}
+
+#[test]
+fn option_or_else_takes_the_fallback_first() {
+    // Argument order matches `withDefault`, so it reads as
+    // `primary |> Option.orElse fallback`.
+    assert!(pyfun::check("let s = Some 1 |> Option.orElse (Some 2)").is_ok());
+    assert_error_contains("let bad = Option.orElse (Some 1) (Some \"x\")", "string");
+}
+
+#[test]
+fn option_flatten_collapses_one_level() {
+    assert!(
+        pyfun::check("let s = Option.flatten (Some (Some 1))\nlet n = Option.withDefault 0 s")
+            .is_ok()
+    );
+    // Only one level: a plain `Option a` has nothing to collapse.
+    assert_error_contains("let bad = Option.flatten (Some 1)", "Option");
+}
+
+#[test]
+fn option_bridges_to_list_and_bool() {
+    assert!(
+        pyfun::check(
+            "let xs = Option.toList (Some 1)\n\
+             let n = List.len xs\n\
+             let b = Option.exists (fun x -> x > 0) (Some 1)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn result_map2_keeps_one_error_type() {
+    assert!(pyfun::check("let r = Result.map2 (fun a b -> a + b) (Ok 1) (Ok 2)").is_ok());
+    // Both sides must fail the same way for there to be a single answer, so two
+    // *concrete* error types conflict. (`Ok 1` alone leaves its error type free,
+    // which is why it happily combines with anything.)
+    assert_error_contains(
+        "let bad = Result.map2 (fun a b -> a + b) (Error \"x\") (Error 2)",
+        "string",
+    );
+}
+
+#[test]
+fn result_bridges_to_list_and_or_else() {
+    assert!(
+        pyfun::check(
+            "let xs = Result.toList (Ok 1)\n\
+             let r = Ok 1 |> Result.orElse (Ok 2)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn option_and_result_iter_carry_their_effect() {
+    assert!(pyfun::check("let go = Option.iter (fun x -> print x) (Some 1)").is_ok());
+    assert_error_contains(
+        "let pure go = Option.iter (fun x -> print x) (Some 1)",
+        "io",
+    );
+    assert_error_contains("let pure go = Result.iter (fun x -> print x) (Ok 1)", "io");
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]
