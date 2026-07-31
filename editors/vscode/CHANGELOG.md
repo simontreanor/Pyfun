@@ -3,6 +3,13 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.4.0
+
+- Version aligned to the compiler's 0.4.0 release. No client changes; the language server it drives
+  gains hover and completion documentation for all 190-odd built-in members (including their
+  complexity), destructuring parameters, module-qualified type names, and the rest of the 0.4.0
+  language and standard-library work.
+
 ## 0.3.0
 
 - Version aligned to the compiler's 0.3.0 release. No client changes; the language server it drives
