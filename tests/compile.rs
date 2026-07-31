@@ -2736,6 +2736,68 @@ fn a_closure_over_a_parameter_blocks_the_loop() {
 }
 
 #[test]
+fn a_shadowing_lambda_parameter_does_not_block_the_loop() {
+    // The lambda's `n` is its own parameter, so it captures nothing from the
+    // frame — matching names alone must not reject.
+    let py = pyfun::compile(
+        "
+        let f n =
+          if n == 0 then 0
+          else
+            let doubled = List.map (fun n -> n + 1) [1, 2]
+            f (n - 1)
+        ",
+    )
+    .unwrap();
+    assert!(py.contains("while True:"), "{py}");
+}
+
+#[test]
+fn a_rejected_self_tail_call_says_why() {
+    // A rejection is otherwise invisible: the program keeps recursing and the
+    // author has only the emitted Python to find out from.
+    let (_, notes) = pyfun::compile_collecting(
+        "
+        let collect n acc =
+          if n == 0 then acc
+          else collect (n - 1) (List.concat acc [fun k -> n])
+        ",
+        pyfun::python_emitter::PyTarget::default(),
+    )
+    .unwrap();
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("`collect` calls itself in tail position"),
+        "{notes:?}"
+    );
+    assert!(notes[0].contains("captures `n`"), "{notes:?}");
+}
+
+#[test]
+fn a_looped_self_tail_call_says_nothing() {
+    // The note fires only where something was given up.
+    let (py, notes) = pyfun::compile_collecting(
+        "let f n =
+  if n == 0 then 0
+  else f (n - 1)",
+        pyfun::python_emitter::PyTarget::default(),
+    )
+    .unwrap();
+    assert!(py.contains("while True:"), "{py}");
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
+#[test]
+fn an_ordinary_function_says_nothing() {
+    let (_, notes) = pyfun::compile_collecting(
+        "let add a b = a + b",
+        pyfun::python_emitter::PyTarget::default(),
+    )
+    .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+}
+
+#[test]
 fn e2e_a_self_tail_call_recurses_past_the_stack_limit() {
     // 50k frames is far past CPython's ~1000 limit: this only completes as a loop.
     run_and_check(

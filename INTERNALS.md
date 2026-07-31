@@ -163,10 +163,19 @@ The four preconditions (DESIGN §5.4) are `binds` (the body rebinds the function
 unpack, `for` target, nested `def`/`class`, or a `match` capture), `has_yield` (generator), the
 descent rule in `rewrite_stmts` (into `If` branches and `Match` case bodies only — never `For`,
 `FuncDef`, `ClassDef` or `Try`), and the capture check: `frame_names` (parameters plus everything
-assigned in this frame) intersected with `nested_refs_stmt` (every name mentioned inside a nested
-`def` body or `lambda` body). A non-empty intersection rejects, because the loop shares one cell per
-name where recursion gave each frame its own. Any rejection returns the body untouched, which is
-always correct and merely stack-bound. Regression tests live in `tests/compile.rs` under
+assigned in this frame) intersected with `nested_refs_stmt`, which collects each nested function's
+**free** names (`free_in_function`/`free_stmts`/`free_expr` subtract the function's own parameters,
+locals and match captures, and add back anything it declares `nonlocal`/`global`, since those name
+the enclosing cell by definition). A non-empty intersection rejects, because the loop shares one cell
+per name where recursion gave each frame its own. Any rejection returns the body untouched, which is
+always correct and merely stack-bound.
+
+`rewrite` returns an `Outcome { body, note }`. `has_self_tail_call` runs *first*, so a function with
+no self tail call is never mentioned; when there is one and a precondition rejects, the note names
+the function and the reason. Notes ride out through `lowering::lower_collecting` /
+`LoweredModule.notes` → `lib::compile_collecting` / `project::CompiledProject.notes` → the CLI's
+`report_notes`, which prints them to stderr for `compile` and `run`. `lower` and `compile` keep their
+old signatures by delegating and dropping the notes. Regression tests live in `tests/compile.rs` under
 "self tail calls become loops", including two end-to-end: 50k/100k-deep recursion that only completes
 as a loop, and the closure case whose per-frame values the capture check exists to preserve.
 

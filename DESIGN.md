@@ -239,10 +239,19 @@ make the loop jump somewhere the program meant to call); it must not be a **gene
 (`return` in a generator raises `StopIteration` with a value, and an async tail call is an `await`);
 the rewrite does not descend into a **`for` loop** (a `continue` there belongs to the `for`) or a
 **`try`** (looping inside it would put every later iteration under a handler that covered one call);
-and no **nested function may mention a name this frame binds**. That last one is the subtle one: the
-loop reuses one cell per parameter where recursion gave each frame its own, so a closure that
-outlives its iteration would see the final value rather than the one it was made with. Mechanics in
-`INTERNALS.md`.
+and no **nested function may have one of this frame's names free** in it. That last one is the subtle
+one: the loop reuses one cell per parameter where recursion gave each frame its own, so a closure
+that outlives its iteration would see the final value rather than the one it was made with. It is
+*free* variables, not mentions: a `fun n -> n + 1` inside a function whose parameter is also `n`
+binds its own `n` and shares nothing. What it still gives up is a closure that captures but provably
+cannot escape (`List.fold (fun acc x -> acc + x * n) 0 xs`, consumed within the iteration); proving
+that needs escape analysis per callee, which is not worth the machinery.
+
+Because a rejection is otherwise invisible — the program simply keeps recursing — a function that
+*does* call itself in tail position but kept its recursive form emits a **note** saying which
+precondition stopped it (`` note: `collect` calls itself in tail position but keeps its recursive
+form: a closure in it captures `n` ``). Nothing is reported for the overwhelming majority of
+functions, which have no self tail call at all. Mechanics in `INTERNALS.md`.
 
 ## 6. Python interop — the hard boundary
 

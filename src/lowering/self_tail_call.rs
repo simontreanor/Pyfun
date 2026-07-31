@@ -29,12 +29,27 @@ use std::collections::HashSet;
 
 use crate::python_emitter::{PyCase, PyExpr, PyFStrPart, PyStmt};
 
+/// What [`rewrite`] did: the body to emit, and — when the function *does* call
+/// itself in tail position but a precondition refused the rewrite — why it kept
+/// its recursive form. A rejection is otherwise invisible, and a program that
+/// silently keeps recursing is exactly the one whose author needs to know.
+pub(super) struct Outcome {
+    pub body: Vec<PyStmt>,
+    pub note: Option<String>,
+}
+
+impl Outcome {
+    fn kept(body: Vec<PyStmt>) -> Self {
+        Outcome { body, note: None }
+    }
+}
+
 /// Rewrite `body` so that self tail calls loop instead of recursing, or return it
 /// unchanged when any precondition fails. `name` is the function's *emitted* name
 /// and `params` its emitted parameter names.
-pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Vec<PyStmt> {
+pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Outcome {
     if params.is_empty() {
-        return body;
+        return Outcome::kept(body);
     }
     // `global`/`nonlocal` must stay at the top of the def, so they sit outside the
     // loop; everything after them is what goes round.
@@ -45,38 +60,61 @@ pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Vec<P
     let (decls, rest) = body.split_at(split);
     let (decls, mut rest) = (decls.to_vec(), rest.to_vec());
 
+    // Nothing to say (and nothing to do) about a function that never calls itself
+    // in tail position, which is almost all of them.
+    if !has_self_tail_call(&rest, name, params) {
+        return Outcome::kept(join(decls, rest));
+    }
+    let rejected = |reason: String, decls: Vec<PyStmt>, rest: Vec<PyStmt>| Outcome {
+        body: join(decls, rest),
+        note: Some(format!(
+            "`{name}` calls itself in tail position but keeps its recursive form: {reason}"
+        )),
+    };
+
     // P1: the name must still mean *this* function everywhere we would rewrite. A
     // body that rebinds it (a shadowing `let`, a nested def of the same name) would
     // have us loop where it meant to call something else.
     if binds(&rest, name) {
-        return join(decls, rest);
+        return rejected(format!("the body rebinds `{name}`"), decls, rest);
     }
     // P2: a generator or coroutine body is not a plain call/return discipline —
     // `return` in a generator raises StopIteration with a value, and an async tail
     // call is an `await`. Neither is what this rewrite assumes.
     if has_yield(&rest) {
-        return join(decls, rest);
+        return rejected("it is a generator".to_string(), decls, rest);
     }
     // P3: the loop reuses **one** cell per parameter and per local, where recursion
     // gave each frame its own. That is unobservable unless a closure outlives the
-    // iteration that made it, so reject when any nested function mentions a name
-    // this frame binds. (`fun () -> x` captured into the accumulator is the shape
-    // that would otherwise silently share the final `x` across every closure.)
+    // iteration that made it, so reject when a nested function has one of this
+    // frame's names *free* in it. (`fun k -> x` captured into the accumulator is the
+    // shape that would otherwise silently share the final `x` across every closure.)
     let frame = frame_names(&rest, params);
     let mut captured = HashSet::new();
     for stmt in &rest {
         nested_refs_stmt(stmt, &mut captured);
     }
-    if frame.iter().any(|n| captured.contains(n)) {
-        return join(decls, rest);
+    if let Some(shared) = frame.iter().find(|n| captured.contains(*n)) {
+        return rejected(format!("a closure in it captures `{shared}`"), decls, rest);
     }
 
     let mut found = false;
     rewrite_stmts(&mut rest, name, params, &mut found);
-    if !found {
-        return join(decls, rest);
-    }
-    join(decls, vec![PyStmt::WhileTrue { body: rest }])
+    Outcome::kept(join(decls, vec![PyStmt::WhileTrue { body: rest }]))
+}
+
+/// Whether any tail position holds a saturated call to this function.
+fn has_self_tail_call(stmts: &[PyStmt], name: &str, params: &[String]) -> bool {
+    stmts.iter().any(|s| match s {
+        PyStmt::Return(value) => self_call_args(value, name, params).is_some(),
+        PyStmt::If { body, orelse, .. } => {
+            has_self_tail_call(body, name, params) || has_self_tail_call(orelse, name, params)
+        }
+        PyStmt::Match { cases, .. } => cases
+            .iter()
+            .any(|c| has_self_tail_call(&c.body, name, params)),
+        _ => false,
+    })
 }
 
 fn join(mut decls: Vec<PyStmt>, mut rest: Vec<PyStmt>) -> Vec<PyStmt> {
@@ -236,15 +274,14 @@ fn collect_bound(stmts: &[PyStmt], out: &mut HashSet<String>) {
     }
 }
 
-/// Names mentioned inside a nested function (a `def` body or a `lambda` body) —
-/// the ones a closure could still be reading after this iteration ends.
+/// Names a nested function has **free** — the ones a closure could still be
+/// reading after this iteration ends. A name the nested function binds itself (its
+/// parameters, its own locals) is not a capture, however it is spelled: a
+/// `fun n -> n + 1` inside a function whose parameter is also `n` shares nothing
+/// with it.
 fn nested_refs_stmt(stmt: &PyStmt, out: &mut HashSet<String>) {
     match stmt {
-        PyStmt::FuncDef { body, .. } => {
-            for s in body {
-                all_names_stmt(s, out);
-            }
-        }
+        PyStmt::FuncDef { params, body, .. } => free_in_function(params, body, out),
         PyStmt::Assign { value, .. }
         | PyStmt::UnpackAssign { value, .. }
         | PyStmt::Return(value)
@@ -296,68 +333,150 @@ fn nested_refs_stmt(stmt: &PyStmt, out: &mut HashSet<String>) {
 
 fn nested_refs_expr(expr: &PyExpr, out: &mut HashSet<String>) {
     match expr {
-        PyExpr::Lambda { body, .. } => all_names_expr(body, out),
+        PyExpr::Lambda { params, body } => {
+            let bound: HashSet<String> = params.iter().cloned().collect();
+            free_expr(body, &bound, out);
+        }
         _ => walk_children(expr, &mut |e| nested_refs_expr(e, out)),
     }
 }
 
-/// Every name an expression mentions (used once inside a nested function, where
-/// any mention is a potential capture).
-fn all_names_expr(expr: &PyExpr, out: &mut HashSet<String>) {
-    if let PyExpr::Name(n) = expr {
-        out.insert(n.clone());
+/// The free names of a nested `def`: everything it mentions, less what it binds
+/// (parameters and its own assignments), plus anything it declares `nonlocal` or
+/// `global` — those name the *enclosing* cell by definition, so they are captures
+/// even though the body also assigns them.
+fn free_in_function(params: &[String], body: &[PyStmt], out: &mut HashSet<String>) {
+    let mut bound: HashSet<String> = params.iter().cloned().collect();
+    collect_bound(body, &mut bound);
+    let mut declared = HashSet::new();
+    for stmt in body {
+        if let PyStmt::Nonlocal(names) | PyStmt::Global(names) = stmt {
+            declared.extend(names.iter().cloned());
+        }
     }
-    walk_children(expr, &mut |e| all_names_expr(e, out));
+    for name in &declared {
+        bound.remove(name);
+    }
+    free_stmts(body, &bound, out);
+    out.extend(declared);
 }
 
-fn all_names_stmt(stmt: &PyStmt, out: &mut HashSet<String>) {
-    match stmt {
-        PyStmt::Assign { value, .. }
-        | PyStmt::UnpackAssign { value, .. }
-        | PyStmt::Return(value)
-        | PyStmt::Expr(value)
-        | PyStmt::Yield(value)
-        | PyStmt::YieldFrom(value)
-        | PyStmt::Raise(value) => all_names_expr(value, out),
-        PyStmt::SubscriptAssign { obj, index, value } => {
-            all_names_expr(obj, out);
-            all_names_expr(index, out);
-            all_names_expr(value, out);
-        }
-        PyStmt::For { iter, body, .. } => {
-            all_names_expr(iter, out);
-            for s in body {
-                all_names_stmt(s, out);
+fn free_stmts(stmts: &[PyStmt], bound: &HashSet<String>, out: &mut HashSet<String>) {
+    for stmt in stmts {
+        match stmt {
+            PyStmt::FuncDef { params, body, .. } => {
+                let mut inner = bound.clone();
+                inner.extend(params.iter().cloned());
+                collect_bound(body, &mut inner);
+                free_stmts(body, &inner, out);
             }
-        }
-        PyStmt::If { test, body, orelse } => {
-            all_names_expr(test, out);
-            for s in body.iter().chain(orelse) {
-                all_names_stmt(s, out);
+            PyStmt::Assign { value, .. }
+            | PyStmt::UnpackAssign { value, .. }
+            | PyStmt::Return(value)
+            | PyStmt::Expr(value)
+            | PyStmt::Yield(value)
+            | PyStmt::YieldFrom(value)
+            | PyStmt::Raise(value) => free_expr(value, bound, out),
+            PyStmt::SubscriptAssign { obj, index, value } => {
+                free_expr(obj, bound, out);
+                free_expr(index, bound, out);
+                free_expr(value, bound, out);
             }
-        }
-        PyStmt::Match { subject, cases } => {
-            all_names_expr(subject, out);
-            for c in cases {
-                if let Some(g) = &c.guard {
-                    all_names_expr(g, out);
+            PyStmt::For { iter, body, .. } => {
+                free_expr(iter, bound, out);
+                free_stmts(body, bound, out);
+            }
+            PyStmt::If { test, body, orelse } => {
+                free_expr(test, bound, out);
+                free_stmts(body, bound, out);
+                free_stmts(orelse, bound, out);
+            }
+            PyStmt::Match { subject, cases } => {
+                free_expr(subject, bound, out);
+                for c in cases {
+                    // A case pattern binds its captures for that arm's body.
+                    let mut inner = bound.clone();
+                    collect_pattern_names(&c.pattern, &mut inner);
+                    if let Some(g) = &c.guard {
+                        free_expr(g, &inner, out);
+                    }
+                    free_stmts(&c.body, &inner, out);
                 }
-                for s in &c.body {
-                    all_names_stmt(s, out);
+            }
+            PyStmt::Try {
+                body,
+                binding,
+                handler,
+                ..
+            } => {
+                free_stmts(body, bound, out);
+                let mut inner = bound.clone();
+                if let Some(b) = binding {
+                    inner.insert(b.clone());
                 }
+                free_stmts(handler, &inner, out);
+            }
+            PyStmt::WhileTrue { body } => free_stmts(body, bound, out),
+            _ => {}
+        }
+    }
+}
+
+fn free_expr(expr: &PyExpr, bound: &HashSet<String>, out: &mut HashSet<String>) {
+    match expr {
+        PyExpr::Name(n) => {
+            if !bound.contains(n) {
+                out.insert(n.clone());
             }
         }
-        PyStmt::Try { body, handler, .. } => {
-            for s in body.iter().chain(handler) {
-                all_names_stmt(s, out);
+        PyExpr::Lambda { params, body } => {
+            let mut inner = bound.clone();
+            inner.extend(params.iter().cloned());
+            free_expr(body, &inner, out);
+        }
+        _ => walk_children(expr, &mut |e| free_expr(e, bound, out)),
+    }
+}
+
+/// The names a lowered case pattern captures.
+fn collect_pattern_names(pattern: &crate::python_emitter::PyPattern, out: &mut HashSet<String>) {
+    use crate::python_emitter::PyPattern as P;
+    match pattern {
+        P::Capture(n) => {
+            out.insert(n.clone());
+        }
+        P::As { pattern, name } => {
+            out.insert(name.clone());
+            collect_pattern_names(pattern, out);
+        }
+        P::Class { args, .. } => {
+            for a in args {
+                collect_pattern_names(a, out);
             }
         }
-        PyStmt::FuncDef { body, .. } | PyStmt::WhileTrue { body } => {
-            for s in body {
-                all_names_stmt(s, out);
+        P::ClassKw { fields, .. } => {
+            for (_, p) in fields {
+                collect_pattern_names(p, out);
             }
         }
-        _ => {}
+        P::Sequence(ps) | P::Or(ps) => {
+            for p in ps {
+                collect_pattern_names(p, out);
+            }
+        }
+        P::ListSeq {
+            elems,
+            star,
+            suffix,
+        } => {
+            if let Some(s) = star {
+                out.insert(s.clone());
+            }
+            for p in elems.iter().chain(suffix) {
+                collect_pattern_names(p, out);
+            }
+        }
+        P::Wildcard | P::Literal(_) => {}
     }
 }
 

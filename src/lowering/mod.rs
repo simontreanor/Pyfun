@@ -77,10 +77,23 @@ pub fn lower(
     float_literals: &HashSet<Span>,
     order: OrderPolicy,
 ) -> Result<PyModule, LowerError> {
+    lower_collecting(module, float_literals, order).map(|(py, _)| py)
+}
+
+/// [`lower`], also returning the lowering **notes**: things worth telling the
+/// author that are neither errors nor visible in the output — today, a function
+/// that calls itself in tail position but keeps its recursive form because a
+/// precondition of the loop rewrite failed (`DESIGN.md` §5.4).
+pub fn lower_collecting(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+) -> Result<(PyModule, Vec<String>), LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.float_literals = float_literals.clone();
     lowerer.order = order;
-    lowerer.lower_module(module)
+    let py = lowerer.lower_module(module)?;
+    Ok((py, lowerer.notes))
 }
 
 /// Per-module context for multi-file lowering (`DESIGN.md` §6.1): the names of
@@ -117,6 +130,8 @@ pub struct LoweredModule {
     /// Whether this module emitted a `from _pyfun_rt import …` (so the driver
     /// knows the shared runtime file is needed).
     pub uses_runtime: bool,
+    /// Lowering notes for this module — see [`lower_collecting`].
+    pub notes: Vec<String>,
 }
 
 /// Lower a module as one node of a multi-file project (`DESIGN.md` §6.1).
@@ -159,7 +174,11 @@ pub fn lower_in_project(
     }
     let py = lowerer.lower_module(module)?;
     let uses_runtime = lowerer.needs_result || lowerer.needs_option || lowerer.needs_exception;
-    Ok(LoweredModule { py, uses_runtime })
+    Ok(LoweredModule {
+        py,
+        uses_runtime,
+        notes: lowerer.notes,
+    })
 }
 
 /// The shared runtime module (`_pyfun_rt.py`): the nominal `Ok`/`Error`/`Some`/
@@ -289,6 +308,9 @@ struct Lowerer {
     /// its inferred type — otherwise a bare `print x` would show `7`, not `7.0`.
     /// Supplied by the caller (from the type checker); empty means "no coercions".
     float_literals: HashSet<Span>,
+    /// Things worth telling the author that are neither errors nor visible in the
+    /// emitted output — see [`lower_collecting`].
+    notes: Vec<String>,
     /// While lowering an in-file `module`, its name + member names, so a bare
     /// sibling reference rewrites to the mangled top-level name (`Geometry_area`).
     cur_module: Option<(String, HashSet<String>)>,
@@ -552,6 +574,7 @@ impl Lowerer {
             }
         }
         Lowerer {
+            notes: Vec::new(),
             arities,
             ap_uses,
             ctor_arity,
@@ -944,7 +967,11 @@ impl Lowerer {
             // recursing (`DESIGN.md` §5.4) — CPython has no TCE, so the recursive
             // form walks a stack it has no reason to build. Returns the body
             // untouched when any precondition fails.
-            let body = self_tail_call::rewrite(&py_name, &py_params, body);
+            let rewritten = self_tail_call::rewrite(&py_name, &py_params, body);
+            if let Some(note) = rewritten.note {
+                self.notes.push(note);
+            }
+            let body = rewritten.body;
             out.push(PyStmt::FuncDef {
                 name: py_name,
                 params: py_params,
