@@ -609,9 +609,22 @@ impl Server {
         // declaration name itself or any reference resolving to it — is appended
         // below the type (`DESIGN.md` §9).
         let doc = analysis.module.as_ref().and_then(|module| {
+            // A qualified reference (`List.contains`) is a built-in member unless
+            // the module imported by that name is a user module, in which case
+            // there is no built-in entry to find and this falls through.
+            if let Some(q) = resolve::qualified_at(module, offset)
+                && let Some(doc) = crate::types::member_doc(&format!("{}.{}", q.module, q.member))
+            {
+                return Some((q.span, doc.to_string()));
+            }
             let (span, target) = resolve::symbol_at(module, offset)?;
             match target {
-                resolve::Target::Module(name) => item_doc(module, &name).map(|d| (span, d)),
+                // A user declaration's own `##` doc wins; a name with no
+                // declaration in this module may still be a global built-in
+                // (`fst`, `print`).
+                resolve::Target::Module(name) => item_doc(module, &name)
+                    .or_else(|| crate::types::member_doc(&name).map(str::to_string))
+                    .map(|d| (span, d)),
                 resolve::Target::Local(_) => None,
             }
         });
@@ -1073,11 +1086,30 @@ impl Server {
 
         let mut items = Vec::new();
         let mut seen = HashSet::new();
-        let mut push = |items: &mut Vec<Json>, label: &str, kind: i64| {
+        // A built-in member carries its signature as `detail` and its one-line
+        // documentation as `documentation`, so the cost of an operation is visible
+        // while choosing it rather than only after looking it up.
+        fn push_builtin(items: &mut Vec<Json>, seen: &mut HashSet<String>, label: &str, kind: i64) {
+            if !seen.insert(label.to_string()) {
+                return;
+            }
+            let mut fields = vec![("label", str(label)), ("kind", int(kind))];
+            if let Some(sig) = crate::types::prelude_signatures().get(label) {
+                fields.push(("detail", str(sig.clone())));
+            }
+            if let Some(doc) = crate::types::member_doc(label) {
+                fields.push((
+                    "documentation",
+                    obj(vec![("kind", str("markdown")), ("value", str(doc))]),
+                ));
+            }
+            items.push(obj(fields));
+        }
+        fn push(items: &mut Vec<Json>, seen: &mut HashSet<String>, label: &str, kind: i64) {
             if seen.insert(label.to_string()) {
                 items.push(obj(vec![("label", str(label)), ("kind", int(kind))]));
             }
-        };
+        }
 
         // User symbols first (they shadow prelude names), from whatever parsed —
         // even a partial module contributes the symbols it recovered.
@@ -1085,27 +1117,32 @@ impl Server {
             && let Some(module) = analysis.module.as_ref()
         {
             for sym in resolve::definitions(module) {
-                push(&mut items, &sym.name, completion_kind(sym.kind));
+                push(&mut items, &mut seen, &sym.name, completion_kind(sym.kind));
             }
         }
 
         for (name, _) in crate::types::PRELUDE {
-            push(&mut items, name, KIND_FUNCTION);
+            push_builtin(&mut items, &mut seen, name, KIND_FUNCTION);
         }
         // Module members are offered fully qualified (`List.map`, `Set.add`, …).
         for (module, members) in crate::types::MODULE_PRELUDES {
             for (member, _) in *members {
-                push(&mut items, &format!("{module}.{member}"), KIND_FUNCTION);
+                push_builtin(
+                    &mut items,
+                    &mut seen,
+                    &format!("{module}.{member}"),
+                    KIND_FUNCTION,
+                );
             }
         }
         for name in BUILTIN_CTORS {
-            push(&mut items, name, KIND_CONSTRUCTOR);
+            push(&mut items, &mut seen, name, KIND_CONSTRUCTOR);
         }
         for name in BUILTIN_TYPES {
-            push(&mut items, name, KIND_CLASS);
+            push(&mut items, &mut seen, name, KIND_CLASS);
         }
         for name in KEYWORDS {
-            push(&mut items, name, KIND_KEYWORD);
+            push(&mut items, &mut seen, name, KIND_KEYWORD);
         }
         Json::Array(items)
     }
@@ -1547,6 +1584,76 @@ mod tests {
             let (l, c) = byte_to_position(text, byte);
             assert_eq!(position_to_byte(text, l, c), byte, "byte {byte}");
         }
+    }
+
+    #[test]
+    fn hover_documents_a_builtin_member() {
+        let mut server = Server::default();
+        let uri = "file:///t.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let hit = List.contains 1 [1, 2]")).unwrap());
+        // Hover over `contains` in `List.contains`.
+        let value = hover_value(&mut server, uri, 0, 15);
+        assert!(value.contains("bool"), "type missing: {value:?}");
+        assert!(
+            value.contains("O(n) linear scan") && value.contains("Set.contains"),
+            "doc missing: {value:?}"
+        );
+    }
+
+    #[test]
+    fn hover_documents_a_global_builtin() {
+        let mut server = Server::default();
+        let uri = "file:///t.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let a = fst (1, 2)")).unwrap());
+        let value = hover_value(&mut server, uri, 0, 8);
+        assert!(
+            value.contains("first element of a pair"),
+            "doc missing: {value:?}"
+        );
+    }
+
+    #[test]
+    fn a_user_declarations_own_doc_wins_over_a_builtin_name() {
+        // A user function named `max` is theirs, not the prelude's.
+        let mut server = Server::default();
+        let uri = "file:///t.pyfun";
+        server.handle(
+            &json::parse(&open_msg(
+                uri,
+                "## Mine.
+let max a = a
+let n = max 1",
+            ))
+            .unwrap(),
+        );
+        let value = hover_value(&mut server, uri, 2, 8);
+        assert!(value.contains("Mine."), "{value:?}");
+        assert!(!value.contains("comparison"), "{value:?}");
+    }
+
+    #[test]
+    fn completion_carries_signatures_and_docs_for_builtins() {
+        let mut server = Server::default();
+        let uri = "file:///t.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let x = 1")).unwrap());
+        let req = pos_msg("textDocument/completion", uri, 0, 9);
+        let out = server.handle(&json::parse(&req).unwrap());
+        let items = out[0].get("result").unwrap().as_array().unwrap();
+        let item = items
+            .iter()
+            .find(|i| i.get("label").and_then(Json::as_str) == Some("List.updateAt"))
+            .expect("List.updateAt should be offered");
+        let detail = item.get("detail").and_then(Json::as_str).unwrap();
+        assert!(
+            detail.starts_with("int -> 'a ->") && detail.ends_with("-> List 'a"),
+            "detail was {detail:?}"
+        );
+        let doc = item
+            .get("documentation")
+            .and_then(|d| d.get("value"))
+            .and_then(Json::as_str)
+            .unwrap();
+        assert!(doc.contains("O(n)"), "documentation was {doc:?}");
     }
 
     #[test]

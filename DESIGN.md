@@ -872,6 +872,15 @@ program's own stdin on its source text, so the first `input` in an interactive p
 The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
 Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
 
+**Built-in documentation.** Every built-in member carries a one-line description
+(`types::MEMBER_DOCS`, keyed by the name a user writes), which the language server appends to hover
+below the type and attaches to completion items alongside the rendered signature. Complexity is
+stated wherever it is not obvious or not what a reader would assume — a `List` backed by a Python
+list makes cost easy to misjudge (`List.contains` is a linear scan where `Set.contains` is O(1);
+`updateAt` copies). A user's own `##` doc always wins over a built-in of the same name. A test pins
+the table to the prelude constants in both directions, so a new member cannot ship undocumented and a
+renamed one cannot leave a stale entry behind.
+
 **LSP.** The editor analysis gains **minimal import awareness**: `analyze_in_dir(source,
 dir)` resolves an imported file's export interface (via `project::resolve_imports`, a *forgiving* variant
 that reads sibling `<name>.pyfun` files, resolves transitively, and silently omits a missing/broken/cyclic
