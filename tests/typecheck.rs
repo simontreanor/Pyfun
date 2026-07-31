@@ -1584,8 +1584,18 @@ fn rejects_unknown_field_in_literal() {
 
 #[test]
 fn rejects_unknown_field_access() {
+    // `p`'s type is known, so the error names the record that lacks the field.
     assert_error_contains(
         "type Point = { x: int }\nlet p = Point { x = 1 }\nlet z = p.nope",
+        "record `Point` has no field `nope`",
+    );
+}
+
+#[test]
+fn rejects_unknown_field_access_on_an_unknown_base() {
+    // Nothing pins down `p`, so the fallback by field name reports it instead.
+    assert_error_contains(
+        "type Point = { x: int }\nlet z p = p.nope",
         "unknown record field `nope`",
     );
 }
@@ -1618,6 +1628,50 @@ fn a_bare_access_of_a_shared_field_is_ambiguous() {
     assert_error_contains(
         "type A = { x: int }\ntype B = { x: int }\nlet get p = p.x",
         "field `x` is ambiguous",
+    );
+}
+
+#[test]
+fn a_shared_field_resolves_when_the_base_type_is_known() {
+    // The base decides which record a shared field belongs to, so two records may
+    // share names freely and still be accessed, updated, and nested. Only a base
+    // whose type is unknown falls back to resolution by field name.
+    assert!(
+        pyfun::check(
+            "type Placed = { letter: string, row: int }\n\
+             type Cell = { letter: string, blank: bool }\n\
+             type Board = { top: Cell }\n\
+             let p = Placed { letter = \"a\", row = 1 }\n\
+             let c = Cell { letter = \"b\", blank = false }\n\
+             let b = Board { top = c }\n\
+             let pl = p.letter\n\
+             let cl = c.letter\n\
+             let nested = b.top.letter\n\
+             let moved = { p with letter = \"z\" }\n\
+             let viaMatch =\n\
+             \x20 match c:\n\
+             \x20 \x20 case Cell { letter }: letter"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_known_record_missing_the_field_is_reported_against_that_record() {
+    // A field that exists on *some* record used to resolve to that record and then
+    // fail as a mismatch between two record types. With the base type in hand the
+    // error names the record that is actually missing the field.
+    assert_error_contains(
+        "type A = { x: int }\ntype B = { y: int }\nlet b = B { y = 1 }\nlet oops = b.x",
+        "record `B` has no field `x`",
+    );
+}
+
+#[test]
+fn a_near_miss_field_on_a_known_record_suggests_the_real_one() {
+    assert_error_contains(
+        "type Cell = { letter: string }\nlet c = Cell { letter = \"a\" }\nlet l = c.leter",
+        "did you mean `letter`",
     );
 }
 
@@ -1741,13 +1795,15 @@ fn rejects_record_pattern_field_type_mismatch() {
 
 #[test]
 fn rejects_update_of_unrelated_field() {
-    // `y` belongs to a different record than `Point`, so the update mixes types.
+    // `y` belongs to a different record than `Point`. The base's type is known, so
+    // this is reported as `Point` lacking the field rather than as a mismatch
+    // between `Point` and whichever record `y` happened to name.
     assert_error_contains(
         "type Point = { x: int }\n\
          type Other = { y: int }\n\
          let p = Point { x = 1 }\n\
          let bad = { p with y = 2 }",
-        "type mismatch",
+        "record `Point` has no field `y`",
     );
 }
 
