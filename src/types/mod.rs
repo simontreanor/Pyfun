@@ -4937,12 +4937,48 @@ impl Infer {
         Ok(Ty::Unit)
     }
 
-    /// The bare identity name of the record type owning `field` (`DESIGN.md` §8.3).
-    /// Resolution is by field name, but no longer global: **0** owners is an unknown
-    /// field, **1** owner resolves, **2+** is an ambiguity error *at this access site*
-    /// (the field is declared by two visible records — pattern-match, or tag the
-    /// construction/update, to disambiguate). Ambiguity is never an error at
-    /// declaration or import; module isolation is preserved.
+    /// The record a `base.field` access refers to, **given the base's type**
+    /// (`DESIGN.md` §8.3). When that type is already a known record, it decides the
+    /// field outright, so records sharing a field name coexist freely and the shared
+    /// name is ambiguous only where the base is still an unsolved variable. This is
+    /// F#'s rule, and it is why callers must infer the base *before* asking.
+    ///
+    /// A known record that does not declare the field is reported precisely here,
+    /// rather than resolving to some other record by name and failing later as a
+    /// mismatch between two record types.
+    fn record_of_field_on(
+        &self,
+        base_ty: &Ty,
+        field: &str,
+        span: Span,
+    ) -> Result<String, TypeError> {
+        if let Ty::Con(rec, _) = base_ty
+            && let Some(info) = self.decls.records.get(rec)
+        {
+            if info.fields.iter().any(|(n, _)| n == field) {
+                return Ok(rec.clone());
+            }
+            let near = info
+                .fields
+                .iter()
+                .map(|(n, _)| (levenshtein(field, n), n))
+                .min_by_key(|&(d, _)| d)
+                .filter(|&(d, n)| d <= (field.chars().count().max(n.chars().count()) / 3).max(2))
+                .map(|(_, n)| format!(" (did you mean `{n}`?)"))
+                .unwrap_or_default();
+            return Err(TypeError {
+                message: format!("record `{rec}` has no field `{field}`{near}"),
+                span,
+            });
+        }
+        self.record_of_field(field, span)
+    }
+
+    /// The bare identity name of the record type owning `field`, **by name alone**
+    /// (`DESIGN.md` §8.3) — the fallback for a base whose type is not yet known:
+    /// **0** owners is an unknown field, **1** owner resolves, **2+** is an ambiguity
+    /// error *at this access site*. Ambiguity is never an error at declaration or
+    /// import; module isolation is preserved.
     fn record_of_field(&self, field: &str, span: Span) -> Result<String, TypeError> {
         match self.decls.field_owner.get(field).map(Vec::as_slice) {
             Some([only]) => Ok(only.clone()),
@@ -4954,8 +4990,9 @@ impl Infer {
                     .join(" and ");
                 Err(TypeError {
                     message: format!(
-                        "field `{field}` is ambiguous here: it is declared by records {names}; \
-                         pattern-match the value (`case {} {{ {field} }}:`) to disambiguate",
+                        "field `{field}` is ambiguous here: the value's type is not known at this \
+                         point, and `{field}` is declared by records {names}; pattern-match the \
+                         value (`case {} {{ {field} }}:`) to disambiguate",
                         owners[0]
                     ),
                     span,
@@ -5099,11 +5136,13 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        // The outer record is resolved from the first path's *first* segment (all
-        // paths' first segments must be fields of the same record — the base's).
-        let owner = self.record_of_field(&fields[0].path[0], span)?;
-        let (record_ty, field_tys) = self.instantiate_record(&owner);
+        // The base is inferred first, so its type picks the record being updated;
+        // only an unknown base type falls back to the first path segment's field
+        // name (all paths' first segments must be fields of that same record).
         let bt = self.infer_expr(base, env)?;
+        let applied = self.apply(&bt);
+        let owner = self.record_of_field_on(&applied, &fields[0].path[0], span)?;
+        let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
 
         // A field may not be updated both wholesale and through a sub-path (`{ p
@@ -5184,9 +5223,14 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        let owner = self.record_of_field(name, span)?;
-        let (record_ty, field_tys) = self.instantiate_record(&owner);
+        // The base is inferred **first**, so a known base type decides which record
+        // this field belongs to (`record_of_field_on`). Resolving by field name
+        // before looking at the base is what made two records sharing a field name
+        // collide at every use site, prefixes and all.
         let bt = self.infer_expr(base, env)?;
+        let applied = self.apply(&bt);
+        let owner = self.record_of_field_on(&applied, name, span)?;
+        let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
         let fty = field_tys
             .iter()

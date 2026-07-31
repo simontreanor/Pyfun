@@ -1483,29 +1483,38 @@ Decisions:
 1. **Nominal, not structural / row-polymorphic.** (Unchanged.) A record literal/access resolves to a
    *declared* record type. Records reuse the existing `Ty::Con` machinery (a record is a type constructor
    with a field registry), so no new `Ty` variant, and they unify and generalize exactly like ADTs.
-2. **Field names are not globally unique — lazy, use-site ambiguity.**
-   Resolution of a bare `p.x` access is still by field name — an access carries no tag and no type
-   annotation (Pyfun has none on `let`/params) — but the field name no longer has to be *globally*
-   unique. Field names live in a **multimap** (`field_owner : field → [records]`), and a bare `p.x`
-   resolves iff **exactly one** *visible* record declares `x`; **0** is an unknown field, **2+** is an
-   ambiguity error **at that access site** (`` field `x` is ambiguous here: it is declared by records `A`
-   and `B`; pattern-match … to disambiguate``). The error fires at the *use*, never at declaration or
-   import — two records (in one module or across modules) may freely share `x`/`name`/`id`; you only hear
-   about it if you write a bare access that can't be resolved, and the fix is to pattern-match or tag the
-   construction/update (both of which name their record type). This is OCaml's record-label model with the
-   type-directed tiebreak replaced by an error (Pyfun has no annotations to recover with).
+2. **Field names are not globally unique — the base's type decides, with a use-site fallback.**
+   A `p.x` access resolves in two steps. **First, from `p`'s own type**: the base is inferred before the
+   field is resolved, so whenever that type is already a known record, *that* record owns the `x` — two
+   records sharing a field name never interfere. This is F#'s rule, and it covers nearly every access in
+   real code, since a base is usually a constructed value, a field of one, a match binding, or a value
+   returned by a typed function. **Second, when the base's type is still a unification variable** (the
+   accessor lambda `fun p -> p.x` being the canonical case), resolution falls back to the field name via a
+   **multimap** (`field_owner : field → [records]`): it resolves iff **exactly one** *visible* record
+   declares `x`; **0** is an unknown field, **2+** is an ambiguity error **at that access site**
+   (`` field `x` is ambiguous here: the value's type is not known at this point … ``). A known record that
+   simply lacks the field is reported against that record (`` record `B` has no field `x` ``), which is
+   the precise error rather than a downstream mismatch between two record types.
 
-   The accessor lambda `fun p -> p.x` is **unaffected in the common case**: it still types by field name
-   whenever `x` has a single visible owner (now including an *imported* record's field). It degrades only
-   to an error when two visible records share `x` — a case that under the old global-uniqueness rule was
-   *impossible to even write* (the second declaration was rejected outright). So the change is strictly
-   monotone: every program that checked before still checks, with identical types.
+   Ambiguity therefore fires only at a *use* whose base type is unknown, never at declaration or import —
+   two records (in one module or across modules) freely share `x`/`name`/`id`. The fix when it does fire is
+   to pattern-match or tag the construction/update (both name their record type), or to give the base a
+   type some other way. This is OCaml's record-label model, with the type-directed tiebreak restored and a
+   name-based fallback underneath it where OCaml would take the last-declared label.
 
-   **Why not the three alternatives.** Lifting global field-uniqueness had three "obvious" routes, all
-   rejected — the multimap above is a fourth:
-   - **Type-directed access** (resolve `p.x` from `p`'s inferred type) — regresses `fun p -> p.x`: when
-     `p` is a bare parameter its type is a unification variable at the access point, so which record `x`
-     belongs to is unknowable there without row polymorphism.
+   The accessor lambda `fun p -> p.x` is **unaffected**: it still types by field name whenever `x` has a
+   single visible owner (including an *imported* record's field), and degrades to an error only when two
+   visible records share `x` — a case the old global-uniqueness rule made *impossible to even write* (the
+   second declaration was rejected outright). So the model is strictly monotone: every program that checked
+   before still checks, with identical types.
+
+   **Why not the three alternatives.** Lifting global field-uniqueness had three "obvious" routes; the
+   two-step rule above takes the useful half of the first and rejects the other two:
+   - **Type-directed access *alone*** (resolve `p.x` only from `p`'s inferred type) — regresses
+     `fun p -> p.x`: when `p` is a bare parameter its type is a unification variable at the access point,
+     so which record `x` belongs to is unknowable there without row polymorphism. Layering it *over* the
+     multimap has no such cost, which is what the rule above does: the type decides when it is known, and
+     the name resolves when it is not, so neither case is worse than it was.
    - **Project-wide uniqueness** (export field registries, error on cross-module clashes) — defeats module
      isolation: two unrelated modules couldn't both have a `name`/`id`/`x` field, collisions inevitable at
      scale. The multimap is *not* this: nothing clashes at declaration or import; only an ambiguous *use*
@@ -1526,7 +1535,7 @@ Decisions:
    §6.1 for that mechanism. The only *record-specific* wrinkle is the field registry: an imported record is
    merged under its bare identity name (with a `Geometry.Point → Point` surface alias) and its fields append
    to the **use-site multimap** (decision 2), so bare `p.x` field-access on an imported value resolves exactly
-   as for a local record.
+   as for a local record — by the value's type where that is known, and by field name otherwise.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**
    always names its type: `Point { x = 1, y = 2 }`, or — for an imported record — the **qualified** tag
    `Geometry.Point { x = 1, y = 2 }` (a bare tag resolves only to a *local* record, exactly as a bare
