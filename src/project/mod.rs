@@ -186,6 +186,8 @@ pub struct CompiledProject {
     /// `(file name, Python source)` pairs — the modules in topological order, with
     /// `_pyfun_rt.py` (when present) last.
     pub files: Vec<(String, String)>,
+    /// Lowering notes from every module, each prefixed with its module name.
+    pub notes: Vec<String>,
 }
 
 /// Lower and emit every module of `project` to Python (`DESIGN.md` §6.1).
@@ -261,6 +263,7 @@ pub fn compile_targeting(
 
     let mut files = Vec::new();
     let mut needs_runtime = false;
+    let mut notes: Vec<String> = Vec::new();
     for module in &project.modules {
         let mut ctx = ImportContext::default();
         for import in &module.imports {
@@ -294,6 +297,12 @@ pub fn compile_targeting(
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
         let lowered = lowering::lower_in_project(&module.ast, &ctx, floats)?;
         needs_runtime |= lowered.uses_runtime;
+        notes.extend(
+            lowered
+                .notes
+                .iter()
+                .map(|n| format!("in `{}`: {n}", module.name)),
+        );
         files.push((
             module_py_name(&module.name),
             python_emitter::emit_for(&lowered.py, target),
@@ -305,7 +314,7 @@ pub fn compile_targeting(
             python_emitter::emit_for(&lowering::runtime_module(), target),
         ));
     }
-    Ok(CompiledProject { files })
+    Ok(CompiledProject { files, notes })
 }
 
 /// Best-effort resolution of `module`'s imports' export interfaces, reading

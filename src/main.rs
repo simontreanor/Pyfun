@@ -162,8 +162,11 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
     {
         return compile_project(path, out, target);
     }
-    let python = match pyfun::compile_targeting(&source, target) {
-        Ok(py) => py,
+    let python = match pyfun::compile_collecting(&source, target) {
+        Ok((py, notes)) => {
+            report_notes(&notes);
+            py
+        }
         Err(e) => {
             eprintln!(
                 "{}",
@@ -207,8 +210,11 @@ fn run(path: &str) -> ExitCode {
     {
         return run_project(path);
     }
-    let python = match pyfun::compile(&source) {
-        Ok(py) => py,
+    let python = match pyfun::compile_collecting(&source, PyTarget::default()) {
+        Ok((py, notes)) => {
+            report_notes(&notes);
+            py
+        }
         Err(e) => {
             eprintln!(
                 "{}",
@@ -321,13 +327,25 @@ fn check_project(entry: &str) -> ExitCode {
     }
 }
 
+/// Print lowering notes to stderr. These are neither errors nor part of the
+/// emitted program: they say something the author would otherwise have to read
+/// the generated Python to discover.
+fn report_notes(notes: &[String]) {
+    for note in notes {
+        eprintln!("note: {note}");
+    }
+}
+
 /// Lower a checked project to its Python files, or render a lowering error.
 fn lower_project(
     project: &project::Project,
     target: PyTarget,
 ) -> Result<Vec<(String, String)>, ExitCode> {
     match project::compile_targeting(project, target) {
-        Ok(compiled) => Ok(compiled.files),
+        Ok(compiled) => {
+            report_notes(&compiled.notes);
+            Ok(compiled.files)
+        }
         Err(e) => {
             eprintln!("error: lowering failed: {}", e.message);
             Err(ExitCode::FAILURE)

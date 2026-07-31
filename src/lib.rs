@@ -147,6 +147,17 @@ pub fn compile_targeting(
     source: &str,
     target: python_emitter::PyTarget,
 ) -> Result<String, CompileError> {
+    compile_collecting(source, target).map(|(py, _)| py)
+}
+
+/// [`compile_targeting`], also returning the lowering **notes** — things worth
+/// telling the author that are neither errors nor visible in the output (today,
+/// a self tail call that kept its recursive form; `DESIGN.md` §5.4). The CLI
+/// prints them; callers that only want the Python use [`compile`].
+pub fn compile_collecting(
+    source: &str,
+    target: python_emitter::PyTarget,
+) -> Result<(String, Vec<String>), CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
@@ -166,9 +177,10 @@ pub fn compile_targeting(
     let floats = float_literal_spans(&types);
     // Single file: the whole program is visible, so emit ordering methods only for the
     // types actually compared (`DESIGN.md` §7.1).
-    let py = lowering::lower(&module, &floats, lowering::OrderPolicy::OnDemand(ordered))
-        .map_err(CompileError::Lower)?;
-    Ok(python_emitter::emit_for(&py, target))
+    let (py, notes) =
+        lowering::lower_collecting(&module, &floats, lowering::OrderPolicy::OnDemand(ordered))
+            .map_err(CompileError::Lower)?;
+    Ok((python_emitter::emit_for(&py, target), notes))
 }
 
 /// The spans of expressions whose inferred type is `float` (dimensionless or
