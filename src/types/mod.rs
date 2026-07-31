@@ -677,7 +677,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ("List.rev", "A fresh list in the opposite order. O(n)."),
     (
         "List.range",
-        "The integers from the first bound up to but not including the second.",
+        "The integers from the first bound up to but not including the second. O(n) — it builds the list, where `Seq.range` does not.",
     ),
     (
         "List.zip",
@@ -740,7 +740,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ("List.indexed", "Pair every element with its index. O(n)."),
     (
         "List.iter",
-        "Run a function for its effect on every element, giving unit. Carries the function's effect.",
+        "Run a function for its effect on every element, giving unit. O(n), and carries the function's effect.",
     ),
     (
         "List.exists",
@@ -816,9 +816,9 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "List.init",
-        "Build a list of n elements from their indices.",
+        "Build a list of n elements from their indices. O(n).",
     ),
-    ("List.replicate", "A list of n copies of one value."),
+    ("List.replicate", "A list of n copies of one value. O(n)."),
     (
         "List.updateAt",
         "A fresh list with one index replaced. O(n) — it copies; an index outside the list changes nothing.",
@@ -841,7 +841,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "List.chunkBySize",
-        "Consecutive chunks of the given size, the last one short if it does not divide evenly.",
+        "Consecutive chunks of the given size, the last one short if it does not divide evenly. O(n).",
     ),
     ("Set.isEmpty", "Whether the set has no elements. O(1)."),
     (
@@ -1079,11 +1079,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "Seq.initInfinite",
-        "An endless sequence built from the indices 0, 1, 2, … Pair it with `Seq.take`.",
+        "An endless sequence built from the indices 0, 1, 2, …, lazily. Pair it with `Seq.take`.",
     ),
     (
         "Seq.unfold",
-        "Generate from a state until the function answers `None`. The lazy way to build a sequence with no list behind it.",
+        "Generate from a state until the function answers `None`, lazily. The way to build a sequence with no list behind it.",
     ),
     (
         "Seq.head",
@@ -1129,13 +1129,16 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "Seq.fold",
-        "Combine every element into an accumulator. Forces the sequence.",
+        "Combine every element into an accumulator. Consumes the whole sequence.",
     ),
     (
         "Seq.toList",
-        "Force the sequence into a list. Does not terminate on an endless one.",
+        "Force the sequence into a list. Consumes the whole sequence, and does not terminate on an endless one.",
     ),
-    ("Seq.ofList", "View a list as a sequence."),
+    (
+        "Seq.ofList",
+        "View a list as a sequence. O(1) — no copy, and the result is single-pass.",
+    ),
     (
         "Seq.range",
         "The integers from the first bound up to but not including the second, lazily.",
@@ -8434,6 +8437,47 @@ mod member_doc_tests {
             .filter(|name| !all.iter().any(|m| m == name))
             .collect();
         assert!(stale.is_empty(), "documented but not a member: {stale:?}");
+    }
+
+    /// The modules whose members traverse something, so a reader needs the cost.
+    /// `Option`/`Result` hold one value and are uniformly O(1); `Format`/`Decode`
+    /// and the globals are not traversals either, so none are held to this.
+    const COST_BEARING: &[&str] = &["List", "Seq", "Set", "Map", "String"];
+
+    /// Members of those modules with genuinely nothing to say: a constant, or a
+    /// conversion whose cost is the number of digits.
+    const NO_COST: &[&str] = &[
+        "Set.empty",
+        "Map.empty",
+        "String.fromInt",
+        "String.fromFloat",
+    ];
+
+    #[test]
+    fn every_traversing_member_states_its_cost() {
+        // Documenting a collection member exists because a `List` backed by a Python
+        // list makes cost easy to misjudge, so a new one must say what it costs — in
+        // big-O, or (for `Seq`) in what it consumes.
+        let states_cost = |doc: &str| {
+            doc.contains("O(")
+                || doc.contains("lazily")
+                || doc.contains("Consumes")
+                || doc.contains("Remembers")
+        };
+        let missing: Vec<&str> = MEMBER_DOCS
+            .iter()
+            .filter(|(name, _)| {
+                name.split_once('.')
+                    .is_some_and(|(m, _)| COST_BEARING.contains(&m))
+                    && !NO_COST.contains(name)
+            })
+            .filter(|(_, doc)| !states_cost(doc))
+            .map(|(name, _)| *name)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "members with no stated cost: {missing:?}"
+        );
     }
 
     #[test]
