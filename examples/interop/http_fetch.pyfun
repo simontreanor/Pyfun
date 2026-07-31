@@ -10,7 +10,8 @@
 # compiler follows them through the pipeline instead of trusting an open `-> a`.
 extern type Response
 extern type Bytes
-extern urlopen: string -> Response = urllib.request.urlopen  # imports urllib.request
+extern import urllib.request
+extern urlopen: string -> Response = urllib.request.urlopen
 extern readBody: Response -> Bytes = .read()                 # resp.read() — a method
 extern decode: Bytes -> string -> string = codecs.decode
 
@@ -28,6 +29,7 @@ print (describe (fetch "://malformed"))                    # failed: ValueError
 # The sibling of a method extern is a *property* read: `= .attr` with no `()`.
 # `urlparse` returns a value whose parts are attributes — pure string parsing.
 extern type Url
+extern import urllib.parse
 extern urlparse: string -> Url = urllib.parse.urlparse
 extern scheme: Url -> string = .scheme
 extern path: Url -> string = .path

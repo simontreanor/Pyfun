@@ -382,6 +382,54 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("snd", 1),
 ];
 
+/// Python builtin *type* names — available without an `import`, so a dotted extern
+/// target rooted at one (`bytes.decode`, `int.from_bytes`) must not emit an import.
+pub const PY_BUILTIN_TYPES: &[&str] = &[
+    "bool",
+    "int",
+    "float",
+    "complex",
+    "str",
+    "bytes",
+    "bytearray",
+    "memoryview",
+    "list",
+    "tuple",
+    "dict",
+    "set",
+    "frozenset",
+    "range",
+    "slice",
+    "object",
+    "type",
+];
+
+/// The segment of a dotted `extern` target that makes its module prefix
+/// **undecidable**, if any (`DESIGN.md` §6, `ROADMAP.md` finding #7).
+///
+/// A target mixes a module path with an attribute path (`urllib.request.urlopen`
+/// is module `urllib.request` + attr `urlopen`; `sqlite3.Connection.execute` is
+/// module `sqlite3` + attrs). PEP 8 tells them apart when the attribute is
+/// capitalised, but a **lowercase** segment after the first could be either a
+/// submodule (`os.path`, `urllib.request`) or an object (`sys.stdout`), and which
+/// one it is belongs to the target environment, not to the text. Emitting a guess
+/// produced `import sys.stdout`, which raises `ImportError` at runtime.
+///
+/// So the compiler refuses to guess and asks for an `extern import` instead. This
+/// returns the first segment it cannot classify; `None` means the shape is
+/// decidable (a single package, or a run stopped by a capitalised segment).
+pub fn undecidable_extern_segment(target: &[String]) -> Option<&str> {
+    if target.len() < 3 || PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
+        return None;
+    }
+    // Everything before the final referenced name is the candidate module path;
+    // the first segment is always the package, so only later ones are in doubt.
+    target[1..target.len() - 1]
+        .iter()
+        .find(|seg| seg.chars().next().is_some_and(char::is_lowercase))
+        .map(String::as_str)
+}
+
 /// The list prelude (`DESIGN.md` §6): functions over the eager `List a` type
 /// (which lowers to a Python list — a dynamic array, so index/`len` are O(1),
 /// prepend is O(n)). Like [`PRELUDE`], the `(name, arity)` pairs are the single
@@ -2579,6 +2627,24 @@ fn build_decls(
     // variables are collected from the declared type (bare lowercase names, as in
     // `type` decls) and generalized; the boundary is effectful-by-default, so the
     // innermost arrow gets `io` unless the binding asserts `pure`.
+    // Which module an `extern import` declares, for the check below: the same
+    // longest-prefix match lowering uses to prefer a declaration over the
+    // heuristic, so the two agree on what counts as "declared".
+    let declared_imports: Vec<(Vec<String>, Option<String>)> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternImport { path, alias, .. } => Some((path.clone(), alias.clone())),
+            _ => None,
+        })
+        .collect();
+    let is_declared = |target: &[String]| {
+        declared_imports.iter().any(|(path, alias)| match alias {
+            Some(a) => target.first() == Some(a),
+            None => target.len() > path.len() && target.starts_with(path),
+        })
+    };
+
     for item in &module.items {
         let Item::Extern(decl) = item else { continue };
         let span = decl.span.span();
@@ -2588,6 +2654,35 @@ fn build_decls(
                 span,
             });
             continue;
+        }
+        // A lowercase segment in the middle of a dotted target could be a submodule
+        // or an object, and only the target environment knows which. Rather than
+        // guess and emit an import that may not exist, ask for the declaration that
+        // already settles it (`DESIGN.md` §6).
+        if decl.receiver.is_none()
+            && let Some(seg) = undecidable_extern_segment(&decl.target)
+            && !is_declared(&decl.target)
+        {
+            let target = decl.target.join(".");
+            let root = &decl.target[0];
+            let upto: Vec<&str> = decl
+                .target
+                .iter()
+                .take_while(|s| s.as_str() != seg)
+                .map(String::as_str)
+                .collect();
+            errors.push(TypeError {
+                message: format!(
+                    "cannot tell which part of `{target}` names the module: `{seg}` is lowercase, \
+                     so it could be a submodule (like `os.path`) or an object (like `sys.stdout`), \
+                     and only the running environment knows which; declare it with \
+                     `extern import {root}` — or `extern import {}` if `{seg}` really is a module",
+                    upto.join(".") + "." + seg
+                ),
+                span,
+            });
+            // Fall through: the extern still registers, so a real import problem
+            // does not also report every use of the name as unbound.
         }
         let mut var_map = HashMap::new();
         collect_type_vars(&decl.ty, &mut var_map);

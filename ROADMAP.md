@@ -101,8 +101,12 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    not worth it. Rejections are silent, which is the real cost: a program keeps its recursion without
    saying why.
 
-7. **A dotted `extern` target imports the wrong prefix when a lowercase segment is not a module**
-   (S–M, reported 2026-07-31) — `extern flush : unit -> unit = sys.stdout.flush` emits
+7. ~~**A dotted `extern` target imports the wrong prefix when a lowercase segment is not a module**~~
+   **CLOSED 2026-07-31** (was S–M, reported the same day) — fixed with option (b): the undecidable
+   shape is now a compile error naming the `extern import` to add (`types::undecidable_extern_segment`,
+   checked in `build_decls` so `pyfun check` reports it, not only `compile`). Two shipped externs in
+   `examples/interop/http_fetch.pyfun` needed the declaration the diagnostic asks for, which is the
+   expected cost of the trade. Original report below. — `extern flush : unit -> unit = sys.stdout.flush` emits
    `import sys.stdout`, which raises `ImportError`. The *call* is always right; only the import line
    is wrong. `lowering::extern_import` takes the **maximal leading run of lowercase-initial segments**
    before the final name, following PEP 8 (packages lowercase, classes capitalised), so it succeeds
