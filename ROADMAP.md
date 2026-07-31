@@ -49,7 +49,11 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
 4. **No tuple patterns in function or lambda parameters** (M) — `parse_param` is `parse_ident`, so
    `fun (t, sq) -> …` does not parse and anything folding over pairs needs a named helper wrapping a
    `match` (five such one-line functions in the dogfooded program). Widening `Param` to a pattern
-   reaches the LSP, where `Param{name,span}` feeds hover, go-to-definition and rename.
+   reaches the LSP, where `Param{name,span}` feeds hover, go-to-definition and rename. **Follow-ups**
+   (S each, both wanted 2026-07-31): **record patterns in parameters**
+   (`fun (Cell { letter }) -> …`), which are irrefutable and so belong in the admitted set, but need
+   attribute-reading lowering rather than tuple unpacking; and **narrowing the self-tail-call capture
+   guard** below to true free variables (see #6).
 5. **Standard library completion** (L, sliced per module) — the dogfooded program wrote 11 scaffolding
    functions before it could start on the game, and defined `takeN`/`dropN` index-based over
    zip-with-indices because the natural recursive definitions are stack-unsafe (item 6). Confirmed
@@ -87,6 +91,15 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    for recursive list functions), and reopening `while` (it needs `let mut` to be useful and fights
    the expression orientation, and this covers the actual complaint without it). Mutual-recursion
    trampolining stays out: it costs the readable output that lowering exists to protect.
+   **Known over-rejection** (S to fix): the capture precondition compares *every name mentioned*
+   inside a nested function against the names this frame binds, so it also rejects two shapes that are
+   in fact safe — a lambda whose own parameter merely shares a name with one of ours
+   (`fun n -> n + 1` inside a function whose parameter is `n`: no capture at all), and a closure that
+   genuinely captures but is consumed within the iteration and never escapes
+   (`List.fold (fun acc x -> acc + x * n) 0 xs`). Subtracting the names bound *inside* the nested
+   function fixes the first outright and is strictly sound; the second needs escape analysis and is
+   not worth it. Rejections are silent, which is the real cost: a program keeps its recursion without
+   saying why.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
