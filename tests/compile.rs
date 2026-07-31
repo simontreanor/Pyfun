@@ -2211,6 +2211,53 @@ fn a_destructuring_lambda_becomes_a_def_not_a_lambda() {
 }
 
 #[test]
+fn a_record_parameter_reads_the_fields_it_names() {
+    // One attribute read per named field — the same attribute a `p.field` access
+    // reads — and nothing for the fields it does not name.
+    let py = pyfun::compile(
+        "type Cell = { row: int, col: int, letter: string }
+         let describe (Cell { letter, row }) = letter",
+    )
+    .unwrap();
+    assert!(py.contains("def describe(_pf_arg0):"), "{py}");
+    assert!(py.contains("letter = _pf_arg0.letter"), "{py}");
+    assert!(py.contains("row = _pf_arg0.row"), "{py}");
+    assert!(!py.contains(".col"), "unnamed field must not be read: {py}");
+}
+
+#[test]
+fn a_nested_record_parameter_reads_through_a_temp() {
+    let py = pyfun::compile(
+        "type Cell = { letter: string }
+         type Pair = { left: Cell, right: Cell }
+         let leftLetter (Pair { left = Cell { letter } }) = letter",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_arg0_0 = _pf_arg0.left"), "{py}");
+    assert!(py.contains("letter = _pf_arg0_0.letter"), "{py}");
+}
+
+#[test]
+fn e2e_record_parameters_round_trip() {
+    run_and_check(
+        "
+        type Cell = { row: int, col: int, letter: string }
+        type Pair = { left: Cell, right: Cell }
+        let describe (Cell { letter, row }) = letter
+        let leftLetter (Pair { left = Cell { letter } }) = letter
+        let both (Pair { left, right }) = (left.letter, right.letter)
+        let a = Cell { row = 1, col = 2, letter = \"A\" }
+        let b = Cell { row = 3, col = 4, letter = \"B\" }
+        let p = Pair { left = a, right = b }
+        let one = describe a
+        let deep = leftLetter p
+        let pairOf = both p
+        ",
+        &[("one", "A"), ("deep", "A"), ("pairOf", "('A', 'B')")],
+    );
+}
+
+#[test]
 fn a_wildcard_parameter_emits_pythons_throwaway_name() {
     let py = pyfun::compile("let const42 _ = 42").unwrap();
     assert!(py.contains("def const42(_):"), "{py}");

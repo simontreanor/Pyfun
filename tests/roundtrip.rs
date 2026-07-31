@@ -113,6 +113,12 @@ const PROGRAMS: &[&str] = &[
     "let f = fun (a, b) -> a + b",
     "let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs",
     "let partial (a, _) = a",
+    // Record patterns in parameters: shorthand, explicit, nested, subset, mixed.
+    "let describe (Cell { letter, row }) = letter",
+    "let explicit (Cell { letter = l }) = l",
+    "let nested (Pair { left = Cell { letter } }) = letter",
+    "let mixed n (Cell { letter }) _ = letter",
+    "let inTuple (a, Cell { letter }) = letter",
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     // A negative integer literal pattern.
     "let sign n =\n  match n:\n    case -1: \"neg\"\n    case 0: \"zero\"\n    case _: \"pos\"",
@@ -681,7 +687,6 @@ fn a_refutable_parameter_pattern_is_rejected_with_a_hint() {
     // shapes are admitted. Each rejection names what it saw.
     for (src, what) in [
         ("let f (Some x) = x", "a constructor pattern"),
-        ("let f (Point { x, y }) = x", "a record pattern"),
         ("let f ([a, b]) = a", "a list pattern"),
         ("let f (0) = 1", "a literal pattern"),
         ("let f (a | b) = a", "an or-pattern"),

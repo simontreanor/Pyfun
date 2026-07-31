@@ -2187,18 +2187,25 @@ fn starts_param(tok: &Tok) -> bool {
 }
 
 /// Whether `pattern` can fail to match, and if so what to call it in the error.
-/// Parameters admit only the shapes that always match: a name, `_`, and tuples of
-/// those (nested). A tuple's arity is fixed by its type, so a tuple of irrefutable
-/// sub-patterns is itself irrefutable. Everything else (a literal, a constructor, a
-/// record tag, a list pattern, an or-pattern) can fail, and a parameter has nowhere
-/// to fail *to*.
+/// Parameters admit only the shapes that always match: a name, `_`, tuples, and
+/// **record** patterns, each over irrefutable sub-patterns. A tuple's arity is
+/// fixed by its type and a record has exactly one shape (naming a subset of its
+/// fields still matches every value), so both are irrefutable when their parts
+/// are. Everything else (a literal, a constructor, a list pattern, an or-pattern)
+/// can fail, and a parameter has nowhere to fail *to*.
+///
+/// A record pattern's tag is only *checked* to name a record later, in the type
+/// checker; a tag that turns out to be a sum-type constructor is rejected there as
+/// "not a record type", so nothing refutable slips through this way.
 fn refutable_in_param(pattern: &Pattern) -> Option<&'static str> {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => None,
         Pattern::Tuple { elems } => elems.iter().find_map(refutable_in_param),
+        Pattern::Record { fields, .. } => {
+            fields.iter().find_map(|f| refutable_in_param(&f.pattern))
+        }
         Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => Some("a literal pattern"),
         Pattern::Ctor { .. } => Some("a constructor pattern"),
-        Pattern::Record { .. } => Some("a record pattern"),
         Pattern::List { .. } => Some("a list pattern"),
         Pattern::Or(_) => Some("an or-pattern"),
         Pattern::As { .. } => Some("an as-pattern"),

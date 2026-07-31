@@ -2349,6 +2349,40 @@ let n = fst2 1 true"
 }
 
 #[test]
+fn a_record_parameter_binds_its_fields() {
+    // A record has one shape, so naming a subset of its fields still always
+    // matches — the parameter destructures without a `match`.
+    assert!(
+        pyfun::check(
+            "type Cell = { row: int, letter: string }
+             let describe (Cell { letter }) = letter
+             let s = describe (Cell { row = 1, letter = \"A\" })"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_record_parameter_rejects_a_field_the_record_lacks() {
+    assert_error_contains(
+        "type Cell = { row: int }
+let f (Cell { nope }) = nope",
+        "nope",
+    );
+}
+
+#[test]
+fn a_sum_constructor_is_not_a_record_parameter() {
+    // The parser admits the *shape*; the checker is what rules out a tag that
+    // does not name a record, so nothing refutable slips through.
+    assert_error_contains(
+        "type Shape = Circle float | Square float
+let f (Circle { r }) = r",
+        "not a record type",
+    );
+}
+
+#[test]
 fn a_lambda_takes_a_tuple_parameter() {
     // The report's shape: folding over pairs without a named unwrapping helper.
     assert!(
