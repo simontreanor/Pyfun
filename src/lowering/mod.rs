@@ -2472,6 +2472,18 @@ impl Lowerer {
             "String.startsWith" => coll(self, "_pf_str_starts_with"),
             "String.endsWith" => coll(self, "_pf_str_ends_with"),
             "String.replace" => coll(self, "_pf_str_replace"),
+            "String.isEmpty" => coll(self, "_pf_str_is_empty"),
+            "String.repeat" => coll(self, "_pf_str_repeat"),
+            "String.trimStart" => coll(self, "_pf_str_trim_start"),
+            "String.trimEnd" => coll(self, "_pf_str_trim_end"),
+            "String.splitLines" => coll(self, "_pf_str_split_lines"),
+            "String.rev" => coll(self, "_pf_str_rev"),
+            "String.ofList" => coll(self, "_pf_str_of_list"),
+            // `get` answers with `Option`, like `List.get`.
+            "String.get" => {
+                self.needs_option = true;
+                coll(self, "_pf_str_get")
+            }
             "String.slice" => coll(self, "_pf_str_slice"),
             "String.tryIndexOf" => {
                 self.needs_option = true;
@@ -6221,6 +6233,77 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     PyStmt::Expr(method(name("out"), "update", vec![name("b")])),
                     PyStmt::Return(name("out")),
                 ],
+            ),
+            // ---- String ----
+            // String.isEmpty(s) -> not s
+            "_pf_str_is_empty" => {
+                def1("_pf_str_is_empty", &["s"], PyExpr::Not(Box::new(name("s"))))
+            }
+            // String.get(i, s) -> Some(s[i]) if 0 <= i < len(s) else None_()
+            // Bounds-checked and total, like `List.get`: there is no `char` type, so
+            // the answer is a one-character string.
+            "_pf_str_get" => def1(
+                "_pf_str_get",
+                &["i", "s"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::Subscript {
+                            value: Box::new(name("s")),
+                            index: Box::new(name("i")),
+                        }],
+                    )),
+                    test: Box::new(PyExpr::Compare {
+                        left: Box::new(PyExpr::Int(0)),
+                        ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                        comparators: vec![name("i"), call("len", vec![name("s")])],
+                    }),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // String.repeat(n, s) -> s * max(n, 0)
+            "_pf_str_repeat" => def1(
+                "_pf_str_repeat",
+                &["n", "s"],
+                binop(
+                    PyBinOp::Mul,
+                    name("s"),
+                    call("max", vec![name("n"), PyExpr::Int(0)]),
+                ),
+            ),
+            // String.trimStart(s) -> s.lstrip()
+            "_pf_str_trim_start" => def1(
+                "_pf_str_trim_start",
+                &["s"],
+                method(name("s"), "lstrip", vec![]),
+            ),
+            // String.trimEnd(s) -> s.rstrip()
+            "_pf_str_trim_end" => def1(
+                "_pf_str_trim_end",
+                &["s"],
+                method(name("s"), "rstrip", vec![]),
+            ),
+            // String.splitLines(s) -> s.splitlines()
+            "_pf_str_split_lines" => def1(
+                "_pf_str_split_lines",
+                &["s"],
+                method(name("s"), "splitlines", vec![]),
+            ),
+            // String.rev(s) -> "".join(reversed(s))
+            "_pf_str_rev" => def1(
+                "_pf_str_rev",
+                &["s"],
+                method(
+                    PyExpr::Str(String::new()),
+                    "join",
+                    vec![call("reversed", vec![name("s")])],
+                ),
+            ),
+            // String.ofList(xs) -> "".join(xs)
+            "_pf_str_of_list" => def1(
+                "_pf_str_of_list",
+                &["xs"],
+                method(PyExpr::Str(String::new()), "join", vec![name("xs")]),
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

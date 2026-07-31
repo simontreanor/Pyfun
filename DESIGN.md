@@ -736,6 +736,13 @@ only the value type (`Map k v -> Map k w`). `Set.fold` walks in Python's set ord
 — a fold whose result depends on order should sort first. All the higher-order members are
 effect-polymorphic like `List.map`.
 
+**String — the text module.** Beyond the operations already there, the sweep added `isEmpty` (the same
+name every other container uses), `get` (one character by index, bounds-checked and `Option`-answering
+exactly like `List.get` — there is no `char` type, so a character is a one-character string), `repeat`,
+`trimStart`/`trimEnd` (`strip` does both ends), `splitLines`, `rev`, and `ofList` (the inverse of
+`toList`). Padding is deliberately *not* here: `Format.padLeft`/`padRight` already take a width and a
+fill character, and a second spelling in `String` would be one way too many.
+
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The

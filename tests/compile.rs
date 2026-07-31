@@ -2270,6 +2270,50 @@ fn e2e_map_traversals() {
     );
 }
 
+// ---------- the String sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn string_members_lower_to_pythons_own_str_methods() {
+    let py =
+        pyfun::compile("let a = String.trimStart \" x\"\nlet b = String.splitLines \"y\"").unwrap();
+    assert!(py.contains("s.lstrip()"), "{py}");
+    assert!(py.contains("s.splitlines()"), "{py}");
+}
+
+#[test]
+fn e2e_string_sweep() {
+    run_and_check(
+        "
+        let empty = String.isEmpty \"\"
+        let full = String.isEmpty \"a\"
+        let at = String.get 1 \"abc\"
+        let past = String.get 9 \"abc\"
+        let thrice = String.repeat 3 \"ab\"
+        let none = String.repeat 0 \"ab\"
+        let left = String.trimStart \"  hi  \"
+        let right = String.trimEnd \"  hi  \"
+        let lines = String.splitLines \"a\\nb\\nc\\n\"
+        let backwards = String.rev \"abc\"
+        let joined = String.ofList [\"a\", \"b\", \"c\"]
+        let roundTrip = String.ofList (String.toList \"xyz\")
+        ",
+        &[
+            ("empty", "True"),
+            ("full", "False"),
+            ("at", "Some('b')"),
+            ("past", "None_"),
+            ("thrice", "ababab"),
+            ("none", ""),
+            ("left", "hi  "),
+            ("right", "  hi"),
+            ("lines", "['a', 'b', 'c']"),
+            ("backwards", "cba"),
+            ("joined", "abc"),
+            ("roundTrip", "xyz"),
+        ],
+    );
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]
