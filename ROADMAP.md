@@ -126,12 +126,18 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **Open VSX** — DONE 2026-07-14: `pyfun.pyfun` 0.1.0 published and indexed (covers
-  VSCodium/code-server/Gitpod/Theia). Future releases: `ovsx publish <vsix> -p <token>`.
-- **JetBrains Marketplace** — plugin uploaded 2026-07-14 (`editors/jetbrains/`, thin: file type
-  + TextMate grammar + LSP4IJ wiring, free mode + legacy CE, 2024.2+); **in moderation**
-  (~1–3 business days — check plugins.jetbrains.com for approval or reviewer feedback).
-  Later releases automate via `gradle publishPlugin`.
+- **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
+  At **0.3.0** (2026-07-31). Every release: `ovsx publish <vsix> -p <token>` (scriptable, no
+  moderation).
+- **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
+  32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
+  mode + legacy CE, 2024.2+). 0.1.0 and 0.2.0 approved; **0.3.0 uploaded 2026-07-31 via
+  `gradle publishPlugin`, awaiting the usual moderation pass** — check plugins.jetbrains.com if it
+  has not appeared in a few business days.
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, but the **only surface that cannot
+  be scripted**: the vsix is uploaded by hand through the publisher web UI (the CLI auth path is
+  broken — see `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that
+  silently falls behind; check it whenever a release goes out.
 - **Zed extensions registry** — PR open
   ([zed-industries/extensions#6814](https://github.com/zed-industries/extensions/pull/6814)):
   the main repo as a submodule with `path = editors/zed` (no dedicated repo needed; the
