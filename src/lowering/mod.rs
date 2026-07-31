@@ -26,6 +26,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 mod decode_spec;
 mod fold_loop;
+mod self_tail_call;
 
 use crate::lexer::Span;
 
@@ -936,11 +937,17 @@ impl Lowerer {
             // A nested function captures the enclosing locals (Python closures),
             // so they count as locals when resolving names in its body.
             let names = param_names(&binding.params);
+            let py_params = py_param_names(&names);
             let inner = extend(locals, &param_bindings(&binding.params));
             let body = self.lower_fn_body(&binding.params, &binding.value, &inner)?;
+            // A function that calls itself in tail position loops instead of
+            // recursing (`DESIGN.md` §5.4) — CPython has no TCE, so the recursive
+            // form walks a stack it has no reason to build. Returns the body
+            // untouched when any precondition fails.
+            let body = self_tail_call::rewrite(&py_name, &py_params, body);
             out.push(PyStmt::FuncDef {
                 name: py_name,
-                params: py_param_names(&names),
+                params: py_params,
                 body,
                 is_async: false,
             });
