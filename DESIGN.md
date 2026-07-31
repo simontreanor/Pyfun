@@ -207,6 +207,43 @@ and message). Anything dynamic (`andThen`, a decoder passed as a value, a non-li
 back to the interpreter. Measured ~2.8x end-to-end on a decode-dominated workload. Mechanics in
 `INTERNALS.md`.
 
+### 5.4 Self tail calls become loops
+
+A function that calls **itself** in tail position lowers to a `while True:` that rebinds the
+parameters and goes round again, rather than to a recursive call:
+
+```python
+def turn(state, deck):          # let turn state deck =
+    while True:                 #   if over state then state
+        if over(state):         #   else turn (step state) (rest deck)
+            return state
+        state, deck = (step(state), rest(deck))
+        continue
+```
+
+CPython has no tail-call elimination and caps the stack near 1000 frames, so the recursive form
+walks a stack it has no reason to build; an interactive loop written as recursion (every turn and
+every rejected input a frame that never returns) is the shape that forced the issue. Several
+parameters rebind **simultaneously** from one tuple, so an argument still reads the previous
+iteration's values, exactly as the call it replaces evaluated its arguments before entering.
+
+The scope is deliberately one shape: a **direct, saturated** call to the enclosing function in tail
+position. General tail-call elimination and mutual recursion need a trampoline, which costs the
+readable output lowering exists to protect; both stay non-goals (`ROADMAP.md`). Nothing about the
+language changes — this is a property of the emitted code, and the recursive definition remains the
+only way to write it.
+
+Four preconditions, each of which leaves the ordinary recursive def when it fails (always correct,
+merely stack-bound): the body must not **rebind the function's own name** (a shadowing `let` would
+make the loop jump somewhere the program meant to call); it must not be a **generator or coroutine**
+(`return` in a generator raises `StopIteration` with a value, and an async tail call is an `await`);
+the rewrite does not descend into a **`for` loop** (a `continue` there belongs to the `for`) or a
+**`try`** (looping inside it would put every later iteration under a handler that covered one call);
+and no **nested function may mention a name this frame binds**. That last one is the subtle one: the
+loop reuses one cell per parameter where recursion gave each frame its own, so a closure that
+outlives its iteration would see the final value rather than the one it was made with. Mechanics in
+`INTERNALS.md`.
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the

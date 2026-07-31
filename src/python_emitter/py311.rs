@@ -29,7 +29,13 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         | PyStmt::Nonlocal(_)
         | PyStmt::Global(_)
         | PyStmt::RaiseRuntimeError(_)
+        | PyStmt::Continue
         | PyStmt::ClassDef { .. } => {}
+        PyStmt::WhileTrue { body } => {
+            for s in body {
+                rewrite_stmt(s);
+            }
+        }
         PyStmt::Assign { value, .. } | PyStmt::UnpackAssign { value, .. } => rewrite_expr(value),
         PyStmt::SubscriptAssign { obj, index, value } => {
             rewrite_expr(obj);

@@ -2598,6 +2598,129 @@ fn recursive_call_lowers_to_a_direct_call() {
     assert!(py.contains("fact(n - 1)"), "{py}");
 }
 
+// ---------- self tail calls become loops (DESIGN §5.4) ----------
+
+#[test]
+fn a_self_tail_call_becomes_a_loop() {
+    let py = pyfun::compile(
+        "let countdown n =
+  if n == 0 then \"done\"
+  else countdown (n - 1)",
+    )
+    .unwrap();
+    assert!(py.contains("while True:"), "{py}");
+    assert!(py.contains("n = n - 1"), "{py}");
+    assert!(py.contains("continue"), "{py}");
+    // The recursive call is gone: nothing calls `countdown` inside its own body.
+    assert!(!py.contains("return countdown("), "{py}");
+}
+
+#[test]
+fn several_parameters_rebind_simultaneously() {
+    // `n` is read by the second argument, so the two must not rebind in sequence.
+    let py = pyfun::compile(
+        "let sumTo n acc =
+  if n == 0 then acc
+  else sumTo (n - 1) (acc + n)",
+    )
+    .unwrap();
+    assert!(py.contains("n, acc = (n - 1, acc + n)"), "{py}");
+}
+
+#[test]
+fn a_tail_call_in_a_match_arm_becomes_a_loop() {
+    let py = pyfun::compile(
+        "let classify n =
+  match n:
+    case 0: \"zero\"
+    case _: classify (n - 1)",
+    )
+    .unwrap();
+    assert!(py.contains("while True:"), "{py}");
+    assert!(py.contains("continue"), "{py}");
+}
+
+#[test]
+fn a_non_tail_self_call_is_left_recursive() {
+    // `1 + f (n - 1)` has work left after the call, so it is not a tail call.
+    let py = pyfun::compile(
+        "let f n =
+  if n == 0 then 0
+  else 1 + f (n - 1)",
+    )
+    .unwrap();
+    assert!(!py.contains("while True:"), "{py}");
+    assert!(py.contains("return 1 + f(n - 1)"), "{py}");
+}
+
+#[test]
+fn mutual_recursion_is_left_alone() {
+    // Only a *self* call loops; mutual recursion would need a trampoline, which
+    // costs the readable output (ROADMAP).
+    let py = pyfun::compile(
+        "
+        let evens n =
+          if n == 0 then true
+          else odds (n - 1)
+        let odds n =
+          if n == 0 then false
+          else evens (n - 1)
+        ",
+    )
+    .unwrap();
+    assert!(!py.contains("while True:"), "{py}");
+}
+
+#[test]
+fn a_closure_over_a_parameter_blocks_the_loop() {
+    // The loop reuses one cell per parameter where recursion gave each frame its
+    // own. A closure that outlives the iteration would see the final value, so
+    // this shape stays recursive.
+    let py = pyfun::compile(
+        "
+        let collect n acc =
+          if n == 0 then acc
+          else collect (n - 1) (List.concat acc [fun k -> n])
+        ",
+    )
+    .unwrap();
+    assert!(!py.contains("while True:"), "{py}");
+    assert!(py.contains("return collect("), "{py}");
+}
+
+#[test]
+fn e2e_a_self_tail_call_recurses_past_the_stack_limit() {
+    // 50k frames is far past CPython's ~1000 limit: this only completes as a loop.
+    run_and_check(
+        "
+        let countdown n =
+          if n == 0 then \"done\"
+          else countdown (n - 1)
+        let sumTo n acc =
+          if n == 0 then acc
+          else sumTo (n - 1) (acc + n)
+        let deep = countdown 50000
+        let total = sumTo 100000 0
+        ",
+        &[("deep", "done"), ("total", "5000050000")],
+    );
+}
+
+#[test]
+fn e2e_a_closure_over_a_parameter_keeps_per_frame_values() {
+    // The guard's reason to exist: each closure must capture its own `n`.
+    run_and_check(
+        "
+        let collect n acc =
+          if n == 0 then acc
+          else collect (n - 1) (List.concat acc [fun k -> n])
+        let fns = collect 3 []
+        let values = List.map (fun f -> f 0) fns
+        ",
+        &[("values", "[3, 2, 1]")],
+    );
+}
+
 #[test]
 fn e2e_recursive_functions() {
     run_and_check(

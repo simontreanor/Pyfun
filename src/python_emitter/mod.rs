@@ -49,11 +49,13 @@ pub enum PyStmt {
     Global(Vec<String>),
     /// `target = value`
     Assign { target: String, value: PyExpr },
-    /// `a, b = value` — tuple unpacking (two or more targets). Emitted for a
-    /// destructuring parameter (`fun (t, sq) -> …`), whose Python argument is a
-    /// single synthetic name unpacked at the top of the body, since Python 3 has no
-    /// tuple parameters. A nested tuple unpacks through a temp, one statement per
-    /// level, rather than nesting the target syntax.
+    /// `a, b = value` — tuple unpacking (two or more targets), so several names
+    /// rebind *simultaneously* from one right-hand side. Emitted for a destructuring
+    /// parameter (`fun (t, sq) -> …`), whose Python argument is a single synthetic
+    /// name unpacked at the top of the body since Python 3 has no tuple parameters
+    /// (a nested tuple unpacks through a temp, one statement per level, rather than
+    /// nesting the target syntax), and for the parameter rebinding of a self tail
+    /// call (`DESIGN.md` §5.4).
     UnpackAssign { targets: Vec<String>, value: PyExpr },
     /// `obj[index] = value` — subscript assignment (a distinct target shape from
     /// [`Assign`], whose target is a bare name). Emitted by the in-place linear-fold
@@ -63,6 +65,12 @@ pub enum PyStmt {
         index: PyExpr,
         value: PyExpr,
     },
+    /// `while True: body` — the loop a self tail call becomes (`DESIGN.md` §5.4).
+    /// Always `True`: the exits are the `return`s already in the body.
+    WhileTrue { body: Vec<PyStmt> },
+    /// `continue` — ends a `while True:` iteration, emitted where a self tail call
+    /// has just rebound the parameters.
+    Continue,
     /// `for target in iter: body` — a `for`-loop over a single iteration variable.
     /// Emitted by the in-place linear-fold optimization (`DESIGN.md` §5).
     For {
@@ -415,6 +423,11 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             line(out, depth, &format!("for {target} in {}:", expr(iter)));
             emit_block(body, depth + 1, out);
         }
+        PyStmt::WhileTrue { body } => {
+            line(out, depth, "while True:");
+            emit_block(body, depth + 1, out);
+        }
+        PyStmt::Continue => line(out, depth, "continue"),
         PyStmt::Return(value) => line(out, depth, &format!("return {}", expr(value))),
         PyStmt::Expr(value) => line(out, depth, &expr(value)),
         PyStmt::FuncDef {

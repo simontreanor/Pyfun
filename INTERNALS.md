@@ -146,6 +146,30 @@ interpreter unchanged. Measured on a decode-dominated workload (400k-object JSON
 in-process best-of-5): **2.8x end-to-end** including the shared `json.loads`, ~4x on the decode portion
 itself.
 
+### Self tail calls as loops — implements DESIGN §5.4
+
+`src/lowering/self_tail_call.rs`, called from `lower_binding_as` (the one site that emits a *named*
+`FuncDef`, so the function has a name to call itself by) after `lower_fn_body` returns. It runs on the
+**lowered body**, not the Pyfun AST, which is what keeps it small: `lower_return` emits a
+`PyStmt::Return` only in tail position, so "tail call" is just "a `Return` whose value is
+`PyExpr::Call` on our own emitted name with our own arity", and the tail-position walk is a walk over
+statements that already exist. Leading `Global`/`Nonlocal` split off first and stay outside the loop
+(Python requires them at the top of the block); everything after them is wrapped in
+`PyStmt::WhileTrue`, with each self tail call replaced by a rebinding (`PyStmt::Assign` for one
+parameter, `PyStmt::UnpackAssign` from a `PyExpr::Tuple` for several, so the rebinding is
+simultaneous) plus `PyStmt::Continue`. Both statements are new IR nodes, as is `UnpackAssign`.
+
+The four preconditions (DESIGN §5.4) are `binds` (the body rebinds the function's own name — assign,
+unpack, `for` target, nested `def`/`class`, or a `match` capture), `has_yield` (generator), the
+descent rule in `rewrite_stmts` (into `If` branches and `Match` case bodies only — never `For`,
+`FuncDef`, `ClassDef` or `Try`), and the capture check: `frame_names` (parameters plus everything
+assigned in this frame) intersected with `nested_refs_stmt` (every name mentioned inside a nested
+`def` body or `lambda` body). A non-empty intersection rejects, because the loop shares one cell per
+name where recursion gave each frame its own. Any rejection returns the body untouched, which is
+always correct and merely stack-bound. Regression tests live in `tests/compile.rs` under
+"self tail calls become loops", including two end-to-end: 50k/100k-deep recursion that only completes
+as a loop, and the closure case whose per-frame values the capture check exists to preserve.
+
 ### The `--target 3.11` emission pass
 
 Emitted code targets Python 3.12+ for exactly one construct: an f-string hole may carry a nested
