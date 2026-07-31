@@ -2166,6 +2166,118 @@ fn record_pattern_lowers_to_keyword_class_pattern() {
     assert!(py.contains("case Point(x=x):"), "{py}");
 }
 
+// ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn seq_lazy_members_route_to_pythons_lazy_machinery() {
+    // No `list(...)` anywhere: a lazy member must not force what it is given.
+    let py = pyfun::compile(
+        "let s = Seq.toList (Seq.drop 1 (Seq.takeWhile (fun x -> x < 3) (Seq.ofList [1, 2])))",
+    )
+    .unwrap();
+    assert!(py.contains("itertools.islice(xs, max(n, 0), None)"), "{py}");
+    assert!(py.contains("itertools.takewhile(f, xs)"), "{py}");
+}
+
+#[test]
+fn seq_distinct_is_a_generator_not_a_list() {
+    // It has to remember what it has seen while staying lazy, so it yields.
+    let py = pyfun::compile("let s = Seq.toList (Seq.distinct (Seq.ofList [1, 1]))").unwrap();
+    assert!(py.contains("yield x"), "{py}");
+    assert!(!py.contains("_pf_seq_distinct(xs):\n    out = []"), "{py}");
+}
+
+#[test]
+fn seq_unfold_yields_until_none() {
+    let py =
+        pyfun::compile("let s = Seq.toList (Seq.take 1 (Seq.unfold (fun n -> Some (n, n)) 0))")
+            .unwrap();
+    assert!(py.contains("while True:"), "{py}");
+    assert!(py.contains("isinstance(step, Some)"), "{py}");
+}
+
+#[test]
+fn e2e_seq_lazy_members() {
+    run_and_check(
+        "
+        let dropped = Seq.toList (Seq.drop 2 (Seq.ofList [1, 2, 3, 4]))
+        let taken = Seq.toList (Seq.takeWhile (fun x -> x < 3) (Seq.ofList [1, 2, 3, 1]))
+        let skipped = Seq.toList (Seq.dropWhile (fun x -> x < 3) (Seq.ofList [1, 2, 3, 1]))
+        let joined = Seq.toList (Seq.concat (Seq.ofList [1, 2]) (Seq.ofList [3]))
+        let flat = Seq.toList (Seq.flatten (Seq.ofList [Seq.ofList [1, 2], Seq.ofList [3]]))
+        let mapped = Seq.toList (Seq.collect (fun x -> Seq.ofList [x, x]) (Seq.ofList [1, 2]))
+        let zipped = Seq.toList (Seq.zip (Seq.ofList [1, 2]) (Seq.ofList [\"a\", \"b\"]))
+        let ix = Seq.toList (Seq.indexed (Seq.ofList [\"a\", \"b\"]))
+        let uniq = Seq.toList (Seq.distinct (Seq.ofList [1, 1, 2, 1, 3]))
+        let pairs = Seq.toList (Seq.pairwise (Seq.ofList [1, 2, 3]))
+        let built = Seq.toList (Seq.init 4 (fun i -> i * i))
+        ",
+        &[
+            ("dropped", "[3, 4]"),
+            ("taken", "[1, 2]"),
+            ("skipped", "[3, 1]"),
+            ("joined", "[1, 2, 3]"),
+            ("flat", "[1, 2, 3]"),
+            ("mapped", "[1, 1, 2, 2]"),
+            ("zipped", "[(1, 'a'), (2, 'b')]"),
+            ("ix", "[(0, 'a'), (1, 'b')]"),
+            ("uniq", "[1, 2, 3]"),
+            ("pairs", "[(1, 2), (2, 3)]"),
+            ("built", "[0, 1, 4, 9]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_seq_can_be_endless() {
+    // Neither of these terminates if anything forces the whole sequence, so they
+    // are the real test that the lazy members stayed lazy.
+    run_and_check(
+        "
+        let doubles = Seq.toList (Seq.take 5 (Seq.initInfinite (fun i -> i * 2)))
+        let powers = Seq.toList (Seq.take 4 (Seq.unfold (fun s -> if s > 100 then None else Some (s, s * 2)) 1))
+        let firstBig = Seq.find (fun x -> x > 6) (Seq.initInfinite (fun i -> i * 2))
+        ",
+        &[
+            ("doubles", "[0, 2, 4, 6, 8]"),
+            ("powers", "[1, 2, 4, 8]"),
+            ("firstBig", "Some(8)"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_seq_consuming_members() {
+    run_and_check(
+        "
+        let first = Seq.head (Seq.ofList [7, 8])
+        let none = Seq.head (Seq.ofList [])
+        let empty = Seq.isEmpty (Seq.ofList [])
+        let full = Seq.isEmpty (Seq.ofList [1])
+        let n = Seq.len (Seq.ofList [1, 2, 3])
+        let any = Seq.exists (fun x -> x > 2) (Seq.ofList [1, 2, 3])
+        let all = Seq.forall (fun x -> x > 0) (Seq.ofList [1, 2, 3])
+        let has = Seq.contains 2 (Seq.ofList [1, 2, 3])
+        let total = Seq.sum (Seq.ofList [1, 2, 3])
+        let found = Seq.find (fun x -> x > 1) (Seq.ofList [1, 2, 3])
+        let missing = Seq.find (fun x -> x > 9) (Seq.ofList [1, 2, 3])
+        ",
+        &[
+            ("first", "Some(7)"),
+            ("none", "None_"),
+            ("empty", "True"),
+            ("full", "False"),
+            ("n", "3"),
+            ("any", "True"),
+            ("all", "True"),
+            ("has", "True"),
+            ("total", "6"),
+            ("found", "Some(2)"),
+            ("missing", "None_"),
+        ],
+    );
+}
+
 // ---------- the List sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]

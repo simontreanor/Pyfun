@@ -914,6 +914,82 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Result.toOption",
         "`Ok x` becomes `Some x`; any `Error` becomes `None`.",
     ),
+    ("Seq.drop", "Skip the first n elements, lazily."),
+    (
+        "Seq.takeWhile",
+        "Take elements while a test passes, lazily; stops at the first failure.",
+    ),
+    (
+        "Seq.dropWhile",
+        "Skip elements while a test passes, lazily; keeps the rest from the first failure.",
+    ),
+    (
+        "Seq.concat",
+        "Append two sequences, lazily. Note this appends, where F#'s `concat` flattens: use `Seq.flatten` for that.",
+    ),
+    (
+        "Seq.flatten",
+        "Concatenate a sequence of sequences, lazily.",
+    ),
+    (
+        "Seq.collect",
+        "Map each element to a sequence and concatenate the results, lazily (flatMap).",
+    ),
+    (
+        "Seq.zip",
+        "Pair up two sequences, lazily, stopping at the shorter.",
+    ),
+    ("Seq.indexed", "Pair every element with its index, lazily."),
+    (
+        "Seq.distinct",
+        "Drop later duplicates, lazily, keeping first-seen order. Remembers what it has seen.",
+    ),
+    ("Seq.pairwise", "Every consecutive pair, lazily."),
+    (
+        "Seq.init",
+        "Build a sequence of n elements from their indices, lazily.",
+    ),
+    (
+        "Seq.initInfinite",
+        "An endless sequence built from the indices 0, 1, 2, … Pair it with `Seq.take`.",
+    ),
+    (
+        "Seq.unfold",
+        "Generate from a state until the function answers `None`. The lazy way to build a sequence with no list behind it.",
+    ),
+    (
+        "Seq.head",
+        "The first element, or `None` when empty. Consumes it — a Python iterator is single-pass.",
+    ),
+    (
+        "Seq.isEmpty",
+        "Whether the sequence has no elements. Consumes one element to find out.",
+    ),
+    (
+        "Seq.len",
+        "How many elements. Consumes the whole sequence, and does not terminate on an endless one.",
+    ),
+    (
+        "Seq.exists",
+        "Whether any element passes a test. Consumes up to the first match.",
+    ),
+    (
+        "Seq.forall",
+        "Whether every element passes a test. Consumes up to the first failure.",
+    ),
+    (
+        "Seq.contains",
+        "Whether the sequence holds this element. Consumes up to the first match.",
+    ),
+    ("Seq.sum", "Add every element. Consumes the whole sequence."),
+    (
+        "Seq.iter",
+        "Run a function for its effect on every element. Consumes the whole sequence.",
+    ),
+    (
+        "Seq.find",
+        "The first element passing a test, or `None`. Consumes up to the first match.",
+    ),
     (
         "Seq.map",
         "Apply a function to every element, lazily. Nothing runs until the sequence is consumed.",
@@ -1119,6 +1195,31 @@ pub const RESULT_PRELUDE: &[(&str, usize)] = &[
 /// `islice`/`range`); `Seq.fold`/`toList` force the sequence. `Seq.map`/`filter`/
 /// `fold` are effect-polymorphic. NB Python iterators are **single-pass**.
 pub const SEQ_PRELUDE: &[(&str, usize)] = &[
+    // Lazy: each answers a new sequence without pulling from the old one yet.
+    ("drop", 2),
+    ("takeWhile", 2),
+    ("dropWhile", 2),
+    ("concat", 2),
+    ("flatten", 1),
+    ("collect", 2),
+    ("zip", 2),
+    ("indexed", 1),
+    ("distinct", 1),
+    ("pairwise", 1),
+    ("init", 2),
+    ("initInfinite", 1),
+    ("unfold", 2),
+    // Consuming: these pull from the sequence, and a Python iterator is
+    // single-pass (`DESIGN.md` §6), so what they consume is gone.
+    ("head", 1),
+    ("isEmpty", 1),
+    ("len", 1),
+    ("exists", 2),
+    ("forall", 2),
+    ("contains", 2),
+    ("sum", 1),
+    ("iter", 2),
+    ("find", 2),
     ("map", 2),
     ("filter", 2),
     ("take", 2),
@@ -4221,6 +4322,138 @@ fn seed_seq_prelude(env: &mut Env) {
     put(
         "range",
         mono(vec![], pure_fn(int(), pure_fn(int(), seq(int())))),
+    );
+
+    // ---- lazy: a new sequence, nothing pulled yet ----
+    let option = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    // Seq.drop : int -> Seq a -> Seq a
+    put(
+        "drop",
+        mono(vec![0], pure_fn(int(), pure_fn(seq(a()), seq(a())))),
+    );
+    // Seq.takeWhile : (a ->{e} bool) -> Seq a ->{e} Seq a
+    put(
+        "takeWhile",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), seq(a()))),
+        ),
+    );
+    // Seq.dropWhile : (a ->{e} bool) -> Seq a ->{e} Seq a
+    put(
+        "dropWhile",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), seq(a()))),
+        ),
+    );
+    // Seq.concat : Seq a -> Seq a -> Seq a   (append, matching `List.concat`)
+    put(
+        "concat",
+        mono(vec![0], pure_fn(seq(a()), pure_fn(seq(a()), seq(a())))),
+    );
+    // Seq.flatten : Seq (Seq a) -> Seq a
+    put("flatten", mono(vec![0], pure_fn(seq(seq(a())), seq(a()))));
+    // Seq.collect : (a ->{e} Seq b) -> Seq a ->{e} Seq b
+    put(
+        "collect",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), seq(b())), arrow_e(seq(a()), seq(b()))),
+        ),
+    );
+    // Seq.zip : Seq a -> Seq b -> Seq (a, b)
+    put(
+        "zip",
+        mono(
+            vec![0, 1],
+            pure_fn(seq(a()), pure_fn(seq(b()), seq(Ty::Tuple(vec![a(), b()])))),
+        ),
+    );
+    // Seq.indexed : Seq a -> Seq (int, a)
+    put(
+        "indexed",
+        mono(vec![0], pure_fn(seq(a()), seq(Ty::Tuple(vec![int(), a()])))),
+    );
+    // Seq.distinct : Seq a -> Seq a
+    put("distinct", mono(vec![0], pure_fn(seq(a()), seq(a()))));
+    // Seq.pairwise : Seq a -> Seq (a, a)
+    put(
+        "pairwise",
+        mono(vec![0], pure_fn(seq(a()), seq(Ty::Tuple(vec![a(), a()])))),
+    );
+    // Seq.init : int -> (int ->{e} a) ->{e} Seq a
+    put(
+        "init",
+        eff_scheme(
+            vec![0],
+            pure_fn(int(), arrow_e(arrow_e(int(), a()), seq(a()))),
+        ),
+    );
+    // Seq.initInfinite : (int ->{e} a) ->{e} Seq a   (endless — the reason `Seq`
+    // exists; pair it with `take`)
+    put(
+        "initInfinite",
+        eff_scheme(vec![0], pure_fn(arrow_e(int(), a()), seq(a()))),
+    );
+    // Seq.unfold : (b ->{e} Option (a, b)) -> b ->{e} Seq a   (generate from a
+    // state until the function answers `None`)
+    put(
+        "unfold",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(b(), option(Ty::Tuple(vec![a(), b()]))),
+                arrow_e(b(), seq(a())),
+            ),
+        ),
+    );
+
+    // ---- consuming: a Python iterator is single-pass, so what these pull is gone ----
+    // Seq.head : Seq a -> Option a
+    put("head", mono(vec![0], pure_fn(seq(a()), option(a()))));
+    // Seq.isEmpty : Seq a -> bool
+    put("isEmpty", mono(vec![0], pure_fn(seq(a()), Ty::Bool)));
+    // Seq.len : Seq a -> int
+    put("len", mono(vec![0], pure_fn(seq(a()), int())));
+    // Seq.exists : (a ->{e} bool) -> Seq a ->{e} bool
+    put(
+        "exists",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), Ty::Bool)),
+        ),
+    );
+    // Seq.forall : (a ->{e} bool) -> Seq a ->{e} bool
+    put(
+        "forall",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), Ty::Bool)),
+        ),
+    );
+    // Seq.contains : a -> Seq a -> bool
+    put(
+        "contains",
+        mono(vec![0], pure_fn(a(), pure_fn(seq(a()), Ty::Bool))),
+    );
+    // Seq.sum : Seq int -> int
+    put("sum", mono(vec![], pure_fn(seq(int()), int())));
+    // Seq.iter : (a ->{e} unit) -> Seq a ->{e} unit
+    put(
+        "iter",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Unit), arrow_e(seq(a()), Ty::Unit)),
+        ),
+    );
+    // Seq.find : (a ->{e} bool) -> Seq a ->{e} Option a   (stops at the first match)
+    put(
+        "find",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), option(a()))),
+        ),
     );
 }
 
