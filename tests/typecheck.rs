@@ -1824,6 +1824,87 @@ fn string_of_list_inverts_to_list() {
     assert_error_contains("let bad = String.ofList [1, 2]", "string");
 }
 
+// ---------- deferred field resolution ----------
+
+#[test]
+fn a_shared_field_resolves_from_a_later_statement() {
+    // The base's type is unknown *where the access is written*, but a later
+    // statement says what it is, and HM knows by the end of the binding. Resolving
+    // at first sight reported an ambiguity the program did not really have.
+    assert!(
+        pyfun::check(
+            "type Placed = { row: int, letter: string }\n\
+             type Cell = { row: int, letter: string, blank: bool }\n\
+             let describe c =\n\
+             \x20   let l = c.letter\n\
+             \x20   let flag = c.blank\n\
+             \x20   l"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_deferred_field_is_still_type_checked() {
+    // Deferring must not weaken the check: once the base is known, the field's
+    // type has to fit every use of it.
+    assert_error_contains(
+        "type Placed = { row: int, letter: string }\n\
+         type Cell = { row: int, letter: string, blank: bool }\n\
+         let bad c =\n\
+         \x20   let l = c.letter\n\
+         \x20   let flag = c.blank\n\
+         \x20   l + 1",
+        "expected int, found string",
+    );
+}
+
+#[test]
+fn a_deferred_field_must_exist_on_the_record_that_wins() {
+    assert_error_contains(
+        "type Cell = { letter: string, blank: bool }\n\
+         type Tile = { letter: string, score: int }\n\
+         let bad c =\n\
+         \x20   let s = c.score\n\
+         \x20   let flag = c.blank\n\
+         \x20   s",
+        "no field",
+    );
+}
+
+#[test]
+fn a_field_on_a_value_nothing_pins_is_still_ambiguous() {
+    // The genuinely unresolvable case: no statement anywhere says what `c` is.
+    // The message names both ways out, including the parameter form.
+    let msgs = errors(
+        "type Placed = { row: int, letter: string }\n\
+         type Cell = { row: int, letter: string, blank: bool }\n\
+         let get c = c.letter",
+    );
+    let msg = msgs.join(" ");
+    assert!(msg.contains("nothing says what this value is"), "{msg}");
+    assert!(msg.contains("in a parameter"), "{msg}");
+    assert!(msg.contains("in a pattern"), "{msg}");
+}
+
+#[test]
+fn a_pinned_container_resolves_its_payload() {
+    // `Map.tryFind` on a map whose value type is known needs no pattern: the
+    // payload is pinned by the map.
+    assert!(
+        pyfun::check(
+            "type Placed = { row: int, letter: string }\n\
+             type Cell = { row: int, letter: string, blank: bool }\n\
+             let board = Map.ofList [(1, Placed { row = 1, letter = \"A\" })]\n\
+             let at k =\n\
+             \x20 match Map.tryFind k board:\n\
+             \x20   case Some p: p.letter\n\
+             \x20   case None: \"\""
+        )
+        .is_ok()
+    );
+}
+
 // ---------- the FSharp.Core audit (ROADMAP dogfooding finding #5) ----------
 
 #[test]
