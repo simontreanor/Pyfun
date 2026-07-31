@@ -329,6 +329,20 @@ extern now : unit -> Datetime = datetime.datetime.now    # import datetime; date
 extern zeros : int -> Arr = np.zeros                     # import numpy as np; np.zeros(n)
 ```
 
+**An undecidable module prefix is a compile error, not a guess.** A lowercase segment *after the
+first* could be a submodule (`os.path`, `urllib.request`) or an object (`sys.stdout`,
+`datetime.datetime`), and which one it is belongs to the running environment, not to the text. The
+compiler used to guess with PEP 8 (maximal leading run of lowercase segments), which emitted
+`import sys.stdout` for `sys.stdout.flush` and raised `ImportError` at runtime. It now refuses the
+shape and names the fix: `` cannot tell which part of `sys.stdout.flush` names the module … declare it
+with `extern import sys` — or `extern import sys.stdout` if `stdout` really is a module ``. A declared
+`extern import` settles it and the error goes away, which is the escape hatch that already existed.
+Capitalised segments still settle themselves (`pathlib.Path.read_text` needs nothing, since `Path` is
+a class), and a two-segment target has nothing to guess. The alternative — emitting the deeper import
+guarded by `try/except ImportError` — was rejected: it puts defensive machinery in the output for
+something the author can state exactly, and a compile error that names the one line to add is the
+better trade (`ROADMAP.md` finding #7).
+
 A used target rooted at a declared path (longest match) — or at its alias name — imports the module
 exactly as declared (trusted as written, the same signed-contract stance as the rest of the
 boundary), and only otherwise does the heuristic decide (`Lowerer::extern_import_spec`). One

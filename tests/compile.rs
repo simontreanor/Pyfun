@@ -72,9 +72,14 @@ fn unused_extern_imports_nothing() {
 #[test]
 fn extern_in_submodule_imports_the_submodule() {
     // A target inside a submodule must import the submodule, not just the top-level
-    // package — `import urllib` would leave `urllib.parse` unbound at runtime.
-    let py = pyfun::compile("extern q: string -> string = urllib.parse.quote\nlet r = q \"a b\"")
-        .unwrap();
+    // package — `import urllib` would leave `urllib.parse` unbound at runtime. The
+    // declaration is what says so; the compiler will not guess (`DESIGN.md` §6).
+    let py = pyfun::compile(
+        "extern import urllib.parse\n\
+         extern q: string -> string = urllib.parse.quote\n\
+         let r = q \"a b\"",
+    )
+    .unwrap();
     assert!(py.contains("import urllib.parse"), "{py}");
     assert!(py.contains("r = urllib.parse.quote("), "{py}");
 }
@@ -363,13 +368,47 @@ fn extern_import_composes_with_pinned_kwargs() {
 }
 
 #[test]
-fn import_heuristic_is_unchanged_without_a_declared_import() {
-    // With no `extern import`, the lowercase-prefix heuristic is untouched: a
-    // submodule target still imports the submodule, not just the top package.
-    let py = pyfun::compile("extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"")
-        .unwrap();
+fn an_undecidable_target_is_rejected_rather_than_guessed() {
+    // `request` is lowercase, so it could be a submodule (it is) or an object
+    // (`sys.stdout` is one). The text cannot say which, and the answer belongs to
+    // the running environment, so the compiler asks instead of emitting an import
+    // that may not exist (`ROADMAP.md` finding #7).
+    let err = pyfun::compile("extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"")
+        .unwrap_err();
+    let msg = err.message();
+    assert!(msg.contains("cannot tell which part"), "{msg}");
+    assert!(msg.contains("extern import urllib.request"), "{msg}");
+}
+
+#[test]
+fn a_declared_import_settles_an_undecidable_target() {
+    // The same target, with the one line the diagnostic asks for.
+    let py = pyfun::compile(
+        "extern import urllib.request\n\
+         extern get: string -> a = urllib.request.urlopen\n\
+         let r = get \"x\"",
+    )
+    .unwrap();
     assert!(py.contains("import urllib.request"), "{py}");
     assert!(py.contains("r = urllib.request.urlopen(\"x\")"), "{py}");
+}
+
+#[test]
+fn a_capitalised_segment_needs_no_declaration() {
+    // PEP 8 settles this one: `Path` is a class, so the module is `pathlib` and
+    // nothing is in doubt.
+    let py = pyfun::compile(
+        "extern type P\nextern read: P -> string = pathlib.Path.read_text\nlet r = read p",
+    );
+    let msg = format!("{:?}", py.as_ref().err());
+    assert!(!msg.contains("cannot tell which part"), "{msg}");
+}
+
+#[test]
+fn a_top_level_target_needs_no_declaration() {
+    // Two segments: the module is the first one, and there is nothing to guess.
+    let py = pyfun::compile("extern pure f: float -> float = math.fabs\nlet r = f 1.0").unwrap();
+    assert!(py.contains("import math"), "{py}");
 }
 
 #[test]

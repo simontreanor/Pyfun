@@ -3637,28 +3637,6 @@ fn is_unit_domain(ty: &TypeExpr) -> bool {
             TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty()))
 }
 
-/// Python builtin *type* names — available without an `import`, so a dotted extern
-/// target rooted at one (`bytes.decode`, `int.from_bytes`) must not emit an import.
-const PY_BUILTIN_TYPES: &[&str] = &[
-    "bool",
-    "int",
-    "float",
-    "complex",
-    "str",
-    "bytes",
-    "bytearray",
-    "memoryview",
-    "list",
-    "tuple",
-    "dict",
-    "set",
-    "frozenset",
-    "range",
-    "slice",
-    "object",
-    "type",
-];
-
 /// Lower a pinned `extern` keyword-argument literal to its Python IR expression.
 /// A negative int/float is emitted as a `Neg` of the magnitude, matching how the
 /// emitter renders unary minus (`compresslevel=-1`).
@@ -3827,7 +3805,7 @@ fn nullary_lambda(target: &[String], spec: Vec<(String, KwSource)>) -> PyExpr {
 /// A target rooted at a builtin *type* (`bytes.decode`, `int.from_bytes`) imports
 /// nothing — those names are always in scope.
 fn extern_import(target: &[String]) -> Option<String> {
-    if target.len() < 2 || PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
+    if target.len() < 2 || crate::types::PY_BUILTIN_TYPES.contains(&target[0].as_str()) {
         return None;
     }
     let prefix = &target[..target.len() - 1];
@@ -3916,7 +3894,7 @@ fn py_value_name(name: &str) -> String {
     // of them directly (`set([…])`, `dict(…)`, `list(…)`).
     if PY_KEYWORDS.contains(&name)
         || PY_EMITTED_BUILTINS.contains(&name)
-        || PY_BUILTIN_TYPES.contains(&name)
+        || crate::types::PY_BUILTIN_TYPES.contains(&name)
     {
         format!("{name}_")
     } else {
