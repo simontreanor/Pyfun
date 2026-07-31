@@ -1688,6 +1688,105 @@ fn rejects_field_declared_twice_in_one_record() {
     assert_error_contains("type P = { x: int, x: int }", "field `x` is declared twice");
 }
 
+// ---------- the List sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn list_accessors_answer_with_option() {
+    // `head`/`last`/`tail` keep their plain names and report the empty case the
+    // way `get`/`find` already do, rather than raising as F# does.
+    assert!(pyfun::check("let h = List.head [1, 2]\nlet n = Option.withDefault 0 h").is_ok());
+    assert!(pyfun::check("let t = List.tail [1, 2]\nlet n = Option.withDefault [] t").is_ok());
+    assert_error_contains("let h = List.head [1, 2]\nlet bad = h + 1", "Option");
+}
+
+#[test]
+fn list_slicing_is_total() {
+    assert!(
+        pyfun::check(
+            "let a = List.take 2 [1, 2, 3]\n             let b = List.drop 2 [1, 2, 3]\n             let c = List.splitAt 2 [1, 2, 3]"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn list_map2_pairs_two_lists() {
+    assert!(pyfun::check("let z = List.map2 (fun a b -> a + b) [1, 2] [3, 4]").is_ok());
+    // The two lists need not share an element type, but the function must agree.
+    assert_error_contains(
+        "let bad = List.map2 (fun a b -> a + b) [1, 2] [\"x\"]",
+        "string",
+    );
+}
+
+#[test]
+fn list_ordering_members_need_comparison() {
+    assert!(pyfun::check("let m = List.max [3, 1]\nlet s = List.sortDescending [3, 1]").is_ok());
+    // `sortBy`/`maxBy` constrain the *key*, not the element.
+    assert!(
+        pyfun::check(
+            "type P = { name: string, age: int }\n             let ps = [P { name = \"a\", age = 2 }]\n             let byAge = List.sortBy (fun p -> p.age) ps\n             let oldest = List.maxBy (fun p -> p.age) ps"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn list_aggregates_that_can_be_empty_answer_with_option() {
+    // `sumBy` has a zero, so it needs no Option; `average`/`reduce`/`max` do not.
+    assert!(pyfun::check("let n = List.sumBy (fun x -> x * 2) [1, 2]\nlet m = n + 1").is_ok());
+    assert_error_contains("let a = List.average [1.0]\nlet bad = a + 1.0", "Option");
+    assert_error_contains(
+        "let r = List.reduce (fun a b -> a + b) [1]\nlet bad = r + 1",
+        "Option",
+    );
+}
+
+#[test]
+fn list_average_takes_floats() {
+    // Averaging ints would silently change type, so the signature asks for floats
+    // (an integer literal that must be float is inferred as one).
+    assert!(pyfun::check("let a = List.average [1.0, 2.0]").is_ok());
+    assert_error_contains("let a = List.average [\"x\"]", "float");
+}
+
+#[test]
+fn list_structure_members_keep_their_element_types() {
+    assert!(
+        pyfun::check(
+            "let p = List.partition (fun x -> x > 1) [1, 2]\n             let u = List.unzip (List.zip [1] [\"a\"])\n             let f = List.flatten [[1], [2]]\n             let i = List.init 3 (fun n -> n * n)\n             let r = List.replicate 2 \"x\"\n             let g = List.groupBy (fun x -> x % 2) [1, 2]"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn list_positional_updates_and_windows_type() {
+    assert!(
+        pyfun::check(
+            "let u = List.updateAt 0 9 [1, 2]\n             let i = List.insertAt 0 9 [1, 2]\n             let r = List.removeAt 0 [1, 2]\n             let p = List.pairwise [1, 2, 3]\n             let w = List.windowed 2 [1, 2, 3]\n             let c = List.chunkBySize 2 [1, 2, 3]"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn list_iter_carries_the_effect_of_its_function() {
+    // The whole point of the effect variable: an impure body makes the traversal
+    // impure, so `let pure` rejects it.
+    assert!(pyfun::check("let go = List.iter (fun x -> print x) [1, 2]").is_ok());
+    assert_error_contains("let pure go = List.iter (fun x -> print x) [1, 2]", "io");
+}
+
+#[test]
+fn fst_and_snd_project_a_pair() {
+    assert!(pyfun::check("let a = fst (1, \"x\")\nlet n = a + 1").is_ok());
+    assert!(pyfun::check("let b = snd (1, \"x\")\nlet s = String.len b").is_ok());
+    // They are ordinary values, so they pass to a higher-order function.
+    assert!(pyfun::check("let firsts = List.map fst (List.zip [1] [\"a\"])").is_ok());
+    assert_error_contains("let bad = fst 1", "found int");
+}
+
 // ---------- record patterns ----------
 
 #[test]

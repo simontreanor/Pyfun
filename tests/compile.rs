@@ -2166,6 +2166,165 @@ fn record_pattern_lowers_to_keyword_class_pattern() {
     assert!(py.contains("case Point(x=x):"), "{py}");
 }
 
+// ---------- the List sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn list_slicing_lowers_to_clamped_slices() {
+    // `max(n, 0)` is what makes a negative count "none of it" rather than Python's
+    // slice-from-the-end.
+    let py =
+        pyfun::compile("let a = List.take 2 [1, 2, 3]\nlet b = List.drop 2 [1, 2, 3]").unwrap();
+    assert!(py.contains("return xs[0:max(n, 0)]"), "{py}");
+    assert!(py.contains("return xs[max(n, 0):len(xs)]"), "{py}");
+}
+
+#[test]
+fn list_distinct_lowers_to_the_order_preserving_idiom() {
+    let py = pyfun::compile("let d = List.distinct [1, 1, 2]").unwrap();
+    assert!(py.contains("list(dict.fromkeys(xs))"), "{py}");
+}
+
+#[test]
+fn list_sort_by_passes_a_key_function() {
+    let py = pyfun::compile("let s = List.sortBy (fun x -> 0 - x) [1, 2]").unwrap();
+    assert!(py.contains("sorted(xs, key=f)"), "{py}");
+}
+
+#[test]
+fn list_partition_tests_each_element_once() {
+    // The obvious two-comprehension form would call the predicate twice per
+    // element, which doubles its effects as well as its cost.
+    let py = pyfun::compile("let p = List.partition (fun x -> x > 1) [1, 2]").unwrap();
+    assert_eq!(py.matches("f(x)").count(), 1, "{py}");
+}
+
+#[test]
+fn fst_and_snd_lower_to_subscripts() {
+    let py = pyfun::compile("let a = fst (1, 2)\nlet b = snd (1, 2)").unwrap();
+    assert!(py.contains("return p[0]"), "{py}");
+    assert!(py.contains("return p[1]"), "{py}");
+}
+
+#[test]
+fn e2e_list_access_and_slicing() {
+    run_and_check(
+        "
+        let xs = [3, 1, 4, 1, 5]
+        let first = List.head xs
+        let none = List.head (List.drop 9 [1])
+        let rest = List.tail xs
+        let taken = List.take 2 xs
+        let dropped = List.drop 3 xs
+        let overTake = List.take 99 xs
+        let negTake = List.take (-1) xs
+        let split = List.splitAt 2 xs
+        ",
+        &[
+            ("first", "Some(3)"),
+            ("none", "None_"),
+            ("rest", "Some([1, 4, 1, 5])"),
+            ("taken", "[3, 1]"),
+            ("dropped", "[1, 5]"),
+            ("overTake", "[3, 1, 4, 1, 5]"),
+            ("negTake", "[]"),
+            ("split", "([3, 1], [4, 1, 5])"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_list_transform_query_and_order() {
+    run_and_check(
+        "
+        let xs = [3, 1, 4, 1, 5]
+        let summed = List.map2 (fun a b -> a + b) [1, 2, 3] [10, 20]
+        let ix = List.indexed [\"a\", \"b\"]
+        let any = List.exists (fun x -> x > 4) xs
+        let all = List.forall (fun x -> x > 0) xs
+        let at = List.findIndex (fun x -> x == 4) xs
+        let missing = List.findIndex (fun x -> x == 99) xs
+        let desc = List.sortDescending xs
+        let uniq = List.distinct xs
+        let grouped = List.groupBy (fun x -> x % 2) [1, 2, 3, 4]
+        ",
+        &[
+            ("summed", "[11, 22]"),
+            ("ix", "[(0, 'a'), (1, 'b')]"),
+            ("any", "True"),
+            ("all", "True"),
+            ("at", "Some(2)"),
+            ("missing", "None_"),
+            ("desc", "[5, 4, 3, 1, 1]"),
+            ("uniq", "[3, 1, 4, 5]"),
+            ("grouped", "[(1, [1, 3]), (0, [2, 4])]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_list_aggregate_structure_and_windows() {
+    run_and_check(
+        "
+        let xs = [3, 1, 4, 1, 5]
+        let biggest = List.max xs
+        let smallest = List.min xs
+        let noMax = List.max (List.drop 9 [1])
+        let doubled = List.sumBy (fun x -> x * 2) [1, 2, 3]
+        let mean = List.average [1.0, 2.0, 4.0]
+        let joined = List.reduce (fun a b -> a + b) [1, 2, 3]
+        let split = List.partition (fun x -> x > 2) xs
+        let apart = List.unzip (List.zip [1, 2] [\"a\", \"b\"])
+        let flat = List.flatten [[1, 2], [3]]
+        let squares = List.init 4 (fun i -> i * i)
+        let copies = List.replicate 3 \"x\"
+        let updated = List.updateAt 1 99 [1, 2, 3]
+        let untouched = List.updateAt 9 99 [1, 2, 3]
+        let inserted = List.insertAt 1 99 [1, 2, 3]
+        let removed = List.removeAt 1 [1, 2, 3]
+        let pairs = List.pairwise [1, 2, 3]
+        let windows = List.windowed 2 [1, 2, 3]
+        let chunks = List.chunkBySize 2 [1, 2, 3]
+        ",
+        &[
+            ("biggest", "Some(5)"),
+            ("smallest", "Some(1)"),
+            ("noMax", "None_"),
+            ("doubled", "12"),
+            ("mean", "Some(2.3333333333333335)"),
+            ("joined", "Some(6)"),
+            ("split", "([3, 4, 5], [1, 1])"),
+            ("apart", "([1, 2], ['a', 'b'])"),
+            ("flat", "[1, 2, 3]"),
+            ("squares", "[0, 1, 4, 9]"),
+            ("copies", "['x', 'x', 'x']"),
+            ("updated", "[1, 99, 3]"),
+            ("untouched", "[1, 2, 3]"),
+            ("inserted", "[1, 99, 2, 3]"),
+            ("removed", "[1, 3]"),
+            ("pairs", "[(1, 2), (2, 3)]"),
+            ("windows", "[[1, 2], [2, 3]]"),
+            ("chunks", "[[1, 2], [3]]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_fst_and_snd() {
+    run_and_check(
+        "
+        let pairs = List.zip [1, 2] [\"a\", \"b\"]
+        let firsts = List.map fst pairs
+        let seconds = List.map snd pairs
+        let one = fst (1, \"one\")
+        ",
+        &[
+            ("firsts", "[1, 2]"),
+            ("seconds", "['a', 'b']"),
+            ("one", "1"),
+        ],
+    );
+}
+
 #[test]
 fn tuple_literal_lowers_to_python_tuple() {
     let py = pyfun::compile("let pair = (1, 2)\nlet triple = (1, true, 3)").unwrap();

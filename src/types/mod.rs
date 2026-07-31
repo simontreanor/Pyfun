@@ -378,6 +378,8 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("const", 2),
     ("ignore", 1),
     ("flip", 3),
+    ("fst", 1),
+    ("snd", 1),
 ];
 
 /// The list prelude (`DESIGN.md` §6): functions over the eager `List a` type
@@ -404,6 +406,51 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("find", 2),
     ("choose", 2),
     ("collect", 2),
+    // Access. Every one that can fail on an empty list answers with `Option`
+    // under its plain name, following `get`/`find` (`ROADMAP.md`).
+    ("head", 1),
+    ("last", 1),
+    ("tail", 1),
+    // Slicing. Total and clamping, like `String.slice`.
+    ("take", 2),
+    ("drop", 2),
+    ("splitAt", 2),
+    // Transform.
+    ("map2", 3),
+    ("indexed", 1),
+    ("iter", 2),
+    // Query.
+    ("exists", 2),
+    ("forall", 2),
+    ("findIndex", 2),
+    // Order.
+    ("sortBy", 2),
+    ("sortDescending", 1),
+    ("distinct", 1),
+    ("distinctBy", 2),
+    ("groupBy", 2),
+    // Aggregate.
+    ("max", 1),
+    ("min", 1),
+    ("maxBy", 2),
+    ("minBy", 2),
+    ("sumBy", 2),
+    ("average", 1),
+    ("reduce", 2),
+    // Structure.
+    ("partition", 2),
+    ("unzip", 1),
+    ("flatten", 1),
+    ("init", 2),
+    ("replicate", 2),
+    // Positional update. Out of range leaves the list unchanged, so each is total.
+    ("updateAt", 3),
+    ("insertAt", 3),
+    ("removeAt", 2),
+    // Windows.
+    ("pairwise", 1),
+    ("windowed", 2),
+    ("chunkBySize", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -2634,6 +2681,35 @@ fn seed_prelude(env: &mut Env) {
             ),
         },
     );
+    // fst : (a, b) -> a   /   snd : (a, b) -> b
+    // The tuple accessors. Destructuring in a parameter or a `match` covers most
+    // uses, but a projection you can *pass* (`List.map fst pairs`) cannot be
+    // written point-free without them.
+    let pair = || Ty::Tuple(vec![Ty::Var(0), Ty::Var(1)]);
+    env.insert(
+        "fst".to_string(),
+        Scheme {
+            vars: vec![0, 1],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![],
+            mutable: false,
+            ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(0)), Effect::pure()),
+        },
+    );
+    env.insert(
+        "snd".to_string(),
+        Scheme {
+            vars: vec![0, 1],
+            uvars: vec![],
+            num_vars: vec![],
+            ord_vars: vec![],
+            eff_vars: vec![],
+            mutable: false,
+            ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(1)), Effect::pure()),
+        },
+    );
 }
 
 /// Seed the list prelude ([`LIST_PRELUDE`]) — functions over the eager `List a`.
@@ -2817,6 +2893,316 @@ fn seed_list_prelude(env: &mut Env) {
                 arrow_e(list(Ty::Var(0)), list(Ty::Var(1))),
             ),
         ),
+    );
+
+    // ---- access (total: `Option` where an empty list has no answer) ----
+    let a = || Ty::Var(0);
+    let b = || Ty::Var(1);
+    let float = || Ty::Float(Unit::dimensionless());
+    let ord_scheme = |vars: Vec<u32>, ord_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars,
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let ord_eff_scheme = |vars: Vec<u32>, ord_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars,
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars,
+        ord_vars: vec![],
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    // List.head : List a -> Option a
+    env.insert(
+        "List.head".to_string(),
+        mono(vec![0], pure_fn(list(a()), option(a()))),
+    );
+    // List.last : List a -> Option a
+    env.insert(
+        "List.last".to_string(),
+        mono(vec![0], pure_fn(list(a()), option(a()))),
+    );
+    // List.tail : List a -> Option (List a)   (everything after the head)
+    env.insert(
+        "List.tail".to_string(),
+        mono(vec![0], pure_fn(list(a()), option(list(a())))),
+    );
+
+    // ---- slicing (total, clamping — a count past either end is not an error) ----
+    // List.take : int -> List a -> List a
+    env.insert(
+        "List.take".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(a())))),
+    );
+    // List.drop : int -> List a -> List a
+    env.insert(
+        "List.drop".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(a())))),
+    );
+    // List.splitAt : int -> List a -> (List a, List a)
+    env.insert(
+        "List.splitAt".to_string(),
+        mono(
+            vec![0],
+            pure_fn(
+                int(),
+                pure_fn(list(a()), Ty::Tuple(vec![list(a()), list(a())])),
+            ),
+        ),
+    );
+
+    // ---- transform ----
+    // List.map2 : (a ->{e} b ->{e} c) -> List a -> List b ->{e} List c
+    // Stops at the shorter input, like `List.zip` (F# raises instead).
+    env.insert(
+        "List.map2".to_string(),
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(
+                arrow_e(a(), arrow_e(b(), Ty::Var(2))),
+                pure_fn(list(a()), arrow_e(list(b()), list(Ty::Var(2)))),
+            ),
+        ),
+    );
+    // List.indexed : List a -> List (int, a)
+    env.insert(
+        "List.indexed".to_string(),
+        mono(
+            vec![0],
+            pure_fn(list(a()), list(Ty::Tuple(vec![int(), a()]))),
+        ),
+    );
+    // List.iter : (a ->{e} unit) -> List a ->{e} unit   (for effects; the point of
+    // the effect variable is that an impure body makes the traversal impure)
+    env.insert(
+        "List.iter".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Unit), arrow_e(list(a()), Ty::Unit)),
+        ),
+    );
+
+    // ---- query ----
+    // List.exists : (a ->{e} bool) -> List a ->{e} bool
+    env.insert(
+        "List.exists".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), Ty::Bool)),
+        ),
+    );
+    // List.forall : (a ->{e} bool) -> List a ->{e} bool
+    env.insert(
+        "List.forall".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), Ty::Bool)),
+        ),
+    );
+    // List.findIndex : (a ->{e} bool) -> List a ->{e} Option int
+    env.insert(
+        "List.findIndex".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), option(int()))),
+        ),
+    );
+
+    // ---- order (the key is what needs `comparison`, not the element) ----
+    // List.sortBy : comparison b => (a ->{e} b) -> List a ->{e} List a
+    env.insert(
+        "List.sortBy".to_string(),
+        ord_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
+        ),
+    );
+    // List.sortDescending : comparison a => List a -> List a
+    env.insert(
+        "List.sortDescending".to_string(),
+        ord_scheme(vec![0], vec![0], pure_fn(list(a()), list(a()))),
+    );
+    // List.distinct : List a -> List a   (first occurrence wins, order kept)
+    env.insert(
+        "List.distinct".to_string(),
+        mono(vec![0], pure_fn(list(a()), list(a()))),
+    );
+    // List.distinctBy : (a ->{e} b) -> List a ->{e} List a
+    env.insert(
+        "List.distinctBy".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
+        ),
+    );
+    // List.groupBy : (a ->{e} b) -> List a ->{e} List (b, List a)   (groups in
+    // first-seen key order)
+    env.insert(
+        "List.groupBy".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(a(), b()),
+                arrow_e(list(a()), list(Ty::Tuple(vec![b(), list(a())]))),
+            ),
+        ),
+    );
+
+    // ---- aggregate ----
+    // List.max : comparison a => List a -> Option a
+    env.insert(
+        "List.max".to_string(),
+        ord_scheme(vec![0], vec![0], pure_fn(list(a()), option(a()))),
+    );
+    // List.min : comparison a => List a -> Option a
+    env.insert(
+        "List.min".to_string(),
+        ord_scheme(vec![0], vec![0], pure_fn(list(a()), option(a()))),
+    );
+    // List.maxBy : comparison b => (a ->{e} b) -> List a ->{e} Option a
+    env.insert(
+        "List.maxBy".to_string(),
+        ord_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), option(a()))),
+        ),
+    );
+    // List.minBy : comparison b => (a ->{e} b) -> List a ->{e} Option a
+    env.insert(
+        "List.minBy".to_string(),
+        ord_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), option(a()))),
+        ),
+    );
+    // List.sumBy : num b => (a ->{e} b) -> List a ->{e} b   (empty sums to zero,
+    // like `List.sum`, so no `Option`)
+    env.insert(
+        "List.sumBy".to_string(),
+        num_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), b())),
+        ),
+    );
+    // List.average : List float -> Option float   (float in, float out: averaging
+    // ints would silently change type, and an empty list has no mean)
+    env.insert(
+        "List.average".to_string(),
+        mono(vec![], pure_fn(list(float()), option(float()))),
+    );
+    // List.reduce : (a ->{e} a ->{e} a) -> List a ->{e} Option a   (a fold with no
+    // seed, so the empty list has no answer)
+    env.insert(
+        "List.reduce".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                arrow_e(a(), arrow_e(a(), a())),
+                arrow_e(list(a()), option(a())),
+            ),
+        ),
+    );
+
+    // ---- structure ----
+    // List.partition : (a ->{e} bool) -> List a ->{e} (List a, List a)
+    env.insert(
+        "List.partition".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                arrow_e(a(), Ty::Bool),
+                arrow_e(list(a()), Ty::Tuple(vec![list(a()), list(a())])),
+            ),
+        ),
+    );
+    // List.unzip : List (a, b) -> (List a, List b)
+    env.insert(
+        "List.unzip".to_string(),
+        mono(
+            vec![0, 1],
+            pure_fn(
+                list(Ty::Tuple(vec![a(), b()])),
+                Ty::Tuple(vec![list(a()), list(b())]),
+            ),
+        ),
+    );
+    // List.flatten : List (List a) -> List a
+    env.insert(
+        "List.flatten".to_string(),
+        mono(vec![0], pure_fn(list(list(a())), list(a()))),
+    );
+    // List.init : int -> (int ->{e} a) ->{e} List a
+    env.insert(
+        "List.init".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(int(), arrow_e(arrow_e(int(), a()), list(a()))),
+        ),
+    );
+    // List.replicate : int -> a -> List a
+    env.insert(
+        "List.replicate".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(a(), list(a())))),
+    );
+
+    // ---- positional update (out of range leaves the list unchanged) ----
+    // List.updateAt : int -> a -> List a -> List a
+    env.insert(
+        "List.updateAt".to_string(),
+        mono(
+            vec![0],
+            pure_fn(int(), pure_fn(a(), pure_fn(list(a()), list(a())))),
+        ),
+    );
+    // List.insertAt : int -> a -> List a -> List a   (index clamped to the ends)
+    env.insert(
+        "List.insertAt".to_string(),
+        mono(
+            vec![0],
+            pure_fn(int(), pure_fn(a(), pure_fn(list(a()), list(a())))),
+        ),
+    );
+    // List.removeAt : int -> List a -> List a
+    env.insert(
+        "List.removeAt".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(a())))),
+    );
+
+    // ---- windows ----
+    // List.pairwise : List a -> List (a, a)   (consecutive pairs; fewer than two
+    // elements gives the empty list)
+    env.insert(
+        "List.pairwise".to_string(),
+        mono(vec![0], pure_fn(list(a()), list(Ty::Tuple(vec![a(), a()])))),
+    );
+    // List.windowed : int -> List a -> List (List a)   (sliding, full windows only)
+    env.insert(
+        "List.windowed".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(list(a()))))),
+    );
+    // List.chunkBySize : int -> List a -> List (List a)   (consecutive chunks; the
+    // last one is short if the length does not divide evenly)
+    env.insert(
+        "List.chunkBySize".to_string(),
+        mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(list(a()))))),
     );
 }
 
