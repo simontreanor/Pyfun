@@ -983,9 +983,12 @@ type ExportedMeasures = (HashSet<String>, HashMap<String, Unit>);
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
     let mut errors = Vec::new();
-    let (mut decls, ctor_env) = build_decls(module, &mut errors);
-    // This module's own public sum types + records, captured before imports are
-    // merged in (so we export only what this module itself declares).
+    // `build_decls` registers imported type *names* mid-way through, so a local
+    // `type` declaration can be written in terms of an imported type; it hands back
+    // the names it accepted for the body merge below.
+    let (mut decls, ctor_env, imported) = build_decls(module, imports, &mut errors);
+    // This module's own public sum types + records: `collect_exported_*` walk this
+    // module's own items, so only what it declares is exported.
     let exported_types = collect_exported_types(module, &decls);
     let exported_records = collect_exported_records(module, &decls);
     // Captured before imports are merged, so we export only this module's own
@@ -993,10 +996,11 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     // holds the aliases' expansions.
     let exported_measures: ExportedMeasures =
         (decls.measures.clone(), decls.measure_aliases.clone());
-    // Merge imported modules' sum types into the decls (qualified constructor keys),
-    // so `Geometry.Circle` construction, qualified ctor patterns, and exhaustiveness
-    // all resolve against the imported type.
-    merge_imported_types(&mut decls, imports, &mut errors);
+    // Merge imported modules' type *bodies* into the decls (qualified constructor
+    // keys), so `Geometry.Circle` construction, qualified ctor patterns, and
+    // exhaustiveness all resolve against the imported type. This half runs after
+    // `build_decls` so that local records lead the field multimap.
+    merge_imported_types(&mut decls, imports, &imported, &mut errors);
 
     // Start fresh ids past the ids reserved for the seeded built-in schemes, so
     // a freshly allocated (and later bound) variable can't alias a builtin's
@@ -1311,21 +1315,28 @@ fn collect_exported_records(module: &Module, decls: &Decls) -> Vec<(String, Reco
     out
 }
 
-/// Merge imported modules' sum types **and records** into `decls` (`DESIGN.md`
-/// §6.1 + §8.3). Sum types register under qualified constructor keys
-/// (`Geometry.Circle`): the type's arity and constructor set (for exhaustiveness),
-/// plus each constructor's [`CtorInfo`] (for construction and pattern binding).
-/// Records register under their **bare identity name** (`Point`, like a sum type),
-/// with a qualified surface alias (`Geometry.Point` → `Point`) for tagged
-/// construction/patterns and their fields appended to the (multimap) field registry.
-/// A type/record name clashing with one already present is reported — the same
-/// bare-name uniqueness sum types rely on.
-fn merge_imported_types(
+/// Register imported modules' sum-type and record **names** in `decls`
+/// (`DESIGN.md` §6.1 + §8.3): each under its **bare identity name** (`Point`, so an
+/// imported type is the same `Ty::Con` everywhere) *and* under a qualified key
+/// (`Geometry.Point`) at the same arity, which [`resolve`] accepts in a type
+/// position and folds back to the identity name. A name clashing with one already
+/// present is reported (the bare-name uniqueness sum types already rely on) and
+/// then skipped, so the returned set of accepted `(module, name)` pairs is what
+/// [`merge_imported_types`] may go on to fill in.
+///
+/// This runs from [`build_decls`] **between** its two passes: after local type
+/// names are registered (so a local declaration still wins a clash) and before
+/// local type *bodies* resolve, which is what lets a record field or an ADT
+/// variant be typed with an imported type. Registering these names only after
+/// `build_decls` had finished was the reason `type Holder = { item: Placed }` read
+/// as an unknown type: the name was not there yet when the field resolved.
+fn merge_imported_type_names(
     decls: &mut Decls,
     imports: &HashMap<String, ModuleExports>,
     errors: &mut Vec<TypeError>,
-) {
-    // Deterministic order so a clash / field-order is the same every run.
+) -> HashSet<(String, String)> {
+    let mut accepted = HashSet::new();
+    // Deterministic order so a clash is reported the same way every run.
     let mut module_names: Vec<&String> = imports.keys().collect();
     module_names.sort();
     for module_name in &module_names {
@@ -1341,13 +1352,10 @@ fn merge_imported_types(
                 continue;
             }
             decls.type_arity.insert(ty.name.clone(), ty.arity);
-            let mut ctor_names = Vec::with_capacity(ty.ctors.len());
-            for (ctor, info) in &ty.ctors {
-                let qualified = format!("{module_name}.{ctor}");
-                decls.ctors.insert(qualified.clone(), info.clone());
-                ctor_names.push(qualified);
-            }
-            decls.type_ctors.insert(ty.name.clone(), ctor_names);
+            decls
+                .type_arity
+                .insert(format!("{module_name}.{}", ty.name), ty.arity);
+            accepted.insert(((*module_name).clone(), ty.name.clone()));
         }
     }
     // Records after types (both share the `type_arity` namespace and clash check).
@@ -1363,6 +1371,48 @@ fn merge_imported_types(
                 continue;
             }
             decls.type_arity.insert(name.clone(), info.params_count);
+            decls
+                .type_arity
+                .insert(format!("{module_name}.{name}"), info.params_count);
+            accepted.insert(((*module_name).clone(), name.clone()));
+        }
+    }
+    accepted
+}
+
+/// Merge imported modules' constructor sets, record registries and measures into
+/// `decls`, for the names [`merge_imported_type_names`] accepted (it runs earlier,
+/// inside [`build_decls`], so that a local `type` declaration can *mention* an
+/// imported type; this second half needs the local field registry to already exist,
+/// so that local records lead the field multimap).
+fn merge_imported_types(
+    decls: &mut Decls,
+    imports: &HashMap<String, ModuleExports>,
+    accepted: &HashSet<(String, String)>,
+    errors: &mut Vec<TypeError>,
+) {
+    // Deterministic order so a field-order is the same every run.
+    let mut module_names: Vec<&String> = imports.keys().collect();
+    module_names.sort();
+    for module_name in &module_names {
+        for ty in &imports[*module_name].types {
+            if !accepted.contains(&((*module_name).clone(), ty.name.clone())) {
+                continue;
+            }
+            let mut ctor_names = Vec::with_capacity(ty.ctors.len());
+            for (ctor, info) in &ty.ctors {
+                let qualified = format!("{module_name}.{ctor}");
+                decls.ctors.insert(qualified.clone(), info.clone());
+                ctor_names.push(qualified);
+            }
+            decls.type_ctors.insert(ty.name.clone(), ctor_names);
+        }
+    }
+    for module_name in &module_names {
+        for (name, info) in &imports[*module_name].records {
+            if !accepted.contains(&((*module_name).clone(), name.clone())) {
+                continue;
+            }
             decls.records.insert(name.clone(), info.clone());
             decls
                 .record_aliases
@@ -1430,7 +1480,11 @@ fn resolve_unit_against(unit: &UnitExpr, decls: &Decls, span: Span) -> Result<Un
 }
 
 /// Register measures and `type` declarations; build the constructor environment.
-fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
+fn build_decls(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+    errors: &mut Vec<TypeError>,
+) -> (Decls, Env, HashSet<(String, String)>) {
     let mut decls = Decls::default();
     let mut env = Env::new();
     seed_builtin_types(&mut decls, &mut env);
@@ -1524,6 +1578,12 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
             }
         }
     }
+
+    // Imported type *names* join here, between the passes: local declarations are
+    // registered (so they win a clash), and pass 2 below can now type a field or a
+    // variant with an imported type. Their bodies (constructor sets, record field
+    // registries) merge after `build_decls` returns.
+    let imported = merge_imported_type_names(&mut decls, imports, errors);
 
     // Pass 2: constructor schemes (sum types) and field registries (records).
     for item in &module.items {
@@ -1748,7 +1808,7 @@ fn build_decls(module: &Module, errors: &mut Vec<TypeError>) -> (Decls, Env) {
         }
     }
 
-    (decls, env)
+    (decls, env, imported)
 }
 
 /// Collect the type variables of a declared type — bare lowercase names that are
@@ -3507,13 +3567,25 @@ fn resolve(
                 "unit" => return no_args(Ty::Unit),
                 _ => {}
             }
+            // A module-qualified name (`Shapes.Placed`) is validated against the
+            // qualified key but resolves to the **bare identity name**, which is how
+            // imported types register (see `merge_imported_type_names`, which inserts
+            // both keys at the same arity). So `Shapes.Placed`, a bare `Placed` here,
+            // and `Placed` inside its home module are all the same `Ty::Con` and
+            // unify — the qualifier is a readability aid, not a distinct type. Bare
+            // identity names are unique across everything visible (the import clash
+            // check enforces it), so dropping the qualifier cannot collide.
+            let identity = match name.rsplit_once('.') {
+                Some((_, bare)) if type_arity.contains_key(name) => bare,
+                _ => name.as_str(),
+            };
             match type_arity.get(name) {
                 Some(&arity) if arity == args.len() => {
                     let resolved: Result<Vec<Ty>, TypeError> = args
                         .iter()
                         .map(|a| resolve(a, params, type_arity, span, eff_params))
                         .collect();
-                    Ok(Ty::Con(name.clone(), resolved?))
+                    Ok(Ty::Con(identity.to_string(), resolved?))
                 }
                 Some(&arity) => Err(TypeError {
                     message: format!(

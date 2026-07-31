@@ -161,6 +161,12 @@ const PROGRAMS: &[&str] = &[
     "let p = Point { x = 3, y = 4 }",
     // A qualified (cross-module) record literal for an imported record.
     "let p = Geometry.Point { x = 3, y = 4 }",
+    // A module-qualified type *name*, in every position a written type appears:
+    // a record field, an ADT variant's payload, and an extern signature.
+    "type Holder = { item: Geometry.Point }",
+    "type Slot = Empty | Filled Geometry.Point",
+    "extern pure widen : Geometry.Point -> Geometry.Point = builtins.id",
+    "extern pure boxed : Store.Box int -> int = builtins.id",
     "let q = { p with y = 9 }",
     // Nested record-update sugar: dotted field paths, mixed with plain updates.
     "let q = { p with a.b = 1 }",

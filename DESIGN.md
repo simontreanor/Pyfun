@@ -746,7 +746,16 @@ sum type's name, arity, and constructors) **and its records** (since the cross-m
 values, with **exhaustiveness checked across the boundary** (a missing arm reports the qualified witness
 `Geometry.Rect _ _`). **Records cross too** (`DESIGN.md` §8.3): construct `Geometry.Point { x = 1, y = 2 }`,
 pattern `case Geometry.Point { x, y }:`, update `{ p with x = 3 }`, and bare-access `p.x` on an imported
-value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **Externs and
+value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **An imported
+type can be *named* in a local `type` declaration** — `type Holder = { item: Shapes.Placed }`, and likewise
+an ADT variant payload or an `extern` signature. Both spellings are accepted, bare `Placed` and qualified
+`Shapes.Placed`, and they denote the same type: an imported type registers under its bare identity name
+(unique across everything visible, as the import clash check enforces) plus a qualified key, and a written
+qualifier is validated and then folded back to that identity, so the two unify freely. Prefer the qualified
+spelling where the reader benefits from knowing which module a type came from. The one thing this does not
+extend to is *transitive* naming: a third module importing `Holder` without importing `Shapes` can hold and
+pass its `item` around, but cannot access that value's fields or construct one, since only `Shapes` brings
+`Placed`'s field registry into scope. **Externs and
 measures cross too:** an imported `extern` (`Mathx.cbrt`) is exported like a value (its scheme joins the
 interface) and — in the project lowering path — also **bound at top level in its own module** (`cbrt =
 math.cbrt`, `import math` hoisted) so a dependent module references it as `mathx.cbrt`; single-file lowering

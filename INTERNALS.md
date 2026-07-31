@@ -385,7 +385,15 @@ in the entry's directory). Cross-module *checking* and *emit* consume this `Proj
 exported value schemes (which now include `extern` names), its exported sum types, **its exported records**,
 **and its measures + measure-aliases**; `check_module(module,
 imports)` seeds imported values under qualified keys and imported sum types into the decls under **qualified
-constructor keys** (`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] =
+constructor keys**. The type merge happens in **two halves**, because a local `type` declaration may name an
+imported type (`type Holder = { item: Shapes.Placed }`, DESIGN §6.1): `merge_imported_type_names` runs
+*inside* `build_decls`, between pass 1 (local type names, which therefore win a clash) and pass 2 (local
+type *bodies*, which can now resolve an imported name), registering each imported type under its bare
+identity name **and** a qualified key at the same arity, and returning the accepted `(module, name)` pairs;
+`merge_imported_types` then fills in the bodies for those pairs after `build_decls` returns, which is when
+the local field registry already exists so local records lead the field multimap. A written qualifier is
+validated against the qualified key and folded back to the identity name in `resolve`, so `Shapes.Placed`
+and a bare `Placed` are one `Ty::Con`. Body merge: (`merge_imported_types`: `decls.ctors["Geometry.Circle"]`, `type_ctors["Shape"] =
 ["Geometry.Circle", …]`), plus imported records under their **bare identity name** with a qualified surface
 alias (`decls.record_aliases["Geometry.Point"] = "Point"`) and their fields appended to the field multimap,
 plus imported measures merged unqualified into `decls.measures`/`measure_aliases` (with the alias-conflict

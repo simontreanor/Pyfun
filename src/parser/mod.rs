@@ -698,14 +698,37 @@ impl Parser {
         Ok(labels)
     }
 
+    /// Consume a type's head name: an identifier, optionally **module-qualified**
+    /// (`Shapes.Placed`), returning it dotted with the span covering both segments.
+    ///
+    /// Qualification needs an uppercase segment on each side of the dot, matching
+    /// the `Module.member` rule for values, and it is one dot deep because module
+    /// names do not nest. The checker validates the qualifier and resolves the pair
+    /// to the same type as the bare name (`types::resolve`), so the qualifier reads
+    /// as documentation at the use site rather than naming a different type.
+    fn parse_type_name(&mut self, name: String) -> (String, NodeSpan) {
+        let start = self.cur_start();
+        self.bump();
+        let mut full = name;
+        if is_upper(&full)
+            && matches!(self.peek(), Tok::Dot)
+            && matches!(self.peek2(), Tok::Ident(m) if is_upper(m))
+        {
+            self.bump();
+            if let Tok::Ident(member) = self.peek().clone() {
+                self.bump();
+                full = format!("{full}.{member}");
+            }
+        }
+        (full, NodeSpan::new(Span::new(start, self.prev_end())))
+    }
+
     fn parse_type_app(&mut self) -> Result<TypeExpr, ParseError> {
         // A capitalized head may be applied to argument atoms (`List a`).
         if let Tok::Ident(name) = self.peek().clone()
             && is_upper(&name)
         {
-            let start = self.cur_start();
-            self.bump();
-            let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+            let (name, name_span) = self.parse_type_name(name);
             let mut args = Vec::new();
             while starts_type_atom(self.peek()) {
                 args.push(self.parse_type_atom()?);
@@ -718,9 +741,7 @@ impl Parser {
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParseError> {
         match self.peek().clone() {
             Tok::Ident(name) => {
-                let start = self.cur_start();
-                self.bump();
-                let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+                let (name, name_span) = self.parse_type_name(name);
                 Ok(TypeExpr::Con(name, name_span, Vec::new()))
             }
             Tok::LParen => {
