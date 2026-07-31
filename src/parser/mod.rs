@@ -782,7 +782,7 @@ impl Parser {
             });
         }
         let mut params = Vec::new();
-        while matches!(self.peek(), Tok::Ident(_)) {
+        while starts_param(self.peek()) {
             params.push(self.parse_param()?);
         }
         if params.is_empty() {
@@ -844,7 +844,7 @@ impl Parser {
         };
         let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
-        while let Tok::Ident(_) = self.peek() {
+        while starts_param(self.peek()) {
             params.push(self.parse_param()?);
         }
         // `let rec f x = …` is F#/ML muscle memory: Pyfun has no `rec` keyword — a
@@ -964,7 +964,7 @@ impl Parser {
         let start = self.cur_start();
         self.expect(&Tok::Fun, "`fun`")?;
         let mut params = vec![self.parse_param()?];
-        while let Tok::Ident(_) = self.peek() {
+        while starts_param(self.peek()) {
             params.push(self.parse_param()?);
         }
         self.expect(&Tok::Arrow, "`->`")?;
@@ -972,12 +972,45 @@ impl Parser {
         Ok(self.mk(start, ExprKind::Fn { params, body }))
     }
 
-    /// Parse a single parameter name, capturing its span (for editor jump/hover).
+    /// Parse a single parameter, capturing its span (for editor jump/hover): a
+    /// name, `_`, or a parenthesized **irrefutable** pattern (`fun (t, sq) -> …`).
+    ///
+    /// A bare identifier deliberately does *not* go through the pattern parser: it
+    /// would read `let f Some x = …` as one constructor pattern rather than the two
+    /// parameters `Some` and `x` that it has always meant. Only a `(`-led parameter
+    /// takes the full pattern grammar, and it is then held to irrefutability, since
+    /// a parameter has no second arm to fall through to.
     fn parse_param(&mut self) -> Result<Param, ParseError> {
         let start = self.cur_start();
-        let name = self.parse_ident("parameter name")?;
+        let pattern = match self.peek() {
+            Tok::Underscore => {
+                self.bump();
+                Pattern::Wildcard
+            }
+            Tok::LParen => {
+                let pattern = self.parse_pattern()?;
+                if let Some(what) = refutable_in_param(&pattern) {
+                    return Err(ParseError {
+                        message: format!(
+                            "a parameter must always match, so it takes a name, `_`, or a tuple \
+                             of those, not {what} (match on the value in the body instead)"
+                        ),
+                        span: Span::new(start, self.prev_end()),
+                    });
+                }
+                pattern
+            }
+            _ => {
+                let name_start = self.cur_start();
+                let name = self.parse_ident("parameter name")?;
+                Pattern::Var {
+                    name,
+                    span: NodeSpan::new(Span::new(name_start, self.prev_end())),
+                }
+            }
+        };
         Ok(Param {
-            name,
+            pattern,
             span: NodeSpan::new(Span::new(start, self.prev_end())),
         })
     }
@@ -2125,6 +2158,30 @@ fn type_is_unit_domain(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Fun(domain, _, _)
         if matches!(domain.as_ref(),
             TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty()))
+}
+
+/// Whether `tok` can begin a parameter: a name, `_`, or a `(`-led pattern.
+fn starts_param(tok: &Tok) -> bool {
+    matches!(tok, Tok::Ident(_) | Tok::Underscore | Tok::LParen)
+}
+
+/// Whether `pattern` can fail to match, and if so what to call it in the error.
+/// Parameters admit only the shapes that always match: a name, `_`, and tuples of
+/// those (nested). A tuple's arity is fixed by its type, so a tuple of irrefutable
+/// sub-patterns is itself irrefutable. Everything else (a literal, a constructor, a
+/// record tag, a list pattern, an or-pattern) can fail, and a parameter has nowhere
+/// to fail *to*.
+fn refutable_in_param(pattern: &Pattern) -> Option<&'static str> {
+    match pattern {
+        Pattern::Wildcard | Pattern::Var { .. } => None,
+        Pattern::Tuple { elems } => elems.iter().find_map(refutable_in_param),
+        Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => Some("a literal pattern"),
+        Pattern::Ctor { .. } => Some("a constructor pattern"),
+        Pattern::Record { .. } => Some("a record pattern"),
+        Pattern::List { .. } => Some("a list pattern"),
+        Pattern::Or(_) => Some("an or-pattern"),
+        Pattern::As { .. } => Some("an as-pattern"),
+    }
 }
 
 /// A short human-readable name for a token, used in error messages.

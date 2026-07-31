@@ -175,8 +175,11 @@ impl Lowerer {
         locals: &HashSet<String>,
         enclosing: &HashSet<String>,
     ) -> Option<FoldPlan<'a>> {
-        let acc_param = params[0].name.clone();
-        let elem_param = params[1].name.clone();
+        // A destructuring folder parameter (`fun (a, b) c -> …`) has no single
+        // name to substitute, and the pass rewrites by name — reject and fall
+        // through to the byte-identical `_pf_fold` lowering.
+        let acc_param = params[0].name()?.to_string();
+        let elem_param = params[1].name()?.to_string();
 
         // P3 + P4: classify the accumulator shape. Each slot's init must be a
         // fresh literal (`Map.empty`/`Set.empty`/a list literal) or a bare `Var`
@@ -1188,7 +1191,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
         ExprKind::Fn { params, body } => {
             let mut b = bound.clone();
             for p in params {
-                b.insert(p.name.clone());
+                b.extend(super::pattern_bindings(&p.pattern));
             }
             collect_free(body, &b, out);
         }
@@ -1212,7 +1215,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
                     BlockStmt::Let(bind) => {
                         let mut inner = b.clone();
                         for p in &bind.params {
-                            inner.insert(p.name.clone());
+                            inner.extend(super::pattern_bindings(&p.pattern));
                         }
                         collect_free(&bind.value, &inner, out);
                         b.insert(bind.name.clone());

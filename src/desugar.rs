@@ -160,14 +160,8 @@ pub fn op_func(op: BinOp, span: Span) -> Expr {
     mk(
         ExprKind::Fn {
             params: vec![
-                Param {
-                    name: "a".to_string(),
-                    span: NodeSpan::new(span),
-                },
-                Param {
-                    name: "b".to_string(),
-                    span: NodeSpan::new(span),
-                },
+                Param::var("a", NodeSpan::new(span)),
+                Param::var("b", NodeSpan::new(span)),
             ],
             body: Box::new(body),
         },
@@ -201,10 +195,7 @@ pub fn compose(lhs: Expr, rhs: Expr, right_to_left: bool, span: Span) -> Expr {
     let body = app(second, app(first, var(&param, span), span), span);
     mk(
         ExprKind::Fn {
-            params: vec![Param {
-                name: param,
-                span: NodeSpan::new(span),
-            }],
+            params: vec![Param::var(param, NodeSpan::new(span))],
             body: Box::new(body),
         },
         span,
@@ -261,10 +252,7 @@ fn call2(module: &str, method: &str, a: Expr, b: Expr, span: Span) -> Expr {
 fn lam(name: String, name_span: NodeSpan, body: Expr, span: Span) -> Expr {
     mk(
         ExprKind::Fn {
-            params: vec![Param {
-                name,
-                span: name_span,
-            }],
+            params: vec![Param::var(name, name_span)],
             body: Box::new(body),
         },
         span,

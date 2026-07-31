@@ -13,8 +13,8 @@ use std::collections::HashMap;
 
 use crate::lexer::Span;
 use crate::syntax::{
-    BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, MatchArm, Module, Pattern,
-    TypeDecl, TypeDeclKind, TypeExpr,
+    BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, MatchArm, Module, Param,
+    Pattern, TypeDecl, TypeDeclKind, TypeExpr,
 };
 
 /// What kind of thing a module-level symbol is (drives the editor's icon and, for
@@ -218,12 +218,7 @@ fn walk(module: &Module) -> Resolver {
             // An active pattern's body is walked like a binding's (params in
             // scope); its case constructions resolve as module-level refs.
             Item::ActivePattern(decl) => {
-                r.push_scope(
-                    decl.params
-                        .iter()
-                        .map(|p| (p.name.clone(), p.span.span()))
-                        .collect(),
-                );
+                r.push_scope(params_scope(&decl.params));
                 r.walk_expr(&decl.value);
                 r.scopes.pop();
             }
@@ -509,12 +504,7 @@ impl Resolver {
                 }),
             },
             ExprKind::Fn { params, body } => {
-                self.push_scope(
-                    params
-                        .iter()
-                        .map(|p| (p.name.clone(), p.span.span()))
-                        .collect(),
-                );
+                self.push_scope(params_scope(params));
                 self.walk_expr(body);
                 self.scopes.pop();
             }
@@ -680,11 +670,18 @@ impl Resolver {
 
 /// A scope frame for a binding's parameters (name → its span).
 fn param_scope(binding: &LetBinding) -> HashMap<String, Span> {
-    binding
-        .params
-        .iter()
-        .map(|p| (p.name.clone(), p.span.span()))
-        .collect()
+    params_scope(&binding.params)
+}
+
+/// A scope frame for a parameter list. A destructuring parameter contributes every
+/// name its pattern binds, each at its own span, so hover and go-to-definition
+/// land on the element the cursor is actually over.
+fn params_scope(params: &[Param]) -> HashMap<String, Span> {
+    let mut out = HashMap::new();
+    for p in params {
+        pattern_vars(&p.pattern, &mut out);
+    }
+    out
 }
 
 /// Collect the variables a pattern binds, mapped to their spans (constructor
