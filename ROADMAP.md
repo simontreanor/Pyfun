@@ -27,7 +27,11 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    then allow dotted names in type position. **Highest language impact of the six**: it forces every
    record mentioning another module's type into a single file, which collapsed a board module and a
    rules module into one 340-line engine in the dogfooded program. This is the only finding that
-   changed a program's architecture rather than its phrasing.
+   changed a program's architecture rather than its phrasing. **Follow-up it creates** (S, LSP): a type
+   name can now be written in a file other than the one declaring it, so rename and find-references
+   for *type* names, which are in-file only, can leave stale references behind. Cross-file type nav was
+   never built because qualified type syntax did not exist; it does now, and `resolve::type_at` needs
+   the cross-file dimension the value and constructor paths already have (`symbol_occurrences`).
 2. **Field access picks its record before the base type is known** (S) — `Infer::infer_field` calls
    `record_of_field` (the name-only multimap) and infers the base one line later, so two records
    sharing a field name collide at *every* use site even where the base's type is already solved. The
