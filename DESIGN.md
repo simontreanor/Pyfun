@@ -157,6 +157,16 @@ call** (`add(1, 2)`) and **only synthesizes a closure** (`functools.partial` or 
 for a *genuine* partial application (`add 1`). This keeps emitted Python idiomatic (§ goal) and
 avoids per-application closure allocation — the same optimization F# performs at the IL level.
 
+A partially applied **lambda** goes one better and closes over the argument rather than being wrapped.
+Operator sections lower to lambdas, so `List.map ((+) 2)` emits `lambda b: 2 + b`, not
+`functools.partial(lambda a, b: a + b, 2)` — one fewer call layer, no `functools` pulled in for this
+alone, and the idiomatic spelling stops emitting worse Python than the `fun y -> y + 2` it stands in
+for. The wrapper stays wherever folding would change meaning: an argument that is not a name or a
+literal keeps it, since `functools.partial` evaluates its arguments once and *now* while a lambda body
+evaluates them on every call; and an argument whose name is also one of the remaining parameters keeps
+it, since substituting would capture (`((+) b)` must not become `lambda b: b + b`). A fully applied
+section is unchanged.
+
 **Representation contracts.** ADTs, records, tuples, options/results, and curried/partially-
 applied functions each need a *stable* Python representation. That representation is a public
 contract — emitted code and interop both depend on it — so changing it is a breaking change, not
