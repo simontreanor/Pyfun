@@ -2093,6 +2093,8 @@ impl Lowerer {
                 "const" => Some("_pf_const"),
                 "ignore" => Some("_pf_ignore"),
                 "flip" => Some("_pf_flip"),
+                "fst" => Some("_pf_fst"),
+                "snd" => Some("_pf_snd"),
                 _ => None,
             };
             if let Some(helper) = combinator {
@@ -2191,6 +2193,75 @@ impl Lowerer {
                 coll(self, "_pf_choose")
             }
             "List.collect" => list(self, "_pf_collect"),
+            // Access, slicing, and the rest of the sweep. Those that answer with
+            // `Option` construct `Some`/`None_`, so they flag the Option prelude
+            // and live with the other collection helpers.
+            "List.head" => {
+                self.needs_option = true;
+                coll(self, "_pf_head")
+            }
+            "List.last" => {
+                self.needs_option = true;
+                coll(self, "_pf_last")
+            }
+            "List.tail" => {
+                self.needs_option = true;
+                coll(self, "_pf_tail")
+            }
+            "List.findIndex" => {
+                self.needs_option = true;
+                coll(self, "_pf_find_index")
+            }
+            "List.max" => {
+                self.needs_option = true;
+                coll(self, "_pf_max")
+            }
+            "List.min" => {
+                self.needs_option = true;
+                coll(self, "_pf_min")
+            }
+            "List.maxBy" => {
+                self.needs_option = true;
+                coll(self, "_pf_max_by")
+            }
+            "List.minBy" => {
+                self.needs_option = true;
+                coll(self, "_pf_min_by")
+            }
+            "List.average" => {
+                self.needs_option = true;
+                coll(self, "_pf_average")
+            }
+            "List.reduce" => {
+                self.needs_option = true;
+                self.needs_functools = true;
+                coll(self, "_pf_reduce")
+            }
+            "List.take" => list(self, "_pf_take"),
+            "List.drop" => list(self, "_pf_drop"),
+            "List.splitAt" => list(self, "_pf_split_at"),
+            "List.map2" => list(self, "_pf_map2"),
+            "List.indexed" => list(self, "_pf_indexed"),
+            "List.iter" => list(self, "_pf_iter"),
+            "List.exists" => list(self, "_pf_exists"),
+            "List.forall" => list(self, "_pf_forall"),
+            "List.sortBy" => list(self, "_pf_sort_by"),
+            "List.sortDescending" => list(self, "_pf_sort_desc"),
+            "List.distinct" => list(self, "_pf_distinct"),
+            "List.distinctBy" => list(self, "_pf_distinct_by"),
+            "List.groupBy" => list(self, "_pf_group_by"),
+            "List.sumBy" => list(self, "_pf_sum_by"),
+            "List.partition" => list(self, "_pf_partition"),
+            "List.unzip" => list(self, "_pf_unzip"),
+            "List.flatten" => list(self, "_pf_flatten"),
+            "List.init" => list(self, "_pf_init"),
+            "List.replicate" => list(self, "_pf_replicate"),
+            "List.updateAt" => list(self, "_pf_update_at"),
+            "List.insertAt" => list(self, "_pf_insert_at"),
+            "List.removeAt" => list(self, "_pf_remove_at"),
+            "List.pairwise" => list(self, "_pf_pairwise"),
+            "List.windowed" => list(self, "_pf_windowed"),
+            "List.chunkBySize" => list(self, "_pf_chunk"),
             // Set
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
@@ -3870,6 +3941,23 @@ fn combinator_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     args: vec![name("y"), name("x")],
                 },
             ),
+            // _pf_fst(p) -> p[0]   /   _pf_snd(p) -> p[1]
+            "_pf_fst" => def(
+                "_pf_fst",
+                &["p"],
+                PyExpr::Subscript {
+                    value: Box::new(name("p")),
+                    index: Box::new(PyExpr::Int(0)),
+                },
+            ),
+            "_pf_snd" => def(
+                "_pf_snd",
+                &["p"],
+                PyExpr::Subscript {
+                    value: Box::new(name("p")),
+                    index: Box::new(PyExpr::Int(1)),
+                },
+            ),
             other => unreachable!("unknown combinator helper {other}"),
         })
         .collect()
@@ -4156,6 +4244,53 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
         body: vec![PyStmt::Return(ret)],
         is_async: false,
     };
+    // A helper whose body needs statements rather than one `return`.
+    let defs = |fn_name: &str, params: &[&str], body: Vec<PyStmt>| PyStmt::FuncDef {
+        name: fn_name.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body,
+        is_async: false,
+    };
+    // `f(args...)` where `f` is any expression (a parameter holding a function).
+    let callx = |f: PyExpr, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(f),
+        args,
+    };
+    let method = |recv: PyExpr, m: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Attribute {
+            value: Box::new(recv),
+            attr: m.to_string(),
+        }),
+        args,
+    };
+    let slice = |value: PyExpr, lower: PyExpr, upper: PyExpr| PyExpr::Slice {
+        value: Box::new(value),
+        lower: Box::new(lower),
+        upper: Box::new(upper),
+    };
+    let index = |value: PyExpr, i: PyExpr| PyExpr::Subscript {
+        value: Box::new(value),
+        index: Box::new(i),
+    };
+    let binop = |op: PyBinOp, left: PyExpr, right: PyExpr| PyExpr::BinOp {
+        op,
+        left: Box::new(left),
+        right: Box::new(right),
+    };
+    let assign = |target: &str, value: PyExpr| PyStmt::Assign {
+        target: target.to_string(),
+        value,
+    };
+    let for_ = |target: &str, iter: PyExpr, body: Vec<PyStmt>| PyStmt::For {
+        target: target.to_string(),
+        iter,
+        body,
+    };
+    // `max(n, 0)` — every count argument is clamped, so a negative one reads as
+    // "none of it" rather than slicing from the far end the way Python would.
+    let clamped = |n: &str| call("max", vec![name(n), PyExpr::Int(0)]);
+    let len_of = |n: &str| call("len", vec![name(n)]);
+    let empty_list = || PyExpr::List(vec![]);
     used.iter()
         .map(|&helper| match helper {
             // _pf_map(f, xs) -> list(map(f, xs))
@@ -4260,6 +4395,397 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 ],
                 is_async: false,
             },
+            // _pf_take(n, xs) -> xs[0:max(n, 0)]   (total: a count past the end
+            // simply takes everything, like `String.slice`)
+            "_pf_take" => def(
+                "_pf_take",
+                &["n", "xs"],
+                slice(name("xs"), PyExpr::Int(0), clamped("n")),
+            ),
+            // _pf_drop(n, xs) -> xs[max(n, 0):len(xs)]
+            "_pf_drop" => def(
+                "_pf_drop",
+                &["n", "xs"],
+                slice(name("xs"), clamped("n"), len_of("xs")),
+            ),
+            // _pf_split_at(n, xs) -> (xs[0:m], xs[m:len(xs)])
+            "_pf_split_at" => defs(
+                "_pf_split_at",
+                &["n", "xs"],
+                vec![
+                    assign("m", clamped("n")),
+                    PyStmt::Return(PyExpr::Tuple(vec![
+                        slice(name("xs"), PyExpr::Int(0), name("m")),
+                        slice(name("xs"), name("m"), len_of("xs")),
+                    ])),
+                ],
+            ),
+            // _pf_map2(f, xs, ys): stops at the shorter input, like `zip`
+            "_pf_map2" => defs(
+                "_pf_map2",
+                &["f", "xs", "ys"],
+                vec![
+                    assign("out", empty_list()),
+                    for_(
+                        "p",
+                        call("zip", vec![name("xs"), name("ys")]),
+                        vec![PyStmt::Expr(method(
+                            name("out"),
+                            "append",
+                            vec![callx(
+                                name("f"),
+                                vec![
+                                    index(name("p"), PyExpr::Int(0)),
+                                    index(name("p"), PyExpr::Int(1)),
+                                ],
+                            )],
+                        ))],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_indexed(xs) -> list(enumerate(xs))
+            "_pf_indexed" => def(
+                "_pf_indexed",
+                &["xs"],
+                call("list", vec![call("enumerate", vec![name("xs")])]),
+            ),
+            // _pf_iter(f, xs): run f for its effect, answer unit
+            "_pf_iter" => defs(
+                "_pf_iter",
+                &["f", "xs"],
+                vec![
+                    for_(
+                        "x",
+                        name("xs"),
+                        vec![PyStmt::Expr(callx(name("f"), vec![name("x")]))],
+                    ),
+                    PyStmt::Return(PyExpr::NoneLit),
+                ],
+            ),
+            // _pf_exists(f, xs) -> any(map(f, xs))   (short-circuits)
+            "_pf_exists" => def(
+                "_pf_exists",
+                &["f", "xs"],
+                call("any", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // _pf_forall(f, xs) -> all(map(f, xs))   (short-circuits)
+            "_pf_forall" => def(
+                "_pf_forall",
+                &["f", "xs"],
+                call("all", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // _pf_sort_by(f, xs) -> sorted(xs, key=f)
+            "_pf_sort_by" => def(
+                "_pf_sort_by",
+                &["f", "xs"],
+                PyExpr::CallKw {
+                    func: Box::new(name("sorted")),
+                    args: vec![name("xs")],
+                    kwargs: vec![("key".to_string(), name("f"))],
+                },
+            ),
+            // _pf_sort_desc(xs) -> sorted(xs, reverse=True)
+            "_pf_sort_desc" => def(
+                "_pf_sort_desc",
+                &["xs"],
+                PyExpr::CallKw {
+                    func: Box::new(name("sorted")),
+                    args: vec![name("xs")],
+                    kwargs: vec![("reverse".to_string(), PyExpr::Bool(true))],
+                },
+            ),
+            // _pf_distinct(xs) -> list(dict.fromkeys(xs))   (first occurrence wins
+            // and order is kept — dicts preserve insertion order)
+            "_pf_distinct" => def(
+                "_pf_distinct",
+                &["xs"],
+                call(
+                    "list",
+                    vec![method(name("dict"), "fromkeys", vec![name("xs")])],
+                ),
+            ),
+            // _pf_distinct_by(f, xs): first element per key, order kept
+            "_pf_distinct_by" => defs(
+                "_pf_distinct_by",
+                &["f", "xs"],
+                vec![
+                    assign("seen", call("set", vec![])),
+                    assign("out", empty_list()),
+                    for_(
+                        "x",
+                        name("xs"),
+                        vec![
+                            assign("k", callx(name("f"), vec![name("x")])),
+                            PyStmt::If {
+                                test: PyExpr::Not(Box::new(binop(
+                                    PyBinOp::In,
+                                    name("k"),
+                                    name("seen"),
+                                ))),
+                                body: vec![
+                                    PyStmt::Expr(method(name("seen"), "add", vec![name("k")])),
+                                    PyStmt::Expr(method(name("out"), "append", vec![name("x")])),
+                                ],
+                                orelse: vec![],
+                            },
+                        ],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_group_by(f, xs) -> list of (key, members), in first-seen key order
+            "_pf_group_by" => defs(
+                "_pf_group_by",
+                &["f", "xs"],
+                vec![
+                    assign("groups", call("dict", vec![])),
+                    for_(
+                        "x",
+                        name("xs"),
+                        vec![PyStmt::Expr(method(
+                            method(
+                                name("groups"),
+                                "setdefault",
+                                vec![callx(name("f"), vec![name("x")]), empty_list()],
+                            ),
+                            "append",
+                            vec![name("x")],
+                        ))],
+                    ),
+                    PyStmt::Return(call("list", vec![method(name("groups"), "items", vec![])])),
+                ],
+            ),
+            // _pf_sum_by(f, xs) -> sum(map(f, xs))
+            "_pf_sum_by" => def(
+                "_pf_sum_by",
+                &["f", "xs"],
+                call("sum", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // _pf_partition(f, xs) -> (kept, rejected), testing each element once
+            "_pf_partition" => defs(
+                "_pf_partition",
+                &["f", "xs"],
+                vec![
+                    assign("yes", empty_list()),
+                    assign("no", empty_list()),
+                    for_(
+                        "x",
+                        name("xs"),
+                        vec![PyStmt::If {
+                            test: callx(name("f"), vec![name("x")]),
+                            body: vec![PyStmt::Expr(method(
+                                name("yes"),
+                                "append",
+                                vec![name("x")],
+                            ))],
+                            orelse: vec![PyStmt::Expr(method(
+                                name("no"),
+                                "append",
+                                vec![name("x")],
+                            ))],
+                        }],
+                    ),
+                    PyStmt::Return(PyExpr::Tuple(vec![name("yes"), name("no")])),
+                ],
+            ),
+            // _pf_unzip(xs) -> (firsts, seconds)
+            "_pf_unzip" => defs(
+                "_pf_unzip",
+                &["xs"],
+                vec![
+                    assign("a", empty_list()),
+                    assign("b", empty_list()),
+                    for_(
+                        "p",
+                        name("xs"),
+                        vec![
+                            PyStmt::Expr(method(
+                                name("a"),
+                                "append",
+                                vec![index(name("p"), PyExpr::Int(0))],
+                            )),
+                            PyStmt::Expr(method(
+                                name("b"),
+                                "append",
+                                vec![index(name("p"), PyExpr::Int(1))],
+                            )),
+                        ],
+                    ),
+                    PyStmt::Return(PyExpr::Tuple(vec![name("a"), name("b")])),
+                ],
+            ),
+            // _pf_flatten(xs) -> one list of every element of every element
+            "_pf_flatten" => defs(
+                "_pf_flatten",
+                &["xs"],
+                vec![
+                    assign("out", empty_list()),
+                    for_(
+                        "x",
+                        name("xs"),
+                        vec![PyStmt::Expr(method(name("out"), "extend", vec![name("x")]))],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_init(n, f) -> [f(0), …, f(n-1)]
+            "_pf_init" => defs(
+                "_pf_init",
+                &["n", "f"],
+                vec![
+                    assign("out", empty_list()),
+                    for_(
+                        "i",
+                        call("range", vec![clamped("n")]),
+                        vec![PyStmt::Expr(method(
+                            name("out"),
+                            "append",
+                            vec![callx(name("f"), vec![name("i")])],
+                        ))],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_replicate(n, x) -> [x] * max(n, 0)
+            "_pf_replicate" => def(
+                "_pf_replicate",
+                &["n", "x"],
+                binop(PyBinOp::Mul, PyExpr::List(vec![name("x")]), clamped("n")),
+            ),
+            // _pf_update_at(i, v, xs): a fresh list with index i replaced; an index
+            // outside the list leaves it unchanged (total, like the accessors)
+            "_pf_update_at" => defs(
+                "_pf_update_at",
+                &["i", "v", "xs"],
+                vec![
+                    assign("out", call("list", vec![name("xs")])),
+                    PyStmt::If {
+                        test: PyExpr::Compare {
+                            left: Box::new(PyExpr::Int(0)),
+                            ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                            comparators: vec![name("i"), len_of("out")],
+                        },
+                        body: vec![PyStmt::SubscriptAssign {
+                            obj: name("out"),
+                            index: name("i"),
+                            value: name("v"),
+                        }],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_insert_at(i, v, xs): index clamped to the ends
+            "_pf_insert_at" => defs(
+                "_pf_insert_at",
+                &["i", "v", "xs"],
+                vec![
+                    assign("out", call("list", vec![name("xs")])),
+                    PyStmt::Expr(method(name("out"), "insert", vec![clamped("i"), name("v")])),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_remove_at(i, xs): an index outside the list leaves it unchanged
+            "_pf_remove_at" => defs(
+                "_pf_remove_at",
+                &["i", "xs"],
+                vec![
+                    assign("out", call("list", vec![name("xs")])),
+                    PyStmt::If {
+                        test: PyExpr::Compare {
+                            left: Box::new(PyExpr::Int(0)),
+                            ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                            comparators: vec![name("i"), len_of("out")],
+                        },
+                        body: vec![PyStmt::Expr(method(name("out"), "pop", vec![name("i")]))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_pairwise(xs) -> list(zip(xs, xs[1:len(xs)]))
+            "_pf_pairwise" => def(
+                "_pf_pairwise",
+                &["xs"],
+                call(
+                    "list",
+                    vec![call(
+                        "zip",
+                        vec![name("xs"), slice(name("xs"), PyExpr::Int(1), len_of("xs"))],
+                    )],
+                ),
+            ),
+            // _pf_windowed(n, xs): full windows only; a non-positive size gives []
+            "_pf_windowed" => defs(
+                "_pf_windowed",
+                &["n", "xs"],
+                vec![
+                    PyStmt::If {
+                        test: PyExpr::Compare {
+                            left: Box::new(name("n")),
+                            ops: vec![PyBinOp::Le],
+                            comparators: vec![PyExpr::Int(0)],
+                        },
+                        body: vec![PyStmt::Return(empty_list())],
+                        orelse: vec![],
+                    },
+                    assign("out", empty_list()),
+                    for_(
+                        "i",
+                        call(
+                            "range",
+                            vec![binop(
+                                PyBinOp::Add,
+                                binop(PyBinOp::Sub, len_of("xs"), name("n")),
+                                PyExpr::Int(1),
+                            )],
+                        ),
+                        vec![PyStmt::Expr(method(
+                            name("out"),
+                            "append",
+                            vec![slice(
+                                name("xs"),
+                                name("i"),
+                                binop(PyBinOp::Add, name("i"), name("n")),
+                            )],
+                        ))],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
+            // _pf_chunk(n, xs): consecutive chunks, the last one short if the
+            // length does not divide evenly; a non-positive size gives []
+            "_pf_chunk" => defs(
+                "_pf_chunk",
+                &["n", "xs"],
+                vec![
+                    PyStmt::If {
+                        test: PyExpr::Compare {
+                            left: Box::new(name("n")),
+                            ops: vec![PyBinOp::Le],
+                            comparators: vec![PyExpr::Int(0)],
+                        },
+                        body: vec![PyStmt::Return(empty_list())],
+                        orelse: vec![],
+                    },
+                    assign("out", empty_list()),
+                    for_(
+                        "i",
+                        call("range", vec![PyExpr::Int(0), len_of("xs"), name("n")]),
+                        vec![PyStmt::Expr(method(
+                            name("out"),
+                            "append",
+                            vec![slice(
+                                name("xs"),
+                                name("i"),
+                                binop(PyBinOp::Add, name("i"), name("n")),
+                            )],
+                        ))],
+                    ),
+                    PyStmt::Return(name("out")),
+                ],
+            ),
             other => unreachable!("unknown list helper {other}"),
         })
         .collect()
@@ -4859,6 +5385,174 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 helper,
                 &["w", "fill", "s"],
                 method(name("s"), "ljust", vec![name("w"), name("fill")]),
+            ),
+            // List.head(xs) -> Some(xs[0]) if xs else None_()
+            // Every accessor that an empty list has no answer for reports it the
+            // same way `get`/`find` do, rather than raising as F# does.
+            "_pf_head" => def1(
+                "_pf_head",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::Subscript {
+                            value: Box::new(name("xs")),
+                            index: Box::new(PyExpr::Int(0)),
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.last(xs) -> Some(xs[-1]) if xs else None_()
+            "_pf_last" => def1(
+                "_pf_last",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::Subscript {
+                            value: Box::new(name("xs")),
+                            index: Box::new(PyExpr::Neg(Box::new(PyExpr::Int(1)))),
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.tail(xs) -> Some(xs[1:len(xs)]) if xs else None_()
+            "_pf_tail" => def1(
+                "_pf_tail",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::Slice {
+                            value: Box::new(name("xs")),
+                            lower: Box::new(PyExpr::Int(1)),
+                            upper: Box::new(call("len", vec![name("xs")])),
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.findIndex(f, xs): the first index whose element passes, if any
+            "_pf_find_index" => def(
+                "_pf_find_index",
+                &["f", "xs"],
+                vec![
+                    PyStmt::For {
+                        target: "p".to_string(),
+                        iter: call("enumerate", vec![name("xs")]),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![PyExpr::Subscript {
+                                    value: Box::new(name("p")),
+                                    index: Box::new(PyExpr::Int(1)),
+                                }],
+                            },
+                            body: vec![PyStmt::Return(call(
+                                "Some",
+                                vec![PyExpr::Subscript {
+                                    value: Box::new(name("p")),
+                                    index: Box::new(PyExpr::Int(0)),
+                                }],
+                            ))],
+                            orelse: vec![],
+                        }],
+                    },
+                    PyStmt::Return(call("None_", vec![])),
+                ],
+            ),
+            // List.max(xs) -> Some(max(xs)) if xs else None_()
+            "_pf_max" => def1(
+                "_pf_max",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call("Some", vec![call("max", vec![name("xs")])])),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.min(xs) -> Some(min(xs)) if xs else None_()
+            "_pf_min" => def1(
+                "_pf_min",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call("Some", vec![call("min", vec![name("xs")])])),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.maxBy(f, xs) -> Some(max(xs, key=f)) if xs else None_()
+            "_pf_max_by" => def1(
+                "_pf_max_by",
+                &["f", "xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::CallKw {
+                            func: Box::new(name("max")),
+                            args: vec![name("xs")],
+                            kwargs: vec![("key".to_string(), name("f"))],
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.minBy(f, xs) -> Some(min(xs, key=f)) if xs else None_()
+            "_pf_min_by" => def1(
+                "_pf_min_by",
+                &["f", "xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::CallKw {
+                            func: Box::new(name("min")),
+                            args: vec![name("xs")],
+                            kwargs: vec![("key".to_string(), name("f"))],
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.average(xs) -> Some(sum(xs) / len(xs)) if xs else None_()
+            "_pf_average" => def1(
+                "_pf_average",
+                &["xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![binop(
+                            PyBinOp::Div,
+                            call("sum", vec![name("xs")]),
+                            call("len", vec![name("xs")]),
+                        )],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // List.reduce(f, xs) -> Some(functools.reduce(f, xs)) if xs else None_()
+            // A fold with no seed, so an empty list genuinely has no answer.
+            "_pf_reduce" => def1(
+                "_pf_reduce",
+                &["f", "xs"],
+                PyExpr::IfExp {
+                    body: Box::new(call(
+                        "Some",
+                        vec![PyExpr::Call {
+                            func: Box::new(attr(name("functools"), "reduce")),
+                            args: vec![name("f"), name("xs")],
+                        }],
+                    )),
+                    test: Box::new(name("xs")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

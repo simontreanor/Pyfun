@@ -452,6 +452,37 @@ makes the whole call `io` and that flows out (a single bound effect variable lin
 to the traversal arrow). The lazy counterpart already exists as the `seq {}` computation expression
 (§8.1).
 
+**The rest of the `List` surface.** A dogfooded program should not have to write its own prelude
+before it starts, so the module covers the F# core set rather than growing one function at a time
+(`ROADMAP.md`). Three conventions decide the shapes, and the first two were already the house style:
+
+- **Total, never raising.** Anything F# raises on, Pyfun answers with `Option` under the *plain* name,
+  following `get`/`find`: `head`/`last`/`tail`, `max`/`min`/`maxBy`/`minBy`, `average`, `reduce`,
+  `findIndex`. `sumBy` is not among them — an empty sum is zero, so it needs no `Option`.
+- **Counts clamp** rather than erroring, like `String.slice`: `take`/`drop`/`splitAt` past either end
+  give everything or nothing, a negative count reads as none of it, and `updateAt`/`removeAt` outside
+  the list leave it unchanged (`insertAt` clamps to the ends). `windowed`/`chunkBySize` answer `[]`
+  for a non-positive size.
+- **`take`/`drop`**, not F#'s `take`/`skip` — the same kind of divergence as `concat`, chosen for the
+  more obvious word.
+
+Access and slicing: `head`, `last`, `tail`, `take`, `drop`, `splitAt`. Transform: `map2` (stopping at
+the shorter input, where F# raises, matching the existing `zip`), `indexed`, `iter` (effect-carrying,
+like `map`). Query: `exists`, `forall`, `findIndex`. Order: `sortBy`, `sortDescending`, `distinct`
+(first occurrence wins, order kept), `distinctBy`, `groupBy` (in first-seen key order). Aggregate:
+`max`, `min`, `maxBy`, `minBy`, `sumBy`, `average`, `reduce`. Structure: `partition` (testing each
+element once), `unzip`, `flatten`, `init`, `replicate`. Positional update: `updateAt`, `insertAt`,
+`removeAt`, each returning a fresh list. Windows: `pairwise`, `windowed`, `chunkBySize`. The
+`comparison` constraint lands on the *key* where there is one (`sortBy`/`maxBy`/`minBy` constrain what
+the function returns, not the element), and every higher-order member is effect-polymorphic like `map`.
+
+`average : List float -> Option float` is deliberately float-in/float-out: averaging integers would
+silently change type, and an integer literal that must be a float is already inferred as one.
+
+**Tuple accessors.** `fst` and `snd` are global (like `abs`, and like F#), not module-qualified.
+Destructuring in a parameter or a `match` covers most uses, but a projection you can *pass*
+(`List.map fst pairs`) cannot be written point-free without them.
+
 The **completeness ops** — `get`/`isEmpty`/`contains`/`concat`/`sort`/`find` — round out the array,
 each with big-O faithful to a Python `list`: `get : int -> List a -> Option a` is **O(1)** and
 **bounds-checked → total** (there is deliberately *no* `xs[i]` surface syntax, since bare indexing would
@@ -466,8 +497,7 @@ extend/append loop in the helper), and `collect : (a ->{e} List b) -> List a ->{
 concatenates (F#'s `List.collect`, i.e. flatMap; `List.collect (fun x -> x)` flattens a list of
 lists). Both are effect-polymorphic like `map`. **Naming note:** Pyfun's `concat` (append two lists)
 diverges from F#, where `concat` *flattens* and `append` joins two — a deliberate cost: to a
-Pythonista "concat two lists" is the natural reading (`+`), and the flattening op remains reachable as
-`collect` with the identity function (a dedicated `flatten` can ride later if demand shows). There is
+Pythonista "concat two lists" is the natural reading (`+`). Flattening is the separate `flatten`. There is
 deliberately **no cheap-looking prepend/`cons`** (O(n) on an array — the linked-list non-goal); and
 because the ops are immutable-style, building a list by repeated `concat` is *nominally* O(n²) —
 though a `Seq.fold`/`List.fold` that builds a collection linearly is recognized and lowered to an
