@@ -8,7 +8,7 @@
 
 use crate::parser::ast::{
     ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternArg, ExternDecl, FieldDecl,
-    FieldInit, InterpPart, Item, LetBinding, MatchArm, Module, Pattern, Receiver, TypeDecl,
+    FieldInit, InterpPart, Item, LetBinding, MatchArm, Module, Param, Pattern, Receiver, TypeDecl,
     TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
@@ -88,7 +88,7 @@ fn print_active_pattern(decl: &ActivePatternDecl) -> String {
     s.push(')');
     for param in &decl.params {
         s.push(' ');
-        s.push_str(&param.name);
+        s.push_str(&print_param(param));
     }
     s.push_str(" =");
     s.push_str(&print_body(&decl.value, 0));
@@ -286,7 +286,7 @@ fn print_let(binding: &LetBinding, indent: usize) -> String {
     s.push_str(&binding.name);
     for param in &binding.params {
         s.push(' ');
-        s.push_str(&param.name);
+        s.push_str(&print_param(param));
     }
     s.push_str(" =");
     s.push_str(&print_body(&binding.value, indent));
@@ -364,7 +364,7 @@ fn print_layout(expr: &Expr, indent: usize) -> String {
             s
         }
         ExprKind::Fn { params, body } => {
-            let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            let names: Vec<String> = params.iter().map(print_param).collect();
             format!(
                 "{pad}fun {} ->{}",
                 names.join(" "),
@@ -408,7 +408,7 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::Var(name) => name.clone(),
 
         ExprKind::Fn { params, body } => {
-            let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+            let names: Vec<String> = params.iter().map(print_param).collect();
             format!("(fun {} -> {})", names.join(" "), print_expr(body))
         }
         ExprKind::App { func, arg } => {
@@ -536,6 +536,12 @@ fn print_arm(arm: &MatchArm) -> String {
 
 /// Render a pattern. Constructors with arguments are parenthesized so they nest
 /// and sit in arm position unambiguously.
+/// Print a parameter. Every admissible parameter shape is already a pattern that
+/// prints back as itself: a name, `_`, or a parenthesized tuple.
+pub fn print_param(param: &Param) -> String {
+    print_pattern(&param.pattern)
+}
+
 pub fn print_pattern(pattern: &Pattern) -> String {
     match pattern {
         Pattern::Wildcard => "_".to_string(),

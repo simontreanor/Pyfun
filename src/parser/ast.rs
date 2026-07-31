@@ -295,13 +295,40 @@ pub struct LetBinding {
     pub value: Expr,
 }
 
-/// A function/value-binding parameter: its name and source span. The span lets an
-/// editor jump to / hover the parameter (`NodeSpan` compares equal, so it is
-/// invisible to structural/roundtrip equality).
+/// A function/value-binding parameter: the **irrefutable** pattern it binds, and
+/// its source span. The span lets an editor jump to / hover the parameter
+/// (`NodeSpan` compares equal, so it is invisible to structural/roundtrip
+/// equality).
+///
+/// Almost every parameter is a plain [`Pattern::Var`], which is why [`Param::name`]
+/// exists: that case keeps its own name all the way into the emitted Python. The
+/// parser admits only patterns that cannot fail to match — a name, `_`, or a tuple
+/// of those, nested (`parser::param_pattern_error`) — since a parameter has no
+/// second arm to fall through to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
-    pub name: String,
+    pub pattern: Pattern,
     pub span: NodeSpan,
+}
+
+impl Param {
+    /// A plain named parameter.
+    pub fn var(name: impl Into<String>, span: NodeSpan) -> Self {
+        let name = name.into();
+        Param {
+            pattern: Pattern::Var { name, span },
+            span,
+        }
+    }
+
+    /// The bound name when this parameter is a plain variable, which is the case
+    /// every phase has a shortcut for; `None` when it destructures.
+    pub fn name(&self) -> Option<&str> {
+        match &self.pattern {
+            Pattern::Var { name, .. } => Some(name),
+            _ => None,
+        }
+    }
 }
 
 /// One statement inside a block (an indented `let … =` body). The final statement

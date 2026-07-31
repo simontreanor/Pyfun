@@ -857,6 +857,18 @@ makes `|>` and point-free style pay off. Inference handles curried arrows and pa
 (standard HM); lowering keeps output readable via the n-ary-collapse strategy (§5); the Python
 boundary stays n-ary (§6).
 
+**A parameter may destructure**, so long as it cannot fail to match: a name, `_`, or a tuple of
+those, nested — `let tileScore (t, sq) = t * sq`, `fun acc (a, b) -> acc + a * b`, `let const42 _ = 42`.
+A parameter has no second arm to fall through to, which is why refutable shapes (a literal, a
+constructor, a record tag, a list pattern, an or-pattern, an as-pattern) are rejected there with a
+message naming what was written; match on the value in the body instead. Only a **parenthesized**
+parameter takes the pattern grammar: a bare uppercase identifier stays a parameter *name*, so
+`let f Some x = …` keeps meaning two parameters rather than silently becoming one constructor
+pattern. Python 3 removed tuple parameters, so a destructuring parameter lowers to a synthetic
+argument name unpacked on the body's first line (`def tileScore(_pf_arg0): t, sq = _pf_arg0`), one
+statement per nesting level; a destructuring *lambda* therefore lowers to a named `def` rather than a
+Python `lambda`, which cannot hold a statement.
+
 MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
 blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
 and **record** declarations, the three computation expressions of §8, units of measure (§8), readable

@@ -1068,7 +1068,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
             .map(|(_, b)| {
                 let mut bound = HashSet::new();
                 for p in &b.params {
-                    bound.insert(p.name.clone());
+                    pattern_names(&p.pattern, &mut bound);
                 }
                 let mut refs = HashSet::new();
                 collect_free(&b.value, &bound, &mut refs);
@@ -2242,7 +2242,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
         ExprKind::Fn { params, body } => {
             let mut b = bound.clone();
             for p in params {
-                b.insert(p.name.clone());
+                pattern_names(&p.pattern, &mut b);
             }
             collect_free(body, &b, out);
         }
@@ -2323,7 +2323,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
                     BlockStmt::Let(binding) => {
                         let mut vb = b.clone();
                         for p in &binding.params {
-                            vb.insert(p.name.clone());
+                            pattern_names(&p.pattern, &mut vb);
                         }
                         collect_free(&binding.value, &vb, out);
                         b.insert(binding.name.clone());
@@ -4086,10 +4086,7 @@ impl Infer {
             for param in &binding.params {
                 let pty = self.fresh();
                 param_tys.push(pty.clone());
-                if self.record_types {
-                    self.recorded.push((param.span.span(), pty.clone()));
-                }
-                body_env.insert(param.name.clone(), Scheme::mono(pty));
+                self.bind_pattern(&param.pattern, &pty, param.span.span(), &mut body_env)?;
             }
             self.infer_expr(&binding.value, &body_env)
                 .and_then(|body_ty| {
@@ -4186,15 +4183,21 @@ impl Infer {
             let outer_eff = std::mem::replace(&mut self.cur_eff, Effect::pure());
             let mut fn_env = body_env.clone();
             let mut param_tys = Vec::with_capacity(b.params.len());
+            let mut bind_err = None;
             for p in &b.params {
                 let pty = self.fresh();
                 param_tys.push(pty.clone());
-                if self.record_types {
-                    self.recorded.push((p.span.span(), pty.clone()));
+                if let Err(e) = self.bind_pattern(&p.pattern, &pty, p.span.span(), &mut fn_env) {
+                    bind_err.get_or_insert(e);
                 }
-                fn_env.insert(p.name.clone(), Scheme::mono(pty));
             }
-            let res = self.infer_expr(&b.value, &fn_env).and_then(|body_ty| {
+            let res = match bind_err {
+                // A parameter pattern that does not fit its type fails this member,
+                // like any other error in its body.
+                Some(e) => Err(e),
+                None => self.infer_expr(&b.value, &fn_env),
+            }
+            .and_then(|body_ty| {
                 let mut ty = body_ty;
                 let mut eff = self.cur_eff.clone();
                 for p in param_tys.into_iter().rev() {
@@ -4313,10 +4316,7 @@ impl Infer {
         for param in &decl.params {
             let pty = self.fresh();
             param_tys.push(pty.clone());
-            if self.record_types {
-                self.recorded.push((param.span.span(), pty.clone()));
-            }
-            fn_env.insert(param.name.clone(), Scheme::mono(pty));
+            self.bind_pattern(&param.pattern, &pty, param.span.span(), &mut fn_env)?;
         }
         let body_res = self.infer_expr(&decl.value, &fn_env);
         let body_eff = std::mem::replace(&mut self.cur_eff, outer);
@@ -4837,10 +4837,7 @@ impl Infer {
                 for param in params {
                     let pty = self.fresh();
                     param_tys.push(pty.clone());
-                    if self.record_types {
-                        self.recorded.push((param.span.span(), pty.clone()));
-                    }
-                    body_env.insert(param.name.clone(), Scheme::mono(pty));
+                    self.bind_pattern(&param.pattern, &pty, param.span.span(), &mut body_env)?;
                 }
                 // Defining a lambda is pure: capture the body's effect as the
                 // innermost arrow's latent effect rather than performing it here.

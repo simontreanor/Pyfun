@@ -104,6 +104,15 @@ const PROGRAMS: &[&str] = &[
     // else-if chain to `elif` and it reparses to the same AST.
     "let grade n =\n  if n >= 90 then \"A\"\n  elif n >= 80 then \"B\"\n  else \"F\"",
     "let compose = fun f g x -> f (g x)",
+    // Destructuring parameters: tuple, nested tuple, `_`, and mixed with names.
+    "let tileScore (t, sq) = t * sq",
+    "let swap (a, b) = (b, a)",
+    "let nested ((a, b), c) = a + b + c",
+    "let ignoreIt _ = 42",
+    "let mix a (b, c) _ = a + b + c",
+    "let f = fun (a, b) -> a + b",
+    "let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs",
+    "let partial (a, _) = a",
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     // A negative integer literal pattern.
     "let sign n =\n  match n:\n    case -1: \"neg\"\n    case 0: \"zero\"\n    case _: \"pos\"",
@@ -667,6 +676,39 @@ fn reports_errors_for_malformed_input() {
 }
 
 #[test]
+fn a_refutable_parameter_pattern_is_rejected_with_a_hint() {
+    // A parameter has no second arm to fall through to, so only always-matching
+    // shapes are admitted. Each rejection names what it saw.
+    for (src, what) in [
+        ("let f (Some x) = x", "a constructor pattern"),
+        ("let f (Point { x, y }) = x", "a record pattern"),
+        ("let f ([a, b]) = a", "a list pattern"),
+        ("let f (0) = 1", "a literal pattern"),
+        ("let f (a | b) = a", "an or-pattern"),
+        ("let f (p as q) = q", "an as-pattern"),
+        ("let f (a, Some b) = a", "a constructor pattern"),
+    ] {
+        let err = parse(src).unwrap_err();
+        assert!(
+            err.message().contains(what) && err.message().contains("must always match"),
+            "{src} -> {}",
+            err.message()
+        );
+    }
+}
+
+#[test]
+fn a_bare_uppercase_parameter_is_still_two_parameters() {
+    // Only a `(`-led parameter takes the pattern grammar: `let f Some x = …` has
+    // always meant two parameters named `Some` and `x`, not one ctor pattern.
+    let module = parse("let f Some x = x").unwrap();
+    let Item::Let(binding) = &module.items[0] else {
+        panic!("expected a let binding")
+    };
+    assert_eq!(binding.params.len(), 2);
+}
+
+#[test]
 fn let_rec_is_rejected_with_a_helpful_hint() {
     // Pyfun has no `rec` keyword (functions are implicitly recursive). The F#/ML
     // `let rec f x = …` would otherwise silently define a function named `rec`; we
@@ -761,7 +803,7 @@ fn active_pattern_declarations_parse_to_the_expected_shape() {
     assert!(decl.partial);
     assert_eq!(decl.cases.len(), 1);
     assert_eq!(decl.cases[0].name, "DivisibleBy");
-    let params: Vec<&str> = decl.params.iter().map(|p| p.name.as_str()).collect();
+    let params: Vec<&str> = decl.params.iter().filter_map(|p| p.name()).collect();
     assert_eq!(params, ["d", "n"]);
 
     let module = parse("let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd").unwrap();

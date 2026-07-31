@@ -30,7 +30,7 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         | PyStmt::Global(_)
         | PyStmt::RaiseRuntimeError(_)
         | PyStmt::ClassDef { .. } => {}
-        PyStmt::Assign { value, .. } => rewrite_expr(value),
+        PyStmt::Assign { value, .. } | PyStmt::UnpackAssign { value, .. } => rewrite_expr(value),
         PyStmt::SubscriptAssign { obj, index, value } => {
             rewrite_expr(obj);
             rewrite_expr(index);

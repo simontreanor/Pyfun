@@ -49,6 +49,12 @@ pub enum PyStmt {
     Global(Vec<String>),
     /// `target = value`
     Assign { target: String, value: PyExpr },
+    /// `a, b = value` — tuple unpacking (two or more targets). Emitted for a
+    /// destructuring parameter (`fun (t, sq) -> …`), whose Python argument is a
+    /// single synthetic name unpacked at the top of the body, since Python 3 has no
+    /// tuple parameters. A nested tuple unpacks through a temp, one statement per
+    /// level, rather than nesting the target syntax.
+    UnpackAssign { targets: Vec<String>, value: PyExpr },
     /// `obj[index] = value` — subscript assignment (a distinct target shape from
     /// [`Assign`], whose target is a bare name). Emitted by the in-place linear-fold
     /// optimization (`Map.add` at a fold tail → `m[k] = v`; `DESIGN.md` §5).
@@ -385,6 +391,13 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::Global(names) => line(out, depth, &format!("global {}", names.join(", "))),
         PyStmt::Assign { target, value } => {
             line(out, depth, &format!("{target} = {}", expr(value)));
+        }
+        PyStmt::UnpackAssign { targets, value } => {
+            line(
+                out,
+                depth,
+                &format!("{} = {}", targets.join(", "), expr(value)),
+            );
         }
         PyStmt::SubscriptAssign { obj, index, value } => {
             line(

@@ -743,8 +743,8 @@ impl Lowerer {
                 // ordinary constructor path (registered in `new`).
                 Item::ActivePattern(decl) => {
                     let names = param_names(&decl.params);
-                    let inner = extend(&HashSet::new(), &names);
-                    let body = self.lower_fn_body(&names, &decl.value, &inner)?;
+                    let inner = extend(&HashSet::new(), &param_bindings(&decl.params));
+                    let body = self.lower_fn_body(&decl.params, &decl.value, &inner)?;
                     code.push(PyStmt::FuncDef {
                         name: ap_py_fn(decl),
                         params: py_param_names(&names),
@@ -936,8 +936,8 @@ impl Lowerer {
             // A nested function captures the enclosing locals (Python closures),
             // so they count as locals when resolving names in its body.
             let names = param_names(&binding.params);
-            let inner = extend(locals, &names);
-            let body = self.lower_fn_body(&names, &binding.value, &inner)?;
+            let inner = extend(locals, &param_bindings(&binding.params));
+            let body = self.lower_fn_body(&binding.params, &binding.value, &inner)?;
             out.push(PyStmt::FuncDef {
                 name: py_name,
                 params: py_param_names(&names),
@@ -955,10 +955,13 @@ impl Lowerer {
     /// so `global` (Python's rule: assigning a name makes it local unless declared).
     fn lower_fn_body(
         &mut self,
-        params: &[String],
+        params: &[Param],
         body: &Expr,
         inner: &HashSet<String>,
     ) -> Result<Vec<PyStmt>, LowerError> {
+        let prelude_params = params;
+        let bindings = param_bindings(params);
+        let params: &[String] = &bindings;
         let mut assigned = HashSet::new();
         let mut bound: HashSet<String> = params.iter().cloned().collect();
         scan_scope(body, &mut assigned, &mut bound);
@@ -993,6 +996,12 @@ impl Lowerer {
         if !nonlocals.is_empty() {
             decls.push(PyStmt::Nonlocal(py_param_names(&nonlocals)));
         }
+        // Destructuring parameters unpack first, after the `global`/`nonlocal`
+        // declarations Python requires at the top of the block.
+        decls.append(&mut destructure_params(
+            prelude_params,
+            &param_names(prelude_params),
+        ));
         decls.append(&mut stmts);
         Ok(decls)
     }
@@ -1225,14 +1234,18 @@ impl Lowerer {
 
             ExprKind::Fn { params, body } => {
                 let names = param_names(params);
-                let inner = extend(locals, &names);
+                let inner = extend(locals, &param_bindings(params));
                 // Lambda parameters shadow any same-named local folder while the
                 // body lowers (`lower_fn_body` re-guards the statement-body pass).
                 let shadowed = self.shadow_local_fns(&names);
                 let lowered = self.lower_value(body, &inner);
                 self.unshadow_local_fns(shadowed);
                 let (body_stmts, body_val) = lowered?;
-                if body_stmts.is_empty() {
+                // A destructuring parameter needs an unpacking statement in the
+                // body, and Python 3 removed tuple parameters, so such a lambda
+                // takes the named-def path below however simple its body is.
+                let all_named = params.iter().all(|p| p.name().is_some());
+                if body_stmts.is_empty() && all_named {
                     Ok((
                         vec![],
                         PyExpr::Lambda {
@@ -1243,7 +1256,7 @@ impl Lowerer {
                 } else {
                     // Body needs statements: emit a named nested def and use it.
                     let name = self.fresh_fn();
-                    let def_body = self.lower_fn_body(&names, body, &inner)?;
+                    let def_body = self.lower_fn_body(params, body, &inner)?;
                     let def = PyStmt::FuncDef {
                         name: name.clone(),
                         params: py_param_names(&names),
@@ -5152,9 +5165,82 @@ fn extend(base: &HashSet<String>, names: &[String]) -> HashSet<String> {
 }
 
 /// The names of a parameter list — parameters lower to plain Python argument
-/// names; their source spans (carried for the LSP) are erased here.
+/// names; their source spans (carried for the LSP) are erased here. A
+/// *destructuring* parameter has no name of its own, so it takes a synthetic one
+/// that [`destructure_params`] unpacks at the top of the body.
 fn param_names(params: &[Param]) -> Vec<String> {
-    params.iter().map(|p| p.name.clone()).collect()
+    let mut wildcard_used = false;
+    params
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match p.name() {
+            Some(name) => name.to_string(),
+            // The first `_` parameter keeps Python's own throwaway name; a second
+            // one cannot (duplicate argument names are a SyntaxError).
+            None if matches!(p.pattern, Pattern::Wildcard) && !wildcard_used => {
+                wildcard_used = true;
+                "_".to_string()
+            }
+            None => format!("_pf_arg{i}"),
+        })
+        .collect()
+}
+
+/// Every Pyfun name a parameter list binds: the plain parameters plus the names
+/// inside each destructuring pattern. This is the set the body can *refer* to,
+/// which is what scope tracking needs — [`param_names`] is the narrower list of
+/// Python argument names.
+fn param_bindings(params: &[Param]) -> Vec<String> {
+    let mut out = param_names(params);
+    for p in params {
+        if p.name().is_none() {
+            out.extend(pattern_bindings(&p.pattern));
+        }
+    }
+    out
+}
+
+/// The unpacking statements a destructuring parameter list needs at the top of its
+/// body: `fun (t, sq) -> …` lowers to `def _f(_pf_arg0): t, sq = _pf_arg0; …`,
+/// since Python 3 removed tuple parameters. A nested tuple unpacks through a temp
+/// (`_pf_arg0_0`), one statement per level, which keeps each emitted line the
+/// obvious Python for that level.
+fn destructure_params(params: &[Param], args: &[String]) -> Vec<PyStmt> {
+    let mut out = Vec::new();
+    for (p, arg) in params.iter().zip(args) {
+        if p.name().is_none() {
+            unpack_into(&p.pattern, arg, &mut out);
+        }
+    }
+    out
+}
+
+/// Emit the unpacking of `pattern` from the value already bound to `source`.
+fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
+    let Pattern::Tuple { elems } = pattern else {
+        // A `_` parameter binds nothing, and a plain name is the argument itself.
+        return;
+    };
+    let mut targets = Vec::with_capacity(elems.len());
+    let mut nested = Vec::new();
+    for (i, elem) in elems.iter().enumerate() {
+        match elem {
+            Pattern::Var { name, .. } => targets.push(py_value_name(name.as_str())),
+            Pattern::Wildcard => targets.push("_".to_string()),
+            _ => {
+                let temp = format!("{source}_{i}");
+                targets.push(temp.clone());
+                nested.push((elem, temp));
+            }
+        }
+    }
+    out.push(PyStmt::UnpackAssign {
+        targets,
+        value: PyExpr::Name(py_value_name(source)),
+    });
+    for (elem, temp) in nested {
+        unpack_into(elem, &temp, out);
+    }
 }
 
 /// Emitted Python parameter names ([`py_value_name`] over each). Scope tracking

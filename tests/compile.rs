@@ -2181,6 +2181,67 @@ fn tuple_pattern_lowers_to_sequence_pattern() {
 }
 
 #[test]
+fn a_tuple_parameter_unpacks_at_the_top_of_the_body() {
+    // Python 3 has no tuple parameters, so the argument takes a synthetic name and
+    // the body opens by unpacking it.
+    let py = pyfun::compile("let tileScore (t, sq) = t * sq").unwrap();
+    assert!(py.contains("def tileScore(_pf_arg0):"), "{py}");
+    assert!(py.contains("t, sq = _pf_arg0"), "{py}");
+}
+
+#[test]
+fn a_nested_tuple_parameter_unpacks_one_level_at_a_time() {
+    let py = pyfun::compile("let nested ((a, b), c) = a + b + c").unwrap();
+    assert!(py.contains("_pf_arg0_0, c = _pf_arg0"), "{py}");
+    assert!(py.contains("a, b = _pf_arg0_0"), "{py}");
+}
+
+#[test]
+fn a_destructuring_lambda_becomes_a_def_not_a_lambda() {
+    // A Python lambda cannot hold the unpacking statement, so this shape takes the
+    // named-def path however simple its body is.
+    let py = pyfun::compile(
+        "let pairs = List.zip [1, 2] [3, 4]
+         let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs",
+    )
+    .unwrap();
+    assert!(py.contains("def _pf_fn0(acc, _pf_arg1):"), "{py}");
+    assert!(py.contains("a, b = _pf_arg1"), "{py}");
+    assert!(!py.contains("lambda acc"), "{py}");
+}
+
+#[test]
+fn a_wildcard_parameter_emits_pythons_throwaway_name() {
+    let py = pyfun::compile("let const42 _ = 42").unwrap();
+    assert!(py.contains("def const42(_):"), "{py}");
+}
+
+#[test]
+fn e2e_tuple_parameters_round_trip() {
+    run_and_check(
+        "
+        let tileScore (t, sq) = t * sq
+        let swap (a, b) = (b, a)
+        let nested ((a, b), c) = a + b + c
+        let const42 _ = 42
+        let pairs = List.zip [1, 2, 3] [10, 20, 30]
+        let scores = List.map tileScore pairs
+        let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs
+        let swapped = swap (1, 2)
+        let deep = nested ((1, 2), 3)
+        let ignored = const42 \"anything\"
+        ",
+        &[
+            ("scores", "[10, 40, 90]"),
+            ("total", "140"),
+            ("swapped", "(2, 1)"),
+            ("deep", "6"),
+            ("ignored", "42"),
+        ],
+    );
+}
+
+#[test]
 fn e2e_tuple_construct_and_destructure() {
     run_and_check(
         "

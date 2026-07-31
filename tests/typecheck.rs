@@ -2304,6 +2304,63 @@ fn rejects_tuple_arity_mismatch() {
 }
 
 #[test]
+fn a_tuple_parameter_types_its_elements() {
+    // The parameter's type is the tuple; each element gets its element type, the
+    // same binding the equivalent `match` would produce.
+    assert!(
+        pyfun::check(
+            "let tileScore (t, sq) = t * sq
+let s = tileScore (3, 4)"
+        )
+        .is_ok()
+    );
+    assert_error_contains(
+        "let tileScore (t, sq) = t * sq
+let bad = tileScore (3, \"x\")",
+        "string",
+    );
+}
+
+#[test]
+fn a_tuple_parameter_rejects_the_wrong_arity() {
+    assert_error_contains(
+        "let f (a, b) = a
+let bad = f (1, 2, 3)",
+        "found",
+    );
+}
+
+#[test]
+fn a_wildcard_parameter_accepts_anything_and_binds_nothing() {
+    assert!(
+        pyfun::check(
+            "let const42 _ = 42
+let n = const42 \"anything\""
+        )
+        .is_ok()
+    );
+    assert!(
+        pyfun::check(
+            "let fst2 a _ = a
+let n = fst2 1 true"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_lambda_takes_a_tuple_parameter() {
+    // The report's shape: folding over pairs without a named unwrapping helper.
+    assert!(
+        pyfun::check(
+            "let pairs = List.zip [1, 2] [3, 4]
+             let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn tuple_type_displays_with_parentheses() {
     // A pair of ints prints as `(int, int)`.
     assert_error_contains("let bad = (1, 2) + 3", "(int, int)");
