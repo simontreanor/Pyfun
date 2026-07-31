@@ -101,6 +101,37 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    not worth it. Rejections are silent, which is the real cost: a program keeps its recursion without
    saying why.
 
+7. **A dotted `extern` target imports the wrong prefix when a lowercase segment is not a module**
+   (S–M, reported 2026-07-31) — `extern flush : unit -> unit = sys.stdout.flush` emits
+   `import sys.stdout`, which raises `ImportError`. The *call* is always right; only the import line
+   is wrong. `lowering::extern_import` takes the **maximal leading run of lowercase-initial segments**
+   before the final name, following PEP 8 (packages lowercase, classes capitalised), so it succeeds
+   exactly when that run happens to be a real submodule:
+
+   | target | emitted | outcome |
+   | --- | --- | --- |
+   | `pathlib.Path.write_text` | `import pathlib` | works, `Path` is capitalised so the run stops |
+   | `os.path.join` | `import os.path` | works, `os.path` really is a submodule |
+   | `sys.stdout.flush` | `import sys.stdout` | fails, `stdout` is an object |
+
+   **Workaround today, and it does work:** declare the module (`extern import sys`), which
+   `extern_import_spec` consults before the heuristic and which emits `import sys`. The function's own
+   doc comment already names this case, so it is a known limit rather than a surprise — but emitting a
+   line that cannot import is still the wrong failure mode, and the fix should stop at a compile error
+   at worst.
+
+   **The obvious fix does not work as stated.** "Import the longest *importable* prefix" is not
+   statically decidable: whether `urllib.request` or `sys.stdout` is a module is a property of the
+   target environment, not of the text. Nor does "always import only the top-level package", which
+   trades one broken case for another — verified on CPython 3.14: `import urllib` leaves
+   `urllib.request` unbound (`AttributeError`), while `import os` does bind `os.path` and `import sys`
+   does bind `sys.stdout`. So the candidates are: **(a)** emit the top-level import plus the deeper one
+   guarded by `try/except ImportError`, which is correct everywhere and mildly ugly, once per module;
+   **(b)** keep the heuristic but *reject* the ambiguous shape at compile time with a fix-it naming the
+   `extern import` to add, which fits "the compiler is the gatekeeper, no runtime surprises" and costs
+   nothing at runtime; or **(c)** both — (b) by default, with (a) where the shape is unambiguous.
+   Decide before implementing.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
