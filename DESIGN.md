@@ -754,6 +754,14 @@ effect on a payload that may not be there, `toList` turns either into a zero-or-
 value, so there is nothing to traverse and nothing to say about cost. All the higher-order members are
 effect-polymorphic like `List.map`.
 
+**Effects through a multi-argument callback.** A function's latent effect lives on its **innermost**
+arrow (§4), so a higher-order scheme must put the effect variable there and nowhere else. Writing
+`(b ->{e} a ->{e} b)` looks more general but is strictly *less*: a pure folder forces `e` pure on both
+arrows and an impure one wants `e` pure outside and `io` inside, so nothing effectful ever unified.
+The FSharp.Core audit found every multi-argument member carrying that shape — `List.fold` among them,
+which meant a fold could never print. They now read `(b -> a ->{e} b)`, which accepts both and lets the
+effect flow out to the call, as the one-argument members (`List.map`) always did.
+
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The

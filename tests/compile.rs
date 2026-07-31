@@ -2314,6 +2314,71 @@ fn e2e_string_sweep() {
     );
 }
 
+// ---------- the FSharp.Core audit (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn sign_lowers_without_a_branch() {
+    // Python bools are ints, so `(x > 0) - (x < 0)` is -1, 0 or 1.
+    let py = pyfun::compile("let s = sign (-5)").unwrap();
+    assert!(py.contains("return (x > 0) - (x < 0)"), "{py}");
+}
+
+#[test]
+fn seq_empty_is_an_exhausted_iterator() {
+    // Bare `iter()` is a TypeError, which is what a naive lowering would emit.
+    let py = pyfun::compile("let xs = Seq.toList Seq.empty").unwrap();
+    assert!(py.contains("iter([])"), "{py}");
+}
+
+#[test]
+fn e2e_the_audit_members() {
+    run_and_check(
+        "
+        let xs = [1, 2, 3, 1, 2]
+        let taken = List.takeWhile (fun x -> x < 3) xs
+        let dropped = List.dropWhile (fun x -> x < 3) xs
+        let desc = List.sortByDescending (fun x -> x) xs
+        let counted = List.countBy (fun x -> x % 2) xs
+        let uniqBy = Seq.toList (Seq.distinctBy (fun x -> x % 2) (Seq.ofList xs))
+        let copies = Seq.toList (Seq.replicate 3 \"a\")
+        let none = Seq.toList Seq.empty
+        let at = Seq.get 2 (Seq.ofList xs)
+        let final = Seq.last (Seq.ofList xs)
+        let doubled = Seq.sumBy (fun x -> x * 2) (Seq.ofList xs)
+        let biggest = Seq.max (Seq.ofList xs)
+        let smallest = Seq.min (Seq.ofList xs)
+        let joined = Seq.reduce (fun a b -> a + b) (Seq.ofList xs)
+        let holds = Option.forall (fun x -> x > 0) (Some 1)
+        let has = Option.contains 1 (Some 1)
+        let okHas = Result.contains 1 (Ok 1)
+        let negative = sign (-5)
+        let zero = sign 0
+        let positive = sign 42
+        ",
+        &[
+            ("taken", "[1, 2]"),
+            ("dropped", "[3, 1, 2]"),
+            ("desc", "[3, 2, 2, 1, 1]"),
+            ("counted", "[(1, 3), (0, 2)]"),
+            ("uniqBy", "[1, 2]"),
+            ("copies", "['a', 'a', 'a']"),
+            ("none", "[]"),
+            ("at", "Some(3)"),
+            ("final", "Some(2)"),
+            ("doubled", "18"),
+            ("biggest", "Some(3)"),
+            ("smallest", "Some(1)"),
+            ("joined", "Some(9)"),
+            ("holds", "True"),
+            ("has", "True"),
+            ("okHas", "True"),
+            ("negative", "-1"),
+            ("zero", "0"),
+            ("positive", "1"),
+        ],
+    );
+}
+
 // ---------- the Option/Result sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]
