@@ -5224,29 +5224,57 @@ fn destructure_params(params: &[Param], args: &[String]) -> Vec<PyStmt> {
 
 /// Emit the unpacking of `pattern` from the value already bound to `source`.
 fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
-    let Pattern::Tuple { elems } = pattern else {
-        // A `_` parameter binds nothing, and a plain name is the argument itself.
-        return;
-    };
-    let mut targets = Vec::with_capacity(elems.len());
-    let mut nested = Vec::new();
-    for (i, elem) in elems.iter().enumerate() {
-        match elem {
-            Pattern::Var { name, .. } => targets.push(py_value_name(name.as_str())),
-            Pattern::Wildcard => targets.push("_".to_string()),
-            _ => {
-                let temp = format!("{source}_{i}");
-                targets.push(temp.clone());
-                nested.push((elem, temp));
+    match pattern {
+        // A tuple unpacks in one statement, the way Python spells it.
+        Pattern::Tuple { elems } => {
+            let mut targets = Vec::with_capacity(elems.len());
+            let mut nested = Vec::new();
+            for (i, elem) in elems.iter().enumerate() {
+                match elem {
+                    Pattern::Var { name, .. } => targets.push(py_value_name(name.as_str())),
+                    Pattern::Wildcard => targets.push("_".to_string()),
+                    _ => {
+                        let temp = format!("{source}_{i}");
+                        targets.push(temp.clone());
+                        nested.push((elem, temp));
+                    }
+                }
+            }
+            out.push(PyStmt::UnpackAssign {
+                targets,
+                value: PyExpr::Name(py_value_name(source)),
+            });
+            for (elem, temp) in nested {
+                unpack_into(elem, &temp, out);
             }
         }
-    }
-    out.push(PyStmt::UnpackAssign {
-        targets,
-        value: PyExpr::Name(py_value_name(source)),
-    });
-    for (elem, temp) in nested {
-        unpack_into(elem, &temp, out);
+        // A record reads the fields it names, one attribute each — the same
+        // attributes a `p.field` access reads, and only the named subset.
+        Pattern::Record { fields, .. } => {
+            for (i, field) in fields.iter().enumerate() {
+                let value = PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name(py_value_name(source))),
+                    attr: py_field_name(&field.name),
+                };
+                match &field.pattern {
+                    Pattern::Wildcard => {}
+                    Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+                        target: py_value_name(name.as_str()),
+                        value,
+                    }),
+                    nested => {
+                        let temp = format!("{source}_{i}");
+                        out.push(PyStmt::Assign {
+                            target: temp.clone(),
+                            value,
+                        });
+                        unpack_into(nested, &temp, out);
+                    }
+                }
+            }
+        }
+        // A `_` parameter binds nothing, and a plain name is the argument itself.
+        _ => {}
     }
 }
 

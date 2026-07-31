@@ -536,10 +536,17 @@ fn print_arm(arm: &MatchArm) -> String {
 
 /// Render a pattern. Constructors with arguments are parenthesized so they nest
 /// and sit in arm position unambiguously.
-/// Print a parameter. Every admissible parameter shape is already a pattern that
-/// prints back as itself: a name, `_`, or a parenthesized tuple.
+/// Print a parameter. A name and `_` print as themselves and a tuple brings its
+/// own parentheses; every other admissible shape (a record pattern) needs them
+/// added, since only a `(`-led parameter takes the pattern grammar — without them
+/// `Cell { letter }` would reparse as a parameter *named* `Cell`.
 pub fn print_param(param: &Param) -> String {
-    print_pattern(&param.pattern)
+    match &param.pattern {
+        Pattern::Var { .. } | Pattern::Wildcard | Pattern::Tuple { .. } => {
+            print_pattern(&param.pattern)
+        }
+        other => format!("({})", print_pattern(other)),
+    }
 }
 
 pub fn print_pattern(pattern: &Pattern) -> String {

@@ -894,17 +894,22 @@ makes `|>` and point-free style pay off. Inference handles curried arrows and pa
 (standard HM); lowering keeps output readable via the n-ary-collapse strategy (§5); the Python
 boundary stays n-ary (§6).
 
-**A parameter may destructure**, so long as it cannot fail to match: a name, `_`, or a tuple of
-those, nested — `let tileScore (t, sq) = t * sq`, `fun acc (a, b) -> acc + a * b`, `let const42 _ = 42`.
-A parameter has no second arm to fall through to, which is why refutable shapes (a literal, a
-constructor, a record tag, a list pattern, an or-pattern, an as-pattern) are rejected there with a
-message naming what was written; match on the value in the body instead. Only a **parenthesized**
+**A parameter may destructure**, so long as it cannot fail to match: a name, `_`, a tuple, or a
+**record** pattern, over those, nested — `let tileScore (t, sq) = t * sq`,
+`fun acc (a, b) -> acc + a * b`, `let const42 _ = 42`, `let describe (Cell { letter }) = letter`. A
+record has exactly one shape, so naming a subset of its fields still matches every value of that
+type. A parameter has no second arm to fall through to, which is why refutable shapes (a literal, a
+constructor, a list pattern, an or-pattern, an as-pattern) are rejected there with a message naming
+what was written; match on the value in the body instead. A record pattern's *tag* is checked later,
+by the type checker, so a tag naming a sum-type constructor rather than a record is rejected as "not
+a record type" and nothing refutable slips through. Only a **parenthesized**
 parameter takes the pattern grammar: a bare uppercase identifier stays a parameter *name*, so
 `let f Some x = …` keeps meaning two parameters rather than silently becoming one constructor
 pattern. Python 3 removed tuple parameters, so a destructuring parameter lowers to a synthetic
 argument name unpacked on the body's first line (`def tileScore(_pf_arg0): t, sq = _pf_arg0`), one
-statement per nesting level; a destructuring *lambda* therefore lowers to a named `def` rather than a
-Python `lambda`, which cannot hold a statement.
+statement per nesting level; a record parameter reads one attribute per field it names
+(`letter = _pf_arg0.letter`) and nothing for the fields it does not. A destructuring *lambda*
+therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement.
 
 MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
 blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
