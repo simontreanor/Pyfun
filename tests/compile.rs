@@ -2166,6 +2166,110 @@ fn record_pattern_lowers_to_keyword_class_pattern() {
     assert!(py.contains("case Point(x=x):"), "{py}");
 }
 
+// ---------- the Map/Set sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn map_traversals_walk_items_once() {
+    // Walking `m.items()` reads each entry once; `m[k]` inside a loop over keys
+    // would hash every key twice.
+    let py = pyfun::compile(
+        "let m = Map.ofList [(1, \"a\")]\nlet t = Map.fold (fun acc k v -> acc + k) 0 m",
+    )
+    .unwrap();
+    assert!(py.contains("for kv in m.items():"), "{py}");
+    assert!(!py.contains("m[k]"), "{py}");
+}
+
+#[test]
+fn map_partition_tests_each_entry_once() {
+    let py = pyfun::compile(
+        "let m = Map.ofList [(1, \"a\")]\nlet p = Map.partition (fun k v -> k > 0) m",
+    )
+    .unwrap();
+    assert_eq!(py.matches("f(kv[0], kv[1])").count(), 1, "{py}");
+}
+
+#[test]
+fn set_operations_use_pythons_own_set_methods() {
+    let py = pyfun::compile("let a = Set.isSubset (Set.ofList [1]) (Set.ofList [1, 2])").unwrap();
+    assert!(py.contains("a.issubset(b)"), "{py}");
+}
+
+#[test]
+fn e2e_set_traversals() {
+    run_and_check(
+        "
+        let s = Set.ofList [3, 1, 4, 1, 5]
+        let empty = Set.isEmpty (Set.ofList [])
+        let full = Set.isEmpty s
+        let halved = List.sort (Set.toList (Set.map (fun x -> x % 2) s))
+        let kept = List.sort (Set.toList (Set.filter (fun x -> x > 2) s))
+        let total = Set.fold (fun acc x -> acc + x) 0 s
+        let any = Set.exists (fun x -> x > 4) s
+        let all = Set.forall (fun x -> x > 0) s
+        let sub = Set.isSubset (Set.ofList [1, 3]) s
+        let sup = Set.isSuperset s (Set.ofList [1, 3])
+        let biggest = Set.max s
+        let smallest = Set.min s
+        let noMax = Set.max (Set.ofList [])
+        let split = Set.partition (fun x -> x > 2) s
+        let passing = List.sort (Set.toList (fst split))
+        let failing = List.sort (Set.toList (snd split))
+        ",
+        &[
+            ("empty", "True"),
+            ("full", "False"),
+            ("halved", "[0, 1]"),
+            ("kept", "[3, 4, 5]"),
+            ("total", "13"),
+            ("any", "True"),
+            ("all", "True"),
+            ("sub", "True"),
+            ("sup", "True"),
+            ("biggest", "Some(5)"),
+            ("smallest", "Some(1)"),
+            ("noMax", "None_"),
+            ("passing", "[3, 4, 5]"),
+            ("failing", "[1]"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_map_traversals() {
+    run_and_check(
+        "
+        let m = Map.ofList [(1, \"one\"), (2, \"two\"), (3, \"three\")]
+        let empty = Map.isEmpty (Map.ofList [])
+        let full = Map.isEmpty m
+        let shouted = Map.toList (Map.map (fun k v -> String.concat v \"!\") m)
+        let kept = Map.toList (Map.filter (fun k v -> k > 1) m)
+        let keySum = Map.fold (fun acc k v -> acc + k) 0 m
+        let any = Map.exists (fun k v -> v == \"two\") m
+        let all = Map.forall (fun k v -> k > 0) m
+        let joined = Map.toList (Map.union m (Map.ofList [(3, \"THREE\"), (4, \"four\")]))
+        let split = Map.partition (fun k v -> k > 1) m
+        let passing = Map.toList (fst split)
+        let failing = Map.toList (snd split)
+        ",
+        &[
+            ("empty", "True"),
+            ("full", "False"),
+            ("shouted", "[(1, 'one!'), (2, 'two!'), (3, 'three!')]"),
+            ("kept", "[(2, 'two'), (3, 'three')]"),
+            ("keySum", "6"),
+            ("any", "True"),
+            ("all", "True"),
+            (
+                "joined",
+                "[(1, 'one'), (2, 'two'), (3, 'THREE'), (4, 'four')]",
+            ),
+            ("passing", "[(2, 'two'), (3, 'three')]"),
+            ("failing", "[(1, 'one')]"),
+        ],
+    );
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]

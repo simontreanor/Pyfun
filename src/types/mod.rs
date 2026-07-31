@@ -463,6 +463,17 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
 /// `Set.empty` is a nullary value (arity 0, lowers to `set()`).
 pub const SET_PRELUDE: &[(&str, usize)] = &[
     ("empty", 0),
+    ("isEmpty", 1),
+    ("map", 2),
+    ("filter", 2),
+    ("fold", 3),
+    ("exists", 2),
+    ("forall", 2),
+    ("partition", 2),
+    ("isSubset", 2),
+    ("isSuperset", 2),
+    ("max", 1),
+    ("min", 1),
     ("add", 2),
     ("remove", 2),
     ("contains", 2),
@@ -484,6 +495,14 @@ pub const SET_PRELUDE: &[(&str, usize)] = &[
 /// tuples exist), mirroring `Set.ofList`/`toList`.
 pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("empty", 0),
+    ("isEmpty", 1),
+    ("map", 2),
+    ("filter", 2),
+    ("fold", 3),
+    ("exists", 2),
+    ("forall", 2),
+    ("partition", 2),
+    ("union", 2),
     ("add", 3),
     ("remove", 2),
     ("contains", 2),
@@ -815,6 +834,73 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     (
         "List.chunkBySize",
         "Consecutive chunks of the given size, the last one short if it does not divide evenly.",
+    ),
+    ("Set.isEmpty", "Whether the set has no elements. O(1)."),
+    (
+        "Set.map",
+        "Apply a function to every element. O(n); the result can be smaller, since two elements may map onto one.",
+    ),
+    ("Set.filter", "Keep the elements passing a test. O(n)."),
+    (
+        "Set.fold",
+        "Combine every element into an accumulator. O(n), in Python's set order — not sorted.",
+    ),
+    (
+        "Set.exists",
+        "Whether any element passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "Set.forall",
+        "Whether every element passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "Set.partition",
+        "Split into the elements passing and failing a test. O(n), testing each element once.",
+    ),
+    (
+        "Set.isSubset",
+        "Whether every element of the first set is in the second. O(n).",
+    ),
+    (
+        "Set.isSuperset",
+        "Whether the first set holds every element of the second. O(m).",
+    ),
+    (
+        "Set.max",
+        "The largest element, or `None` when empty. O(n). Needs `comparison`.",
+    ),
+    (
+        "Set.min",
+        "The smallest element, or `None` when empty. O(n). Needs `comparison`.",
+    ),
+    ("Map.isEmpty", "Whether the map has no entries. O(1)."),
+    (
+        "Map.map",
+        "Apply a function to every value, keeping the keys. The function takes the key and the value. O(n).",
+    ),
+    (
+        "Map.filter",
+        "Keep the entries whose key and value pass a test. O(n).",
+    ),
+    (
+        "Map.fold",
+        "Combine every entry into an accumulator, in insertion order. The function takes the accumulator, the key and the value. O(n).",
+    ),
+    (
+        "Map.exists",
+        "Whether any entry passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "Map.forall",
+        "Whether every entry passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "Map.partition",
+        "Split into the entries passing and failing a test. O(n), testing each entry once.",
+    ),
+    (
+        "Map.union",
+        "Every entry of both maps, the second winning a shared key. O(n+m).",
     ),
     ("Set.empty", "The set with no elements."),
     (
@@ -3829,6 +3915,109 @@ fn seed_set_prelude(env: &mut Env) {
     put("difference", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
     put("ofList", pure_fn(list(a()), set(a())));
     put("toList", pure_fn(set(a()), list(a())));
+
+    // The higher-order members are effect-polymorphic like `List.map`: one bound
+    // effect variable (id 0) links the function's arrow to the traversal's.
+    let e = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    let b = || Ty::Var(1);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    // Set.isEmpty : Set a -> bool
+    env.insert(
+        "Set.isEmpty".to_string(),
+        scheme(pure_fn(set(a()), Ty::Bool)),
+    );
+    // Set.map : (a ->{e} b) -> Set a ->{e} Set b   (the result may be smaller: two
+    // elements can map onto one)
+    env.insert(
+        "Set.map".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), b()), arrow_e(set(a()), set(b()))),
+        ),
+    );
+    // Set.filter : (a ->{e} bool) -> Set a ->{e} Set a
+    env.insert(
+        "Set.filter".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(set(a()), set(a()))),
+        ),
+    );
+    // Set.fold : (b ->{e} a ->{e} b) -> b -> Set a ->{e} b   (iteration order is
+    // Python's set order, so a fold whose result depends on order is on you)
+    env.insert(
+        "Set.fold".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(b(), arrow_e(a(), b())),
+                pure_fn(b(), arrow_e(set(a()), b())),
+            ),
+        ),
+    );
+    // Set.exists / Set.forall : (a ->{e} bool) -> Set a ->{e} bool
+    env.insert(
+        "Set.exists".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(set(a()), Ty::Bool)),
+        ),
+    );
+    env.insert(
+        "Set.forall".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(set(a()), Ty::Bool)),
+        ),
+    );
+    // Set.partition : (a ->{e} bool) -> Set a ->{e} (Set a, Set a)
+    env.insert(
+        "Set.partition".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                arrow_e(a(), Ty::Bool),
+                arrow_e(set(a()), Ty::Tuple(vec![set(a()), set(a())])),
+            ),
+        ),
+    );
+    // Set.isSubset / Set.isSuperset : Set a -> Set a -> bool
+    env.insert(
+        "Set.isSubset".to_string(),
+        scheme(pure_fn(set(a()), pure_fn(set(a()), Ty::Bool))),
+    );
+    env.insert(
+        "Set.isSuperset".to_string(),
+        scheme(pure_fn(set(a()), pure_fn(set(a()), Ty::Bool))),
+    );
+    // Set.max / Set.min : comparison a => Set a -> Option a
+    let ord_scheme = |ty: Ty| Scheme {
+        vars: vec![0],
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![0],
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    env.insert(
+        "Set.max".to_string(),
+        ord_scheme(pure_fn(set(a()), opt(a()))),
+    );
+    env.insert(
+        "Set.min".to_string(),
+        ord_scheme(pure_fn(set(a()), opt(a()))),
+    );
 }
 
 /// Seed the `String` module ([`STRING_PRELUDE`]) — pure, **monomorphic** text
@@ -4092,6 +4281,91 @@ fn seed_map_prelude(env: &mut Env) {
     let pair = || list(Ty::Tuple(vec![k(), v()]));
     put("ofList", pure_fn(pair(), mv()));
     put("toList", pure_fn(mv(), pair()));
+
+    // The higher-order members take the key *and* the value, since a map's
+    // element is the pair. Effect-polymorphic like `List.map`.
+    let e = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    let w = || Ty::Var(2);
+    let acc = || Ty::Var(3);
+    // Map.isEmpty : Map k v -> bool
+    env.insert("Map.isEmpty".to_string(), scheme(pure_fn(mv(), Ty::Bool)));
+    // Map.map : (k ->{e} v ->{e} w) -> Map k v ->{e} Map k w   (keys are kept)
+    env.insert(
+        "Map.map".to_string(),
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(
+                arrow_e(k(), arrow_e(v(), w())),
+                arrow_e(mv(), map(k(), w())),
+            ),
+        ),
+    );
+    // Map.filter : (k ->{e} v ->{e} bool) -> Map k v ->{e} Map k v
+    env.insert(
+        "Map.filter".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(k(), arrow_e(v(), Ty::Bool)), arrow_e(mv(), mv())),
+        ),
+    );
+    // Map.fold : (acc ->{e} k ->{e} v ->{e} acc) -> acc -> Map k v ->{e} acc
+    env.insert(
+        "Map.fold".to_string(),
+        eff_scheme(
+            vec![0, 1, 3],
+            pure_fn(
+                arrow_e(acc(), arrow_e(k(), arrow_e(v(), acc()))),
+                pure_fn(acc(), arrow_e(mv(), acc())),
+            ),
+        ),
+    );
+    // Map.exists / Map.forall : (k ->{e} v ->{e} bool) -> Map k v ->{e} bool
+    env.insert(
+        "Map.exists".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                arrow_e(mv(), Ty::Bool),
+            ),
+        ),
+    );
+    env.insert(
+        "Map.forall".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                arrow_e(mv(), Ty::Bool),
+            ),
+        ),
+    );
+    // Map.partition : (k ->{e} v ->{e} bool) -> Map k v ->{e} (Map k v, Map k v)
+    env.insert(
+        "Map.partition".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                arrow_e(mv(), Ty::Tuple(vec![mv(), mv()])),
+            ),
+        ),
+    );
+    // Map.union : Map k v -> Map k v -> Map k v   (the second map's entry wins)
+    env.insert(
+        "Map.union".to_string(),
+        scheme(pure_fn(mv(), pure_fn(mv(), mv()))),
+    );
 }
 
 /// Seed the `Option` module ([`OPTION_PRELUDE`]) — combinators over the built-in
