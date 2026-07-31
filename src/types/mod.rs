@@ -583,6 +583,497 @@ pub const MODULES: &[&str] = &[
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
 /// truth for seeding qualified schemes, registering arities, and editor completion.
+/// One-line documentation for every built-in member, keyed by the name a user
+/// writes (`"List.contains"`, `"fst"`). Surfaced by the language server: appended
+/// to hover below the type, and carried on completion items — the two places a
+/// reader can see it without leaving the editor.
+///
+/// Complexity is stated wherever it is not obvious or not what a reader would
+/// assume, since the cost of a collection operation is exactly what a `List`
+/// backed by a Python list makes easy to get wrong (`contains` is a linear scan,
+/// `Set.contains` is not; `updateAt` copies). A test pins this table to
+/// [`PRELUDE`] + [`MODULE_PRELUDES`] in both directions, so a new member cannot
+/// ship undocumented and a renamed one cannot leave a stale entry behind.
+pub const MEMBER_DOCS: &[(&str, &str)] = &[
+    (
+        "print",
+        "Write a value and a newline to stdout. Performs `io`.",
+    ),
+    (
+        "input",
+        "Read one line from stdin, without its newline. Performs `io`.",
+    ),
+    ("abs", "Absolute value."),
+    ("min", "The smaller of two values. Needs `comparison`."),
+    ("max", "The larger of two values. Needs `comparison`."),
+    ("round", "Nearest integer, halves to even (Python's rule)."),
+    ("floor", "Largest integer not above the value."),
+    ("ceil", "Smallest integer not below the value."),
+    (
+        "truncate",
+        "Drop the fractional part, rounding toward zero.",
+    ),
+    (
+        "sqrt",
+        "Square root. Unit-aware: `float<m^2>` gives `float<m>`.",
+    ),
+    (
+        "cbrt",
+        "Cube root. Unit-aware: `float<m^3>` gives `float<m>`.",
+    ),
+    ("id", "Return the argument unchanged."),
+    ("const", "Return the first argument, ignoring the second."),
+    (
+        "ignore",
+        "Discard a value, giving unit. For calling something only for its effect.",
+    ),
+    (
+        "flip",
+        "Call a two-argument function with its arguments swapped.",
+    ),
+    ("fst", "The first element of a pair."),
+    ("snd", "The second element of a pair."),
+    (
+        "List.map",
+        "Apply a function to every element. O(n), and carries the function's effect.",
+    ),
+    ("List.filter", "Keep the elements passing a test. O(n)."),
+    (
+        "List.fold",
+        "Combine every element into an accumulator, left to right. O(n). A fold that builds a collection lowers to an in-place loop.",
+    ),
+    ("List.len", "How many elements. O(1)."),
+    (
+        "List.sum",
+        "Add every element. O(n); an empty list sums to zero.",
+    ),
+    ("List.rev", "A fresh list in the opposite order. O(n)."),
+    (
+        "List.range",
+        "The integers from the first bound up to but not including the second.",
+    ),
+    (
+        "List.zip",
+        "Pair up two lists, stopping at the shorter. O(n).",
+    ),
+    (
+        "List.get",
+        "The element at an index, or `None` when out of range. O(1), and total: there is no bare `xs[i]`.",
+    ),
+    ("List.isEmpty", "Whether the list has no elements. O(1)."),
+    (
+        "List.contains",
+        "Whether the list holds this element. O(n) linear scan — `Set.contains` is O(1).",
+    ),
+    (
+        "List.concat",
+        "Append two lists into a fresh one. O(n+m). Note this appends, where F#'s `concat` flattens: use `List.flatten` for that.",
+    ),
+    (
+        "List.sort",
+        "A fresh list in ascending order. O(n log n). Needs `comparison`.",
+    ),
+    (
+        "List.find",
+        "The first element passing a test, or `None`. O(n), stopping at the first match.",
+    ),
+    (
+        "List.choose",
+        "Map and keep only the `Some` payloads, in one O(n) pass.",
+    ),
+    (
+        "List.collect",
+        "Map each element to a list and concatenate the results (flatMap). O(total).",
+    ),
+    (
+        "List.head",
+        "The first element, or `None` when empty. O(1).",
+    ),
+    (
+        "List.last",
+        "The final element, or `None` when empty. O(1).",
+    ),
+    (
+        "List.tail",
+        "Everything after the first element, or `None` when empty. O(n) — it copies.",
+    ),
+    (
+        "List.take",
+        "The first n elements. O(n); a count past the end takes everything, a negative one takes nothing.",
+    ),
+    (
+        "List.drop",
+        "Everything after the first n elements. O(n); a count past the end drops everything.",
+    ),
+    ("List.splitAt", "The pair of `take n` and `drop n`. O(n)."),
+    (
+        "List.map2",
+        "Combine two lists element by element, stopping at the shorter (F# raises instead). O(n).",
+    ),
+    ("List.indexed", "Pair every element with its index. O(n)."),
+    (
+        "List.iter",
+        "Run a function for its effect on every element, giving unit. Carries the function's effect.",
+    ),
+    (
+        "List.exists",
+        "Whether any element passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "List.forall",
+        "Whether every element passes a test. O(n), short-circuiting.",
+    ),
+    (
+        "List.findIndex",
+        "The index of the first element passing a test, or `None`. O(n).",
+    ),
+    (
+        "List.sortBy",
+        "Sort by a key computed per element. O(n log n). The key needs `comparison`, the element does not.",
+    ),
+    (
+        "List.sortDescending",
+        "A fresh list in descending order. O(n log n). Needs `comparison`.",
+    ),
+    (
+        "List.distinct",
+        "Drop later duplicates, keeping first-seen order. O(n), and elements must be hashable.",
+    ),
+    (
+        "List.distinctBy",
+        "Keep the first element for each key, in first-seen order. O(n).",
+    ),
+    (
+        "List.groupBy",
+        "Group elements by a key into (key, members) pairs, in first-seen key order. O(n).",
+    ),
+    (
+        "List.max",
+        "The largest element, or `None` when empty. O(n). Needs `comparison`.",
+    ),
+    (
+        "List.min",
+        "The smallest element, or `None` when empty. O(n). Needs `comparison`.",
+    ),
+    (
+        "List.maxBy",
+        "The element with the largest key, or `None` when empty. O(n).",
+    ),
+    (
+        "List.minBy",
+        "The element with the smallest key, or `None` when empty. O(n).",
+    ),
+    (
+        "List.sumBy",
+        "Add a number computed per element. O(n); an empty list sums to zero, so no `Option`.",
+    ),
+    (
+        "List.average",
+        "The mean, or `None` when empty. O(n). Floats in, float out.",
+    ),
+    (
+        "List.reduce",
+        "Fold with no seed, using the first element. O(n); `None` when empty.",
+    ),
+    (
+        "List.partition",
+        "Split into the elements passing and failing a test. O(n), testing each element once.",
+    ),
+    (
+        "List.unzip",
+        "Split a list of pairs into a pair of lists. O(n).",
+    ),
+    (
+        "List.flatten",
+        "Concatenate a list of lists into one. O(total).",
+    ),
+    (
+        "List.init",
+        "Build a list of n elements from their indices.",
+    ),
+    ("List.replicate", "A list of n copies of one value."),
+    (
+        "List.updateAt",
+        "A fresh list with one index replaced. O(n) — it copies; an index outside the list changes nothing.",
+    ),
+    (
+        "List.insertAt",
+        "A fresh list with a value inserted at an index. O(n); the index clamps to the ends.",
+    ),
+    (
+        "List.removeAt",
+        "A fresh list without the element at an index. O(n); an index outside the list changes nothing.",
+    ),
+    (
+        "List.pairwise",
+        "Every consecutive pair. O(n); fewer than two elements gives an empty list.",
+    ),
+    (
+        "List.windowed",
+        "Every sliding window of the given size, full ones only. O(n*size).",
+    ),
+    (
+        "List.chunkBySize",
+        "Consecutive chunks of the given size, the last one short if it does not divide evenly.",
+    ),
+    ("Set.empty", "The set with no elements."),
+    (
+        "Set.add",
+        "A fresh set with this element included. O(n) — it copies.",
+    ),
+    (
+        "Set.remove",
+        "A fresh set without this element. O(n) — it copies.",
+    ),
+    (
+        "Set.contains",
+        "Whether the set holds this element. O(1) — this is what `Set` is for.",
+    ),
+    ("Set.len", "How many elements. O(1)."),
+    ("Set.union", "Every element of either set. O(n+m)."),
+    ("Set.intersect", "The elements in both sets. O(min(n,m))."),
+    (
+        "Set.difference",
+        "The elements of the first set not in the second. O(n).",
+    ),
+    (
+        "Set.ofList",
+        "A set of a list's elements, dropping duplicates. O(n).",
+    ),
+    (
+        "Set.toList",
+        "The elements as a list, in no guaranteed order. O(n).",
+    ),
+    ("Map.empty", "The map with no entries."),
+    (
+        "Map.add",
+        "A fresh map with this key set. O(n) — it copies; a fold that builds a map lowers to an in-place loop.",
+    ),
+    (
+        "Map.remove",
+        "A fresh map without this key. O(n) — it copies.",
+    ),
+    ("Map.contains", "Whether the map holds this key. O(1)."),
+    (
+        "Map.findOr",
+        "The value for a key, or the given default. O(1).",
+    ),
+    ("Map.tryFind", "The value for a key, or `None`. O(1)."),
+    ("Map.len", "How many entries. O(1)."),
+    ("Map.keys", "The keys as a list, in insertion order. O(n)."),
+    (
+        "Map.values",
+        "The values as a list, in insertion order. O(n).",
+    ),
+    (
+        "Map.ofList",
+        "A map from (key, value) pairs; a later pair wins. O(n).",
+    ),
+    (
+        "Map.toList",
+        "The entries as (key, value) pairs, in insertion order. O(n).",
+    ),
+    (
+        "Option.map",
+        "Apply a function to the payload if there is one.",
+    ),
+    (
+        "Option.bind",
+        "Chain a function that itself answers with `Option`.",
+    ),
+    (
+        "Option.filter",
+        "Keep the payload only if it passes a test.",
+    ),
+    ("Option.withDefault", "The payload, or the given fallback."),
+    ("Option.isSome", "Whether there is a payload."),
+    ("Option.isNone", "Whether there is no payload."),
+    (
+        "Option.toResult",
+        "`Some x` becomes `Ok x`; `None` becomes `Error` with the given value.",
+    ),
+    (
+        "Result.map",
+        "Apply a function to the `Ok` value, leaving an `Error` untouched.",
+    ),
+    (
+        "Result.mapError",
+        "Apply a function to the `Error` value, leaving an `Ok` untouched.",
+    ),
+    (
+        "Result.bind",
+        "Chain a function that itself answers with `Result`, short-circuiting on `Error`.",
+    ),
+    (
+        "Result.withDefault",
+        "The `Ok` value, or the given fallback.",
+    ),
+    ("Result.isOk", "Whether this is an `Ok`."),
+    ("Result.isError", "Whether this is an `Error`."),
+    (
+        "Result.toOption",
+        "`Ok x` becomes `Some x`; any `Error` becomes `None`.",
+    ),
+    (
+        "Seq.map",
+        "Apply a function to every element, lazily. Nothing runs until the sequence is consumed.",
+    ),
+    ("Seq.filter", "Keep the elements passing a test, lazily."),
+    (
+        "Seq.take",
+        "The first n elements, lazily — safe on an endless sequence.",
+    ),
+    (
+        "Seq.fold",
+        "Combine every element into an accumulator. Forces the sequence.",
+    ),
+    (
+        "Seq.toList",
+        "Force the sequence into a list. Does not terminate on an endless one.",
+    ),
+    ("Seq.ofList", "View a list as a sequence."),
+    (
+        "Seq.range",
+        "The integers from the first bound up to but not including the second, lazily.",
+    ),
+    ("String.len", "How many characters. O(1)."),
+    ("String.concat", "Join two strings. O(n+m)."),
+    (
+        "String.join",
+        "Join a list of strings with a separator. O(total).",
+    ),
+    ("String.split", "Split on a separator into a list of parts."),
+    ("String.upper", "Upper case."),
+    ("String.lower", "Lower case."),
+    ("String.strip", "Drop leading and trailing whitespace."),
+    (
+        "String.contains",
+        "Whether the string holds this substring.",
+    ),
+    (
+        "String.startsWith",
+        "Whether the string begins with this prefix.",
+    ),
+    (
+        "String.endsWith",
+        "Whether the string ends with this suffix.",
+    ),
+    (
+        "String.replace",
+        "Every occurrence of one substring replaced by another.",
+    ),
+    ("String.fromInt", "The decimal spelling of an integer."),
+    ("String.fromFloat", "The decimal spelling of a float."),
+    (
+        "String.toInt",
+        "Parse an integer, or `None` when it does not parse. Total.",
+    ),
+    (
+        "String.toFloat",
+        "Parse a float, or `None` when it does not parse. Total.",
+    ),
+    (
+        "String.toList",
+        "The characters as single-character strings — there is no `char` type.",
+    ),
+    (
+        "String.slice",
+        "The characters between two positions, end-exclusive. Total: out-of-range bounds clamp.",
+    ),
+    (
+        "String.tryIndexOf",
+        "Where a substring first occurs, or `None`.",
+    ),
+    (
+        "Format.fixed",
+        "A float with exactly this many decimal places.",
+    ),
+    ("Format.thousands", "An integer with thousands separators."),
+    (
+        "Format.percent",
+        "A fraction as a percentage with this many decimal places.",
+    ),
+    (
+        "Format.currency",
+        "An amount with a currency symbol and two decimal places.",
+    ),
+    (
+        "Format.grouped",
+        "A float with thousands separators and this many decimal places.",
+    ),
+    ("Format.padLeft", "Right-align in a field of this width."),
+    ("Format.padRight", "Left-align in a field of this width."),
+    ("Decode.string", "Decode a JSON string."),
+    ("Decode.int", "Decode a JSON integer."),
+    ("Decode.float", "Decode a JSON number."),
+    ("Decode.bool", "Decode a JSON boolean."),
+    ("Decode.field", "Decode one named field of a JSON object."),
+    (
+        "Decode.list",
+        "Decode a JSON array, every element with the same decoder.",
+    ),
+    (
+        "Decode.nullable",
+        "Decode a value that may be JSON null, giving `Option`.",
+    ),
+    ("Decode.map", "Apply a function to a decoder's result."),
+    ("Decode.map2", "Combine two decoders with a function."),
+    ("Decode.map3", "Combine three decoders with a function."),
+    ("Decode.map4", "Combine four decoders with a function."),
+    (
+        "Decode.succeed",
+        "A decoder that ignores its input and always gives this value.",
+    ),
+    (
+        "Decode.fail",
+        "A decoder that always fails with this message.",
+    ),
+    (
+        "Decode.andThen",
+        "Pick the next decoder from what has been decoded so far.",
+    ),
+    (
+        "Decode.oneOf",
+        "Try each decoder in turn, taking the first that succeeds.",
+    ),
+    (
+        "Decode.decodeString",
+        "Run a decoder over JSON text, giving `Result`.",
+    ),
+];
+
+/// The documentation for a built-in member, by the name a user writes.
+pub fn member_doc(name: &str) -> Option<&'static str> {
+    MEMBER_DOCS
+        .iter()
+        .find(|(member, _)| *member == name)
+        .map(|(_, doc)| *doc)
+}
+
+/// The rendered signature of every built-in member (`"List.map"` →
+/// `"(a -> b) -> List a -> List b"`), built once on first use by seeding a fresh
+/// environment and showing each scheme. Constraints (`comparison`, `num`) are not
+/// spelled here — where one matters the member's [`MEMBER_DOCS`] line says so.
+pub fn prelude_signatures() -> &'static HashMap<String, String> {
+    static SIGNATURES: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    SIGNATURES.get_or_init(|| {
+        let mut env = Env::new();
+        seed_prelude(&mut env);
+        seed_list_prelude(&mut env);
+        seed_set_prelude(&mut env);
+        seed_map_prelude(&mut env);
+        seed_string_prelude(&mut env);
+        seed_format_prelude(&mut env);
+        seed_decode_prelude(&mut env);
+        seed_option_prelude(&mut env);
+        seed_result_prelude(&mut env);
+        seed_seq_prelude(&mut env);
+        env.iter()
+            .map(|(name, scheme)| (name.clone(), show(&scheme.ty)))
+            .collect()
+    })
+}
+
 pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("List", LIST_PRELUDE),
     ("Set", SET_PRELUDE),
@@ -7208,5 +7699,49 @@ fn var_name(index: usize) -> String {
         format!("'{letter}")
     } else {
         format!("'{letter}{}", index / 26)
+    }
+}
+
+#[cfg(test)]
+mod member_doc_tests {
+    use super::{MEMBER_DOCS, MODULE_PRELUDES, PRELUDE, prelude_signatures};
+
+    /// Every name a user can write, qualified where the module requires it.
+    fn every_member() -> Vec<String> {
+        let mut out: Vec<String> = PRELUDE.iter().map(|(n, _)| (*n).to_string()).collect();
+        for (module, members) in MODULE_PRELUDES {
+            out.extend(members.iter().map(|(n, _)| format!("{module}.{n}")));
+        }
+        out
+    }
+
+    #[test]
+    fn every_builtin_member_is_documented() {
+        let missing: Vec<String> = every_member()
+            .into_iter()
+            .filter(|m| !MEMBER_DOCS.iter().any(|(name, _)| name == m))
+            .collect();
+        assert!(missing.is_empty(), "undocumented members: {missing:?}");
+    }
+
+    #[test]
+    fn every_documented_member_exists() {
+        let all = every_member();
+        let stale: Vec<&str> = MEMBER_DOCS
+            .iter()
+            .map(|(name, _)| *name)
+            .filter(|name| !all.iter().any(|m| m == name))
+            .collect();
+        assert!(stale.is_empty(), "documented but not a member: {stale:?}");
+    }
+
+    #[test]
+    fn every_builtin_member_has_a_signature() {
+        let sigs = prelude_signatures();
+        let missing: Vec<String> = every_member()
+            .into_iter()
+            .filter(|m| !sigs.contains_key(m))
+            .collect();
+        assert!(missing.is_empty(), "members with no signature: {missing:?}");
     }
 }
