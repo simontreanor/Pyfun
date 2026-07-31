@@ -710,6 +710,20 @@ function's effect is attributed at the call (sound, slightly conservative for th
 Python iterators are **single-pass**, unlike F#'s re-enumerable `seq` — consistent with the one-shot
 generator the `seq {}` CE already produces.
 
+The module splits cleanly in two, and each member's hover documentation says which half it is in,
+because single-pass makes the difference matter. **Lazy** (a new sequence, nothing pulled yet):
+`drop`, `takeWhile`, `dropWhile`, `concat` (append, as in `List.concat`), `flatten`, `collect`, `zip`,
+`indexed`, `distinct`, `pairwise`, `init`, `initInfinite`, `unfold`. Most route to Python's own lazy
+machinery (`itertools.islice`/`takewhile`/`dropwhile`/`chain`/`pairwise`/`count`); `distinct` and
+`unfold` are emitted **generators**, since they carry state while staying lazy. **Consuming** (each
+pulls, and what it pulls is gone): `head`, `isEmpty`, `len`, `exists`, `forall`, `contains`, `sum`,
+`iter`, `find` — several short-circuit, so they consume only as far as the answer.
+
+`initInfinite` and `unfold` are the members with no list behind them at all, which is the reason the
+lazy module exists: `Seq.initInfinite (fun i -> i * 2) |> Seq.take 5 |> Seq.toList` terminates, and
+`Seq.find` over an endless sequence stops at the first match. Anything that forces the whole sequence
+(`len`, `sum`, `toList`) does not terminate on one, which its documentation says.
+
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The

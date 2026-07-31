@@ -2367,6 +2367,67 @@ impl Lowerer {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_take")
             }
+            // The lazy half routes to Python's own lazy machinery, so a sequence
+            // stays a sequence and nothing is pulled until it is consumed.
+            "Seq.zip" => bare("zip"),
+            "Seq.indexed" => bare("enumerate"),
+            "Seq.sum" => bare("sum"),
+            "Seq.len" => coll(self, "_pf_seq_len"),
+            "Seq.drop" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_drop")
+            }
+            "Seq.takeWhile" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_take_while")
+            }
+            "Seq.dropWhile" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_drop_while")
+            }
+            "Seq.concat" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_concat")
+            }
+            "Seq.flatten" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_flatten")
+            }
+            "Seq.collect" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_collect")
+            }
+            "Seq.pairwise" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_pairwise")
+            }
+            "Seq.init" => coll(self, "_pf_seq_init"),
+            "Seq.initInfinite" => {
+                self.needed_imports.insert("itertools".to_string());
+                coll(self, "_pf_seq_init_inf")
+            }
+            "Seq.distinct" => coll(self, "_pf_seq_distinct"),
+            "Seq.exists" => coll(self, "_pf_seq_exists"),
+            "Seq.forall" => coll(self, "_pf_seq_forall"),
+            "Seq.contains" => coll(self, "_pf_seq_contains"),
+            "Seq.iter" => coll(self, "_pf_seq_iter"),
+            // `head`/`find`/`unfold` construct `Some`/`None_`.
+            "Seq.head" => {
+                self.needs_option = true;
+                coll(self, "_pf_seq_head")
+            }
+            "Seq.find" => {
+                self.needs_option = true;
+                coll(self, "_pf_seq_find")
+            }
+            "Seq.isEmpty" => {
+                self.needs_option = true;
+                coll(self, "_pf_seq_is_empty")
+            }
+            "Seq.unfold" => {
+                self.needs_option = true;
+                coll(self, "_pf_seq_unfold")
+            }
             // String — text ops over the built-in `string` (Python `str`). Bare
             // routes reuse Python builtins (`len`/`str`/`list`); the rest lower to
             // emitted `_pf_str_*` helpers so each curried function is one callable.
@@ -5553,6 +5614,254 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     test: Box::new(name("xs")),
                     orelse: Box::new(call("None_", vec![])),
                 },
+            ),
+            // ---- Seq: the lazy half routes to Python's own lazy machinery ----
+            // Seq.drop(n, xs) -> itertools.islice(xs, max(n, 0), None)
+            "_pf_seq_drop" => def1(
+                "_pf_seq_drop",
+                &["n", "xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(name("itertools"), "islice")),
+                    args: vec![
+                        name("xs"),
+                        call("max", vec![name("n"), PyExpr::Int(0)]),
+                        PyExpr::NoneLit,
+                    ],
+                },
+            ),
+            // Seq.takeWhile(f, xs) -> itertools.takewhile(f, xs)
+            "_pf_seq_take_while" => def1(
+                "_pf_seq_take_while",
+                &["f", "xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(name("itertools"), "takewhile")),
+                    args: vec![name("f"), name("xs")],
+                },
+            ),
+            // Seq.dropWhile(f, xs) -> itertools.dropwhile(f, xs)
+            "_pf_seq_drop_while" => def1(
+                "_pf_seq_drop_while",
+                &["f", "xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(name("itertools"), "dropwhile")),
+                    args: vec![name("f"), name("xs")],
+                },
+            ),
+            // Seq.concat(xs, ys) -> itertools.chain(xs, ys)
+            "_pf_seq_concat" => def1(
+                "_pf_seq_concat",
+                &["xs", "ys"],
+                PyExpr::Call {
+                    func: Box::new(attr(name("itertools"), "chain")),
+                    args: vec![name("xs"), name("ys")],
+                },
+            ),
+            // Seq.flatten(xs) -> itertools.chain.from_iterable(xs)
+            "_pf_seq_flatten" => def1(
+                "_pf_seq_flatten",
+                &["xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(attr(name("itertools"), "chain"), "from_iterable")),
+                    args: vec![name("xs")],
+                },
+            ),
+            // Seq.collect(f, xs) -> itertools.chain.from_iterable(map(f, xs))
+            "_pf_seq_collect" => def1(
+                "_pf_seq_collect",
+                &["f", "xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(attr(name("itertools"), "chain"), "from_iterable")),
+                    args: vec![call("map", vec![name("f"), name("xs")])],
+                },
+            ),
+            // Seq.pairwise(xs) -> itertools.pairwise(xs)
+            "_pf_seq_pairwise" => def1(
+                "_pf_seq_pairwise",
+                &["xs"],
+                PyExpr::Call {
+                    func: Box::new(attr(name("itertools"), "pairwise")),
+                    args: vec![name("xs")],
+                },
+            ),
+            // Seq.init(n, f) -> map(f, range(max(n, 0)))
+            "_pf_seq_init" => def1(
+                "_pf_seq_init",
+                &["n", "f"],
+                call(
+                    "map",
+                    vec![
+                        name("f"),
+                        call("range", vec![call("max", vec![name("n"), PyExpr::Int(0)])]),
+                    ],
+                ),
+            ),
+            // Seq.initInfinite(f) -> map(f, itertools.count())
+            "_pf_seq_init_inf" => def1(
+                "_pf_seq_init_inf",
+                &["f"],
+                call(
+                    "map",
+                    vec![
+                        name("f"),
+                        PyExpr::Call {
+                            func: Box::new(attr(name("itertools"), "count")),
+                            args: vec![],
+                        },
+                    ],
+                ),
+            ),
+            // Seq.distinct(xs): a generator, so it stays lazy while remembering
+            // what it has already yielded.
+            "_pf_seq_distinct" => def(
+                "_pf_seq_distinct",
+                &["xs"],
+                vec![
+                    PyStmt::Assign {
+                        target: "seen".to_string(),
+                        value: call("set", vec![]),
+                    },
+                    PyStmt::For {
+                        target: "x".to_string(),
+                        iter: name("xs"),
+                        body: vec![PyStmt::If {
+                            test: PyExpr::Not(Box::new(binop(
+                                PyBinOp::In,
+                                name("x"),
+                                name("seen"),
+                            ))),
+                            body: vec![
+                                PyStmt::Expr(method(name("seen"), "add", vec![name("x")])),
+                                PyStmt::Yield(name("x")),
+                            ],
+                            orelse: vec![],
+                        }],
+                    },
+                ],
+            ),
+            // Seq.unfold(f, state): yield until the function answers None.
+            "_pf_seq_unfold" => def(
+                "_pf_seq_unfold",
+                &["f", "state"],
+                vec![PyStmt::WhileTrue {
+                    body: vec![
+                        PyStmt::Assign {
+                            target: "step".to_string(),
+                            value: PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![name("state")],
+                            },
+                        },
+                        PyStmt::If {
+                            test: PyExpr::Not(Box::new(is_some("step"))),
+                            body: vec![PyStmt::Return(PyExpr::NoneLit)],
+                            orelse: vec![],
+                        },
+                        PyStmt::Assign {
+                            target: "pair".to_string(),
+                            value: attr(name("step"), "_0"),
+                        },
+                        PyStmt::Yield(PyExpr::Subscript {
+                            value: Box::new(name("pair")),
+                            index: Box::new(PyExpr::Int(0)),
+                        }),
+                        PyStmt::Assign {
+                            target: "state".to_string(),
+                            value: PyExpr::Subscript {
+                                value: Box::new(name("pair")),
+                                index: Box::new(PyExpr::Int(1)),
+                            },
+                        },
+                    ],
+                }],
+            ),
+            // ---- Seq: the consuming half ----
+            // Seq.len(xs) -> len(list(xs))   (forces; there is no length without
+            // walking an iterator)
+            "_pf_seq_len" => def1(
+                "_pf_seq_len",
+                &["xs"],
+                call("len", vec![call("list", vec![name("xs")])]),
+            ),
+            // Seq.head(xs) -> next(map(Some, xs), None_())
+            "_pf_seq_head" => def1(
+                "_pf_seq_head",
+                &["xs"],
+                call(
+                    "next",
+                    vec![
+                        call("map", vec![name("Some"), name("xs")]),
+                        call("None_", vec![]),
+                    ],
+                ),
+            ),
+            // Seq.find(f, xs) -> next(map(Some, filter(f, xs)), None_())
+            "_pf_seq_find" => def1(
+                "_pf_seq_find",
+                &["f", "xs"],
+                call(
+                    "next",
+                    vec![
+                        call(
+                            "map",
+                            vec![name("Some"), call("filter", vec![name("f"), name("xs")])],
+                        ),
+                        call("None_", vec![]),
+                    ],
+                ),
+            ),
+            // Seq.isEmpty(xs) -> not isinstance(next(map(Some, xs), None_()), Some)
+            // One element is pulled to find out, which is the honest cost of asking
+            // an iterator whether it is empty.
+            "_pf_seq_is_empty" => def1(
+                "_pf_seq_is_empty",
+                &["xs"],
+                PyExpr::Not(Box::new(call(
+                    "isinstance",
+                    vec![
+                        call(
+                            "next",
+                            vec![
+                                call("map", vec![name("Some"), name("xs")]),
+                                call("None_", vec![]),
+                            ],
+                        ),
+                        name("Some"),
+                    ],
+                ))),
+            ),
+            // Seq.exists(f, xs) -> any(map(f, xs))   (short-circuits)
+            "_pf_seq_exists" => def1(
+                "_pf_seq_exists",
+                &["f", "xs"],
+                call("any", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // Seq.forall(f, xs) -> all(map(f, xs))   (short-circuits)
+            "_pf_seq_forall" => def1(
+                "_pf_seq_forall",
+                &["f", "xs"],
+                call("all", vec![call("map", vec![name("f"), name("xs")])]),
+            ),
+            // Seq.contains(x, xs) -> x in xs   (short-circuits on an iterator)
+            "_pf_seq_contains" => def1(
+                "_pf_seq_contains",
+                &["x", "xs"],
+                binop(PyBinOp::In, name("x"), name("xs")),
+            ),
+            // Seq.iter(f, xs): run f for its effect over the whole sequence.
+            "_pf_seq_iter" => def(
+                "_pf_seq_iter",
+                &["f", "xs"],
+                vec![
+                    PyStmt::For {
+                        target: "x".to_string(),
+                        iter: name("xs"),
+                        body: vec![PyStmt::Expr(PyExpr::Call {
+                            func: Box::new(name("f")),
+                            args: vec![name("x")],
+                        })],
+                    },
+                    PyStmt::Return(PyExpr::NoneLit),
+                ],
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

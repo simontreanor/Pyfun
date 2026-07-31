@@ -1688,6 +1688,104 @@ fn rejects_field_declared_twice_in_one_record() {
     assert_error_contains("type P = { x: int, x: int }", "field `x` is declared twice");
 }
 
+// ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn seq_lazy_members_answer_a_seq() {
+    // Each stays in `Seq`, so a chain of them is still lazy.
+    assert!(
+        pyfun::check(
+            "let s = Seq.ofList [1, 2, 3]\n\
+             let a = Seq.toList (Seq.drop 1 s)\n\
+             let b = Seq.toList (Seq.takeWhile (fun x -> x < 3) s)\n\
+             let c = Seq.toList (Seq.dropWhile (fun x -> x < 3) s)\n\
+             let d = Seq.toList (Seq.distinct s)\n\
+             let e = Seq.toList (Seq.pairwise s)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn seq_and_list_members_do_not_mix() {
+    // `Seq` and `List` are distinct types, so a member of one rejects the other
+    // — the choice of laziness stays explicit.
+    assert_error_contains("let bad = Seq.drop 1 [1, 2]", "Seq");
+    assert_error_contains("let bad = List.drop 1 (Seq.ofList [1, 2])", "List");
+}
+
+#[test]
+fn seq_zip_and_indexed_pair_up() {
+    assert!(
+        pyfun::check(
+            "let z = Seq.toList (Seq.zip (Seq.ofList [1]) (Seq.ofList [\"a\"]))\n\
+             let i = Seq.toList (Seq.indexed (Seq.ofList [\"a\"]))"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn seq_concat_appends_and_flatten_flattens() {
+    // Same divergence from F# as `List.concat`: this one appends.
+    assert!(
+        pyfun::check(
+            "let a = Seq.toList (Seq.concat (Seq.ofList [1]) (Seq.ofList [2]))\n\
+             let b = Seq.toList (Seq.flatten (Seq.ofList [Seq.ofList [1]]))\n\
+             let c = Seq.toList (Seq.collect (fun x -> Seq.ofList [x]) (Seq.ofList [1]))"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn seq_can_be_endless() {
+    // `initInfinite` and `unfold` have no list behind them, which is the whole
+    // reason `Seq` exists.
+    assert!(
+        pyfun::check("let s = Seq.toList (Seq.take 3 (Seq.initInfinite (fun i -> i * 2)))").is_ok()
+    );
+    assert!(
+        pyfun::check("let s = Seq.toList (Seq.take 3 (Seq.unfold (fun n -> Some (n, n + 1)) 0))")
+            .is_ok()
+    );
+    // `unfold`'s function reports the end with `None`, so it must answer Option.
+    assert_error_contains(
+        "let s = Seq.toList (Seq.unfold (fun n -> (n, n + 1)) 0)",
+        "Option",
+    );
+}
+
+#[test]
+fn seq_consuming_members_answer_plain_values() {
+    assert!(
+        pyfun::check(
+            "let s = Seq.ofList [1, 2, 3]\n\
+             let n = Seq.len s\n\
+             let e = Seq.isEmpty s\n\
+             let x = Seq.exists (fun v -> v > 1) s\n\
+             let a = Seq.forall (fun v -> v > 0) s\n\
+             let c = Seq.contains 2 s\n\
+             let t = Seq.sum s"
+        )
+        .is_ok()
+    );
+    // `head`/`find` are the Option-answering pair, like List's.
+    assert_error_contains(
+        "let h = Seq.head (Seq.ofList [1])\nlet bad = h + 1",
+        "Option",
+    );
+}
+
+#[test]
+fn seq_iter_carries_the_effect_of_its_function() {
+    assert!(pyfun::check("let go = Seq.iter (fun x -> print x) (Seq.ofList [1])").is_ok());
+    assert_error_contains(
+        "let pure go = Seq.iter (fun x -> print x) (Seq.ofList [1])",
+        "io",
+    );
+}
+
 // ---------- the List sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]
