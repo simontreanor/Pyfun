@@ -525,6 +525,14 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
 /// (a `ValueError`-guarded parse), so it lowers to a `try`/`except` helper.
 pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("len", 1),
+    ("isEmpty", 1),
+    ("get", 2),
+    ("repeat", 2),
+    ("trimStart", 1),
+    ("trimEnd", 1),
+    ("splitLines", 1),
+    ("rev", 1),
+    ("ofList", 1),
     ("concat", 2),
     ("join", 2),
     ("split", 2),
@@ -1099,52 +1107,87 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The integers from the first bound up to but not including the second, lazily.",
     ),
     ("String.len", "How many characters. O(1)."),
+    (
+        "String.isEmpty",
+        "Whether the string has no characters. O(1).",
+    ),
+    (
+        "String.get",
+        "The character at an index as a one-character string, or `None` when out of range. O(1), and total.",
+    ),
+    (
+        "String.repeat",
+        "The string repeated n times; a non-positive count gives the empty string. O(n*k).",
+    ),
+    (
+        "String.trimStart",
+        "Drop leading whitespace. O(n). `String.strip` does both ends.",
+    ),
+    (
+        "String.trimEnd",
+        "Drop trailing whitespace. O(n). `String.strip` does both ends.",
+    ),
+    (
+        "String.splitLines",
+        "Split on any line ending. O(n). A trailing newline does not add an empty last line.",
+    ),
+    ("String.rev", "The characters in the opposite order. O(n)."),
+    (
+        "String.ofList",
+        "Join a list of strings with nothing between them. O(total). The inverse of `String.toList`.",
+    ),
     ("String.concat", "Join two strings. O(n+m)."),
     (
         "String.join",
         "Join a list of strings with a separator. O(total).",
     ),
-    ("String.split", "Split on a separator into a list of parts."),
-    ("String.upper", "Upper case."),
-    ("String.lower", "Lower case."),
-    ("String.strip", "Drop leading and trailing whitespace."),
+    (
+        "String.split",
+        "Split on a separator into a list of parts. O(n).",
+    ),
+    ("String.upper", "Upper case. O(n)."),
+    ("String.lower", "Lower case. O(n)."),
+    (
+        "String.strip",
+        "Drop leading and trailing whitespace. O(n).",
+    ),
     (
         "String.contains",
-        "Whether the string holds this substring.",
+        "Whether the string holds this substring. O(n*m) worst case — it is a search, not a lookup.",
     ),
     (
         "String.startsWith",
-        "Whether the string begins with this prefix.",
+        "Whether the string begins with this prefix. O(m), the prefix length.",
     ),
     (
         "String.endsWith",
-        "Whether the string ends with this suffix.",
+        "Whether the string ends with this suffix. O(m), the suffix length.",
     ),
     (
         "String.replace",
-        "Every occurrence of one substring replaced by another.",
+        "Every occurrence of one substring replaced by another. O(n).",
     ),
     ("String.fromInt", "The decimal spelling of an integer."),
     ("String.fromFloat", "The decimal spelling of a float."),
     (
         "String.toInt",
-        "Parse an integer, or `None` when it does not parse. Total.",
+        "Parse an integer, or `None` when it does not parse. Total. O(n).",
     ),
     (
         "String.toFloat",
-        "Parse a float, or `None` when it does not parse. Total.",
+        "Parse a float, or `None` when it does not parse. Total. O(n).",
     ),
     (
         "String.toList",
-        "The characters as single-character strings — there is no `char` type.",
+        "The characters as single-character strings — there is no `char` type. O(n).",
     ),
     (
         "String.slice",
-        "The characters between two positions, end-exclusive. Total: out-of-range bounds clamp.",
+        "The characters between two positions, end-exclusive. O(k) in the slice length. Total: out-of-range bounds clamp.",
     ),
     (
         "String.tryIndexOf",
-        "Where a substring first occurs, or `None`.",
+        "Where a substring first occurs, or `None`. O(n*m) worst case — it is a search.",
     ),
     (
         "Format.fixed",
@@ -4075,6 +4118,25 @@ fn seed_string_prelude(env: &mut Env) {
     );
     // String.tryIndexOf sub s -> Some i (first occurrence) or None if absent.
     put("tryIndexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
+
+    // String.isEmpty : string -> bool   (the same name every other container uses)
+    put("isEmpty", pure_fn(str_(), Ty::Bool));
+    // String.get : int -> string -> Option string   (one character, bounds-checked
+    // and total, exactly like `List.get`; there is no `char` type, so it is a
+    // one-character string)
+    put("get", pure_fn(int(), pure_fn(str_(), opt(str_()))));
+    // String.repeat : int -> string -> string   (a non-positive count gives "")
+    put("repeat", pure_fn(int(), pure_fn(str_(), str_())));
+    // String.trimStart / trimEnd : string -> string   (`strip` does both ends)
+    put("trimStart", pure_fn(str_(), str_()));
+    put("trimEnd", pure_fn(str_(), str_()));
+    // String.splitLines : string -> List string   (splits on any line ending, and
+    // a trailing newline does not add an empty last line)
+    put("splitLines", pure_fn(str_(), list(str_())));
+    // String.rev : string -> string
+    put("rev", pure_fn(str_(), str_()));
+    // String.ofList : List string -> string   (the inverse of `toList`)
+    put("ofList", pure_fn(list(str_()), str_()));
 }
 
 /// Seed the `Format` module ([`FORMAT_PRELUDE`]) — checked formatting functions, the

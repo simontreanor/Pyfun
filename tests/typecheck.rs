@@ -1788,6 +1788,42 @@ fn map_and_set_traversals_carry_their_effect() {
     );
 }
 
+// ---------- the String sweep (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn string_members_stay_monomorphic_over_string() {
+    assert!(
+        pyfun::check(
+            "let e = String.isEmpty \"\"\n\
+             let r = String.repeat 2 \"ab\"\n\
+             let a = String.trimStart \" x\"\n\
+             let b = String.trimEnd \"x \"\n\
+             let l = String.splitLines \"a\"\n\
+             let v = String.rev \"abc\""
+        )
+        .is_ok()
+    );
+    assert_error_contains("let bad = String.repeat 2 3", "int");
+}
+
+#[test]
+fn string_get_answers_with_option_like_list_get() {
+    // One character is a one-character string — there is no `char` type.
+    assert!(
+        pyfun::check("let c = String.get 0 \"abc\"\nlet s = Option.withDefault \"\" c").is_ok()
+    );
+    assert_error_contains(
+        "let c = String.get 0 \"abc\"\nlet bad = String.len c",
+        "Option",
+    );
+}
+
+#[test]
+fn string_of_list_inverts_to_list() {
+    assert!(pyfun::check("let s = String.ofList (String.toList \"abc\")").is_ok());
+    assert_error_contains("let bad = String.ofList [1, 2]", "string");
+}
+
 // ---------- the Seq sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]
