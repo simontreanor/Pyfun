@@ -2340,6 +2340,46 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_option_with_default")
             }
+            "Option.map2" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_map2")
+            }
+            "Option.orElse" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_or_else")
+            }
+            "Option.flatten" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_flatten")
+            }
+            "Option.iter" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_iter")
+            }
+            "Option.toList" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_to_list")
+            }
+            "Option.exists" => {
+                self.needs_option = true;
+                coll(self, "_pf_opt_exists")
+            }
+            "Result.map2" => {
+                self.needs_result = true;
+                coll(self, "_pf_res_map2")
+            }
+            "Result.orElse" => {
+                self.needs_result = true;
+                coll(self, "_pf_res_or_else")
+            }
+            "Result.iter" => {
+                self.needs_result = true;
+                coll(self, "_pf_res_iter")
+            }
+            "Result.toList" => {
+                self.needs_result = true;
+                coll(self, "_pf_res_to_list")
+            }
             "Option.isSome" => {
                 self.needs_option = true;
                 coll(self, "_pf_option_is_some")
@@ -6304,6 +6344,147 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 "_pf_str_of_list",
                 &["xs"],
                 method(PyExpr::Str(String::new()), "join", vec![name("xs")]),
+            ),
+            // ---- Option / Result: combining and bridging ----
+            // Option.map2(f, a, b) -> Some(f(a._0, b._0)) when both are Some
+            "_pf_opt_map2" => def(
+                "_pf_opt_map2",
+                &["f", "a", "b"],
+                vec![
+                    PyStmt::If {
+                        test: binop(PyBinOp::And, is_some("a"), is_some("b")),
+                        body: vec![PyStmt::Return(call(
+                            "Some",
+                            vec![PyExpr::Call {
+                                func: Box::new(name("f")),
+                                args: vec![attr(name("a"), "_0"), attr(name("b"), "_0")],
+                            }],
+                        ))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(call("None_", vec![])),
+                ],
+            ),
+            // Option.orElse(fallback, o) -> o if it has a payload, else fallback
+            "_pf_opt_or_else" => def1(
+                "_pf_opt_or_else",
+                &["fallback", "o"],
+                PyExpr::IfExp {
+                    body: Box::new(name("o")),
+                    test: Box::new(is_some("o")),
+                    orelse: Box::new(name("fallback")),
+                },
+            ),
+            // Option.flatten(o) -> o._0 if isinstance(o, Some) else None_()
+            // The payload is itself an Option, so this is the payload as-is.
+            "_pf_opt_flatten" => def1(
+                "_pf_opt_flatten",
+                &["o"],
+                PyExpr::IfExp {
+                    body: Box::new(attr(name("o"), "_0")),
+                    test: Box::new(is_some("o")),
+                    orelse: Box::new(call("None_", vec![])),
+                },
+            ),
+            // Option.iter(f, o): run f on the payload, if there is one
+            "_pf_opt_iter" => def(
+                "_pf_opt_iter",
+                &["f", "o"],
+                vec![
+                    PyStmt::If {
+                        test: is_some("o"),
+                        body: vec![PyStmt::Expr(PyExpr::Call {
+                            func: Box::new(name("f")),
+                            args: vec![attr(name("o"), "_0")],
+                        })],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(PyExpr::NoneLit),
+                ],
+            ),
+            // Option.toList(o) -> [o._0] if isinstance(o, Some) else []
+            "_pf_opt_to_list" => def1(
+                "_pf_opt_to_list",
+                &["o"],
+                PyExpr::IfExp {
+                    body: Box::new(PyExpr::List(vec![attr(name("o"), "_0")])),
+                    test: Box::new(is_some("o")),
+                    orelse: Box::new(PyExpr::List(vec![])),
+                },
+            ),
+            // Option.exists(f, o) -> isinstance(o, Some) and f(o._0)
+            "_pf_opt_exists" => def1(
+                "_pf_opt_exists",
+                &["f", "o"],
+                binop(
+                    PyBinOp::And,
+                    is_some("o"),
+                    PyExpr::Call {
+                        func: Box::new(name("f")),
+                        args: vec![attr(name("o"), "_0")],
+                    },
+                ),
+            ),
+            // Result.map2(f, a, b): Ok only when both are, else the *first* Error,
+            // so the earliest failure is the one reported.
+            "_pf_res_map2" => def(
+                "_pf_res_map2",
+                &["f", "a", "b"],
+                vec![
+                    PyStmt::If {
+                        test: is_err("a"),
+                        body: vec![PyStmt::Return(name("a"))],
+                        orelse: vec![],
+                    },
+                    PyStmt::If {
+                        test: is_err("b"),
+                        body: vec![PyStmt::Return(name("b"))],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(call(
+                        "Ok",
+                        vec![PyExpr::Call {
+                            func: Box::new(name("f")),
+                            args: vec![attr(name("a"), "_0"), attr(name("b"), "_0")],
+                        }],
+                    )),
+                ],
+            ),
+            // Result.orElse(fallback, r) -> r if it is Ok, else fallback
+            "_pf_res_or_else" => def1(
+                "_pf_res_or_else",
+                &["fallback", "r"],
+                PyExpr::IfExp {
+                    body: Box::new(name("r")),
+                    test: Box::new(is_ok("r")),
+                    orelse: Box::new(name("fallback")),
+                },
+            ),
+            // Result.iter(f, r): run f on the Ok value; an Error does nothing
+            "_pf_res_iter" => def(
+                "_pf_res_iter",
+                &["f", "r"],
+                vec![
+                    PyStmt::If {
+                        test: is_ok("r"),
+                        body: vec![PyStmt::Expr(PyExpr::Call {
+                            func: Box::new(name("f")),
+                            args: vec![attr(name("r"), "_0")],
+                        })],
+                        orelse: vec![],
+                    },
+                    PyStmt::Return(PyExpr::NoneLit),
+                ],
+            ),
+            // Result.toList(r) -> [r._0] if isinstance(r, Ok) else []
+            "_pf_res_to_list" => def1(
+                "_pf_res_to_list",
+                &["r"],
+                PyExpr::IfExp {
+                    body: Box::new(PyExpr::List(vec![attr(name("r"), "_0")])),
+                    test: Box::new(is_ok("r")),
+                    orelse: Box::new(PyExpr::List(vec![])),
+                },
             ),
             other => unreachable!("unknown collection helper {other}"),
         })

@@ -968,6 +968,40 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The entries as (key, value) pairs, in insertion order. O(n).",
     ),
     (
+        "Option.map2",
+        "Combine two options with a function; `Some` only when both are.",
+    ),
+    (
+        "Option.orElse",
+        "The second option if it has a payload, else the first. The fallback comes first, so it reads as `primary |> Option.orElse fallback`.",
+    ),
+    ("Option.flatten", "Collapse a nested option into one."),
+    (
+        "Option.iter",
+        "Run a function for its effect on the payload, if there is one.",
+    ),
+    ("Option.toList", "A one-element list, or the empty list."),
+    (
+        "Option.exists",
+        "Whether there is a payload and it passes a test. `None` fails.",
+    ),
+    (
+        "Result.map2",
+        "Combine two results with a function; `Ok` only when both are, otherwise the first `Error`.",
+    ),
+    (
+        "Result.orElse",
+        "The second result if it is `Ok`, else the first. The fallback comes first, so it reads as `primary |> Result.orElse fallback`.",
+    ),
+    (
+        "Result.iter",
+        "Run a function for its effect on the `Ok` value; an `Error` does nothing.",
+    ),
+    (
+        "Result.toList",
+        "A one-element list from an `Ok`, or the empty list from an `Error`.",
+    ),
+    (
         "Option.map",
         "Apply a function to the payload if there is one.",
     ),
@@ -1295,6 +1329,12 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
 /// (constructors `Some`/`None`, seeded like `Result`'s `Ok`/`Error`). The
 /// constructors themselves are global; these are the qualified combinators.
 pub const OPTION_PRELUDE: &[(&str, usize)] = &[
+    ("map2", 3),
+    ("orElse", 2),
+    ("flatten", 1),
+    ("iter", 2),
+    ("toList", 1),
+    ("exists", 2),
     ("map", 2),
     ("bind", 2),
     ("filter", 2),
@@ -1309,6 +1349,10 @@ pub const OPTION_PRELUDE: &[(&str, usize)] = &[
 /// `Result.mapError`/`Result.bind` are effect-polymorphic; `Result.toOption` bridges
 /// to `Option` (`Ok v → Some v`, `Error _ → None`).
 pub const RESULT_PRELUDE: &[(&str, usize)] = &[
+    ("map2", 3),
+    ("orElse", 2),
+    ("iter", 2),
+    ("toList", 1),
     ("map", 2),
     ("mapError", 2),
     ("bind", 2),
@@ -4505,6 +4549,57 @@ fn seed_option_prelude(env: &mut Env) {
         "toResult",
         scheme(vec![0, 1], pure_fn(b(), pure_fn(opt(a()), res(a(), b())))),
     );
+
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let eff_scheme = |vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars: vec![e],
+        mutable: false,
+        ty,
+    };
+    // Option.map2 : (a ->{e} b ->{e} c) -> Option a -> Option b ->{e} Option c
+    // `Some` only when both are, which is what makes it the shape for combining
+    // two independent lookups without nesting two matches.
+    put(
+        "map2",
+        eff_scheme(
+            vec![0, 1, 2],
+            pure_fn(
+                arrow_e(a(), arrow_e(b(), Ty::Var(2))),
+                pure_fn(opt(a()), arrow_e(opt(b()), opt(Ty::Var(2)))),
+            ),
+        ),
+    );
+    // Option.orElse : Option a -> Option a -> Option a
+    // The **fallback comes first**, like `withDefault`, so it reads as
+    // `primary |> Option.orElse fallback`.
+    put(
+        "orElse",
+        scheme(vec![0], pure_fn(opt(a()), pure_fn(opt(a()), opt(a())))),
+    );
+    // Option.flatten : Option (Option a) -> Option a
+    put("flatten", scheme(vec![0], pure_fn(opt(opt(a())), opt(a()))));
+    // Option.iter : (a ->{e} unit) -> Option a ->{e} unit
+    put(
+        "iter",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Unit), arrow_e(opt(a()), Ty::Unit)),
+        ),
+    );
+    // Option.toList : Option a -> List a   (one element, or none)
+    put("toList", scheme(vec![0], pure_fn(opt(a()), list(a()))));
+    // Option.exists : (a ->{e} bool) -> Option a ->{e} bool   (`None` fails it)
+    put(
+        "exists",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), Ty::Bool)),
+        ),
+    );
 }
 
 /// Seed the `Result` module ([`RESULT_PRELUDE`]) — combinators over the built-in
@@ -4582,6 +4677,43 @@ fn seed_result_prelude(env: &mut Env) {
     put(
         "toOption",
         scheme(vec![0, 1], pure_fn(res(a(), e()), opt(a()))),
+    );
+
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    // Result.map2 : (a ->{x} m ->{x} n) -> Result a e -> Result m e ->{x} Result n e
+    // `Ok` only when both are; otherwise the **first** `Error`, so the earliest
+    // failure is the one reported.
+    put(
+        "map2",
+        eff_scheme(
+            vec![0, 1, 2, 3],
+            pure_fn(
+                arrow_e(a(), arrow_e(m(), Ty::Var(3))),
+                pure_fn(res(a(), e()), arrow_e(res(m(), e()), res(Ty::Var(3), e()))),
+            ),
+        ),
+    );
+    // Result.orElse : Result a e -> Result a e -> Result a e   (fallback first,
+    // like `withDefault`)
+    put(
+        "orElse",
+        scheme(
+            vec![0, 1],
+            pure_fn(res(a(), e()), pure_fn(res(a(), e()), res(a(), e()))),
+        ),
+    );
+    // Result.iter : (a ->{x} unit) -> Result a e ->{x} unit   (runs on `Ok` only)
+    put(
+        "iter",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), Ty::Unit), arrow_e(res(a(), e()), Ty::Unit)),
+        ),
+    );
+    // Result.toList : Result a e -> List a   (the `Ok` value, or none)
+    put(
+        "toList",
+        scheme(vec![0, 1], pure_fn(res(a(), e()), list(a()))),
     );
 }
 

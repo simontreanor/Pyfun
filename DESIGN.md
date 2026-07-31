@@ -743,6 +743,17 @@ exactly like `List.get` — there is no `char` type, so a character is a one-cha
 `toList`). Padding is deliberately *not* here: `Format.padLeft`/`padRight` already take a width and a
 fill character, and a second spelling in `String` would be one way too many.
 
+**Option and Result — combining and bridging.** Both had `map`/`bind`/`withDefault` and the
+predicates, which cover one value at a time, and now carry the members for *two* values and for
+crossing into other types. `map2` combines a pair (`Some` only when both are; `Ok` only when both are,
+otherwise the **first** `Error`, so the earliest failure is the one reported) — the shape for two
+independent lookups without nesting two matches. `orElse` takes the **fallback first**, matching
+`withDefault`, so it reads as `primary |> Option.orElse fallback`. `iter` runs a function for its
+effect on a payload that may not be there, `toList` turns either into a zero-or-one-element list, and
+`Option.flatten`/`Option.exists` finish the set. Every member of both modules is O(1) — they hold one
+value, so there is nothing to traverse and nothing to say about cost. All the higher-order members are
+effect-polymorphic like `List.map`.
+
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
 `Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The
