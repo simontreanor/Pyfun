@@ -267,42 +267,47 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.3.0** (2026-07-31). Every release: `ovsx publish <vsix> -p <token>` (scriptable, no
-  moderation).
+  At **0.4.0** (2026-07-31, verified against the registry API). Every release:
+  `ovsx publish <vsix> -p <token>` (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). 0.1.0 and 0.2.0 approved; **0.3.0 uploaded 2026-07-31 via
-  `gradle publishPlugin`, awaiting the usual moderation pass** — check plugins.jetbrains.com if it
-  has not appeared in a few business days.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, but the **only surface that cannot
-  be scripted**: the vsix is uploaded by hand through the publisher web UI (the CLI auth path is
-  broken — see `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that
-  silently falls behind; check it whenever a release goes out.
-- **Zed extensions registry** — PR open
-  ([zed-industries/extensions#6814](https://github.com/zed-industries/extensions/pull/6814)):
-  the main repo as a submodule with `path = editors/zed` (no dedicated repo needed; the
-  registry required a LICENSE file inside the extension dir — added). On merge, Pyfun is
-  one-click in Zed's extension panel.
-- **Upstream registry PRs** — status after the 2026-07-14 sweep:
-  - **Helix**: PR open ([helix-editor/helix#16036](https://github.com/helix-editor/helix/pull/16036)) —
-    languages.toml + git/rev/subpath grammar + Helix-scope queries; their query-check/docgen run
-    clean locally; CI awaits first-contributor approval. May face an "established language" test.
-  - **nvim-lspconfig**: PR #4476 CLOSED by maintainers — new languages need adoption evidence
-    (~100 stars informally). **Resubmit post-launch with downloads/installs/stars in hand**; until
-    then the manual `vim.lsp.config` snippet in `editors/README.md` is the documented path.
-  - **Mason registry**: PR #16012 withdrawn by us (its acceptance path was lspconfig approval).
-    Same resubmission trigger as lspconfig.
-  - **nvim-treesitter**: upstream repo ARCHIVED 2026-04, no successor yet (candidates: the
-    neovim-treesitter fork org, or parser management in Neovim core — neovim/neovim#39006). A
-    fully validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`, parser entry
-    + queries, their linter clean) ready to retarget when the ecosystem settles.
-  - **MELPA** `pyfun-mode` recipe: PR open
-    ([melpa/melpa#10094](https://github.com/melpa/melpa/pull/10094)); their process asked for an
-    `Assisted-by:` header on the elisp (added). MELPA reviews code, not popularity — expect
-    interactive review comments.
-- **Sublime Text Package Control** (M, new audience) and a **Pygments lexer** on PyPI (S–M;
-  improves JupyterLab/nbconvert/Sphinx rendering — kernel currently declares the `fsharp`
-  lexer as an approximation) — both demand-gated.
+  mode + legacy CE, 2024.2+). 0.1.0, 0.2.0 and **0.3.0 all approved** (verified against the
+  plugins API 2026-07-31 — the earlier "awaiting moderation" note was stale). **0.4.0 is not
+  uploaded yet**: it is the one artifact the 0.4.0 release still owes, and acceptance is already
+  granted, so `gradle publishPlugin` (JDK 21, `JETBRAINS_PERMANENT_TOKEN`) is not gated on
+  anything.
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.4.0** (2026-07-31, verified
+  against the gallery API). The **only surface that cannot be scripted**: the vsix is uploaded by
+  hand through the publisher web UI (the CLI auth path is broken — see
+  `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls
+  behind; check it whenever a release goes out. Note it reports the *previous* version for a few
+  minutes after an upload while validation runs, so a stale read there is not a failed upload.
+- **Third-party registries — PARKED until there is adoption evidence** (decided 2026-07-31). The
+  surfaces Pyfun controls (PyPI, VS Code Marketplace, Open VSX, JetBrains) are the ones that get
+  kept current every release; these do not, and their status is deliberately *not* re-checked each
+  time. Two of them already told us the same thing in different words, which is what makes the rule
+  rather than the exception:
+  - **nvim-lspconfig** (#4476, closed) and **Mason** (#16012, withdrawn — its path was lspconfig
+    approval): new languages need adoption evidence, informally ~100 stars.
+  - **MELPA** `pyfun-mode` (melpa/melpa#10094, closed 2026-07-19): *not* a rejection of the recipe,
+    which they had already signed off; they require the Emacs package to live in a public repository
+    for **one month or more** and `pyfun-mode.el` was five days old. Re-openable any time from
+    mid-August with the same recipe unchanged.
+  - **Zed** (zed-industries/extensions#6814 — the main repo as a submodule at `editors/zed`, with
+    the LICENSE the registry wanted inside the extension dir) and **Helix**
+    (helix-editor/helix#16036 — languages.toml, git/rev/subpath grammar, Helix-scope queries, their
+    checks clean locally) are still open and need nothing from us; if they merge, they merge.
+  - **nvim-treesitter**: upstream ARCHIVED 2026-04 with no successor (candidates: the
+    neovim-treesitter fork org, or parser management in Neovim core — neovim/neovim#39006). A fully
+    validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`), ready to retarget
+    when the ecosystem settles.
+  - **Sublime Text Package Control** and a **Pygments lexer** on PyPI (the kernel declares the
+    `fsharp` lexer as an approximation) were always demand-gated and stay that way.
+
+  The documented fallback for every one of these already exists in `editors/README.md`, so a user
+  on any of those editors is not blocked — they install by hand instead of by registry. Revisit the
+  whole list when download or install numbers give the maintainers something to say yes to, rather
+  than re-litigating each one per release.
 
 ## Docs & education site (live at simontreanor.github.io/Pyfun — what remains)
 
