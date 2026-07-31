@@ -2396,6 +2396,24 @@ fn e2e_string_sweep() {
     );
 }
 
+#[test]
+fn e2e_a_deferred_field_reads_the_right_attribute() {
+    // Deferral is a type-checking matter; the emitted access must be the ordinary
+    // attribute read on the record that won.
+    run_and_check(
+        "
+        type Placed = { row: int, col: int, letter: string }
+        type Cell = { row: int, col: int, letter: string, blank: bool }
+        let describe c =
+            let l = c.letter
+            let flag = c.blank
+            f\"{l}/{flag}\"
+        let out = describe (Cell { row = 1, col = 2, letter = \"A\", blank = false })
+        ",
+        &[("out", "A/False")],
+    );
+}
+
 // ---------- the FSharp.Core audit (ROADMAP dogfooding finding #5) ----------
 
 #[test]

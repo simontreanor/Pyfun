@@ -1686,7 +1686,16 @@ Decisions:
    simply lacks the field is reported against that record (`` record `B` has no field `x` ``), which is
    the precise error rather than a downstream mismatch between two record types.
 
-   Ambiguity therefore fires only at a *use* whose base type is unknown, never at declaration or import —
+   Resolution is **deferred, not immediate**, when the base is still a variable and the name is shared:
+   the obligation is recorded and settled once the enclosing top-level binding is fully inferred, by
+   which point a later statement may have said what the base is. `let l = c.letter` followed by
+   `let flag = c.blank` type-checks, because `blank` pins `c` to `Cell` and HM knows that by the end of
+   the binding even though it did not at the access. A variable a pending obligation depends on stays
+   **monomorphic** until it is settled: generalizing it would give each use its own copy, and the later
+   resolution would reach none of them. Deferring never weakens the check — the field must still exist
+   on the record that wins, and its type must still fit every use.
+
+   Ambiguity therefore fires only at a *use* whose base type is unknown *and stays unknown*, never at declaration or import —
    two records (in one module or across modules) freely share `x`/`name`/`id`. The fix when it does fire is
    to pattern-match or tag the construction/update (both name their record type), or to give the base a
    type some other way. This is OCaml's record-label model, with the type-directed tiebreak restored and a

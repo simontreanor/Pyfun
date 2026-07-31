@@ -300,6 +300,16 @@ enum NumRef {
     Var(u32),
 }
 
+/// A field access waiting for its base's type to become known (`Infer::pending_fields`).
+struct PendingField {
+    /// The base expression's type, as inferred at the access site.
+    base: Ty,
+    field: String,
+    /// The variable standing in for the field's type until it is known.
+    result: Ty,
+    span: Span,
+}
+
 /// A type scheme, generalized over type variables, unit variables, and `num`
 /// (numeric base) variables.
 #[derive(Debug, Clone)]
@@ -5594,6 +5604,15 @@ struct Infer {
     cur_eff: Effect,
     next: u32,
     decls: Decls,
+    /// Field accesses whose base type was still unknown where they were written
+    /// (`c.letter` before anything says what `c` is). Resolution waits until the
+    /// enclosing top-level binding is fully inferred, by which point HM may have
+    /// learned the answer from a later statement. See [`Infer::resolve_pending_fields`].
+    pending_fields: Vec<PendingField>,
+    /// How many `let` bindings deep inference currently is. Obligations float up to
+    /// the outermost one: an inner binding cannot resolve them (that is the whole
+    /// point) and must not generalize over them either.
+    binding_depth: usize,
     /// When set, [`infer_expr`](Infer::infer_expr) records the inferred type of
     /// every expression node into [`recorded`](Infer::recorded) for editor hover.
     record_types: bool,
@@ -6017,6 +6036,9 @@ impl Infer {
         env: &Env,
     ) -> Result<(Scheme, Effect), TypeError> {
         let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+        // Obligations float up to the outermost binding: an inner one cannot settle
+        // a base that a *later* statement pins down, which is the whole point.
+        self.binding_depth += 1;
         let ty_res = if binding.params.is_empty() {
             self.infer_expr(&binding.value, env)
         } else {
@@ -6062,6 +6084,10 @@ impl Infer {
             outer
         };
         let ty = ty_res?;
+        self.binding_depth -= 1;
+        if self.binding_depth == 0 {
+            self.resolve_pending_fields()?;
+        }
 
         // `let pure` asserts the binding introduces no concrete effect of its own
         // (effect variables — "pure up to its arguments" — are fine).
@@ -6955,6 +6981,74 @@ impl Infer {
         Ok(Ty::Unit)
     }
 
+    /// The ambiguity error, naming both ways out. The parameter form is usually the
+    /// nicer one and is easy to miss, since it arrived after the message did.
+    fn ambiguous_field(&self, field: &str, span: Span) -> TypeError {
+        let owners = self
+            .decls
+            .field_owner
+            .get(field)
+            .cloned()
+            .unwrap_or_default();
+        let names = owners
+            .iter()
+            .map(|r| format!("`{r}`"))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let first = owners.first().map(String::as_str).unwrap_or("Record");
+        TypeError {
+            message: format!(
+                "field `{field}` is ambiguous here: nothing says what this value is, and \
+                 `{field}` is declared by records {names}. Name the record where the value \
+                 arrives — in a parameter (`fun ({first} {{ {field} }}) -> …`) or in a pattern \
+                 (`case {first} {{ {field} }}:`) — or give it a type some other way",
+            ),
+            span,
+        }
+    }
+
+    /// Whether this field name is declared by more than one visible record, so an
+    /// access on an unknown base cannot be resolved by name alone.
+    fn field_is_ambiguous(&self, field: &str) -> bool {
+        self.decls
+            .field_owner
+            .get(field)
+            .is_some_and(|owners| owners.len() >= 2)
+    }
+
+    /// Settle every deferred field access, now that the enclosing binding is fully
+    /// inferred. A base that some later statement pinned down resolves exactly as it
+    /// would have at the access site; one that is *still* unknown is the genuine
+    /// ambiguity, and is reported at the access with the ways out.
+    fn resolve_pending_fields(&mut self) -> Result<(), TypeError> {
+        let pending = std::mem::take(&mut self.pending_fields);
+        for p in pending {
+            let base = self.apply(&p.base);
+            let Ty::Con(record, _) = &base else {
+                return Err(self.ambiguous_field(&p.field, p.span));
+            };
+            let Some(info) = self.decls.records.get(record) else {
+                return Err(self.ambiguous_field(&p.field, p.span));
+            };
+            if !info.fields.iter().any(|(n, _)| *n == p.field) {
+                return Err(TypeError {
+                    message: format!("record `{record}` has no field `{}`", p.field),
+                    span: p.span,
+                });
+            }
+            let owner = record.clone();
+            let (record_ty, field_tys) = self.instantiate_record(&owner);
+            self.unify(&record_ty, &base, p.span)?;
+            let fty = field_tys
+                .iter()
+                .find(|(n, _)| *n == p.field)
+                .map(|(_, t)| t.clone())
+                .expect("field checked above");
+            self.unify(&p.result, &fty, p.span)?;
+        }
+        Ok(())
+    }
+
     /// The record a `base.field` access refers to, **given the base's type**
     /// (`DESIGN.md` §8.3). When that type is already a known record, it decides the
     /// field outright, so records sharing a field name coexist freely and the shared
@@ -7000,22 +7094,7 @@ impl Infer {
     fn record_of_field(&self, field: &str, span: Span) -> Result<String, TypeError> {
         match self.decls.field_owner.get(field).map(Vec::as_slice) {
             Some([only]) => Ok(only.clone()),
-            Some(owners) if owners.len() >= 2 => {
-                let names = owners
-                    .iter()
-                    .map(|r| format!("`{r}`"))
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                Err(TypeError {
-                    message: format!(
-                        "field `{field}` is ambiguous here: the value's type is not known at this \
-                         point, and `{field}` is declared by records {names}; pattern-match the \
-                         value (`case {} {{ {field} }}:`) to disambiguate",
-                        owners[0]
-                    ),
-                    span,
-                })
-            }
+            Some(owners) if owners.len() >= 2 => Err(self.ambiguous_field(field, span)),
             _ => {
                 // Empty `decls.records` means records aren't in use at all.
                 let hint = if self.decls.records.is_empty() {
@@ -7247,6 +7326,19 @@ impl Infer {
         // collide at every use site, prefixes and all.
         let bt = self.infer_expr(base, env)?;
         let applied = self.apply(&bt);
+        // An unsolved base with an ambiguous field name is not an error *yet*: a
+        // later statement may still say what the base is, and HM will know by the
+        // end of the binding even though it does not know here.
+        if matches!(applied, Ty::Var(_)) && self.field_is_ambiguous(name) {
+            let result = self.fresh();
+            self.pending_fields.push(PendingField {
+                base: applied,
+                field: name.to_string(),
+                result: result.clone(),
+                span,
+            });
+            return Ok(result);
+        }
         let owner = self.record_of_field_on(&applied, name, span)?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
@@ -8445,9 +8537,21 @@ impl Infer {
     fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
         let ty = self.apply(ty);
         let (env_t, env_u, env_n, env_e) = self.env_free_vars(env);
+        // A variable a deferred field access still depends on stays monomorphic:
+        // generalizing it would hand each use its own copy, and settling the
+        // obligation later would then reach none of them.
+        let mut deferred: HashSet<u32> = HashSet::new();
+        for p in &self.pending_fields {
+            free_type_vars(&self.apply(&p.base), &mut |v| {
+                deferred.insert(v);
+            });
+            free_type_vars(&self.apply(&p.result), &mut |v| {
+                deferred.insert(v);
+            });
+        }
         let mut vars = Vec::new();
         free_type_vars(&ty, &mut |v| {
-            if !env_t.contains(&v) && !vars.contains(&v) {
+            if !env_t.contains(&v) && !deferred.contains(&v) && !vars.contains(&v) {
                 vars.push(v);
             }
         });
