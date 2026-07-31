@@ -16,7 +16,6 @@
 //! directory. A file with **no imports behaves exactly as before** (single-file
 //! path: `compile` to stdout/one file, `run` piped to the interpreter).
 
-use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
 
@@ -188,10 +187,17 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
     }
 }
 
-/// Compile `path` to Python (gated on type-checking), then execute it by piping
-/// the emitted source to the interpreter's stdin (`python -`). The program's
-/// stdout/stderr are inherited so its output appears directly; piping via stdin
-/// sidesteps temp-file cleanup and Windows path-translation pitfalls.
+/// Compile `path` to Python (gated on type-checking), then execute it from a
+/// temp file (`python <file>.py`), inheriting stdin/stdout/stderr so the program
+/// reads the terminal and its output appears directly.
+///
+/// The obvious alternative, piping the emitted source to `python -`, spends the
+/// program's *own* stdin on its source text, so the first `input` in an
+/// interactive program raises `EOFError`. This mirrors what [`run_project`]
+/// already does. The staged file is named `_pyfun_main.py` rather than after the
+/// source: Python puts the script's directory first on `sys.path`, so a source
+/// stem like `json.pyfun` would otherwise shadow the stdlib module an `extern`
+/// in that very program imports.
 fn run(path: &str) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
@@ -214,17 +220,22 @@ fn run(path: &str) -> ExitCode {
     let Some(interp) = python_cmd() else {
         return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
     };
-    let mut child = match Command::new(&interp).arg("-").stdin(Stdio::piped()).spawn() {
-        Ok(c) => c,
-        Err(e) => return fail(&format!("cannot start `{interp}`: {e}")),
-    };
-    if let Some(mut stdin) = child.stdin.take()
-        && let Err(e) = stdin.write_all(python.as_bytes())
-    {
-        return fail(&format!("cannot send program to `{interp}`: {e}"));
+    let dir = std::env::temp_dir().join(format!("pyfun_run_{}", std::process::id()));
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return fail(&format!("cannot create temp dir: {e}"));
     }
-    match child.wait() {
-        Ok(status) if status.success() => ExitCode::SUCCESS,
+    let entry_py = "_pyfun_main.py";
+    if let Err(e) = std::fs::write(dir.join(entry_py), &python) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return fail(&format!("cannot stage {entry_py}: {e}"));
+    }
+    // Absolute path, and *no* `current_dir`: the program keeps the user's working
+    // directory, so its relative file paths mean what they meant on the command
+    // line. Python still puts the script's own directory first on `sys.path`.
+    let status = Command::new(&interp).arg(dir.join(entry_py)).status();
+    let _ = std::fs::remove_dir_all(&dir);
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
         Ok(_) => ExitCode::FAILURE,
         Err(e) => fail(&format!("`{interp}` did not finish: {e}")),
     }
@@ -379,8 +390,11 @@ fn run_project(entry: &str) -> ExitCode {
     let Some(interp) = python_cmd() else {
         return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
     };
-    // Materialize the tree to a temp dir and run `python <entry>.py` there, so the
-    // emitted `import geometry` / `_pyfun_rt` lines resolve as sibling modules.
+    // Materialize the tree to a temp dir and run `python <dir>/<entry>.py`. The
+    // emitted `import geometry` / `_pyfun_rt` lines resolve as siblings because
+    // Python puts the *script's* directory first on `sys.path`, which is also why
+    // the working directory is left alone: the program's relative file paths mean
+    // what they meant on the command line.
     let dir = std::env::temp_dir().join(format!("pyfun_run_{}", std::process::id()));
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return fail(&format!("cannot create temp dir: {e}"));
@@ -392,10 +406,7 @@ fn run_project(entry: &str) -> ExitCode {
         }
     }
     let entry_py = project::module_py_name(&project.entry().name);
-    let status = Command::new(&interp)
-        .arg(&entry_py)
-        .current_dir(&dir)
-        .status();
+    let status = Command::new(&interp).arg(dir.join(&entry_py)).status();
     let _ = std::fs::remove_dir_all(&dir);
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
