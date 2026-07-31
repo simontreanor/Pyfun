@@ -130,7 +130,13 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    **(b)** keep the heuristic but *reject* the ambiguous shape at compile time with a fix-it naming the
    `extern import` to add, which fits "the compiler is the gatekeeper, no runtime surprises" and costs
    nothing at runtime; or **(c)** both — (b) by default, with (a) where the shape is unambiguous.
-   Decide before implementing.
+   **Decided 2026-07-31: (b).** A compile error naming the one line to add beats an import that may or
+   may not work in the target environment, and it keeps the emitted Python free of defensive
+   `try/except` around something the author can state exactly. The check fires only on the shape the
+   heuristic cannot see through — a target with a lowercase segment after the first, before the final
+   name — and the message carries the fix (`add `extern import sys``). The `extern import` escape hatch
+   already exists and already wins over the heuristic, so this turns a silent runtime failure into a
+   diagnostic pointing at the existing answer.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
