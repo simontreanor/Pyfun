@@ -432,6 +432,86 @@ fn e2e_a_parameterized_cross_module_record_round_trips() {
 }
 
 #[test]
+fn e2e_a_local_type_declaration_can_name_an_imported_type() {
+    // A record field and an ADT variant typed with an imported record, one
+    // qualified and one bare. Both spellings mean the same type, so the value
+    // built by the exporter flows into the locally-declared shapes and back into
+    // an imported function.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Shapes",
+                "type Placed = { row: int, col: int }\n\
+                 let mk r = Placed { row = r, col = r }\n\
+                 let rowOf p = p.row",
+            ),
+            (
+                "Main",
+                "import Shapes\n\
+                 type Holder = { item: Shapes.Placed, tag: string }\n\
+                 type Slot = Empty | Filled Placed\n\
+                 let describe s =\n  match s:\n    case Empty: 0\n    case Filled p: Shapes.rowOf p\n\
+                 let h = Holder { item = Shapes.mk 3, tag = \"a\" }\n\
+                 print h.tag\n\
+                 print (describe (Filled h.item))\n\
+                 print (describe Empty)",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_imported_type_in_decl");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "a\n3\n0");
+    }
+}
+
+#[test]
+fn an_imported_type_is_the_same_type_qualified_or_bare() {
+    // The qualifier is a readability aid at the use site, not a distinct type, so
+    // a value annotated one way unifies with the other. `extern` is the only place
+    // that takes a written type, so it is where the two spellings meet.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Shapes", "type Placed = { row: int, col: int }"),
+            (
+                "Main",
+                "import Shapes\n\
+                 extern pure widen : Shapes.Placed -> Placed = builtins.id\n\
+                 let same p = widen p",
+            ),
+        ],
+    );
+    assert!(
+        project::check(&project).is_empty(),
+        "the qualified and bare spellings must unify"
+    );
+}
+
+#[test]
+fn an_unknown_qualified_type_is_reported() {
+    // The qualifier is checked, not stripped and ignored: a module that exports no
+    // such type is an unknown type, not a silent resolution to the bare name.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Shapes", "type Placed = { row: int, col: int }"),
+            (
+                "Main",
+                "import Shapes\ntype Holder = { item: Shapes.Widget }",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0].message.contains("unknown type"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
 fn a_bare_tag_does_not_construct_an_imported_record() {
     // An imported record must be tagged qualified (like an imported sum ctor); a
     // bare `Point { … }` is rejected rather than miscompiling to a NameError.
