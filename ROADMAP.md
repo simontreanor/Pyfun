@@ -71,9 +71,16 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    following the existing `List.get`/`List.find`, diverging from F# where `head` raises), and
    **`take`/`drop`** rather than F#'s `take`/`skip` (the `concat` divergence already set that
    precedent). `String.tryIndexOf` is the one member out of step with the accessor convention; it
-   stays as-is unless the audit turns up more of them. The positional-update family
+   stays as-is (the audit turned up no others). The positional-update family
    (`updateAt`/`insertAt`/`removeAt`) is the most directly game-shaped gap: a board update has no
-   vocabulary at all today.
+   vocabulary at all today. **Sweep COMPLETE 2026-07-31** — `List` (+`fst`/`snd`), `Seq`, `Set`/`Map`,
+   `String`, `Option`/`Result`, then the `FSharp.Core` audit, which added 21 more members. Nearly all
+   of those came from *internal* asymmetry rather than F# parity: `takeWhile`/`dropWhile` on `Seq` but
+   not `List`, nine `List` members with no `Seq` counterpart, `iter` on every module except `Set` and
+   `Map`, `Option.exists` with no `forall`, and `sign` as the one missing F# global. The audit's more
+   valuable half was a bug: every multi-argument callback's scheme put the effect variable on *every*
+   arrow, so an impure two-argument callback could never unify and `List.fold` could not print
+   (`DESIGN.md`, "Effects through a multi-argument callback").
 6. **Unbounded recursion has no stack-safe form** (M, decided) — an interactive turn loop is not a
    collection traversal, so the Non-goals answer below ("iteration is the `List`/`Seq` combinators
    plus recursion") does not cover it: every turn and every rejected input is a frame that never

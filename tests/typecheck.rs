@@ -1824,6 +1824,119 @@ fn string_of_list_inverts_to_list() {
     assert_error_contains("let bad = String.ofList [1, 2]", "string");
 }
 
+// ---------- the FSharp.Core audit (ROADMAP dogfooding finding #5) ----------
+
+#[test]
+fn a_multi_argument_callback_may_be_effectful() {
+    // The bug the audit found: every scheme with a two-argument callback put the
+    // effect variable on *both* arrows, but inference puts an effect only on the
+    // innermost arrow (`DESIGN.md` §4), so the two could never unify — which made
+    // every such member silently pure-only, `List.fold` included.
+    let src = "extern log : int -> int = builtins.print\n\
+               let step acc x =\n\
+               \x20   let shown = log x\n\
+               \x20   acc + x\n\
+               let total = List.fold step 0 [1, 2]";
+    assert!(
+        pyfun::check(src).is_ok(),
+        "an effectful folder must be accepted"
+    );
+    // …and the effect still flows out, so `let pure` catches it.
+    let pure_src = src.replace("let total", "let pure total");
+    assert_error_contains(&pure_src, "performs `io`");
+}
+
+#[test]
+fn every_multi_argument_callback_member_takes_an_effect() {
+    // One shape per module, so a scheme cannot regress unnoticed.
+    let cases = [
+        "let r = List.map2 (fun a b -> log (a + b)) [1] [2]",
+        "let r = List.reduce (fun a b -> log (a + b)) [1, 2]",
+        "let r = Seq.fold (fun acc x -> log (acc + x)) 0 (Seq.ofList [1])",
+        "let r = Set.fold (fun acc x -> log (acc + x)) 0 (Set.ofList [1])",
+        "let r = Map.map (fun k v -> log v) (Map.ofList [(1, 2)])",
+        "let r = Map.fold (fun acc k v -> log (acc + v)) 0 (Map.ofList [(1, 2)])",
+        "let r = Map.iter (fun k v -> ignore (log v)) (Map.ofList [(1, 2)])",
+        "let r = Option.map2 (fun a b -> log (a + b)) (Some 1) (Some 2)",
+        "let r = Result.map2 (fun a b -> log (a + b)) (Ok 1) (Ok 2)",
+    ];
+    for case in cases {
+        let src = format!("extern log : int -> int = builtins.print\n{case}");
+        assert!(
+            pyfun::check(&src).is_ok(),
+            "should accept an effect:\n{src}"
+        );
+    }
+}
+
+#[test]
+fn list_gains_the_members_seq_already_had() {
+    assert!(
+        pyfun::check(
+            "let xs = [1, 2, 3]\n\
+             let a = List.takeWhile (fun x -> x < 3) xs\n\
+             let b = List.dropWhile (fun x -> x < 3) xs\n\
+             let c = List.sortByDescending (fun x -> x) xs\n\
+             let d = List.countBy (fun x -> x % 2) xs"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn seq_gains_the_members_list_already_had() {
+    assert!(
+        pyfun::check(
+            "let s = Seq.ofList [1, 2, 3]\n\
+             let e = Seq.toList Seq.empty\n\
+             let d = Seq.toList (Seq.distinctBy (fun x -> x % 2) s)\n\
+             let r = Seq.toList (Seq.replicate 2 \"a\")\n\
+             let g = Seq.get 1 s\n\
+             let l = Seq.last s\n\
+             let t = Seq.sumBy (fun x -> x * 2) s\n\
+             let m = Seq.max s\n\
+             let n = Seq.min s\n\
+             let f = Seq.reduce (fun a b -> a + b) s"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn every_module_can_iterate_for_effect() {
+    // `iter` existed on List, Seq, Option and Result but not on Set or Map.
+    assert!(
+        pyfun::check(
+            "let a = Set.iter (fun x -> print x) (Set.ofList [1])\n\
+             let b = Map.iter (fun k v -> print v) (Map.ofList [(1, 2)])"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn option_and_result_agree_on_the_empty_case() {
+    // `forall` passes on `None` and on `Error`, the empty case, exactly as
+    // `List.forall` passes on `[]`.
+    assert!(
+        pyfun::check(
+            "let a = Option.forall (fun x -> x > 0) (Some 1)\n\
+             let b = Option.contains 1 (Some 1)\n\
+             let c = Result.exists (fun x -> x > 0) (Ok 1)\n\
+             let d = Result.forall (fun x -> x > 0) (Ok 1)\n\
+             let e = Result.contains 1 (Ok 1)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn sign_is_a_number_to_an_int() {
+    assert!(pyfun::check("let s = sign (-5)\nlet t = s + 1").is_ok());
+    assert!(pyfun::check("let s = sign 2.5").is_ok());
+    assert_error_contains("let bad = sign \"x\"", "string");
+}
+
 // ---------- the Option/Result sweep (ROADMAP dogfooding finding #5) ----------
 
 #[test]

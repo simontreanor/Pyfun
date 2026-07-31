@@ -380,6 +380,7 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("flip", 3),
     ("fst", 1),
     ("snd", 1),
+    ("sign", 1),
 ];
 
 /// Python builtin *type* names — available without an `import`, so a dotted extern
@@ -499,6 +500,11 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("pairwise", 1),
     ("windowed", 2),
     ("chunkBySize", 2),
+    // From the FSharp.Core audit: `Seq` had these and `List` did not.
+    ("takeWhile", 2),
+    ("dropWhile", 2),
+    ("sortByDescending", 2),
+    ("countBy", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -531,6 +537,7 @@ pub const SET_PRELUDE: &[(&str, usize)] = &[
     ("difference", 2),
     ("ofList", 1),
     ("toList", 1),
+    ("iter", 2),
 ];
 
 /// The `Map` module (`DESIGN.md` §6): members of the built-in `Map k v` (which
@@ -561,6 +568,7 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("values", 1),
     ("ofList", 1),
     ("toList", 1),
+    ("iter", 2),
 ];
 
 /// The `String` module (`DESIGN.md` §6): text operations over the built-in `string`
@@ -708,6 +716,81 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     ("fst", "The first element of a pair."),
     ("snd", "The second element of a pair."),
+    (
+        "List.takeWhile",
+        "Take elements while a test passes; stops at the first failure. O(n).",
+    ),
+    (
+        "List.dropWhile",
+        "Skip elements while a test passes; keeps the rest from the first failure. O(n).",
+    ),
+    (
+        "List.sortByDescending",
+        "Sort by a key, largest first. O(n log n). The key needs `comparison`, the element does not.",
+    ),
+    (
+        "List.countBy",
+        "How many elements share each key, in first-seen key order. O(n).",
+    ),
+    ("Seq.empty", "The sequence with no elements."),
+    (
+        "Seq.distinctBy",
+        "Drop later elements with a seen key, lazily. Remembers the keys it has seen.",
+    ),
+    ("Seq.replicate", "n copies of one value, lazily."),
+    (
+        "Seq.get",
+        "The element at a position, or `None`. Consumes up to it.",
+    ),
+    (
+        "Seq.last",
+        "The final element, or `None` when empty. Consumes the whole sequence.",
+    ),
+    (
+        "Seq.sumBy",
+        "Add a number computed per element. Consumes the whole sequence.",
+    ),
+    (
+        "Seq.max",
+        "The largest element, or `None` when empty. Consumes the whole sequence. Needs `comparison`.",
+    ),
+    (
+        "Seq.min",
+        "The smallest element, or `None` when empty. Consumes the whole sequence. Needs `comparison`.",
+    ),
+    (
+        "Seq.reduce",
+        "Fold with no seed, using the first element. Consumes the whole sequence; `None` when empty.",
+    ),
+    (
+        "Set.iter",
+        "Run a function for its effect on every element. O(n), in Python's set order.",
+    ),
+    (
+        "Map.iter",
+        "Run a function for its effect on every entry, in insertion order. O(n). The function takes the key and the value.",
+    ),
+    (
+        "Option.forall",
+        "Whether the payload passes a test. `None` passes, like `List.forall` over an empty list.",
+    ),
+    (
+        "Option.contains",
+        "Whether there is a payload equal to this value.",
+    ),
+    (
+        "Result.exists",
+        "Whether this is an `Ok` whose value passes a test. An `Error` fails.",
+    ),
+    (
+        "Result.forall",
+        "Whether an `Ok` value passes a test. An `Error` passes, like `Option.forall` over `None`.",
+    ),
+    (
+        "Result.contains",
+        "Whether this is an `Ok` equal to this value.",
+    ),
+    ("sign", "-1, 0 or 1 according to the sign of a number."),
     (
         "List.map",
         "Apply a function to every element. O(n), and carries the function's effect.",
@@ -1393,6 +1476,8 @@ pub const OPTION_PRELUDE: &[(&str, usize)] = &[
     ("isSome", 1),
     ("isNone", 1),
     ("toResult", 2),
+    ("forall", 2),
+    ("contains", 2),
 ];
 
 /// The `Result` module (`DESIGN.md` §6): combinators over the built-in `Result a e`
@@ -1411,6 +1496,9 @@ pub const RESULT_PRELUDE: &[(&str, usize)] = &[
     ("isOk", 1),
     ("isError", 1),
     ("toOption", 1),
+    ("exists", 2),
+    ("forall", 2),
+    ("contains", 2),
 ];
 
 /// The `Seq` module (`DESIGN.md` §6): the **lazy** counterpart to `List`, over the
@@ -1451,6 +1539,16 @@ pub const SEQ_PRELUDE: &[(&str, usize)] = &[
     ("toList", 1),
     ("ofList", 1),
     ("range", 2),
+    // From the FSharp.Core audit: `List` had these and `Seq` did not.
+    ("empty", 0),
+    ("distinctBy", 2),
+    ("replicate", 2),
+    ("get", 2),
+    ("last", 1),
+    ("sumBy", 2),
+    ("max", 1),
+    ("min", 1),
+    ("reduce", 2),
 ];
 
 /// If `expr` is a module member access `Module.member` (built-in *or* user module),
@@ -3401,6 +3499,16 @@ fn seed_prelude(env: &mut Env) {
         mutable: false,
         ty,
     };
+    // sign : num 'a => 'a<'u> -> int   (pure) — -1, 0 or 1. The unit erases: the
+    // sign of a length is a plain number, not a length.
+    env.insert(
+        "sign".to_string(),
+        scheme(Ty::Fun(
+            Box::new(num_u()),
+            Box::new(Ty::Int(Unit::dimensionless())),
+            Effect::pure(),
+        )),
+    );
     // abs : num 'a => 'a<'u> -> 'a<'u>  (pure)
     env.insert(
         "abs".to_string(),
@@ -3716,7 +3824,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(0))),
+                pure_fn(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(0))),
                 pure_fn(Ty::Var(0), arrow_e(list(Ty::Var(1)), Ty::Var(0))),
             ),
         ),
@@ -3836,7 +3944,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1, 2],
             pure_fn(
-                arrow_e(a(), arrow_e(b(), Ty::Var(2))),
+                pure_fn(a(), arrow_e(b(), Ty::Var(2))),
                 pure_fn(list(a()), arrow_e(list(b()), list(Ty::Var(2)))),
             ),
         ),
@@ -3978,7 +4086,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_scheme(
             vec![0],
             pure_fn(
-                arrow_e(a(), arrow_e(a(), a())),
+                pure_fn(a(), arrow_e(a(), a())),
                 arrow_e(list(a()), option(a())),
             ),
         ),
@@ -4067,6 +4175,46 @@ fn seed_list_prelude(env: &mut Env) {
         "List.chunkBySize".to_string(),
         mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(list(a()))))),
     );
+
+    // ---- from the FSharp.Core audit: `Seq` had these and `List` did not ----
+    // List.takeWhile : (a ->{e} bool) -> List a ->{e} List a
+    env.insert(
+        "List.takeWhile".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), list(a()))),
+        ),
+    );
+    // List.dropWhile : (a ->{e} bool) -> List a ->{e} List a
+    env.insert(
+        "List.dropWhile".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), list(a()))),
+        ),
+    );
+    // List.sortByDescending : comparison b => (a ->{e} b) -> List a ->{e} List a
+    // (`sortBy` and `sortDescending` existed; this is the pair of them.)
+    env.insert(
+        "List.sortByDescending".to_string(),
+        ord_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
+        ),
+    );
+    // List.countBy : (a ->{e} b) -> List a ->{e} List (b, int)   (how many share
+    // each key, in first-seen key order — `groupBy` with the members counted)
+    env.insert(
+        "List.countBy".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                arrow_e(a(), b()),
+                arrow_e(list(a()), list(Ty::Tuple(vec![b(), int()]))),
+            ),
+        ),
+    );
 }
 
 /// Seed the `Set` module ([`SET_PRELUDE`]) — pure functions over `Set a` (var 0),
@@ -4145,7 +4293,7 @@ fn seed_set_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(b(), arrow_e(a(), b())),
+                pure_fn(b(), arrow_e(a(), b())),
                 pure_fn(b(), arrow_e(set(a()), b())),
             ),
         ),
@@ -4202,6 +4350,14 @@ fn seed_set_prelude(env: &mut Env) {
     env.insert(
         "Set.min".to_string(),
         ord_scheme(pure_fn(set(a()), opt(a()))),
+    );
+    // Set.iter : (a ->{e} unit) -> Set a ->{e} unit   (every other module had one)
+    env.insert(
+        "Set.iter".to_string(),
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Unit), arrow_e(set(a()), Ty::Unit)),
+        ),
     );
 }
 
@@ -4509,7 +4665,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1, 2],
             pure_fn(
-                arrow_e(k(), arrow_e(v(), w())),
+                pure_fn(k(), arrow_e(v(), w())),
                 arrow_e(mv(), map(k(), w())),
             ),
         ),
@@ -4519,7 +4675,7 @@ fn seed_map_prelude(env: &mut Env) {
         "Map.filter".to_string(),
         eff_scheme(
             vec![0, 1],
-            pure_fn(arrow_e(k(), arrow_e(v(), Ty::Bool)), arrow_e(mv(), mv())),
+            pure_fn(pure_fn(k(), arrow_e(v(), Ty::Bool)), arrow_e(mv(), mv())),
         ),
     );
     // Map.fold : (acc ->{e} k ->{e} v ->{e} acc) -> acc -> Map k v ->{e} acc
@@ -4528,7 +4684,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1, 3],
             pure_fn(
-                arrow_e(acc(), arrow_e(k(), arrow_e(v(), acc()))),
+                pure_fn(acc(), pure_fn(k(), arrow_e(v(), acc()))),
                 pure_fn(acc(), arrow_e(mv(), acc())),
             ),
         ),
@@ -4539,7 +4695,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                pure_fn(k(), arrow_e(v(), Ty::Bool)),
                 arrow_e(mv(), Ty::Bool),
             ),
         ),
@@ -4549,7 +4705,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                pure_fn(k(), arrow_e(v(), Ty::Bool)),
                 arrow_e(mv(), Ty::Bool),
             ),
         ),
@@ -4560,7 +4716,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(k(), arrow_e(v(), Ty::Bool)),
+                pure_fn(k(), arrow_e(v(), Ty::Bool)),
                 arrow_e(mv(), Ty::Tuple(vec![mv(), mv()])),
             ),
         ),
@@ -4569,6 +4725,17 @@ fn seed_map_prelude(env: &mut Env) {
     env.insert(
         "Map.union".to_string(),
         scheme(pure_fn(mv(), pure_fn(mv(), mv()))),
+    );
+    // Map.iter : (k ->{e} v ->{e} unit) -> Map k v ->{e} unit
+    env.insert(
+        "Map.iter".to_string(),
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(
+                pure_fn(k(), arrow_e(v(), Ty::Unit)),
+                arrow_e(mv(), Ty::Unit),
+            ),
+        ),
     );
 }
 
@@ -4666,7 +4833,7 @@ fn seed_option_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1, 2],
             pure_fn(
-                arrow_e(a(), arrow_e(b(), Ty::Var(2))),
+                pure_fn(a(), arrow_e(b(), Ty::Var(2))),
                 pure_fn(opt(a()), arrow_e(opt(b()), opt(Ty::Var(2)))),
             ),
         ),
@@ -4697,6 +4864,20 @@ fn seed_option_prelude(env: &mut Env) {
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), Ty::Bool)),
         ),
+    );
+    // Option.forall : (a ->{e} bool) -> Option a ->{e} bool   (`None` passes it —
+    // the empty case, exactly like `List.forall` over `[]`)
+    put(
+        "forall",
+        eff_scheme(
+            vec![0],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), Ty::Bool)),
+        ),
+    );
+    // Option.contains : a -> Option a -> bool
+    put(
+        "contains",
+        scheme(vec![0], pure_fn(a(), pure_fn(opt(a()), Ty::Bool))),
     );
 }
 
@@ -4786,7 +4967,7 @@ fn seed_result_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1, 2, 3],
             pure_fn(
-                arrow_e(a(), arrow_e(m(), Ty::Var(3))),
+                pure_fn(a(), arrow_e(m(), Ty::Var(3))),
                 pure_fn(res(a(), e()), arrow_e(res(m(), e()), res(Ty::Var(3), e()))),
             ),
         ),
@@ -4812,6 +4993,27 @@ fn seed_result_prelude(env: &mut Env) {
     put(
         "toList",
         scheme(vec![0, 1], pure_fn(res(a(), e()), list(a()))),
+    );
+    // Result.exists / forall : (a ->{x} bool) -> Result a e ->{x} bool
+    // An `Error` fails `exists` and passes `forall`, matching `Option`.
+    put(
+        "exists",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(res(a(), e()), Ty::Bool)),
+        ),
+    );
+    put(
+        "forall",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), Ty::Bool), arrow_e(res(a(), e()), Ty::Bool)),
+        ),
+    );
+    // Result.contains : a -> Result a e -> bool
+    put(
+        "contains",
+        scheme(vec![0, 1], pure_fn(a(), pure_fn(res(a(), e()), Ty::Bool))),
     );
 }
 
@@ -4875,7 +5077,7 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_scheme(
             vec![0, 1],
             pure_fn(
-                arrow_e(a(), arrow_e(b(), a())),
+                pure_fn(a(), arrow_e(b(), a())),
                 pure_fn(a(), arrow_e(seq(b()), a())),
             ),
         ),
@@ -5019,6 +5221,77 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), option(a()))),
+        ),
+    );
+
+    // ---- from the FSharp.Core audit: `List` had these and `Seq` did not ----
+    let ord_scheme = |vars: Vec<u32>, ord_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars,
+        eff_vars: vec![],
+        mutable: false,
+        ty,
+    };
+    let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars,
+        ord_vars: vec![],
+        eff_vars: vec![ev],
+        mutable: false,
+        ty,
+    };
+    // Seq.empty : Seq a
+    put("empty", mono(vec![0], seq(a())));
+    // Seq.distinctBy : (a ->{e} b) -> Seq a ->{e} Seq a   (lazy, remembering keys)
+    put(
+        "distinctBy",
+        eff_scheme(
+            vec![0, 1],
+            pure_fn(arrow_e(a(), b()), arrow_e(seq(a()), seq(a()))),
+        ),
+    );
+    // Seq.replicate : int -> a -> Seq a
+    put(
+        "replicate",
+        mono(vec![0], pure_fn(int(), pure_fn(a(), seq(a())))),
+    );
+    // Seq.get : int -> Seq a -> Option a   (consumes up to that position)
+    put(
+        "get",
+        mono(vec![0], pure_fn(int(), pure_fn(seq(a()), option(a())))),
+    );
+    // Seq.last : Seq a -> Option a
+    put("last", mono(vec![0], pure_fn(seq(a()), option(a()))));
+    // Seq.sumBy : num b => (a ->{e} b) -> Seq a ->{e} b
+    put(
+        "sumBy",
+        num_eff_scheme(
+            vec![0, 1],
+            vec![1],
+            pure_fn(arrow_e(a(), b()), arrow_e(seq(a()), b())),
+        ),
+    );
+    // Seq.max / Seq.min : comparison a => Seq a -> Option a
+    put(
+        "max",
+        ord_scheme(vec![0], vec![0], pure_fn(seq(a()), option(a()))),
+    );
+    put(
+        "min",
+        ord_scheme(vec![0], vec![0], pure_fn(seq(a()), option(a()))),
+    );
+    // Seq.reduce : (a ->{e} a ->{e} a) -> Seq a ->{e} Option a
+    put(
+        "reduce",
+        eff_scheme(
+            vec![0],
+            pure_fn(
+                pure_fn(a(), arrow_e(a(), a())),
+                arrow_e(seq(a()), option(a())),
+            ),
         ),
     );
 }
@@ -8544,6 +8817,7 @@ mod member_doc_tests {
     const NO_COST: &[&str] = &[
         "Set.empty",
         "Map.empty",
+        "Seq.empty",
         "String.fromInt",
         "String.fromFloat",
     ];
