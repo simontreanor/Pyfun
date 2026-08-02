@@ -1,7 +1,13 @@
 # Releasing Pyfun
 
-The compiler version in `Cargo.toml` is canonical, and **every versioned artifact
-tracks it** — one Pyfun version, the same number everywhere a user can read one.
+The compiler version in `Cargo.toml` is canonical, and **every artifact that carries
+the Pyfun version tracks it** — one Pyfun version, the same number everywhere a user
+can read one. That set is `Cargo.toml`, `editors/vscode/package.json`,
+`editors/jetbrains/build.gradle.kts` and `editors/emacs/pyfun-mode.el`; the wheel and
+the Jupyter kernel derive theirs. Two artifacts are deliberately versioned on their
+own because they change on their own schedule and a user reads them as a grammar
+rather than as a compiler: `editors/zed/extension.toml` and
+`editors/tree-sitter-pyfun/tree-sitter.json`, each bumped when the grammar changes.
 An editor artifact is never left behind because "it didn't change": a user whose
 extension says 0.2.0 while `pyfun --version` says 0.3.0 has no way to tell whether
 that is fine or a broken install. Version numbers are cheap; that doubt is not.
@@ -13,6 +19,7 @@ that is fine or a broken install. Version numbers are cheap; that doubt is not.
    - `editors/vscode/package.json` (+ a `CHANGELOG.md` entry — "no client
      changes" is a fine entry)
    - `editors/jetbrains/build.gradle.kts`
+   - `editors/emacs/pyfun-mode.el` (the `;; Version:` header — MELPA reads it)
 2. Commit, `git tag vX.Y.Z`, push the tag → `wheels.yml` publishes `pyfun-lang`
    to PyPI (Trusted Publishing) and attaches the `.vsix` to the GitHub release.
    **The attached `.vsix` is named from `package.json`, not the tag** — bumping in

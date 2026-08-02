@@ -51,10 +51,22 @@ require('nvim-treesitter.parsers').get_parser_configs().pyfun = {
 ```bash
 npm install -g tree-sitter-cli   # or: cargo install tree-sitter-cli
 tree-sitter generate             # grammar.js -> src/parser.c
+tree-sitter test                 # the corpus goldens in test/corpus/
 tree-sitter parse test/stress.pyfun
 ```
 
-The correctness gate: **every `.pyfun` file in the repo must parse with zero
+`test/corpus/` holds the golden parse trees (`expressions`, `items`, `layout`,
+`patterns`), and `tree-sitter test` is the suite to run after any `grammar.js`
+change — add a case there for the syntax you added. The CLI needs C headers to
+build the generated parser, which the Windows dev machine does not have, so the
+route that works there is a container:
+
+```bash
+docker run --rm -v "$PWD:/g" -w /g node:24-trixie \
+  sh -c "npm i -g tree-sitter-cli@0.26.11 && tree-sitter generate && tree-sitter test"
+```
+
+The other correctness gate: **every `.pyfun` file in the repo must parse with zero
 ERROR nodes**, and `test/stress.pyfun` (which covers constructs the examples
 don't) must stay accepted by the real compiler:
 

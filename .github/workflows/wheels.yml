@@ -125,8 +125,9 @@ jobs:
   # this tag. The Marketplace publish itself stays manual (drag the .vsix into
   # https://marketplace.visualstudio.com/manage/publishers/pyfun). CLI publishing
   # is a dead end here (see the vsce --azure-credential bug). The vsix carries the
-  # version from editors/vscode/package.json, which is independent of the pip tag,
-  # so bump it there before tagging when the extension itself changed.
+  # version from editors/vscode/package.json, not the tag, so bumping it is step 1
+  # of RELEASING.md — every release, whether or not the client itself changed, so
+  # that a user comparing the extension against `pyfun --version` sees one number.
   vscode-extension:
     name: Package VS Code extension
     runs-on: ubuntu-latest

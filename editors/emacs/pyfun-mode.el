@@ -4,8 +4,9 @@
 
 ;; Author: Simon Treanor
 ;; Maintainer: Simon Treanor
+;; Assisted-by: Claude Code:claude-opus-5
 ;; URL: https://github.com/simontreanor/Pyfun
-;; Version: 0.1.0
+;; Version: 0.5.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: languages
 
@@ -40,8 +41,18 @@
     "import" "try" "as" "not" "and" "or")
   "Pyfun reserved words.")
 
+(defconst pyfun-mode--builders
+  '("async" "seq" "result" "option")
+  "Built-in computation-expression builders.
+Contextual: each is a builder only immediately before an opening brace.")
+
 (defconst pyfun-mode--font-lock-keywords
   `((,(regexp-opt pyfun-mode--keywords 'symbols) . font-lock-keyword-face)
+    ;; CE builders, only where one opens a block: `result {'.
+    (,(concat (regexp-opt pyfun-mode--builders 'symbols) "\\(?:\\s-\\|\n\\)*{")
+     (1 font-lock-builtin-face))
+    ;; The bang forms, which `regexp-opt' cannot reach through `symbols'.
+    ("\\_<\\(?:let\\|do\\|return\\|yield\\)!" . font-lock-keyword-face)
     ("\\_<\\(?:true\\|false\\)\\_>" . font-lock-constant-face)
     ;; Uppercase-initial identifiers: types, constructors, modules.
     ("\\_<[A-Z][A-Za-z0-9_]*\\_>" . font-lock-type-face)

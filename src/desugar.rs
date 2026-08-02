@@ -2,8 +2,8 @@
 //! builders. A `Builder { … }` where `Builder` is an in-file `module` desugars
 //! into ordinary calls on that module's protocol functions, after which the
 //! normal HM inference and lowering handle it — no per-builder type rules or
-//! codegen. (The three built-ins `async`/`seq`/`result` keep their bespoke native
-//! lowering instead; they are not desugared here.)
+//! codegen. (The four built-ins `async`/`seq`/`result`/`option` keep their bespoke
+//! native lowering instead; they are not desugared here.)
 //!
 //! The protocol mirrors F#'s, lowercased and keyword-safe:
 //!

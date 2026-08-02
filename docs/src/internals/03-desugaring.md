@@ -64,18 +64,19 @@ the builder module, threading the rest of the block through as a continuation la
 
 ```rust
 // src/desugar.rs
-CeItem::LetBang { name, name_span, value } => {
+CeItem::LetBang { target, target_span, value } => {
     let cont = require_rest(builder, rest, span, "`let!`", value)?;
     Ok(call2(builder, "bind", value.clone(),
-             lam(name.clone(), *name_span, cont, span), span))
+             lam(target.clone(), *target_span, cont, span), span))
 }
 ```
 
 Because the result is ordinary calls, the desugaring is **type-directed for free**: the builder's
 own `bind` and `return_` signatures determine the types through normal inference on the rewritten
 calls. There are no per-builder type rules and no per-builder codegen. Note too that the
-`let!`-bound name keeps its original span on the generated lambda parameter, so hover and rename
-still work on a name that only exists after desugaring.
+`let!`-bound pattern keeps its original span on the generated lambda parameter, so hover and rename
+still work on a name that only exists after desugaring. The target is a `Pattern`, not a name, so
+`let! (r, c) = …` destructures the same way an ordinary `let` does.
 
 ## The built-in `result {}`, natively
 
@@ -107,4 +108,4 @@ constructor function to
 equivalent `Fn`/`App`/`Binary` tree (following `op_func` and `compose`), call it from the parser
 where the surface form is recognized, and keep the pretty-printer rendering the surface spelling so
 the roundtrip holds. If the sugar needs its own lowering to stay idiomatic, as the built-in CEs do,
-it instead belongs downstream in [lowering](README.md), not in this pass.
+it instead belongs downstream in [lowering](07-lowering.md), not in this pass.

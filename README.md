@@ -266,7 +266,7 @@ let force = 10<N>
 let side = sqrt 16.0<m^2>       # float<m>, unit-aware roots
 ```
 
-**Computation expressions** (F#'s showcase feature): `result`, `seq`, `async`, plus your own:
+**Computation expressions** (F#'s showcase feature): `result`, `option`, `seq`, `async`, plus your own:
 
 ```fsharp
 let checked ok v =
@@ -289,9 +289,9 @@ let path = r"C:\Users\pyfun"    # raw string, backslashes literal
 ```
 
 And a standard library that reads like F#'s: module-qualified `List` / `Set` / `Map` / `Option` /
-`Result` / `Seq` / `String` (`List.map`, `Map.tryFind`, `Result.bind`, lazy `Seq.take`,
-`String.split`), tuples, active patterns, typed holes for type-driven development, and
-multi-file projects with `import`.
+`Result` / `Seq` / `String` / `Format` (`List.map`, `Map.tryFind`, `Result.bind`, lazy `Seq.take`,
+`String.split`), tuples, destructuring `let` bindings (`let (r, c) = coord`), active patterns,
+typed holes for type-driven development, and multi-file projects with `import`.
 
 ---
 
@@ -468,10 +468,10 @@ to learn Rust on a real codebase), see **[Inside the compiler](https://simontrea
 
 ## Status
 
-MVP showcase complete and runnable: ADTs, records, tuples, computation expressions (including
-user-defined builders), units of measure, mutability, inferred multi-label effects, general Python
-FFI via `extern`, a module-qualified standard library, string interpolation, active patterns,
-typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](https://github.com/simontreanor/Pyfun/blob/main/ROADMAP.md) for what's next.
+MVP showcase complete and runnable: ADTs, records, tuples, destructuring bindings, computation
+expressions (four built-in, plus user-defined builders), units of measure, mutability, inferred
+multi-label effects, general Python FFI via `extern`, a module-qualified standard library, string
+interpolation, active patterns, typed holes, file-based modules, and a full LSP. See [`ROADMAP.md`](https://github.com/simontreanor/Pyfun/blob/main/ROADMAP.md) for what's next.
 
 This is a solo, actively-developed project: the MVP is feature-complete and runnable, but it's
 pre-1.0. Expect sharp edges; the language surface is stabilizing but not frozen.

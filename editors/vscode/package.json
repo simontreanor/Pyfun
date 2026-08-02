@@ -95,7 +95,7 @@
             }
           },
           {
-            "comment": "Computation-expression builders `async`/`seq`/`result` — pinned to Monokai purple to give the CE openers their own identity, distinct from keywords and declarations.",
+            "comment": "Computation-expression builders `async`/`seq`/`result`/`option` — pinned to Monokai purple to give the CE openers their own identity, distinct from keywords and declarations.",
             "scope": [
               "keyword.other.computation.pyfun"
             ],
@@ -115,7 +115,7 @@
             }
           },
           {
-            "comment": "Control-flow keywords (`if`/`then`/`else`/`elif`/`match`/`case`/`with`/`return`/`yield`/`do`/`in`) and the logical `and`/`or`/`not` — pinned to bracket-gold so control flow stays distinct and pink remains reserved for the `mut`/`<-`/`extern` escape hatches.",
+            "comment": "Control-flow keywords (`if`/`then`/`else`/`elif`/`match`/`case`/`with`/`return`/`yield`/`do`/`try`) and the logical `and`/`or`/`not` — pinned to bracket-gold so control flow stays distinct and pink remains reserved for the `mut`/`<-`/`extern` escape hatches.",
             "scope": [
               "keyword.control.pyfun",
               "keyword.operator.logical.pyfun"
@@ -152,7 +152,7 @@
               }
             },
             {
-              "comment": "CE builders (`async`/`seq`/`result`) — violet, the darkened purple.",
+              "comment": "CE builders (`async`/`seq`/`result`/`option`) — violet, the darkened purple.",
               "scope": [
                 "keyword.other.computation.pyfun"
               ],

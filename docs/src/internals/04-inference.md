@@ -102,4 +102,4 @@ The prelude and the stdlib modules are seeded as type schemes in
 source of truth for each is a names-and-arities table (`PRELUDE`, `LIST_PRELUDE`, and the rest)
 paired with a `seed_*` function that builds the scheme. To add a builtin you add its entry and its
 scheme there, marking the effect on the relevant arrow if it is not pure. Lowering reads the same
-arity table so partial application still works, which the [lowering chapter](README.md) picks up.
+arity table so partial application still works, which the [lowering chapter](07-lowering.md) picks up.

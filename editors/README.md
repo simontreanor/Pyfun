@@ -130,7 +130,18 @@ cp editors/tree-sitter-pyfun/queries/highlights.scm ~/.config/helix/runtime/quer
 
 ## Emacs
 
-Emacs 29+ has eglot built in. Add to your `init.el`:
+A major mode ships in [`emacs/pyfun-mode.el`](emacs/pyfun-mode.el): syntax highlighting, comment
+handling, and eglot registration. Put it on your `load-path` and require it:
+
+```elisp
+(add-to-list 'load-path "/path/to/Pyfun/editors/emacs")
+(require 'pyfun-mode)
+(add-hook 'pyfun-mode-hook #'eglot-ensure)
+```
+
+Emacs 29+ has eglot built in, and `pyfun-mode` already registers `pyfun lsp` with it. If you would
+rather not clone anything, this much in `init.el` gets you the language server without
+highlighting:
 
 ```elisp
 (define-derived-mode pyfun-mode prog-mode "Pyfun"
@@ -172,12 +183,13 @@ directory of a clone (Zed compiles it locally; needs a Rust toolchain). See
 
 ## PyCharm / IntelliJ (including free mode and Community editions)
 
-A dedicated marketplace plugin lives in [`jetbrains/`](jetbrains/) (file type +
-TextMate highlighting + LSP via LSP4IJ, one-click once it clears marketplace
-moderation). Until then — or if you prefer zero plugins of ours — the manual
-route below gives the same result.
+Install **Pyfun** from the JetBrains Marketplace (**Settings → Plugins → Marketplace**, search
+`Pyfun`): file type, syntax highlighting, and the language server via LSP4IJ, on 2024.2+ including
+unified PyCharm's free mode and the legacy Community editions. The source is in
+[`jetbrains/`](jetbrains/).
 
-Two pieces, both zero-code: an LSP client and syntax highlighting.
+If you prefer zero plugins of ours, the manual route below gives the same result in two
+zero-code pieces: an LSP client and syntax highlighting.
 
 **1. Language server via [LSP4IJ](https://plugins.jetbrains.com/plugin/23257-lsp4ij)**
 (Red Hat's free, open-source LSP client — works in unified PyCharm's free mode *and* the
@@ -198,10 +210,6 @@ VS Code-format extensions directly):
 1. Clone this repo (or copy the [`vscode/`](vscode/) folder).
 2. **Settings → Editor → TextMate Bundles**, click **+**, and select the `editors/vscode`
    directory.
-
-> On unified PyCharm/IntelliJ 2025.2+, JetBrains' native LSP API is also free for all
-> users, so a dedicated marketplace plugin is possible — it's on the roadmap for when
-> there's demand; the LSP4IJ route above needs nothing from us.
 
 ---
 

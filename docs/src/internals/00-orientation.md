@@ -49,7 +49,7 @@ module map; the short version is that each stage of the pipeline is its own dire
 The dependency order among them is the pipeline order:
 
 > **Build order:** `lexer` + `parser` + `ast` -> `desugar` -> `types` (incl. `units`) ->
-> `lowering` + `python_emitter` -> `diagnostics` + `cli` -> `lsp`.
+> `lowering` + `python_emitter` -> `diagnostics` + `main` -> `project` -> `lsp`.
 
 Reading the modules in that order is reading the compiler from front to back, which is exactly
 what this tour does.

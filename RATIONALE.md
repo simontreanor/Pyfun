@@ -102,8 +102,8 @@ know it is safe.
 ## Currying that reads as plain calls
 
 Functions curry by default. A fully applied call compiles straight to a direct call, so `f a b c`
-becomes `f(a, b, c)`. Closures appear only when you partially apply, where they compile to
-`functools.partial`. The `|>` pipe is sugar that resolves at compile time and costs nothing at runtime.
+becomes `f(a, b, c)`. Closures appear only when you partially apply, where a named function compiles
+to `functools.partial` and a lambda closes over the argument directly, so `(+) 2` is `lambda b: 2 + b`. The `|>` pipe is sugar that resolves at compile time and costs nothing at runtime.
 
 The Python side stays n-ary in both directions. You call an imported Python function with normal syntax,
 and a Pyfun function you expose to Python has a plain `def` signature. Python callers work with ordinary
@@ -129,8 +129,8 @@ you handle rather than a crash. The `examples/interop/` cookbook shows the patte
 
 ## A small surface, on purpose
 
-Pyfun keeps a deliberately small surface. There are three computation expressions, `async`, `seq`, and
-`result`, and a fixed set of built-in units. The reason is that parser quality, error quality, and
+Pyfun keeps a deliberately small surface. There are four computation expressions, `async`, `seq`,
+`result` and `option`, and a fixed set of built-in units. The reason is that parser quality, error quality, and
 predictable lowering are where the effort pays off, so the language spends its budget there rather than
 on breadth. User-defined CE builders arrived after the core settled, because they desugar cleanly
 through machinery that already existed.
