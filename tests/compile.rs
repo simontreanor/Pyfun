@@ -4936,8 +4936,27 @@ fn run_and_check(source: &str, expected: &[(&str, &str)]) {
         "unexpected output\nprogram:\n{program}\nstdout:\n{stdout}"
     );
     for (line, (name, want)) in lines.iter().zip(expected) {
+        if float_eq(line, want) {
+            continue;
+        }
         assert_eq!(line, want, "binding `{name}` mismatch\nprogram:\n{program}");
     }
+}
+
+/// Whether two printed values are the same float to within rounding noise.
+///
+/// A libm is free to return the nearest representable result rather than the exact
+/// one, and they differ by platform: `math.cbrt(27.0)` is `3.0` on Windows and macOS
+/// and `3.0000000000000004` on the Linux CI runner. The unit and arithmetic tests are
+/// about which computation is emitted, not about the last bit of the answer, so a
+/// relative tolerance is what they actually mean to assert. Non-numeric output falls
+/// through to the exact comparison.
+fn float_eq(got: &str, want: &str) -> bool {
+    let (Ok(a), Ok(b)) = (got.parse::<f64>(), want.parse::<f64>()) else {
+        return false;
+    };
+    let scale = a.abs().max(b.abs()).max(1.0);
+    (a - b).abs() <= scale * 1e-12
 }
 
 /// The first available Python interpreter command, if any.
