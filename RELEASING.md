@@ -23,8 +23,14 @@ that is fine or a broken install. Version numbers are cheap; that doubt is not.
      (https://marketplace.visualstudio.com/manage/publishers/pyfun — the CLI auth
      path is broken; do not fight it).
    - **Open VSX**: `npx ovsx publish <vsix> -p $OPEN_VSX_APIKEY`.
-   - **JetBrains**: `gradle publishPlugin` (needs `JETBRAINS_PERMANENT_TOKEN`;
-     JDK 21) — but see the acceptance gate below.
+   - **JetBrains**: `./gradlew publishPlugin` in `editors/jetbrains/` (needs
+     `JETBRAINS_PERMANENT_TOKEN` and JDK 21; the wrapper fetches Gradle itself,
+     so nothing has to be installed) — but see the acceptance gate below. The
+     upload then waits on JetBrains moderation, so the plugins API keeps
+     reporting the previous version for a while; that is not a failed publish.
+     **Use the wrapper, never a bare `gradle`** — Gradle is not installed on the
+     dev machine, and each release that reached for it lost time rediscovering
+     that.
 4. Verify: `pip install "pyfun-lang[jupyter]==X.Y.Z"` in a clean venv, then
    `pip install -U "pyfun-lang[jupyter]"` in the day-to-day Python env so the
    Jupyter kernel is not stranded on the previous compiler.
