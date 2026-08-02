@@ -149,6 +149,71 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    already exists and already wins over the heuristic, so this turns a silent runtime failure into a
    diagnostic pointing at the existing answer.
 
+## Dogfooding findings (2026-08-02, second session on the same program)
+
+A second pass over the same private game found two gaps, both about the *shape* of code rather than a
+missing capability: each has a working spelling today, and each costs the readable Python that lowering
+exists to protect. Both are accepted work. They compose — together they turn a chained-`Option` function
+into the statements a Python programmer would have written — but they are independent, and the second is
+the higher-value of the two.
+
+8. **`Option` is the one short-circuit type with no computation expression** (M) — the stdlib's own
+   accessor convention (item 5: *bare names returning `Option`* for anything that can fail) makes
+   `Option` the type it pushes you to chain, and chaining it means one nested `match` per step with an
+   identical `case None: None` arm at every level. The dogfooded program hit this at three stdlib calls
+   in a row (`List.get`, `List.findIndex`, `String.toInt`). Further evidence that the battery is missing
+   rather than deliberately excluded: `docs/src/learn/20-build-your-own-ce.md` teaches CE-authoring by
+   having the reader write the `Option` builder as its worked example.
+
+   **A user-defined builder does not close it**, which is the whole point. `src/desugar.rs` is an
+   *expression* transform, so `Opt { … }` compiles to a chain of nested `bind` lambdas on one line,
+   while `result { … }`'s bespoke `lower_result_items` (`src/lowering/mod.rs:3337`) emits a flat
+   sequence of `match` statements with early returns for the identical control flow. Readable output is
+   the pitch, and this is the one common short-circuit shape that does not get it.
+
+   **What keeps a fourth built-in from being scope creep**: *a built-in CE exists for each built-in
+   short-circuit type*. `Option` and `Result` are the two prelude ADTs, `async` and `seq` are the two
+   Python control-flow forms, and there is no fifth candidate, so the set closes at four rather than
+   opening up. Spelling is lowercase **`option`**, mirroring `result`/`Result`; builder keywords are
+   contextual rather than reserved, and bare `{ … }` record literals were removed with the tagged-record
+   change, so nothing else can parse there. The item set is exactly `result`'s (`let`, `let!`, `do!`,
+   `return`, `return!`; no `yield`).
+
+   The work is a fourth arm in `CeBuilder::from_name` (`src/parser/ast.rs:580`), a typing rule beside
+   `result`'s, and `lower_option_items` mirroring `lower_result_items` — *simpler* than the model it
+   copies, because the short-circuit arm carries no payload to rebind (`case None_(): return None_()`
+   against `result_bind_match`'s `case Error(e): return Error(e)`). One diagnostic goes with it: the
+   prelude `Option` module and the built-in `option` do not collide (user builders resolve from an
+   uppercase name), but they are a near-miss, so uppercase `Option { let! … }` should get a fix-it
+   naming the lowercase form instead of a member-not-found error pointing into prelude code.
+
+   **Turned down: giving the prelude `Option` module a `return_` and using it as a user builder.** The
+   CE protocol binds value-first (`bind value (fun x -> …)`, `src/desugar.rs:44`) while the prelude is
+   function-first (`Option.bind : (a ->{e} Option b) -> Option a ->{e} Option b`) so that it reads under
+   `|>`; the two orders are deliberately incompatible, and the cheap version would still emit the lambda
+   chain that is the actual complaint. **Scope guards**: a CE earns its keep at *two or more* binds — a
+   single bind reads better as `Option.map`/`Option.bind`, which is where lesson 13 already draws the
+   line for `result { }` and where the docs for this should draw it too. And lesson 20 keeps the
+   `Option` builder as its worked example, gaining a line saying the built-in does this with a flat
+   lowering and you are rebuilding it to see the mechanism, which documents why built-ins exist at all.
+
+9. **A `let` binding cannot destructure** (M) — `let (r, c) = parseCoord tok` does not parse anywhere in
+   the language: `LetBinding` carries `name: String` (`src/parser/ast.rs:289`) and so does
+   `CeItem::LetBang` (`:604`). It surfaced inside a CE body, where it forces a `match` that exists for
+   no reason other than to take a tuple apart, but it is not a CE papercut: top-level `let`, block `let`,
+   and CE `let`/`let!` all have it, and Python spells this `a, b = f()`. That makes it the broader of the
+   two findings and the one that pays out at every binding site.
+
+   Fix: `let` (and `let!`) accept an **irrefutable** pattern — tuples, single-constructor records,
+   wildcards, and nestings of those. Refutable patterns stay at `match`, which keeps "the compiler is the
+   gatekeeper, no runtime surprises" intact and makes the restriction explainable in one sentence. The
+   work is spread thin rather than deep: the parser stores a `Pattern` where it stores a name today, and
+   every path that asks what names a binding introduces (lowering's scope scan, the mutation and effect
+   checks, the LSP resolver) has to learn that one `let` can introduce several. The editor side should be
+   mostly free, since `Pattern::Var { name, span }` and `resolve::walk_pattern` already exist for match
+   arms. Emitted output is a plain Python tuple unpacking, so this costs nothing in readability — and on
+   top of #8 it is what removes the last lambda from a chained-`Option` function.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
