@@ -1,7 +1,7 @@
 id = "pyfun"
 name = "Pyfun"
 description = "Pyfun language support: Tree-sitter syntax highlighting and the pyfun language server."
-version = "0.1.0"
+version = "0.2.0"
 schema_version = 1
 authors = ["Simon Treanor"]
 repository = "https://github.com/simontreanor/Pyfun"
@@ -15,5 +15,5 @@ languages = ["Pyfun"]
 # repository + rev). Bump `rev` when the grammar changes.
 [grammars.pyfun]
 repository = "https://github.com/simontreanor/Pyfun"
-rev = "90502f1857052920b8f3e80f959fa81522fc535a"
+rev = "64b6faa691d81883f80d377d1a5103858da97c42"
 path = "editors/tree-sitter-pyfun"
