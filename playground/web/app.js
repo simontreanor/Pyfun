@@ -33,6 +33,75 @@ print (f"total area: {total}")
 `,
   },
   {
+    label: "Computation expressions",
+    source: `# Computation expressions: F#'s flagship sugar, and Pyfun ships four of them.
+# \`option { }\` chains steps that may find nothing. The first None ends the block,
+# so one failure arm covers the whole chain instead of one per step.
+let describe m =
+  option {
+    let! name = Map.tryFind "name" m
+    let! age = Map.tryFind "age" m
+    return f"{name} is {age}"
+  }
+
+let ada = Map.ofList [("name", "Ada"), ("age", "36")]
+let sparse = Map.ofList [("name", "Bo")]
+
+print (describe ada)
+print (describe sparse)
+
+# \`result { }\` is the same shape where a failure carries a reason.
+let addStrings a b =
+  result {
+    let! x = Option.toResult "not a number" (String.toInt a)
+    let! y = Option.toResult "not a number" (String.toInt b)
+    return x + y
+  }
+
+print (addStrings "3" "4")
+print (addStrings "3" "oops")
+
+# \`seq { }\` lowers to a Python generator; \`async { }\` lowers to async/await.
+let counts =
+  seq {
+    yield 1
+    yield 2
+    yield 3
+  }
+
+print (Seq.toList counts)
+
+# Try it: drop the \`return\` from the option block and read what the compiler says.
+`,
+  },
+  {
+    label: "Opaque types",
+    source: `# Opaque types: a zero-cost newtype. \`UserId\` and \`Email\` are both strings underneath,
+# and the checker still refuses to let one stand in for the other. The distinction is
+# erased at lowering, so the emitted Python carries no wrapper class at all.
+opaque type UserId = string
+opaque type Email = string
+
+type Account = { id: UserId, email: Email, credits: int }
+
+let unwrapId u =
+  match u:
+    case UserId s: s
+
+let account = Account { id = UserId "u-1001", email = Email "ana@example.org", credits = 12 }
+
+# A \`let\` binding destructures, so the pieces come out named in one line.
+let Account { id, credits } = account
+let (low, high) = (credits - 5, credits + 5)
+
+print (unwrapId id)
+print (f"credits between {low} and {high}")
+
+# Try it: swap \`UserId "u-1001"\` for \`Email "u-1001"\` and the compiler stops you,
+# even though both are a plain string once the program reaches Python.
+`,
+  },
+  {
     label: "JSON → typed records",
     source: `# Parse JSON into your own typed records.
 # Bad input becomes a value you handle, never a crash.
@@ -145,7 +214,9 @@ function sourceFromHash() {
   const hash = location.hash.slice(1);
   if (hash.startsWith("code=")) {
     try {
-      return decodeSource(hash.slice("code=".length));
+      const source = decodeSource(hash.slice("code=".length));
+      examplePicker.value = "shared";
+      return source;
     } catch {
       return null;
     }
@@ -164,17 +235,25 @@ function sourceFromHash() {
 // doesn't compile.
 let lastPython = null;
 
-// Byte offset -> 1-based line/column. Spans are byte offsets; for the ASCII the
-// examples use this matches character indices. (Non-ASCII would need a byte walk.)
+// Byte offset -> 1-based line/column. The spans Rust hands back are byte offsets,
+// while a JS string is indexed in UTF-16 code units, so anything non-ASCII earlier
+// in the buffer (an accent, an emoji, the `£` in a string literal) would drift every
+// later diagnostic. Walking the encoded bytes keeps them aligned. Column counts
+// characters, which is what a reader is looking at.
+const ENCODER = new TextEncoder();
+
 function lineCol(source, offset) {
+  const bytes = ENCODER.encode(source);
+  const end = Math.min(offset, bytes.length);
   let line = 1;
   let col = 1;
-  const end = Math.min(offset, source.length);
   for (let i = 0; i < end; i++) {
-    if (source[i] === "\n") {
+    const b = bytes[i];
+    if (b === 0x0a) {
       line++;
       col = 1;
-    } else {
+    } else if ((b & 0xc0) !== 0x80) {
+      // Count only the first byte of each character, skipping continuations.
       col++;
     }
   }
@@ -232,6 +311,13 @@ for (let i = 0; i < EXAMPLES.length; i++) {
   opt.textContent = EXAMPLES[i].label;
   examplePicker.appendChild(opt);
 }
+// A shared #code= link is not any of the examples, so the picker says so rather than
+// labelling someone else's program with whichever example happens to be first.
+const sharedOption = document.createElement("option");
+sharedOption.value = "shared";
+sharedOption.textContent = "Shared program";
+sharedOption.hidden = true;
+examplePicker.appendChild(sharedOption);
 examplePicker.addEventListener("change", () => {
   const ex = EXAMPLES[Number(examplePicker.value)];
   if (!ex) return;
@@ -309,6 +395,8 @@ async function main() {
     runner.warm();
   }
   compileFn = await loadCompiler(import.meta.url);
+  const versionEl = document.getElementById("version");
+  if (versionEl && compileFn.version) versionEl.textContent = ` (${compileFn.version})`;
   editor.value = sourceFromHash() ?? EXAMPLES[0].source;
   render();
 }

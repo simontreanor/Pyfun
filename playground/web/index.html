@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pyfun Playground</title>
+  <meta name="description" content="Write Pyfun in the browser and watch it compile to readable Python, type-checked live by the real compiler running as WebAssembly. Run the result in CPython, no server and no runtime library.">
+  <meta property="og:title" content="Pyfun Playground">
+  <meta property="og:description" content="Write Pyfun in the browser and watch it compile to readable Python, type-checked live by the real compiler running as WebAssembly.">
+  <meta property="og:type" content="website">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
@@ -42,9 +46,10 @@
   </main>
 
   <footer>
-    <a href="https://github.com/simontreanor/Pyfun">GitHub</a>
+    <a href="../">Learn Pyfun</a>
+    &middot; <a href="https://github.com/simontreanor/Pyfun">GitHub</a>
     &middot; <code>pip install pyfun-lang</code>
-    &middot; the compiler on this page <em>is</em> the WebAssembly it loaded
+    &middot; the compiler on this page <em>is</em> the WebAssembly it loaded<span id="version"></span>
   </footer>
 
   <!-- Pyodide runs in a Web Worker (see pyodide-worker.js), off the main thread, so the

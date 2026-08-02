@@ -20,6 +20,11 @@ pub mod types;
 
 pub use parser::ast as syntax;
 
+/// The compiler version, so an embedder can report which one it is running.
+/// `pyfun version` reads the same constant through the binary crate, and the
+/// WebAssembly playground shows it in the page footer.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Lex and parse `source` into a [`syntax::Module`].
 ///
 /// This is the convenience entry point used by the CLI and tests. Lexing and
