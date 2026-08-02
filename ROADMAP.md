@@ -325,18 +325,22 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
+- **PyPI** — `pyfun-lang` at **0.5.0** (2026-08-02, published by the tag and verified by installing
+  it into a clean venv and running both 0.5.0 features against it). Rides the tag; no manual step.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.4.0** (2026-07-31, verified against the registry API). Every release:
+  At **0.5.0** (2026-08-02, verified against the registry API). Every release:
   `ovsx publish <vsix> -p <token>` (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). 0.1.0, 0.2.0 and **0.3.0 all approved** (verified against the
-  plugins API 2026-07-31 — the earlier "awaiting moderation" note was stale). **0.4.0 is not
-  uploaded yet**: it is the one artifact the 0.4.0 release still owes, and acceptance is already
-  granted, so `gradle publishPlugin` (JDK 21, `JETBRAINS_PERMANENT_TOKEN`) is not gated on
-  anything.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.4.0** (2026-07-31, verified
-  against the gallery API). The **only surface that cannot be scripted**: the vsix is uploaded by
+  mode + legacy CE, 2024.2+). At **0.4.0** (2026-08-02, verified against the plugins API — the
+  earlier "0.4.0 is not uploaded yet" note was stale, as the "awaiting moderation" one had been
+  before it; check the API rather than this line). **0.5.0 is owed.** Acceptance is granted, so
+  nothing gates it but the toolchain: `gradle publishPlugin` needs JDK 21 **and Gradle**, and
+  Gradle is not installed on the dev machine (there is no wrapper in `editors/jetbrains/`, so
+  `gradle` must come from PATH). Adding a Gradle wrapper would make this scriptable like Open VSX.
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.4.0** (2026-08-02, verified
+  against the gallery API; **0.5.0 is owed** — the vsix is built at
+  `editors/vscode/pyfun-0.5.0.vsix` and attached to the GitHub release). The **only surface that cannot be scripted**: the vsix is uploaded by
   hand through the publisher web UI (the CLI auth path is broken — see
   `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls
   behind; check it whenever a release goes out. Note it reports the *previous* version for a few
