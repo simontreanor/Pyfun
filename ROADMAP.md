@@ -332,20 +332,20 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   `ovsx publish <vsix> -p <token>` (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.4.0** (2026-08-02, verified against the plugins API — the
-  earlier "0.4.0 is not uploaded yet" note was stale, as the "awaiting moderation" one had been
-  before it; check the API rather than this line). **0.5.0 uploaded 2026-08-02 and is awaiting
-  moderation** — the API lists approved versions only, so it will read 0.4.0 until that clears.
-  `editors/jetbrains/` now has a **committed Gradle wrapper**: `./gradlew publishPlugin` (JDK 21 +
-  `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this machine and
-  two releases running lost time rediscovering that before reaching for a bare `gradle`.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.4.0** (2026-08-02, verified
-  against the gallery API; **0.5.0 is owed** — the vsix is built at
-  `editors/vscode/pyfun-0.5.0.vsix` and attached to the GitHub release). The **only surface that cannot be scripted**: the vsix is uploaded by
-  hand through the publisher web UI (the CLI auth path is broken — see
-  `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls
-  behind; check it whenever a release goes out. Note it reports the *previous* version for a few
-  minutes after an upload while validation runs, so a stale read there is not a failed upload.
+  mode + legacy CE, 2024.2+). At **0.5.0**, uploaded and **approved 2026-08-02** (verified against
+  the plugins API; an earlier "0.4.0 is not uploaded yet" note here was stale, as an "awaiting
+  moderation" one had been before it — check the API, not this line). `editors/jetbrains/` has a
+  **committed Gradle wrapper**: `./gradlew publishPlugin` (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`)
+  needs nothing installed, because Gradle is *not* on this machine and two releases running lost
+  time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
+  API lists approved versions only, so it reads the previous one until moderation clears.
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`. **0.5.0 uploaded 2026-08-02** and in
+  Marketplace verification at the time of writing; the gallery API reads 0.4.0 until that clears,
+  which is a lag and not a failed upload (the publisher UI shows the pending version as
+  "Verifying"). The **only surface that cannot be scripted**: the vsix is uploaded by hand through
+  the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI
+  auth path is broken — see `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the
+  one that silently falls behind; check it whenever a release goes out.
 - **Third-party registries — PARKED until there is adoption evidence** (decided 2026-07-31). The
   surfaces Pyfun controls (PyPI, VS Code Marketplace, Open VSX, JetBrains) are the ones that get
   kept current every release; these do not, and their status is deliberately *not* re-checked each
