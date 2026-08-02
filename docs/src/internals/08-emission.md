@@ -111,8 +111,8 @@ came from a compiler.
 
 ## Where you would add a new emitted construct
 
-A new Python shape (say a `while` loop for a future optimization) starts as a variant on `PyStmt`
-or `PyExpr` in
+A new Python shape (say a `try`/`except` form, or the `PyStmt::WhileTrue` the self-tail-call pass
+needed) starts as a variant on `PyStmt` or `PyExpr` in
 [src/python_emitter/mod.rs](https://github.com/simontreanor/Pyfun/blob/main/src/python_emitter/mod.rs),
 with its rendering arm in `emit_stmt`/`emit_expr`, and only then does lowering get to produce it.
 Adding the IR node first keeps the "no string splicing" contract intact and gives you one place

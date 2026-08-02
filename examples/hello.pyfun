@@ -180,6 +180,17 @@ let checked ok v =
     return x + 1
   }
 
+#   option {} — the same railway over Option, for chaining lookups that may find
+#   nothing. One `case None` arm covers the whole chain instead of one per step.
+let firstTwo xs =
+  option {
+    let! a = List.get 0 xs
+    let! b = List.get 1 xs
+    return a + b
+  }
+print (firstTwo [10, 20, 30])      # Some(30)
+print (firstTwo [10])              # None_ — the emitted class name, `None` being taken in Python
+
 #   seq {} — a lazy sequence, lowered to a Python generator.
 let small =
   seq {

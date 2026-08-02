@@ -25,7 +25,7 @@ does **not** work: VS Code only loads extensions registered in its `extensions/e
 manifest, which `--install-extension` updates.
 
 ```bash
-code-insiders --install-extension pyfun-0.1.0.vsix --force
+code-insiders --install-extension pyfun-0.5.0.vsix --force
 ```
 
 Point the extension at the built server via a setting (see below), then reload the window. An
@@ -38,6 +38,11 @@ The extension shells out to a `pyfun` executable. From the repo root:
 ```bash
 cargo build                      # produces target/debug/pyfun
 ```
+
+On Windows the running language server holds `target/debug/pyfun.exe` open, so a plain `cargo build`
+fails to relink it with "Access is denied". [`build-lsp.ps1`](../../build-lsp.ps1) in the repo root
+handles that: it builds into the secondary `target-test/` directory and hot-swaps the fresh binary
+into place, stopping the server only for as long as the copy takes.
 
 Then either put `pyfun` on your `PATH`, or set `pyfun.server.path` in VS Code settings to the built
 binary. `${workspaceFolder}` is expanded by the client, so a checkout-relative path works on any
@@ -87,7 +92,18 @@ diagnostics appear on save/typing and hover shows inferred types. After changing
 
 ## Publishing to the Marketplace
 
-See the VS Code docs on [publishing extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).
-In short: create a publisher whose ID matches the `publisher` field in `package.json`, then from this
-directory run `npx @vscode/vsce publish`. The `pyfun.server.path` default (`pyfun` on `PATH`) means a
-Marketplace install works as soon as the user has run `pip install pyfun-lang`.
+The extension is published as `pyfun.pyfun`. Package it here with `npx @vscode/vsce package`, then
+**upload the `.vsix` by hand** through the publisher web UI at
+<https://marketplace.visualstudio.com/manage/publishers/pyfun>.
+
+**Do not reach for `npx @vscode/vsce publish`.** The CLI auth path does not work for this publisher:
+the personal access token is rejected because the Microsoft account and the Azure DevOps tenant that
+owns the publisher disagree, which is [vsce#976](https://github.com/microsoft/vscode-vsce/issues/976)
+and not something a token re-issue fixes. Two releases have lost time to it. The web upload takes a
+minute, and verification takes a few more, during which the gallery API keeps reporting the previous
+version and the publisher UI shows the new one as "Verifying" — a lag, not a failure.
+
+Open VSX has no such problem and is scriptable: `npx ovsx publish <vsix> -p $OPEN_VSX_APIKEY`.
+
+The `pyfun.server.path` default (`pyfun` on `PATH`) means a Marketplace install works as soon as the
+user has run `pip install pyfun-lang`.

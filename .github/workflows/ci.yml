@@ -1,0 +1,71 @@
+# The project's own gate: the three commands CLAUDE.md names (test, clippy, fmt)
+# on the pinned toolchain. Everything else in .github/workflows publishes or
+# deploys something; this is the one that decides whether a change is sound.
+#
+# Tests run on all three OSes because the end-to-end suite shells out to a Python
+# interpreter and the emitted code has to run everywhere the wheel installs.
+# Clippy and fmt are toolchain-deterministic, so once is enough for them.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      # Pyfun targets Python 3.12+ (the emitted code uses `match` and PEP 701
+      # f-strings). Without an interpreter the e2e tests skip rather than fail,
+      # which would quietly hollow out this job.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo fmt --check
+
+  # The learner track is executable documentation: every lesson's solution runs
+  # and its output is compared against what the lesson prints. A compiler change
+  # that alters a diagnostic or a stdlib suggestion shows up here.
+  lessons:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build
+      - run: python docs/verify_lessons.py

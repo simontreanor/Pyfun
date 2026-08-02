@@ -3,6 +3,5 @@
 .vscode/**
 .gitignore
 DEVELOPMENT.md
-build_icon.py
 **/*.vsix
 **/*.map

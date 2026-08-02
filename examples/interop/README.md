@@ -40,6 +40,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
 | [`datetime.pyfun`](./datetime.pyfun) | `datetime` (stdlib) | ✅ | a **pure** FFI: `extern pure` + `let pure` prove a date pipeline effect-free; class target as constructor; `extern import` for classmethods (`now`, `fromisoformat`); `operator.add`/`sub` as extern targets; `try` on an impossible date |
+| [`network-rail/`](./network-rail/) | `gzip`/`pathlib` (stdlib) | ✅ on the bundled fixture | the boundary at scale: the national rail timetable feed folded in constant memory through a lazy `Seq`, in two versions whose only difference is where the streaming boundary sits (~1.3× apart on the real 3 GB feed) |
 
 ## Reusable patterns (all verified against the current compiler)
 
@@ -89,8 +90,11 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   method (`= .write_text(encoding = ...)`). A partially applied slot extern keeps working:
   `parseInt "ff"` is a function awaiting the base.
 - **`extern import` when the heuristic can't see the module.** A dotted target's module is
-  guessed by its lowercase prefix, which mis-reads a lowercase *class* (or value attribute)
-  as a submodule. Declare it explicitly — Python's own import statement, `as` and all:
+  guessed by its lowercase prefix. Where that prefix is undecidable — a lowercase segment
+  after the first, which might be a submodule or might be a class or value attribute — the
+  compiler refuses to guess and names the declaration to add rather than emitting an import
+  that may not work (`extern flush : unit -> unit = sys.stdout.flush` asks for
+  `extern import sys`). Declare it explicitly — Python's own import statement, `as` and all:
   `extern import datetime` roots every `datetime.datetime.*` target in the file
   (`datetime.pyfun`); `extern import numpy as np` lets targets say `np.zeros` and emits
   `import numpy as np` (`DESIGN.md` §6).

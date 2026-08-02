@@ -11,20 +11,52 @@ For every docs/src/learn/NN-*.md file:
 
 Usage: python verify_lessons.py
 Exit code 0 = all good; prints a per-file report either way.
+
+The compiler it runs is `target/debug/pyfun` (override with PYFUN_BIN). A binary
+older than Cargo.toml is refused rather than used: verifying the lessons against
+a stale compiler reports every one of them green for the wrong reason.
 """
 
 import base64
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(r"C:\git\Pyfun")
+REPO = Path(__file__).resolve().parents[1]
 LEARN = REPO / "docs" / "src" / "learn"
-PYFUN = REPO / "target" / "debug" / "pyfun.exe"
+PYFUN = Path(
+    os.environ.get("PYFUN_BIN")
+    or next(
+        (p for p in (REPO / "target/debug/pyfun.exe", REPO / "target/debug/pyfun") if p.exists()),
+        REPO / "target/debug/pyfun",
+    )
+)
 LINK_RE = re.compile(r"\]\(https://simontreanor\.github\.io/Pyfun/playground/#code=([A-Za-z0-9_-]+)\)")
 BLOCK_RE = re.compile(r"```pyfun\n(.*?)```", re.DOTALL)
+
+
+def require_current_compiler() -> None:
+    """Refuse a compiler older than the sources it is meant to check.
+
+    The failure this prevents is silent: an out-of-date binary reports every
+    lesson green, because the lessons were green against *it*.
+    """
+    if not PYFUN.exists():
+        sys.exit(f"no compiler at {PYFUN} — run `cargo build` (or set PYFUN_BIN)")
+    declared = re.search(
+        r'^version = "([^"]+)"', (REPO / "Cargo.toml").read_text(encoding="utf-8"), re.M
+    )
+    built = subprocess.run(
+        [str(PYFUN), "version"], capture_output=True, text=True
+    ).stdout.split()
+    if declared and built and built[-1] != declared.group(1):
+        sys.exit(
+            f"{PYFUN} is {built[-1]} but Cargo.toml says {declared.group(1)} — "
+            "run `cargo build` first"
+        )
 
 
 def decode(enc: str) -> str:
@@ -46,6 +78,8 @@ def run_pyfun(cmd: str, code: str) -> subprocess.CompletedProcess:
 def norm(s: str) -> str:
     return "\n".join(line.rstrip() for line in s.replace("\r\n", "\n").strip().split("\n"))
 
+
+require_current_compiler()
 
 failures = 0
 for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):

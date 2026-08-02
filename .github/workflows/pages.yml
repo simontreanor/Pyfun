@@ -33,7 +33,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Match the toolchain pinned by rust-toolchain.toml, with the wasm target.
       - uses: dtolnay/rust-toolchain@master

@@ -34,7 +34,7 @@
       ]
     },
     "computation-expressions": {
-      "comment": "The three built-in CE builders, only when opening a block.",
+      "comment": "The four built-in CE builders, only when opening a block.",
       "match": "\\b(async|seq|result|option)\\b(?=\\s*\\{)",
       "name": "keyword.other.computation.pyfun"
     },
@@ -65,8 +65,8 @@
           "name": "keyword.other.extern.pyfun"
         },
         {
-          "comment": "Other binding/declaration keywords (benign).",
-          "match": "\\b(fun|type|opaque|measure|module)\\b",
+          "comment": "Other binding/declaration keywords (benign). `import` brings in a module (§6.1) and `as` names an as-pattern.",
+          "match": "\\b(fun|type|opaque|measure|module|import|as)\\b",
           "name": "keyword.declaration.pyfun"
         }
       ]
@@ -76,7 +76,7 @@
         {
           "comment": "Control-flow keywords. `case` is a match arm (DESIGN.md §7.2); `match e:` / `case pat [if guard]: body`. `elif` is sugar for `else if`. `with` now only introduces a record update `{ p with x = 3 }`.",
           "name": "keyword.control.pyfun",
-          "match": "\\b(if|then|else|elif|match|case|with|return|yield|do|in)\\b(!)?"
+          "match": "\\b(if|then|else|elif|match|case|with|return|yield|do|try)\\b(!)?"
         },
         {
           "name": "keyword.operator.logical.pyfun",

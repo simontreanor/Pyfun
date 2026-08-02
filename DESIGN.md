@@ -1009,7 +1009,7 @@ Differences from Python that the MVP commits to:
 | Application    | `f(a, b)` n-ary             | `f a b`; `f a` is a partial application       |
 | Pipe           | none                        | `x \|> f \|> g` (= `g(f(x))`)                  |
 | Effects        | untracked                   | tracked in the type (§4)                      |
-| Comp. exprs    | none (ad-hoc `async`/gens)  | `async {}` / `seq {}` / `result {}` (§8)      |
+| Comp. exprs    | none (ad-hoc `async`/gens)  | `async {}` / `seq {}` / `result {}` / `option {}` (§8) |
 | Units          | none                        | units of measure, compile-time only (§8)      |
 
 **Functions are curried by default** (F# style): `let add a b = a + b` has type
@@ -1614,12 +1614,12 @@ case: being indentation-sensitive, it *forbids* blocks in expression position (h
 single-expression `lambda`); an expression-oriented language that went indentation-only for CEs
 would inherit exactly that limitation. So Pyfun keeps the braces deliberately, not by inheritance:
 
-- Pyfun is currently whitespace-insensitive (no offside rule at all — `lexer/mod.rs`), so the `{ }`
-  is the *only* thing delimiting a CE block today.
-- The contextual-keyword scheme (`async`/`seq`/`result` are keywords *only* immediately before `{`)
+- Pyfun's offside rule (`lexer/mod.rs`) delimits *statements and blocks*, not an expression embedded
+  mid-expression, so the `{ }` is what delimits a CE block.
+- The contextual-keyword scheme (`async`/`seq`/`result`/`option` are keywords *only* immediately before `{`)
   depends on the explicit brace as its disambiguator.
-- A future offside rule for `let`/`match`/function bodies is **orthogonal** and composes with this
-  (exactly as in F#): adding it would not require changing CE or record braces. Records (§8.3) reuse
+- The offside rule for `let`/`match`/function bodies proved **orthogonal** and composed with this
+  (exactly as in F#): adding it required no change to CE or record braces. Records (§8.3) reuse
   `{ }` as well, so the brace family stays consistent.
 
 ### 8.2 Units of measure
@@ -1906,10 +1906,14 @@ accreting features. The MVP showcase set (§8) is a *deliberate, fixed* exceptio
 outside it is deferred. Hold the line:
 
 - **Do not fork CPython** — Pyfun is a front end targeting Python, full stop.
-- Beyond the MVP (effects + the three CEs + units), defer **user-defined CE builders**, **unit
-  polymorphism** (if not trivially free), macros, and a package manager until the core is solid.
-- Ship **exactly three** built-in computation expressions (`async`/`seq`/`result`) — no more — and
-  a **small** built-in unit set. Generality comes after the MVP proves out.
+- Beyond the MVP (effects + the CEs + units), defer **unit polymorphism** (if not trivially free),
+  macros, and a package manager until the core is solid. **User-defined CE builders** were on this
+  list and came off it once the core settled: they desugar through machinery that already existed
+  (§8.1), so they cost no new checking rules.
+- The built-in computation expressions are **closed by a rule, not by a count** (§8.1): one per
+  built-in short-circuit type (`Option`, `Result`) and one per Python control-flow form (`async`,
+  `seq`). That is four, and there is no fifth candidate — which is what stops "add one more" from
+  becoming a habit. The built-in unit set stays **small** for the same reason.
 - Syntax is cheap; resist inventing more. Parser quality, error quality, and predictable lowering
   are what make the language usable — spend effort there.
 - Keep the effect lattice small until real programs justify expanding it.

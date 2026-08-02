@@ -20,8 +20,7 @@ timings for programs that computed different results.
 
 Deliberately **not** here: I/O-bound workloads. The network-rail example's
 runtime is gzip decompression and long-line scanning, costs every runtime pays
-alike; it measures the shape of that job, not the language (see
-`local/article-draft-leverage-dont-emulate.md`).
+alike; it measures the shape of that job, not the language.
 
 ## Running
 

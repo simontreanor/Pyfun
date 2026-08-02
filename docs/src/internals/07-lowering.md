@@ -29,6 +29,10 @@ fn build_call(&mut self, head: PyExpr, arity: Option<usize>, args: Vec<PyExpr>) 
     let n = args.len();
     match arity {
         Some(k) if n < k => {
+            // A partially applied lambda closes over the argument directly.
+            if let Some(reduced) = beta_reduce(&head, &args) {
+                return reduced;
+            }
             // Partial application.
             self.needs_functools = true;
             // ... functools.partial(head, args...)
@@ -43,9 +47,11 @@ fn build_call(&mut self, head: PyExpr, arity: Option<usize>, args: Vec<PyExpr>) 
 In the running example, `area s` inside the fold is a full application, so it collapses to the
 direct call `area(s)`, and the fold's folder is a two-argument lambda applied fully. Arities
 come from a syntactic table of top-level functions, constructors, and prelude members, built in
-the lowerer's constructor. A genuine partial application (`add 1`) instead sets `needs_functools`
-and emits `functools.partial(add, 1)`. This mirrors what F# does at the IL level: closures only
-where partial application is real.
+the lowerer's constructor. A genuine partial application of a *named* function (`add 1`) instead
+sets `needs_functools` and emits `functools.partial(add, 1)`. A partially applied *lambda* skips
+that wrapper: `beta_reduce` substitutes the argument into the body, so the operator section
+`(+) 2` emits `lambda b: 2 + b` rather than a partial around a two-argument lambda. This mirrors
+what F# does at the IL level: closures only where partial application is real.
 
 ## The pipe is lowering-time sugar
 
