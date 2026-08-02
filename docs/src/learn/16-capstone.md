@@ -50,9 +50,9 @@ print report
 The checker names each expected type:
 
 ```console
-note: hole `?` has type `Decoder float` — try: Decode.float
-note: hole `?` has type `float<m>` — try: a
-note: hole `?` has type `float<'a>` — try: dist, time
+note: hole `?` has type `Decoder float` — try: Decode.float — or: Decode.fail ?, Decode.oneOf ?, Decode.succeed ?, Decode.field ? ?
+note: hole `?` has type `float<m>` — try: a — or: cbrt ?, sqrt ?, abs ?, max ? ?
+note: hole `?` has type `float<'a>` — try: dist, time — or: cbrt ?, sqrt ?, abs ?, max ? ?
 ```
 
 Expected output:

@@ -98,7 +98,7 @@ print (double "21")
 Some(42)
 ```
 
-A second built-in builder is `seq { }`, which describes a sequence one `yield` at a time. It stays
+Another built-in builder is `seq { }`, which describes a sequence one `yield` at a time. It stays
 lazy, and it lowers to a Python generator function, which you may already know from Python's own
 `yield`:
 

@@ -39,8 +39,12 @@ class Point:
     x: int
     y: int
 here = Point(3, 4)
-moved = Point(10, here.y)
+_pf_t0 = here
+moved = Point(10, _pf_t0.y)
 ```
+
+The `_pf_t0` line is the compiler holding on to the record being copied, so a base that took work to
+compute is evaluated once however many fields the update carries over.
 
 Records also match. A `case` may name a subset of the fields, and `{ x }` shorthand binds the field
 to a variable of the same name:
@@ -85,7 +89,7 @@ print opened.balance
 The checker reports:
 
 ```console
-note: hole `?` has type `int` — or: List.sum ?, String.len ?, ceil ?, floor ?
+note: hole `?` has type `int` — or: List.sum ?, Seq.sum ?, String.len ?, ceil ?
  --> 4:38
   |
 4 | let funded = { opened with balance = ? }

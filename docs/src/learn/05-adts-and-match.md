@@ -53,15 +53,15 @@ A `case` arm can carry a condition. Write `if` after the pattern and the arm onl
 guard is true:
 
 ```pyfun
-let sign n =
+let describeSign n =
   match n:
     case 0: "zero"
     case m if m > 0: "positive"
     case _: "negative"
 
-print (sign 5)
-print (sign 0)
-print (sign (0 - 4))
+print (describeSign 5)
+print (describeSign 0)
+print (describeSign (0 - 4))
 ```
 
 ```console
@@ -75,7 +75,7 @@ false, so the compiler does not count it toward covering the type. Drop the `cas
 the guarded arm, and the check fails:
 
 ```pyfun
-let sign n =
+let describeSign n =
   match n:
     case 0: "zero"
     case m if m > 0: "positive"

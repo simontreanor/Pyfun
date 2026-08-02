@@ -36,12 +36,39 @@ True
 True
 ```
 
-A recursive Pyfun function compiles to a plain Python function, so it shares Python's call stack and
-its recursion limit. A recursion thousands of levels deep will overflow that stack, the same as it
-would in hand-written Python. For walking a long list or summing a large collection, reach for
-`List.fold` and the other combinators from lesson 7, which loop underneath and stay flat. Recursion
-earns its keep on tree-shaped data, where the depth follows the structure rather than the size of
-the input.
+How deep a recursion can go depends on its shape. When a function's recursive call is the *last*
+thing it does, and it calls itself, the compiler turns it into a loop:
+
+```pyfun
+let countDown n acc = if n == 0 then acc else countDown (n - 1) (acc + n)
+
+print (countDown 100000 0)
+```
+
+```console
+5000050000
+```
+
+That is a hundred thousand levels deep and it does not overflow anything, because the emitted Python
+is the `while` loop you would have written by hand:
+
+```python
+def countDown(n, acc):
+    while True:
+        if n == 0:
+            return acc
+        else:
+            n, acc = (n - 1, acc + n)
+            continue
+```
+
+Every other shape compiles to a plain Python function and shares Python's call stack and its
+recursion limit. `fact` above is one: its recursive call sits under a `*`, so the multiplication
+still has to happen after the call returns and a frame has to wait for it. A recursion thousands of
+levels deep in that shape will overflow the stack, the same as it would in hand-written Python. For
+walking a long list or summing a large collection, reach for `List.fold` and the other combinators
+from lesson 7, which loop underneath and stay flat. Recursion earns its keep on tree-shaped data,
+where the depth follows the structure rather than the size of the input.
 
 An arithmetic expression is a natural tree: a number is a leaf, and an addition or a multiplication
 holds two smaller expressions. The lesson 5 material models it as an ADT, and `eval` walks it by
@@ -96,7 +123,7 @@ print (total sample)
 The checker reports:
 
 ```console
-note: hole `?` has type `int` — or: total ?, List.sum ?, String.len ?, ceil ?
+note: hole `?` has type `int` — or: total ?, List.sum ?, Seq.sum ?, String.len ?
  --> 8:22
   |
 8 |     case Branch l r: ?
