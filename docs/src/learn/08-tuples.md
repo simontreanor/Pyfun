@@ -76,21 +76,46 @@ ada scored 10
 (2, 1)
 ```
 
-A function parameter takes the same patterns, so `let line (name, score) = f"{name}: {score}"`
-binds both parts on the way in and skips the `match` from the previous example entirely.
+A function parameter takes the same patterns, which is where they save the most typing. A parameter
+that destructures binds the parts on the way in, so the body starts with the pieces already named
+and the `match` from the previous example disappears:
+
+```pyfun
+type Cell = { letter: string, points: int }
+
+let line (name, score) = f"{name}: {score}"
+let label (Cell { letter, points }) = f"{letter} is worth {points}"
+
+print (line ("ada", 10))
+print (label (Cell { letter = "Q", points = 10 }))
+print (List.map line [("ada", 10), ("alan", 9)])
+```
+
+```console
+ada: 10
+Q is worth 10
+['ada: 10', 'alan: 9']
+```
+
+That last line is the everyday payoff: a function folding or mapping over pairs reads as a function
+of two named things, with no helper in the way. Note the brackets around a record pattern in a
+parameter, which keep `label (Cell { … })` from parsing as two parameters.
 
 The rule in all three positions is that the pattern has to match every value of its type. Names,
 `_`, tuples and records qualify, and they nest. A constructor pattern does not, because it can
 fail:
 
 ```pyfun
-let Some x = Some 1
+let (Some x) = Some 1
 ```
 
 ```console
 error: a `let` binding must always match, so it takes a name, `_`, or a tuple or record of those,
 not a constructor pattern (use `match` instead, which has somewhere to fall through to)
 ```
+
+The brackets matter. Without them, `let Some x = …` reads the way `let f x = …` does, as a function
+definition whose parameter is `x`, so the constructor never reaches the pattern grammar at all.
 
 That is the trade. `match` handles the patterns that can fail, because it has other arms to fall
 through to, and `let` handles the ones that cannot, because it does not.

@@ -29,7 +29,8 @@ Session 5: run lessons 12 and 13 as one session and lessons 14 through 16 as a s
 capstone (lesson 16) as the finale. That split is noted again in the Session 5 doc.
 
 Beyond the core unit, the course has a **Going further** set (recursion, async, active patterns,
-building a computation expression, and string/number details). It works well as stretch material
+building a computation expression, string/number details, opaque types, and keyword arguments at
+the Python boundary). It works well as stretch material
 for students who finish early, as self-study after the unit, or as the seed of an extra session if
 your course has room.
 

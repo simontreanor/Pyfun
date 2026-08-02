@@ -45,6 +45,44 @@ argument function, and `(*) 2` is multiplication with one argument already suppl
 `List.map ((*) 2) ns` doubles every element. `List.fold` walks the list carrying an accumulator,
 starting from `0` here and adding each element, which is how you reduce a list to a single value.
 
+There is a fourth collection, and it is the lazy one. A `Seq` describes elements that are produced
+as they are asked for rather than stored, which is Python's own iterator idea with a type on it.
+`Seq.ofList` starts one from a list, the familiar combinators work over it, and `Seq.toList` runs
+it out into a `List` at the end. Nothing between those two lines does any work until the last line
+asks:
+
+```pyfun
+let ns = [4, 8, 15, 16, 23]
+
+ns
+|> Seq.ofList
+|> Seq.map (fun n -> n * n)
+|> Seq.filter (fun n -> n > 100)
+|> Seq.take 2
+|> Seq.toList
+|> print
+
+Seq.initInfinite (fun i -> i * 3) |> Seq.take 4 |> Seq.toList |> print
+```
+
+```console
+[225, 256]
+[0, 3, 6, 9]
+```
+
+The second line is the point of laziness: `Seq.initInfinite` describes an endless sequence, and
+`Seq.take 4` is what makes it finite. It lowers to a Python generator, so a `Seq` over a large file
+holds one element at a time however long the file is. Reach for `List` when you want the elements,
+and `Seq` when you want the pipeline.
+
+The four modules go well beyond what these examples use. `List` alone carries sorting (`sortBy`),
+splitting (`partition`, `chunk`), positional edits (`updateAt`, `insertAt`, `removeAt`) and much
+else, `Map` has `keys`/`values`/`findOr`, and `Set` has the set algebra you would expect. Two
+conventions hold across all of them: functions are total, so `List.take 99` on a five element list
+clamps rather than raising, and any accessor that can come up empty returns an `Option`, which is
+why `List.head` hands back `Option a` instead of raising on an empty list. Hover a module name in
+your editor, or type `:type` in the REPL, to see what a module offers.
+
 Totality carries over from lesson 3. In Python, `ns[9]` on a five element list raises `IndexError`.
 Pyfun has no bracket indexing at all. Instead `List.get 9 ns` returns an `Option`, `None` when the
 index is out of range, and you supply a fallback with `Option.withDefault`. The lookup cannot crash,
@@ -77,7 +115,7 @@ note: hole `?` has type `int -> int -> int` — try: const, max, min — or: fli
 3 | let total = List.fold ? 0 ns
   |                       ^
 
-note: hole `?` has type `int` — try: total — or: List.sum ?, String.len ?, cbrt ?, ceil ?
+note: hole `?` has type `int` — try: total — or: List.sum ?, Seq.sum ?, String.len ?, cbrt ?
  --> 4:32
   |
 4 | let atTen = Option.withDefault ? (List.get 10 ns)

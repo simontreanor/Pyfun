@@ -18,6 +18,50 @@ readings = [2.0, 4.0, 9.0]
 print(statistics.mean(readings))
 ```
 
+## Naming the module when the target cannot be read
+
+`= statistics.mean` gave the compiler an easy job: `statistics` is the module and `mean` is the function, so `import statistics` is the only sensible import. Deeper targets are not always so clear. In `sys.stdout.flush`, the middle segment `stdout` could be a submodule the way `os.path` is, or an object the way `sys.stdout` actually is, and which one it is depends on the running Python rather than on the text. So the compiler declines to guess:
+
+```pyfun
+extern flush: unit -> unit = sys.stdout.flush
+```
+
+```console
+error: cannot tell which part of `sys.stdout.flush` names the module: `stdout` is lowercase, so it could be a submodule (like `os.path`) or an object (like `sys.stdout`), and only the running environment knows which; declare it with `extern import sys` — or `extern import sys.stdout` if `stdout` really is a module
+```
+
+The fix is the line the error names. `extern import` is Python's own import statement, and it settles the question for every target in the file:
+
+```pyfun
+extern import sys
+
+extern flush: unit -> unit = sys.stdout.flush
+
+print "written"
+flush ()
+```
+
+This emits `import sys` followed by `sys.stdout.flush()`, which is what you would have written by hand. `extern import` takes an alias too, so `extern import numpy as np` lets your targets say `np.zeros` and emits `import numpy as np`. Reach for it whenever a target has a lowercase segment in the middle, and whenever you want a specific import spelling regardless.
+
+## Calling a method on a value
+
+Plenty of Python libraries hand you an object and expect you to call methods on it. A target that begins with a dot is a member of the *first argument* rather than a name in a module, which is how a Pyfun function signature wraps a method:
+
+```pyfun
+extern type Path
+extern pure toPath: string -> Path = pathlib.Path
+extern pure suffix: Path -> string = .suffix
+extern pure withName: Path -> string -> Path = .with_name
+extern pure asText: Path -> string = builtins.str
+
+let renamed = withName (toPath "report.csv") "summary.csv"
+
+"report.csv" |> toPath |> suffix |> print
+renamed |> asText |> print
+```
+
+This prints `.csv` then `summary.csv`. `extern type Path` declares an opaque handle: Pyfun knows the type exists and keeps it distinct, and it never looks inside. The dotted targets work on attributes (`.suffix`) and on methods with their own arguments (`.with_name`), and because the receiver is just the first parameter, these compose in a pipe like any other Pyfun function. Reading the signature tells you exactly what crosses the boundary, which is the whole point of writing it down.
+
 The framing worth keeping is boundary versus engine. Pyfun shines at the boundary where the world is untyped and can fail, which is parsing, files, and the network. It adds little wrapped around an engine like numpy, whose speed lives in native code Pyfun cannot touch. Call the boundary safely and stay out of the engine's way.
 
 The clearest boundary is untrusted JSON. When an `extern` can raise, `try` from lesson 4 turns the exception into a `Result` you must handle. Building on that, the built-in `Decode` module turns raw JSON straight into your own record type or a structured error, so the rest of your program never sees an untyped shape. `Decode.field` pulls one field and runs a decoder on it, `Decode.string` and `Decode.int` decode strictly, `Decode.map2` combines two field decoders into one that builds a record, and `Decode.decodeString` runs the whole thing over a JSON string to yield `Result a Exception`.

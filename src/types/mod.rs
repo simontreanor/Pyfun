@@ -1371,21 +1371,27 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Format.fixed",
         "A float with exactly this many decimal places.",
     ),
-    ("Format.thousands", "An integer with thousands separators."),
+    (
+        "Format.thousands",
+        "A float with thousands separators and this many decimal places.",
+    ),
     (
         "Format.percent",
         "A fraction as a percentage with this many decimal places.",
     ),
     (
         "Format.currency",
-        "An amount with a currency symbol and two decimal places.",
+        "An amount with a currency symbol and this many decimal places.",
+    ),
+    ("Format.grouped", "An integer with thousands separators."),
+    (
+        "Format.padLeft",
+        "Right-align in a field of this width, padded with this fill string.",
     ),
     (
-        "Format.grouped",
-        "A float with thousands separators and this many decimal places.",
+        "Format.padRight",
+        "Left-align in a field of this width, padded with this fill string.",
     ),
-    ("Format.padLeft", "Right-align in a field of this width."),
-    ("Format.padRight", "Left-align in a field of this width."),
     ("Decode.string", "Decode a JSON string."),
     ("Decode.int", "Decode a JSON integer."),
     ("Decode.float", "Decode a JSON number."),

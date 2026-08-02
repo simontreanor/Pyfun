@@ -27,6 +27,15 @@ error: `greet` is declared `pure` but performs `io`
 
 The fix is not to weaken the assertion but to separate the two jobs. Keep the pure part pure by having it return a value, and perform the effect at the call site, where the `io` belongs. That separation is the point: your calculating code stays provably free of side effects, and the parts that talk to the world are the parts that say so.
 
+`print` is one half of the everyday `io` pair. The other is `input`, which shows a prompt and reads one line from standard input, exactly as Python's `input` does, and carries the same `io` effect:
+
+```pyfun
+let name = input "Your name: "
+print (f"Hello, {name}")
+```
+
+Run that with `pyfun run` and it does what you would expect. It is the shape most first programs take, and it makes the effect story concrete: a function that asks the user anything is `io` all the way up its callers, and the arithmetic underneath it can still be `pure`.
+
 ## Exercise
 
 `greet` is declared `pure`, but it prints inside its body, so it does not compile. Fix it by making `greet` return the greeting string and moving the `print` to the call site.

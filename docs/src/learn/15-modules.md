@@ -73,6 +73,50 @@ A cross-module call lowers to plain Python attribute access like `geometry.area(
 projects need the installed compiler on disk, since the playground runs a single source at a time.
 For practice there, an in-file `module` gives you the same qualified-use experience.
 
+## Types cross too
+
+Functions are the obvious thing to share, but the types themselves cross a module boundary as well,
+which is what lets you split a program along its data rather than around it. Given a `shapes.pyfun`
+that declares an ADT and a record:
+
+```pyfun
+type Shape =
+  | Circle float
+  | Rect float float
+
+type Placed = { shape: Shape, x: float, y: float }
+```
+
+another module can build those values, match them, and name the types in its own declarations:
+
+```pyfun
+import Shapes
+
+type Scene = { name: string, item: Shapes.Placed }
+
+let scene =
+  Scene { name = "demo", item = Shapes.Placed { shape = Shapes.Circle 2.0, x = 0.0, y = 0.0 } }
+
+let describe p =
+  match p.shape:
+    case Shapes.Circle r: f"circle of radius {r}"
+    case Shapes.Rect w h: f"{w} by {h} rectangle"
+
+print scene.name
+print (describe scene.item)
+```
+
+```console
+demo
+circle of radius 2.0
+```
+
+Constructors qualify like values do, in expressions and in `case` patterns alike, so
+`Shapes.Circle 2.0` builds one and `case Shapes.Circle r:` takes it apart. In *type* position the
+bare name works as well, so the record above could equally say `item: Placed`. Because a type can be
+named from a file other than the one declaring it, a record that holds another module's data no
+longer forces the two into a single file.
+
 ## Exercise
 
 Here is a flat program with two temperature conversions. Group both functions into an in-file module

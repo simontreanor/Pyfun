@@ -1,8 +1,8 @@
 # 18. Async
 
-Lesson 13 introduced computation expressions with `result { }` and `seq { }`. The third built-in
-builder is `async { }`, and it maps onto Python's own `async`/`await` the way `seq` maps onto
-generators. An `async { }` block builds an `Async a` value. Inside it, `let!` awaits another async
+Lesson 13 introduced computation expressions with `result { }`, `option { }` and `seq { }`. The
+fourth and last built-in builder is `async { }`, and it maps onto Python's own `async`/`await` the
+way `seq` maps onto generators. An `async { }` block builds an `Async a` value. Inside it, `let!` awaits another async
 step, and `return` hands back the final value.
 
 ```pyfun

@@ -41,6 +41,42 @@ Hello
 `String.slice 0 5` is total Python slicing, so an out-of-range bound clamps rather than raising, and
 `String.toInt "x"` hands back `None`, defaulted to `0` here.
 
+The module covers the rest of the everyday string work too, with the names a Python programmer
+expects: `String.startsWith`, `String.endsWith`, `String.contains`, `String.replace`,
+`String.splitLines`, `String.trimStart` and `String.trimEnd`, among others.
+
+## Formatting numbers for people
+
+Interpolation puts a value into a sentence, and a `Format` function decides how it should read.
+`f"{price}"` gives you Python's own rendering; `Format` gives you the presentation choices you would
+otherwise reach for a format specifier to express:
+
+```pyfun
+print (Format.fixed 2 3.14159)
+print (Format.thousands 2 1234567.891)
+print (Format.grouped 1234567)
+print (Format.percent 1 0.256)
+print (Format.padLeft 8 " " "42")
+```
+
+```console
+3.14
+1,234,567.89
+1,234,567
+25.6%
+      42
+```
+
+`Format.fixed` sets the decimal places, `Format.thousands` adds grouping to a float and `grouped`
+does the same for an integer, `Format.percent` turns a fraction into a percentage, and
+`padLeft`/`padRight` align text in a field of a given width using a fill string. `Format.currency`
+takes the symbol first, so `Format.currency "£" 2` partially applies into a reusable formatter.
+
+These are ordinary functions, which is the reason they exist. A format specifier inside a string
+(`f"{x:.2f}"` in Python) is a small language the compiler cannot see into, so `.f2` for `.2f` goes
+wrong only when it runs. A misapplied `Format.fixed` is a type error, and a house style for money or
+percentages is one function everything calls rather than a spelling everyone has to remember.
+
 ## String literals
 
 An f-string interpolates any expression in `{...}`, exactly like Python. A `{expr=}` hole is
@@ -150,7 +186,7 @@ print (label "oops")
 The checker reports:
 
 ```console
-note: hole `?` has type `int` — or: List.sum ?, String.len ?, ceil ?, floor ?
+note: hole `?` has type `int` — or: List.sum ?, Seq.sum ?, String.len ?, ceil ?
  --> 2:30
   |
 2 |   let n = Option.withDefault ? (String.toInt raw)
