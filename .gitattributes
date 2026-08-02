@@ -3,3 +3,10 @@ editors/tree-sitter-pyfun/src/parser.c linguist-generated
 editors/tree-sitter-pyfun/src/tree_sitter/** linguist-generated
 editors/zed/grammars/** linguist-vendored
 editors/zed/*.wasm linguist-generated
+
+# The Gradle wrapper. `gradlew` is a POSIX shell script: committed with CRLF it
+# fails on Linux/macOS with a bad-interpreter error, so pin its endings. The
+# `.bat` is the reverse, and the jar must never be line-ending converted.
+editors/jetbrains/gradlew text eol=lf
+editors/jetbrains/gradlew.bat text eol=crlf
+editors/jetbrains/gradle/wrapper/gradle-wrapper.jar binary
