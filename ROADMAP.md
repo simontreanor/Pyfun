@@ -339,10 +339,10 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   needs nothing installed, because Gradle is *not* on this machine and two releases running lost
   time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
   API lists approved versions only, so it reads the previous one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`. **0.5.0 uploaded 2026-08-02** and in
-  Marketplace verification at the time of writing; the gallery API reads 0.4.0 until that clears,
-  which is a lag and not a failed upload (the publisher UI shows the pending version as
-  "Verifying"). The **only surface that cannot be scripted**: the vsix is uploaded by hand through
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.5.0** (2026-08-02, verified
+  against the gallery API). Verification takes minutes, during which the API keeps reading the
+  previous version and the publisher UI shows the pending one as "Verifying" — a lag, not a failed
+  upload. The **only surface that cannot be scripted**: the vsix is uploaded by hand through
   the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI
   auth path is broken — see `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the
   one that silently falls behind; check it whenever a release goes out.
