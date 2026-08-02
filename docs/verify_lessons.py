@@ -71,7 +71,14 @@ def run_pyfun(cmd: str, code: str) -> subprocess.CompletedProcess:
         f.write(code)
         path = f.name
     return subprocess.run(
-        [str(PYFUN), cmd, path], capture_output=True, text=True, timeout=120
+        [str(PYFUN), cmd, path],
+        capture_output=True,
+        text=True,
+        # The compiler writes UTF-8; without this, Windows decodes its
+        # diagnostics as cp1252 and every quoted message containing an
+        # em dash mismatches a lesson that has it right.
+        encoding="utf-8",
+        timeout=120,
     )
 
 
