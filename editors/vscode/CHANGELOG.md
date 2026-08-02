@@ -3,6 +3,15 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.5.0
+
+- Version aligned to the compiler's 0.5.0 release. No client changes; the language server it drives
+  now understands destructuring `let` bindings (`let (r, c) = …`, `let Point { x, y } = …`, and the
+  same targets on a computation expression's `let`/`let!`), offering hover, go-to-definition,
+  find-references and rename per bound name rather than per binding, and it completes the new
+  `option { }` computation expression alongside `async`/`seq`/`result`. The bundled syntax grammar
+  highlights both.
+
 ## 0.4.0
 
 - Version aligned to the compiler's 0.4.0 release. No client changes; the language server it drives

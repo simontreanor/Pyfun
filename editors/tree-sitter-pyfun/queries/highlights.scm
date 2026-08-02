@@ -111,6 +111,7 @@
   "async"
   "seq"
   "result"
+  "option"
 ] @function.macro
 
 [

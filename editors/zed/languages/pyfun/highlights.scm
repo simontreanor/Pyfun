@@ -92,6 +92,7 @@
   "async"
   "seq"
   "result"
+  "option"
 ] @keyword
 
 [
