@@ -268,7 +268,7 @@ pub enum TypeExpr {
     Tuple(Vec<TypeExpr>),
 }
 
-/// `let [mut] name params... = value`.
+/// `let [mut] target params... = value`.
 ///
 /// Parameters make this a (curried) function definition; with no parameters it
 /// is a value binding. `mutable` records the `let mut` opt-in (§3); a non-`mut`
@@ -286,13 +286,55 @@ pub struct LetBinding {
     /// `let pure …` — an opt-in assertion that the binding introduces no effect
     /// (no `io`). Checked in the type phase; erased at lowering.
     pub pure: bool,
-    pub name: String,
-    /// The span of the binding `name`, so an editor can hover the definition site
-    /// to see its inferred type (`NodeSpan` compares equal, so this is invisible
-    /// to structural/roundtrip equality).
-    pub name_span: NodeSpan,
+    /// What the binding binds: a name, `_`, or an **irrefutable** pattern that
+    /// destructures the value (`let (r, c) = …`, `DESIGN.md` §7). Held to the
+    /// same shapes as a [`Param`] and by the same rule
+    /// (`parser::refutable_shape`), since a binding has no second arm to fall
+    /// through to. A binding with `params` — or with `mut` — takes a plain name;
+    /// only a value binding destructures.
+    pub target: Pattern,
+    /// The span of the whole binding target, so an editor can hover the
+    /// definition site to see its inferred type and diagnostics have somewhere to
+    /// point when the target is not a single name (`NodeSpan` compares equal, so
+    /// this is invisible to structural/roundtrip equality).
+    pub target_span: NodeSpan,
     pub params: Vec<Param>,
     pub value: Expr,
+}
+
+impl LetBinding {
+    /// The bound name when the target is a plain variable, which is the case
+    /// every phase has a shortcut for (and the only case a *function* binding can
+    /// be); `None` when it destructures or discards.
+    pub fn name(&self) -> Option<&str> {
+        match &self.target {
+            Pattern::Var { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// How to refer to this binding in a diagnostic: its name in backticks, or a
+    /// neutral phrase when it destructures and has no one name to blame.
+    pub fn describe(&self) -> String {
+        match self.name() {
+            Some(name) => format!("`{name}`"),
+            None => "this binding".to_string(),
+        }
+    }
+
+    /// Every name this binding introduces: one for a plain name, none for `_`, and
+    /// one per variable for a destructuring target. This is what scope tracking
+    /// needs, since a single `let` no longer means a single name.
+    pub fn bound_names(&self) -> Vec<String> {
+        self.target.bound_names()
+    }
+
+    /// Every name this binding introduces, paired with the span it was written at
+    /// — the definition site an editor navigates to, and the span the checker
+    /// records each name's inferred type against.
+    pub fn bound_vars(&self) -> Vec<(&str, Span)> {
+        self.target.bound_vars()
+    }
 }
 
 /// A function/value-binding parameter: the **irrefutable** pattern it binds, and
@@ -599,17 +641,18 @@ impl CeBuilder {
 /// One item inside a computation-expression block.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CeItem {
-    /// `let! name = value` — monadic bind. `name_span` is the binding name's span
+    /// `let! target = value` — monadic bind. The target takes the same irrefutable
+    /// patterns a `let` binding does (`let! (r, c) = …`); `target_span` is its span
     /// (for editor jump/hover; `NodeSpan` compares equal, so roundtrip-invisible).
     LetBang {
-        name: String,
-        name_span: NodeSpan,
+        target: Pattern,
+        target_span: NodeSpan,
         value: Expr,
     },
-    /// `let name = value` — ordinary binding.
+    /// `let target = value` — ordinary binding.
     Let {
-        name: String,
-        name_span: NodeSpan,
+        target: Pattern,
+        target_span: NodeSpan,
         value: Expr,
     },
     /// `do! value` — monadic bind discarding the result.
@@ -700,6 +743,81 @@ pub enum Pattern {
         name: String,
         name_span: NodeSpan,
     },
+}
+
+impl Pattern {
+    /// Every name this pattern binds, in source order. Used wherever a phase needs
+    /// the set a pattern brings into scope: match arms, parameters, and `let`
+    /// targets.
+    pub fn bound_names(&self) -> Vec<String> {
+        self.bound_vars()
+            .into_iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+
+    /// Every name this pattern binds, paired with the span it was written at, in
+    /// source order. The span is what lets an editor hover or jump to the one
+    /// element of a destructuring the cursor is actually over.
+    pub fn bound_vars(&self) -> Vec<(&str, Span)> {
+        let mut out = Vec::new();
+        self.collect_bound_vars(&mut out);
+        out
+    }
+
+    fn collect_bound_vars<'a>(&'a self, out: &mut Vec<(&'a str, Span)>) {
+        match self {
+            Pattern::Var { name, span } => out.push((name, span.span())),
+            Pattern::Ctor { args, .. } => {
+                for a in args {
+                    a.collect_bound_vars(out);
+                }
+            }
+            Pattern::Record { fields, .. } => {
+                for f in fields {
+                    f.pattern.collect_bound_vars(out);
+                }
+            }
+            Pattern::Tuple { elems } => {
+                for e in elems {
+                    e.collect_bound_vars(out);
+                }
+            }
+            // A list pattern binds its prefix/suffix elements' vars plus the rest binder.
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix {
+                    p.collect_bound_vars(out);
+                }
+                if let Some(r) = rest {
+                    r.collect_bound_vars(out);
+                }
+                for p in suffix {
+                    p.collect_bound_vars(out);
+                }
+            }
+            // Every alternative binds the same variables (enforced by the checker), so
+            // the first alternative's bindings are representative.
+            Pattern::Or(alts) => {
+                if let Some(first) = alts.first() {
+                    first.collect_bound_vars(out);
+                }
+            }
+            // `p as x` binds `x` plus whatever `p` binds.
+            Pattern::As {
+                pattern,
+                name,
+                name_span,
+            } => {
+                pattern.collect_bound_vars(out);
+                out.push((name, name_span.span()));
+            }
+            Pattern::Wildcard | Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => {}
+        }
+    }
 }
 
 /// One `name [= pattern]` entry in a record pattern. Shorthand `{ x }` carries a

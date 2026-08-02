@@ -4175,3 +4175,65 @@ fn compile_is_gated_on_type_checking() {
     // A well-typed one still compiles.
     assert!(pyfun::compile("let add a b = a + b\nlet r = add 1 2").is_ok());
 }
+
+// ---------- destructuring `let` (`DESIGN.md` §7) ----------
+
+#[test]
+fn a_tuple_target_binds_each_element_at_its_own_type() {
+    assert!(pyfun::check("let (a, b) = (1, \"x\")\nlet n = a + 1\nlet s = String.len b").is_ok());
+}
+
+#[test]
+fn a_tuple_target_must_match_the_value_shape() {
+    assert_error_contains("let (a, b) = 5", "expected ('a, 'b), found int");
+}
+
+#[test]
+fn a_tuple_target_must_match_the_value_arity() {
+    assert_error_contains("let (a, b, c) = (1, 2)", "found (int, int)");
+}
+
+#[test]
+fn a_record_target_binds_the_fields_it_names() {
+    assert!(
+        pyfun::check(
+            "type Point = { x: int, y: int }\nlet Point { x } = Point { x = 1, y = 2 }\nlet n = x + 1"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_destructured_name_generalizes_like_any_other_binding() {
+    // Both elements are polymorphic, and each instantiates freshly per use — the
+    // same let-generalization a single-name binding gets.
+    assert!(
+        pyfun::check(
+            "let (f, g) = (List.map, List.map)\nlet a = f (fun x -> x + 1) [1]\nlet b = g (fun s -> String.len s) [\"x\"]"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_destructuring_binding_leaks_its_effect() {
+    // The value still runs, so `let pure` still catches what it performs.
+    assert_error_contains(
+        "let pure (a, b) =\n  print \"hi\"\n  (1, 2)",
+        "is declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn a_destructuring_let_bang_binds_through_the_monad() {
+    assert!(pyfun::check("let f r = result {\n  let! (a, b) = r\n  return a + b\n}").is_ok());
+}
+
+#[test]
+fn a_destructuring_let_bang_unwraps_before_it_destructures() {
+    // The target sees the *inner* type, so a non-tuple payload is the error.
+    assert_error_contains(
+        "let f r = result {\n  let! (a, b) = r\n  return a\n}\nlet g = f (Ok 1)",
+        "expected ('a, 'b), found int",
+    );
+}

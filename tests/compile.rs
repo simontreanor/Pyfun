@@ -5663,3 +5663,104 @@ fn an_aliased_or_dotted_extern_import_re_roots_around_a_collision() {
     assert!(dotted.contains("import os.path as _pf_os"), "{dotted}");
     assert!(dotted.contains("_pf_os.join(\"a\", \"b\")"), "{dotted}");
 }
+
+// ---------- destructuring `let` (`DESIGN.md` §7) ----------
+
+#[test]
+fn destructuring_let_lowers_to_tuple_unpacking() {
+    // The point of the feature: the statement a Python programmer would write,
+    // with no temp in the way.
+    let py = pyfun::compile("let pair = (1, 2)\nlet (a, b) = pair").unwrap();
+    assert!(py.contains("a, b = pair"), "{py}");
+}
+
+#[test]
+fn destructuring_let_unpacks_straight_from_a_call() {
+    let py = pyfun::compile("let mk x = (x, x + 1)\nlet (a, b) = mk 1").unwrap();
+    assert!(py.contains("a, b = mk(1)"), "{py}");
+}
+
+#[test]
+fn a_wildcard_element_needs_no_name() {
+    let py = pyfun::compile("let pair = (1, 2)\nlet (a, _) = pair").unwrap();
+    assert!(py.contains("a, _ = pair"), "{py}");
+}
+
+#[test]
+fn a_nested_destructuring_unpacks_one_level_per_statement() {
+    let py = pyfun::compile("let p = (1, (2, 3))\nlet (a, (b, c)) = p").unwrap();
+    assert!(py.contains("a, _pf_t0_1 = p"), "{py}");
+    assert!(py.contains("b, c = _pf_t0_1"), "{py}");
+}
+
+#[test]
+fn a_record_target_reads_the_fields_it_names() {
+    let py = pyfun::compile(
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = 2 }\nlet Point { x, y } = p",
+    )
+    .unwrap();
+    assert!(py.contains("x = p.x"), "{py}");
+    assert!(py.contains("y = p.y"), "{py}");
+}
+
+#[test]
+fn a_destructuring_result_bind_rides_inside_the_ok_pattern() {
+    // `result`'s bespoke lowering keeps its flat statements: the target costs no
+    // extra unpacking line, it just becomes the `Ok` pattern's argument.
+    let py = pyfun::compile("let f r = result {\n  let! (a, b) = r\n  return a + b\n}").unwrap();
+    assert!(py.contains("case Ok((a, b)):"), "{py}");
+}
+
+#[test]
+fn a_module_member_destructuring_mangles_every_name() {
+    let py = pyfun::compile("module M =\n    let (w, h) = (3, 4)\nlet r = M.w + M.h").unwrap();
+    assert!(py.contains("M_w, M_h = (3, 4)"), "{py}");
+    assert!(py.contains("r = M_w + M_h"), "{py}");
+}
+
+#[test]
+fn e2e_destructuring_let_binds_every_name() {
+    run_and_check(
+        "
+        type Point = { x: int, y: int }
+        let (a, b) = (1, 2)
+        let (c, (d, e)) = (3, (4, 5))
+        let Point { x, y } = Point { x = 6, y = 7 }
+        let total = a + b + c + d + e + x + y
+        ",
+        &[("total", "28")],
+    );
+}
+
+#[test]
+fn e2e_a_destructuring_let_inside_a_function_body() {
+    run_and_check(
+        "
+        let swapSum p =
+          let (a, b) = p
+          let (c, d) = (b, a)
+          c * 10 + d
+        let r = swapSum (1, 2)
+        ",
+        &[("r", "21")],
+    );
+}
+
+#[test]
+fn e2e_a_destructuring_bind_in_a_result_block() {
+    run_and_check(
+        "
+        let f r =
+          result {
+            let! (a, b) = r
+            let (c, d) = (b, a)
+            return c * 10 + d
+          }
+        let ok =
+          match f (Ok (1, 2)):
+            case Ok v: v
+            case Error _: 0
+        ",
+        &[("ok", "21")],
+    );
+}

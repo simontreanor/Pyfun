@@ -275,14 +275,17 @@ impl Session {
             let start = module.items.len().saturating_sub(new_count);
             for item in &module.items[start..] {
                 if let Item::Let(binding) = item {
-                    let ty = analysis
-                        .types
-                        .iter()
-                        .find(|t| t.span == binding.name_span.span())
-                        .map(|t| t.ty.as_str());
-                    match ty {
-                        Some(ty) => println!("{} : {ty}", binding.name),
-                        None => println!("{}", binding.name),
+                    // A destructuring binding echoes one line per name it binds.
+                    for (name, span) in binding.bound_vars() {
+                        let ty = analysis
+                            .types
+                            .iter()
+                            .find(|t| t.span == span)
+                            .map(|t| t.ty.as_str());
+                        match ty {
+                            Some(ty) => println!("{name} : {ty}"),
+                            None => println!("{name}"),
+                        }
                     }
                 }
             }

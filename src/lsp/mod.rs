@@ -1311,7 +1311,7 @@ fn doc_to_markdown(doc: &str) -> String {
 fn item_doc(module: &crate::syntax::Module, name: &str) -> Option<String> {
     use crate::syntax::Item;
     module.items.iter().find_map(|item| match item {
-        Item::Let(binding) if binding.name == name => binding.doc.clone(),
+        Item::Let(binding) if binding.name() == Some(name) => binding.doc.clone(),
         Item::Type(decl) if decl.name == name => decl.doc.clone(),
         Item::Extern(decl) if decl.name == name => decl.doc.clone(),
         _ => None,

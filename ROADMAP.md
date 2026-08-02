@@ -197,22 +197,22 @@ the higher-value of the two.
    `Option` builder as its worked example, gaining a line saying the built-in does this with a flat
    lowering and you are rebuilding it to see the mechanism, which documents why built-ins exist at all.
 
-9. **A `let` binding cannot destructure** (M) — `let (r, c) = parseCoord tok` does not parse anywhere in
-   the language: `LetBinding` carries `name: String` (`src/parser/ast.rs:289`) and so does
-   `CeItem::LetBang` (`:604`). It surfaced inside a CE body, where it forces a `match` that exists for
-   no reason other than to take a tuple apart, but it is not a CE papercut: top-level `let`, block `let`,
-   and CE `let`/`let!` all have it, and Python spells this `a, b = f()`. That makes it the broader of the
-   two findings and the one that pays out at every binding site.
-
-   Fix: `let` (and `let!`) accept an **irrefutable** pattern — tuples, single-constructor records,
-   wildcards, and nestings of those. Refutable patterns stay at `match`, which keeps "the compiler is the
-   gatekeeper, no runtime surprises" intact and makes the restriction explainable in one sentence. The
-   work is spread thin rather than deep: the parser stores a `Pattern` where it stores a name today, and
-   every path that asks what names a binding introduces (lowering's scope scan, the mutation and effect
-   checks, the LSP resolver) has to learn that one `let` can introduce several. The editor side should be
-   mostly free, since `Pattern::Var { name, span }` and `resolve::walk_pattern` already exist for match
-   arms. Emitted output is a plain Python tuple unpacking, so this costs nothing in readability — and on
-   top of #8 it is what removes the last lambda from a chained-`Option` function.
+9. ~~**A `let` binding cannot destructure**~~ **CLOSED 2026-08-02** (was M, reported the same day) —
+   `let (r, c) = parseCoord tok`, `let Point { x, y } = origin` and `let (a, (b, c)) = nested` now parse
+   at top level, in blocks, in an in-file `module`, and on a computation expression's `let`/`let!`.
+   `LetBinding` and `CeItem::Let`/`LetBang` carry a `Pattern` where they carried a `String`, with
+   `bound_names`/`bound_vars` on the AST as the one place every phase asks what a binding introduces.
+   The irrefutability rule turned out to already exist — `parser::refutable_in_param`, renamed
+   `refutable_shape` and now shared — so a `let` target admits exactly what a parameter does (a name,
+   `_`, tuples, records, nested) and rejects the rest with a message naming what was written and
+   pointing at `match`. A function binding and a `let mut` keep their single name, each with its own
+   message. Lowering reuses `unpack_into`, so `let (r, c) = e` emits `r, c = e` with no temp, a nested
+   target reads through a reserved base (`_pf_t0_1`, never a name derived from the user's), a record
+   target reads one attribute per field named, and a destructuring `let!` in `result` rides inside the
+   `Ok` pattern it already matches (`case Ok((r, c)):`) for no extra statement. Each bound name
+   generalizes on its own, matching the single-name case. Canonical `DESIGN.md` §7; lesson 8 covers it;
+   the tree-sitter grammar accepts the new targets (and destructuring *parameters*, which the language
+   had but the grammar did not).
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 

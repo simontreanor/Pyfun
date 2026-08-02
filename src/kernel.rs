@@ -199,14 +199,17 @@ impl Engine {
             let start = module.items.len().saturating_sub(new_count);
             for item in &module.items[start..] {
                 if let Item::Let(binding) = item {
-                    let ty = analysis
-                        .types
-                        .iter()
-                        .find(|t| t.span == binding.name_span.span())
-                        .map(|t| t.ty.as_str());
-                    match ty {
-                        Some(ty) => echoes.push_str(&format!("{} : {ty}\n", binding.name)),
-                        None => echoes.push_str(&format!("{}\n", binding.name)),
+                    // A destructuring binding echoes one line per name it binds.
+                    for (name, span) in binding.bound_vars() {
+                        let ty = analysis
+                            .types
+                            .iter()
+                            .find(|t| t.span == span)
+                            .map(|t| t.ty.as_str());
+                        match ty {
+                            Some(ty) => echoes.push_str(&format!("{name} : {ty}\n")),
+                            None => echoes.push_str(&format!("{name}\n")),
+                        }
                     }
                 }
             }

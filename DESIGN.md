@@ -1035,6 +1035,24 @@ statement per nesting level; a record parameter reads one attribute per field it
 (`letter = _pf_arg0.letter`) and nothing for the fields it does not. A destructuring *lambda*
 therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement.
 
+**A `let` binding may destructure too**, under exactly the rule above and for exactly the same
+reason — `let (r, c) = parseCoord tok`, `let Point { x, y } = origin`, `let (a, (b, c)) = nested`.
+Python spells this `a, b = f()`, and Pyfun emits precisely that: a tuple of plain names unpacks in a
+single statement straight from the value, with no temp in the way. Anything deeper reads through a
+reserved temp, one statement per level (`a, _pf_t0_1 = p` then `b, c = _pf_t0_1`), and a record
+target reads one attribute per field it names. The target is held to irrefutability by the same
+check a parameter's is, so `let Some x = …` is rejected with a message naming what was written and
+pointing at `match`, which has somewhere to fall through to. Three positions take a target: a
+top-level `let`, a block-local `let`, and a computation expression's `let`/`let!` — where a
+destructuring bind costs nothing extra, because `result`'s pattern rides inside the `Ok` it already
+matches (`case Ok((r, c)):`). What cannot destructure is a binding that needs a single name to
+*be*: a function binding (`params` are what make it one) and a `let mut` (whose name is what `<-`
+reassigns) both reject a pattern target, each with its own message. Each name a destructuring
+binding introduces is generalized on its own, the same let-generalization a single-name binding
+gets; there is no value restriction to trip over, since `mut` bindings are monomorphic and named.
+`let _ = e` is the degenerate case: it binds nothing and exists so a value-producing expression can
+be run for its effect.
+
 MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
 blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
 and **record** declarations, the three computation expressions of §8, units of measure (§8), readable

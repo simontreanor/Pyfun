@@ -381,6 +381,17 @@ const PROGRAMS: &[&str] = &[
     // structural arm sitting beside an active-pattern arm.
     "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f n =\n  match n:\n    case Even | Odd: \"eo\"",
     "let f o =\n  match o:\n    case Answer: 1\n    case Some x: x\n    case None: 0",
+    // Destructuring `let` targets (`DESIGN.md` §7): tuples, nesting, records,
+    // the discard, and the same targets on a computation expression's `let`/`let!`.
+    "let (a, b) = (1, 2)",
+    "let (a, (b, c)) = (1, (2, 3))",
+    "let (a, _) = (1, 2)",
+    "let _ = print \"hi\"",
+    "type Point = { x: int, y: int }\nlet Point { x, y } = Point { x = 1, y = 2 }",
+    "type Point = { x: int, y: int }\nlet Point { x = a, y = b } = Point { x = 1, y = 2 }",
+    "let f p =\n  let (a, b) = p\n  a + b",
+    "let f r = result {\n  let! (a, b) = r\n  return a + b\n}",
+    "let f r = result {\n  let (a, b) = r\n  return a + b\n}",
 ];
 
 #[test]

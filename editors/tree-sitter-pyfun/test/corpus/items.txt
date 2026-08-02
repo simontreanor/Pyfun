@@ -372,3 +372,55 @@ module Geom =
       (multiplicative_expression
         (identifier)
         (identifier)))))
+
+================================================================================
+destructuring let binding
+================================================================================
+
+let (a, b) = pair
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (tuple_pattern
+      (identifier)
+      (identifier))
+    (identifier)))
+
+================================================================================
+destructuring let binding with a record target
+================================================================================
+
+let Point { x, y } = origin
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (record_pattern
+      (constructor_identifier)
+      (field_pattern
+        (identifier))
+      (field_pattern
+        (identifier)))
+    (identifier)))
+
+================================================================================
+destructuring parameter
+================================================================================
+
+let tileScore (t, sq) = t * sq
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (tuple_pattern
+        (identifier)
+        (identifier)))
+    (multiplicative_expression
+      (identifier)
+      (identifier))))

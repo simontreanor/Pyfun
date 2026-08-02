@@ -2032,7 +2032,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         let name_to_local: HashMap<&str, usize> = lets
             .iter()
             .enumerate()
-            .map(|(local, (_, b))| (b.name.as_str(), local))
+            .filter_map(|(local, (_, b))| b.name().map(|n| (n, local)))
             .collect();
         let succ: Vec<Vec<usize>> = lets
             .iter()
@@ -2118,15 +2118,22 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 }
             }
             Item::Let(binding) => {
-                exported.push(binding.name.clone());
+                exported.extend(binding.bound_names());
                 match inf.infer_binding(binding, &env) {
-                    Ok((scheme, _eff)) => {
-                        env.insert(binding.name.clone(), scheme);
+                    Ok((bound, _eff)) => {
+                        for (name, scheme) in bound {
+                            env.insert(name, scheme);
+                        }
                     }
                     Err(e) => {
                         errors.push(e);
-                        let ty = inf.fresh();
-                        env.insert(binding.name.clone(), Scheme::mono(ty));
+                        // Bind every name the target *would* have bound, at a fresh
+                        // type, so later items report their own errors instead of a
+                        // cascade of "unbound name".
+                        for name in binding.bound_names() {
+                            let ty = inf.fresh();
+                            env.insert(name, Scheme::mono(ty));
+                        }
                     }
                 }
             }
@@ -2151,17 +2158,25 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
             Item::Module { name, items, .. } => {
                 let mut module_env = env.clone();
                 for member in items {
-                    let scheme = match inf.infer_binding(member, &module_env) {
-                        Ok((scheme, _eff)) => scheme,
+                    let bound = match inf.infer_binding(member, &module_env) {
+                        Ok((bound, _eff)) => bound,
                         Err(e) => {
                             errors.push(e);
-                            Scheme::mono(inf.fresh())
+                            member
+                                .bound_names()
+                                .into_iter()
+                                .map(|n| (n, Scheme::mono(inf.fresh())))
+                                .collect()
                         }
                     };
-                    let qualified = format!("{name}.{}", member.name);
-                    module_env.insert(member.name.clone(), scheme.clone());
-                    module_env.insert(qualified.clone(), scheme.clone());
-                    env.insert(qualified, scheme);
+                    // A member is visible to its siblings bare and to the outside
+                    // qualified — including each name a destructuring member binds.
+                    for (member_name, scheme) in bound {
+                        let qualified = format!("{name}.{member_name}");
+                        module_env.insert(member_name, scheme.clone());
+                        module_env.insert(qualified.clone(), scheme.clone());
+                        env.insert(qualified, scheme);
+                    }
                 }
             }
         }
@@ -3304,9 +3319,9 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
             let mut b = bound.clone();
             for item in items {
                 match item {
-                    CeItem::Let { name, value, .. } | CeItem::LetBang { name, value, .. } => {
+                    CeItem::Let { target, value, .. } | CeItem::LetBang { target, value, .. } => {
                         collect_free(value, &b, out);
-                        b.insert(name.clone());
+                        b.extend(target.bound_names());
                     }
                     CeItem::DoBang(e)
                     | CeItem::Return(e)
@@ -3344,7 +3359,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
                             pattern_names(&p.pattern, &mut vb);
                         }
                         collect_free(&binding.value, &vb, out);
-                        b.insert(binding.name.clone());
+                        b.extend(binding.bound_names());
                     }
                     BlockStmt::Expr(e) => collect_free(e, &b, out),
                 }
@@ -6026,15 +6041,16 @@ impl Infer {
         out
     }
 
-    /// Infer a binding's scheme and its effect. The body's effect lands on the
-    /// innermost arrow (a function definition is itself pure) or, for a value
-    /// binding, is the binding's effect (and leaks to the enclosing scope, since
-    /// evaluating the binding performs it).
+    /// Infer what a binding binds — one `(name, scheme)` for `let x = …`, none for
+    /// `let _ = …`, and one per name for a destructuring `let (r, c) = …` — and its
+    /// effect. The body's effect lands on the innermost arrow (a function
+    /// definition is itself pure) or, for a value binding, is the binding's effect
+    /// (and leaks to the enclosing scope, since evaluating the binding performs it).
     fn infer_binding(
         &mut self,
         binding: &LetBinding,
         env: &Env,
-    ) -> Result<(Scheme, Effect), TypeError> {
+    ) -> Result<(Vec<(String, Scheme)>, Effect), TypeError> {
         let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
         // Obligations float up to the outermost binding: an inner one cannot settle
         // a base that a *later* statement pins down, which is the whole point.
@@ -6052,7 +6068,12 @@ impl Infer {
             // where `x = x` is a module-level NameError). Mutual recursion across
             // bindings is not supported (declare-before-use; `DESIGN.md` §6.1).
             let self_ty = self.fresh();
-            body_env.insert(binding.name.clone(), Scheme::mono(self_ty.clone()));
+            // The parser admits parameters only on a plain-name binding, so this
+            // branch always has a name to make self-visible.
+            body_env.insert(
+                binding.name().unwrap_or_default().to_string(),
+                Scheme::mono(self_ty.clone()),
+            );
             let mut param_tys = Vec::with_capacity(binding.params.len());
             for param in &binding.params {
                 let pty = self.fresh();
@@ -6095,40 +6116,67 @@ impl Infer {
         if binding.pure && !resolved_body_eff.labels.is_empty() {
             return Err(TypeError {
                 message: format!(
-                    "`{}` is declared `pure` but performs `{}`",
-                    binding.name,
+                    "{} is declared `pure` but performs `{}`",
+                    binding.describe(),
                     resolved_body_eff.show_labels()
                 ),
                 span: binding.value.span(),
             });
         }
 
-        // Record the binding's inferred type against its name span, so hovering a
+        // Record the binding's inferred type against its target span, so hovering a
         // definition (e.g. a function name) shows its signature — the headline
-        // hover case, since Pyfun signatures are inferred, never written.
-        if self.record_types {
-            self.recorded.push((binding.name_span.span(), ty.clone()));
+        // hover case, since Pyfun signatures are inferred, never written. A
+        // destructuring target additionally records each name it binds, at that
+        // name's own span, from `bind_pattern` below.
+        if self.record_types && !matches!(binding.target, Pattern::Wildcard) {
+            self.recorded.push((binding.target_span.span(), ty.clone()));
         }
 
-        // A `mut` binding is monomorphic (so a later `<-` can't change its type)
-        // and cannot be a function — only a reassignable value.
-        let scheme = if binding.mutable {
-            if !binding.params.is_empty() {
-                return Err(TypeError {
-                    message: format!(
-                        "a mutable binding cannot take parameters (`{}` is `let mut`)",
-                        binding.name
-                    ),
-                    span: binding.value.span(),
-                });
+        let eff = self.apply_eff(&body_eff);
+        match &binding.target {
+            // `let _ = e` binds nothing. The value is still inferred and its effect
+            // still leaks, which is the whole reason to write it.
+            Pattern::Wildcard => Ok((Vec::new(), eff)),
+            Pattern::Var { name, .. } => {
+                // A `mut` binding is monomorphic (so a later `<-` can't change its
+                // type) and cannot be a function — only a reassignable value.
+                let scheme = if binding.mutable {
+                    if !binding.params.is_empty() {
+                        return Err(TypeError {
+                            message: format!(
+                                "a mutable binding cannot take parameters (`{name}` is `let mut`)"
+                            ),
+                            span: binding.value.span(),
+                        });
+                    }
+                    let mut scheme = Scheme::mono(self.apply(&ty));
+                    scheme.mutable = true;
+                    scheme
+                } else {
+                    self.generalize(env, &ty)
+                };
+                Ok((vec![(name.clone(), scheme)], eff))
             }
-            let mut scheme = Scheme::mono(self.apply(&ty));
-            scheme.mutable = true;
-            scheme
-        } else {
-            self.generalize(env, &ty)
-        };
-        Ok((scheme, self.apply_eff(&body_eff)))
+            // A destructuring target unifies against the value's type — which is
+            // what fixes a tuple's arity and a record's field types — and binds
+            // every name in it (`DESIGN.md` §7). Each name generalizes on its own,
+            // exactly as the single-name case does: there is no value restriction to
+            // trip over, since a `mut` binding is monomorphic and takes a name.
+            target => {
+                let mut scope = env.clone();
+                self.bind_pattern(target, &ty, binding.target_span.span(), &mut scope)?;
+                let mut out = Vec::new();
+                for name in target.bound_names() {
+                    let Some(bound) = scope.get(&name).map(|s| s.ty.clone()) else {
+                        continue;
+                    };
+                    let scheme = self.generalize(env, &bound);
+                    out.push((name, scheme));
+                }
+                Ok((out, eff))
+            }
+        }
     }
 
     /// Infer a group of mutually-recursive **function** bindings together
@@ -6149,7 +6197,10 @@ impl Infer {
         let mut self_tys = Vec::with_capacity(group.len());
         for b in group {
             let t = self.fresh();
-            body_env.insert(b.name.clone(), Scheme::mono(t.clone()));
+            body_env.insert(
+                b.name().unwrap_or_default().to_string(),
+                Scheme::mono(t.clone()),
+            );
             self_tys.push(t);
         }
         // Infer each body against the group env plus its own params; tie the knot.
@@ -6197,19 +6248,21 @@ impl Infer {
                     if b.pure && !body_eff.labels.is_empty() {
                         return Err(TypeError {
                             message: format!(
-                                "`{}` is declared `pure` but performs `{}`",
-                                b.name,
+                                "{} is declared `pure` but performs `{}`",
+                                b.describe(),
                                 body_eff.show_labels()
                             ),
                             span: b.value.span(),
                         });
                     }
                     if self.record_types {
-                        self.recorded.push((b.name_span.span(), ty.clone()));
+                        self.recorded.push((b.target_span.span(), ty.clone()));
                     }
                     Ok(self.generalize(outer_env, &ty))
                 });
-                (b.name.clone(), scheme)
+                // Every member of a mutual group is a function binding, so it has
+                // a name (the parser admits parameters only on a named target).
+                (b.name().unwrap_or_default().to_string(), scheme)
             })
             .collect()
     }
@@ -6926,8 +6979,10 @@ impl Infer {
                     // The binding's effect is accumulated into `cur_eff` by
                     // `infer_binding` (for value bindings), so the block's effect
                     // includes it.
-                    let (scheme, _eff) = self.infer_binding(binding, &scope)?;
-                    scope.insert(binding.name.clone(), scheme);
+                    let (bound, _eff) = self.infer_binding(binding, &scope)?;
+                    for (name, scheme) in bound {
+                        scope.insert(name, scheme);
+                    }
                 }
                 BlockStmt::Expr(e) => {
                     let t = self.infer_expr(e, &scope)?;
@@ -7402,16 +7457,16 @@ impl Infer {
                     )?;
                 }
                 CeItem::Let {
-                    name,
-                    name_span,
+                    target,
+                    target_span,
                     value,
                 } => {
                     let t = self.infer_expr(value, &env)?;
                     let applied = self.apply(&t);
                     if self.record_types {
-                        self.recorded.push((name_span.span(), applied.clone()));
+                        self.recorded.push((target_span.span(), applied.clone()));
                     }
-                    env.insert(name.clone(), Scheme::mono(applied));
+                    self.bind_pattern(target, &applied, target_span.span(), &mut env)?;
                 }
                 _ => {
                     return Err(TypeError {
@@ -7449,8 +7504,8 @@ impl Infer {
             let is_last = i + 1 == items.len();
             match item {
                 CeItem::LetBang {
-                    name,
-                    name_span,
+                    target,
+                    target_span,
                     value,
                 } => {
                     let t = self.infer_expr(value, &env)?;
@@ -7459,21 +7514,23 @@ impl Infer {
                     self.unify(&expected, &t, value.span())?;
                     let bound = self.apply(&inner);
                     if self.record_types {
-                        self.recorded.push((name_span.span(), bound.clone()));
+                        self.recorded.push((target_span.span(), bound.clone()));
                     }
-                    env.insert(name.clone(), Scheme::mono(bound));
+                    // The target binds against the *unwrapped* type, so
+                    // `let! (r, c) = …` destructures what the bind produced.
+                    self.bind_pattern(target, &bound, target_span.span(), &mut env)?;
                 }
                 CeItem::Let {
-                    name,
-                    name_span,
+                    target,
+                    target_span,
                     value,
                 } => {
                     let t = self.infer_expr(value, &env)?;
                     let applied = self.apply(&t);
                     if self.record_types {
-                        self.recorded.push((name_span.span(), applied.clone()));
+                        self.recorded.push((target_span.span(), applied.clone()));
                     }
-                    env.insert(name.clone(), Scheme::mono(applied));
+                    self.bind_pattern(target, &applied, target_span.span(), &mut env)?;
                 }
                 CeItem::DoBang(e) => {
                     let t = self.infer_expr(e, &env)?;
