@@ -41,8 +41,21 @@ jobs:
           toolchain: "1.97.0"
           targets: wasm32-unknown-unknown
 
+      # Pinned like mdBook below: the installer script takes whatever is newest that
+      # day, which is the one unpinned tool in a pipeline that otherwise reproduces.
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -sSL https://github.com/rustwasm/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz --strip-components=1 -C "$HOME/.local/bin" \
+                wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack
+          chmod +x "$HOME/.local/bin/wasm-pack"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Without this every deploy recompiles the whole compiler for wasm32 from zero.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: playground
 
       # Prebuilt binary: keeps the job Rust-toolchain-only, no compile, no pip.
       - name: Install mdBook

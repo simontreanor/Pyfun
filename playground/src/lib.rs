@@ -68,6 +68,14 @@ pub fn compile(source: &str) -> String {
     )
 }
 
+/// The version of the compiler compiled into this WebAssembly module. The page
+/// shows it so a visitor can tell which Pyfun they are trying, and so a stale
+/// deploy is visible rather than silent.
+#[wasm_bindgen]
+pub fn version() -> String {
+    pyfun::VERSION.to_string()
+}
+
 fn diag(start: usize, end: usize, severity: &str, message: &str) -> String {
     format!(
         "{{\"start\":{start},\"end\":{end},\"severity\":\"{severity}\",\"message\":\"{}\"}}",

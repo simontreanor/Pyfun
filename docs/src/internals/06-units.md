@@ -65,7 +65,11 @@ exponent has no integer solution, so `sqrt` of a non-square unit is rejected wit
 mismatch. In the running example:
 
 ```pyfun
+measure m
+
 let side = sqrt 16.0<m^2>
+
+print side
 ```
 
 infers `float<m>`, and `let norm x = sqrt (x * x)` stays unit-polymorphic `float<'u> ->

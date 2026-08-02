@@ -15,10 +15,10 @@
 
 // A module worker: import Pyodide's ES-module build directly (cross-origin `import` is
 // CORS-clean on jsdelivr; classic-worker `importScripts` of the CDN is blocked).
-import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/pyodide.mjs";
+import { loadPyodide } from "https://cdn.jsdelivr.net/pyodide/v314.0.3/full/pyodide.mjs";
 import initCompiler, { compile } from "./pkg/pyfun_playground.js";
 
-const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.2/full/";
+const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v314.0.3/full/";
 
 let pyodideReady = null;
 function ensurePyodide() {

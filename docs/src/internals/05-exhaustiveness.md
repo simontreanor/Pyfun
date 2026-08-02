@@ -41,6 +41,8 @@ up, a constructor applied to sub-witnesses or `_` for "any value."
 Delete the `Rect` arm from `area`, leaving only `Circle`:
 
 ```pyfun
+type Shape = Circle float | Rect float float
+
 let area s =
   match s:
     case Circle r: 3.14159 * r * r

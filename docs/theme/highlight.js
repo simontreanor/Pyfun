@@ -63,8 +63,8 @@ hljs.registerLanguage("pyfun", function (hljs) {
     name: "Pyfun",
     keywords: {
       keyword:
-        "let pure fun type measure module import match case with if then elif else " +
-        "and or not try do in return yield async seq result",
+        "let pure fun type opaque measure module import as match case with if then " +
+        "elif else and or not try do return yield async seq result option",
       literal: "true false",
       built_in: "print",
     },

@@ -11,7 +11,10 @@
 export async function loadCompiler(base) {
   const mod = await import(new URL("./pkg/pyfun_playground.js", base).href);
   await mod.default();
-  return (source) => JSON.parse(mod.compile(source));
+  const compile = (source) => JSON.parse(mod.compile(source));
+  // The compiler's own version, for surfaces that show which build they loaded.
+  compile.version = mod.version();
+  return compile;
 }
 
 // A lazy runner over pyodide-worker.js. Preferred channel: a SharedWorker, so ONE
