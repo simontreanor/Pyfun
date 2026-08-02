@@ -240,6 +240,7 @@ const PROGRAMS: &[&str] = &[
     // Computation expressions (built-in builders).
     "let a = seq { yield 1 yield! xs }",
     "let a = result { let! x = m return x }",
+    "let a = option { let! x = m return x }",
     "let a = async { let! x = m do! n return! r }",
     // User-defined CE builders (an uppercase module name before `{`). The CE-item
     // lookahead keeps `Some { x = 1 }` (a record argument) parsing as application.

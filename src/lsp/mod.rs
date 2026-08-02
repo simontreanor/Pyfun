@@ -1409,7 +1409,7 @@ const BUILTIN_TYPES: &[&str] = &[
 /// Pyfun keywords (and contextual builder/CE words) offered as completions.
 const KEYWORDS: &[&str] = &[
     "let", "mut", "pure", "type", "measure", "extern", "if", "then", "else", "match", "with",
-    "fun", "and", "or", "not", "true", "false", "return", "in", "async", "seq", "result",
+    "fun", "and", "or", "not", "true", "false", "return", "in", "async", "seq", "result", "option",
 ];
 
 /// The `initialize` result advertising our capabilities (full document sync +

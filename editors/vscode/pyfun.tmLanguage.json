@@ -35,7 +35,7 @@
     },
     "computation-expressions": {
       "comment": "The three built-in CE builders, only when opening a block.",
-      "match": "\\b(async|seq|result)\\b(?=\\s*\\{)",
+      "match": "\\b(async|seq|result|option)\\b(?=\\s*\\{)",
       "name": "keyword.other.computation.pyfun"
     },
     "declarations": {

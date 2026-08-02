@@ -4237,3 +4237,61 @@ fn a_destructuring_let_bang_unwraps_before_it_destructures() {
         "expected ('a, 'b), found int",
     );
 }
+
+// ---------- the `option` computation expression (`DESIGN.md` §8.1) ----------
+
+#[test]
+fn option_block_binds_through_option() {
+    assert!(pyfun::check("let f o = option { let! x = o  return (x + 1) }").is_ok());
+}
+
+#[test]
+fn option_block_chains_several_binds() {
+    // The shape the builder exists for: fallible stdlib accessors in a row.
+    assert!(
+        pyfun::check(
+            "let f xs s = option {\n  let! a = List.get 0 xs\n  let! b = List.get 1 xs\n  let! n = String.toInt s\n  return (a + b + n)\n}"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn option_block_requires_an_option_to_bind() {
+    assert_error_contains("let f = option { let! x = 1  return x }", "expected Option");
+}
+
+#[test]
+fn option_return_bang_takes_an_option() {
+    assert!(pyfun::check("let f o = option { let! x = o  return! Some (x + 1) }").is_ok());
+}
+
+#[test]
+fn rejects_yield_in_option_block() {
+    assert_error_contains(
+        "let a = option { yield 1 }",
+        "`yield` is not allowed in an `option` block",
+    );
+}
+
+#[test]
+fn rejects_option_without_return() {
+    assert_error_contains(
+        "let a = option { let! x = Some 1 }",
+        "must end with `return`",
+    );
+}
+
+#[test]
+fn a_destructuring_bind_works_in_an_option_block() {
+    assert!(pyfun::check("let f o = option {\n  let! (a, b) = o\n  return a + b\n}").is_ok());
+}
+
+#[test]
+fn uppercase_option_names_the_lowercase_builder() {
+    // The one likely near-miss: the prelude module `Option` is not the builder.
+    assert_error_contains(
+        "let f o = Option { let! x = o  return x }",
+        "the built-in one is spelled `option`",
+    );
+}

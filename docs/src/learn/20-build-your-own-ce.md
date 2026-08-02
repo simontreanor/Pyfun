@@ -6,7 +6,11 @@ computation expression is just method calls, and any in-file `module` (lesson 15
 `bind` and `return_` becomes a builder you can use with the same `{ let! ... return ... }` syntax.
 
 Here is a builder for the `Option` type, so `Maybe { }` chains steps that might be `None` and stops
-at the first one:
+at the first one. Pyfun ships `option { }` as a built-in (lesson 13), so this is a rebuild of
+something you already have, which is exactly what makes it a good first builder: you can compare
+your version against one that works. The built-in earns its place by lowering to flat `match`
+statements with early returns, the way `result { }` does, where a builder written this way lowers
+to nested `bind` calls. Everything else about them is the same.
 
 ```pyfun
 module Maybe =
@@ -58,10 +62,11 @@ branch never calls `f`, so `addOpt (Some 3) None` is `None` without running the 
 
 Builders can do more than `bind` and `return_`. A sequence-style builder adds `yield_` for a
 `yield`, and `combine`/`delay` to glue and defer multiple yields, the same members the built-in
-`seq { }` relies on. The three built-in builders, `async { }`, `seq { }`, and `result { }`, keep
-bespoke lowerings so their output reads as idiomatic Python (`async`/`await`, generators, and a
-`Result` short-circuit) rather than a chain of method calls. The full desugaring rules live in the
-internals chapter on [desugaring](../internals/03-desugaring.md).
+`seq { }` relies on. The four built-in builders, `async { }`, `seq { }`, `result { }` and
+`option { }`, keep bespoke lowerings so their output reads as idiomatic Python (`async`/`await`,
+generators, and a `Result` or `Option` short-circuit) rather than a chain of method calls. The full
+desugaring rules live in the internals chapter on
+[desugaring](../internals/03-desugaring.md).
 
 ## Exercise
 

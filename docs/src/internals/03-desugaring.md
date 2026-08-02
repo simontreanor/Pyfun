@@ -41,7 +41,7 @@ identically.
 ## Computation-expression builders
 
 Computation expressions are the F# flagship for monadic sugar, written `builder { ... }`. Pyfun
-splits them in two. The three built-ins keep **bespoke native lowerings** and are not desugared
+splits them in two. The four built-ins keep **bespoke native lowerings** and are not desugared
 here, because a generic bind/return rewrite cannot produce idiomatic output for them. User-defined
 builders, on the other hand, are handled entirely by this pass. A builder is an in-file `module`
 providing protocol functions, and `Builder { ... }` desugars to calls on them. The protocol, from
@@ -79,7 +79,7 @@ still work on a name that only exists after desugaring.
 
 ## The built-in `result {}`, natively
 
-The three built-ins lower directly rather than through this pass, so it is worth seeing what
+The built-ins lower directly rather than through this pass, so it is worth seeing what
 "native" buys. Here is a small `result {}` block compiled with `pyfun compile`:
 
 ```python

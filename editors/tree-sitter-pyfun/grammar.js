@@ -511,7 +511,7 @@ module.exports = grammar({
     ),
 
     ce_expression: $ => seq(
-      field('builder', choice('async', 'seq', 'result', $._module_identifier)),
+      field('builder', choice('async', 'seq', 'result', 'option', $._module_identifier)),
       '{',
       repeat1($._ce_item),
       '}',

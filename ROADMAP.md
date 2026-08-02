@@ -152,50 +152,44 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
 ## Dogfooding findings (2026-08-02, second session on the same program)
 
 A second pass over the same private game found two gaps, both about the *shape* of code rather than a
-missing capability: each has a working spelling today, and each costs the readable Python that lowering
-exists to protect. Both are accepted work. They compose — together they turn a chained-`Option` function
-into the statements a Python programmer would have written — but they are independent, and the second is
-the higher-value of the two.
+missing capability: each had a working spelling already, and each cost the readable Python that lowering
+exists to protect. **Both shipped on 2026-08-02**, in the order below reversed (destructuring first, so
+the `option` example landed in its final form). Together they turn a chained-`Option` function into the
+statements a Python programmer would have written:
 
-8. **`Option` is the one short-circuit type with no computation expression** (M) — the stdlib's own
-   accessor convention (item 5: *bare names returning `Option`* for anything that can fail) makes
-   `Option` the type it pushes you to chain, and chaining it means one nested `match` per step with an
-   identical `case None: None` arm at every level. The dogfooded program hit this at three stdlib calls
-   in a row (`List.get`, `List.findIndex`, `String.toInt`). Further evidence that the battery is missing
-   rather than deliberately excluded: `docs/src/learn/20-build-your-own-ce.md` teaches CE-authoring by
-   having the reader write the `Option` builder as its worked example.
+```pyfun
+let parseCoord tok =
+  option {
+    let! c0 = List.get 0 (String.toList tok)
+    let! ci = List.findIndex ((==) (String.upper c0)) Render.colLabels
+    let! rn = String.toInt (tok |> String.toList |> List.drop 1 |> String.join "")
+    return! if 1 <= rn and rn <= Board.size then Some (rn - 1, ci) else None
+  }
+```
 
-   **A user-defined builder does not close it**, which is the whole point. `src/desugar.rs` is an
-   *expression* transform, so `Opt { … }` compiles to a chain of nested `bind` lambdas on one line,
-   while `result { … }`'s bespoke `lower_result_items` (`src/lowering/mod.rs:3337`) emits a flat
-   sequence of `match` statements with early returns for the identical control flow. Readable output is
-   the pitch, and this is the one common short-circuit shape that does not get it.
+8. ~~**`Option` is the one short-circuit type with no computation expression**~~
+   **CLOSED 2026-08-02** (was M, reported the same day) — `option { }` is the fourth built-in.
+   The stdlib's accessor convention (item 5: bare names returning `Option`) makes `Option` the type it
+   pushes you to chain, and a chain of them meant one nested `match` per step with an identical
+   `case None: None` arm at every level. A user-defined builder could not close it, which was the
+   point: `src/desugar.rs` is an *expression* transform, so `Opt { … }` compiled to nested `bind`
+   lambdas on one line, where the bespoke lowering emits flat `match` statements with early returns.
 
-   **What keeps a fourth built-in from being scope creep**: *a built-in CE exists for each built-in
-   short-circuit type*. `Option` and `Result` are the two prelude ADTs, `async` and `seq` are the two
-   Python control-flow forms, and there is no fifth candidate, so the set closes at four rather than
-   opening up. Spelling is lowercase **`option`**, mirroring `result`/`Result`; builder keywords are
-   contextual rather than reserved, and bare `{ … }` record literals were removed with the tagged-record
-   change, so nothing else can parse there. The item set is exactly `result`'s (`let`, `let!`, `do!`,
-   `return`, `return!`; no `yield`).
+   **What keeps a fourth built-in from becoming a fifth**, now recorded in `DESIGN.md` §8.1 and on
+   `CeBuilder`: one per built-in *short-circuit type* (`Option`, `Result`) and one per Python
+   *control-flow form* (`async`, `seq`). There is no fifth candidate, so the set closes at four.
 
-   The work is a fourth arm in `CeBuilder::from_name` (`src/parser/ast.rs:580`), a typing rule beside
-   `result`'s, and `lower_option_items` mirroring `lower_result_items` — *simpler* than the model it
-   copies, because the short-circuit arm carries no payload to rebind (`case None_(): return None_()`
-   against `result_bind_match`'s `case Error(e): return Error(e)`). One diagnostic goes with it: the
-   prelude `Option` module and the built-in `option` do not collide (user builders resolve from an
-   uppercase name), but they are a near-miss, so uppercase `Option { let! … }` should get a fix-it
-   naming the lowercase form instead of a member-not-found error pointing into prelude code.
-
-   **Turned down: giving the prelude `Option` module a `return_` and using it as a user builder.** The
-   CE protocol binds value-first (`bind value (fun x -> …)`, `src/desugar.rs:44`) while the prelude is
-   function-first (`Option.bind : (a ->{e} Option b) -> Option a ->{e} Option b`) so that it reads under
-   `|>`; the two orders are deliberately incompatible, and the cheap version would still emit the lambda
-   chain that is the actual complaint. **Scope guards**: a CE earns its keep at *two or more* binds — a
-   single bind reads better as `Option.map`/`Option.bind`, which is where lesson 13 already draws the
-   line for `result { }` and where the docs for this should draw it too. And lesson 20 keeps the
-   `Option` builder as its worked example, gaining a line saying the built-in does this with a flat
-   lowering and you are rebuilding it to see the mechanism, which documents why built-ins exist at all.
+   `result` and `option` turned out to be one lowering, not two: `lowering::ShortCircuit` names the
+   success and failure constructors and whether the failure carries a payload, so neither can drift
+   from the other. `option`'s is the simpler half — `None` carries nothing, so its failure arm binds
+   nothing and returns a fresh one (`case None_(): return None_()`). Also shipped: the near-miss
+   diagnostic (uppercase `Option { let! … }` is rejected with a message naming the lowercase form,
+   instead of resolving against the prelude module and failing on `Option.bind`'s pipe-first argument
+   order), the `a`/`an` fix in the CE diagnostics this exposed (`async` had it too), and the builder
+   keyword across every editor target. Lesson 13 gains the `option` section and the
+   two-or-more-binds threshold; lesson 20 keeps the `Option` builder as its worked example, now
+   introduced as a rebuild of a battery you have, with the lowering difference as the reason the
+   built-in exists.
 
 9. ~~**A `let` binding cannot destructure**~~ **CLOSED 2026-08-02** (was M, reported the same day) —
    `let (r, c) = parseCoord tok`, `let Point { x, y } = origin` and `let (a, (b, c)) = nested` now parse
