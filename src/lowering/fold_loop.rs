@@ -450,7 +450,7 @@ impl Lowerer {
                         BlockStmt::Let(b) => {
                             self.lower_let(b, &locals, &mut out)?;
                             self.note_block_let(b);
-                            locals.insert(b.name.clone());
+                            locals.extend(b.bound_names());
                         }
                         BlockStmt::Expr(e) if i == last => {
                             out.extend(self.lower_fold_step(e, &locals, slots, acc_param, single)?)
@@ -1087,7 +1087,7 @@ pub(super) fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
             for s in stmts {
                 match s {
                     BlockStmt::Let(b) => {
-                        out.insert(b.name.clone());
+                        out.extend(b.bound_names());
                         // A value binding shares this frame; a parameterized `let`
                         // is a nested function (its own scope) — only its name leaks.
                         if b.params.is_empty() {
@@ -1218,7 +1218,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
                             inner.extend(super::pattern_bindings(&p.pattern));
                         }
                         collect_free(&bind.value, &inner, out);
-                        b.insert(bind.name.clone());
+                        b.extend(bind.bound_names());
                     }
                     BlockStmt::Expr(e) => collect_free(e, &b, out),
                 }
@@ -1228,9 +1228,9 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
             let mut b = bound.clone();
             for it in items {
                 match it {
-                    CeItem::LetBang { name, value, .. } | CeItem::Let { name, value, .. } => {
+                    CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
                         collect_free(value, &b, out);
-                        b.insert(name.clone());
+                        b.extend(target.bound_names());
                     }
                     CeItem::DoBang(e)
                     | CeItem::Return(e)

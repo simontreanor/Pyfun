@@ -61,11 +61,18 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
     let mut out = Vec::new();
     for item in &module.items {
         match item {
-            Item::Let(binding) => out.push(Symbol {
-                name: binding.name.clone(),
-                span: binding.name_span.span(),
-                kind: SymbolKind::Value,
-            }),
+            // A destructuring `let` defines one symbol per name it binds, each at
+            // its own span, so the outline and go-to-definition land on the element
+            // the cursor is over.
+            Item::Let(binding) => {
+                for (name, span) in let_target_vars(binding) {
+                    out.push(Symbol {
+                        name,
+                        span,
+                        kind: SymbolKind::Value,
+                    });
+                }
+            }
             Item::Extern(decl) => out.push(Symbol {
                 name: decl.name.clone(),
                 span: decl.span.span(),
@@ -105,11 +112,13 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
             // and completion, each at its own name span.
             Item::Module { name, items, .. } => {
                 for member in items {
-                    out.push(Symbol {
-                        name: format!("{name}.{}", member.name),
-                        span: member.name_span.span(),
-                        kind: SymbolKind::Value,
-                    });
+                    for (member_name, span) in let_target_vars(member) {
+                        out.push(Symbol {
+                            name: format!("{name}.{member_name}"),
+                            span,
+                            kind: SymbolKind::Value,
+                        });
+                    }
                 }
             }
             // An imported module appears in the outline under its name.
@@ -562,18 +571,14 @@ impl Resolver {
                 self.scopes.push(HashMap::new());
                 for item in items {
                     match item {
-                        CeItem::LetBang {
-                            name,
-                            name_span,
-                            value,
-                        }
-                        | CeItem::Let {
-                            name,
-                            name_span,
-                            value,
-                        } => {
+                        CeItem::LetBang { target, value, .. }
+                        | CeItem::Let { target, value, .. } => {
                             self.walk_expr(value);
-                            self.bind_in_scope(name.clone(), name_span.span());
+                            // A destructuring target binds each of its names at its
+                            // own span, like any other binding position.
+                            for (name, span) in target.bound_vars() {
+                                self.bind_in_scope(name.to_string(), span);
+                            }
                         }
                         CeItem::DoBang(e)
                         | CeItem::Return(e)
@@ -654,7 +659,9 @@ impl Resolver {
                             self.push_scope(param_scope(binding));
                             self.walk_expr(&binding.value);
                             self.scopes.pop();
-                            self.bind_in_scope(binding.name.clone(), binding.name_span.span());
+                            for (name, span) in let_target_vars(binding) {
+                                self.bind_in_scope(name, span);
+                            }
                         }
                         BlockStmt::Expr(e) => self.walk_expr(e),
                     }
@@ -671,6 +678,18 @@ impl Resolver {
 /// A scope frame for a binding's parameters (name → its span).
 fn param_scope(binding: &LetBinding) -> HashMap<String, Span> {
     params_scope(&binding.params)
+}
+
+/// The names a binding's *target* introduces, each at its own span: one entry for
+/// a plain `let x = …`, none for `let _ = …`, and one per variable for a
+/// destructuring `let (r, c) = …`.
+fn let_target_vars(binding: &LetBinding) -> Vec<(String, Span)> {
+    let mut out = HashMap::new();
+    pattern_vars(&binding.target, &mut out);
+    let mut out: Vec<(String, Span)> = out.into_iter().collect();
+    // Deterministic order (a HashMap's is not), so the outline is stable.
+    out.sort_by_key(|(_, span)| span.start);
+    out
 }
 
 /// A scope frame for a parameter list. A destructuring parameter contributes every

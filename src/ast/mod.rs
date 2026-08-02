@@ -283,7 +283,9 @@ fn print_let(binding: &LetBinding, indent: usize) -> String {
     if binding.pure {
         s.push_str("pure ");
     }
-    s.push_str(&binding.name);
+    // A plain name and `_` print as themselves; a destructuring target prints as
+    // the pattern it is, parens and all, which is exactly how it reparses.
+    s.push_str(&print_pattern(&binding.target));
     for param in &binding.params {
         s.push(' ');
         s.push_str(&print_param(param));
@@ -507,8 +509,12 @@ fn print_field_update(field: &crate::syntax::FieldUpdate) -> String {
 
 fn print_ce_item(item: &CeItem) -> String {
     match item {
-        CeItem::LetBang { name, value, .. } => format!("let! {name} = {}", print_expr(value)),
-        CeItem::Let { name, value, .. } => format!("let {name} = {}", print_expr(value)),
+        CeItem::LetBang { target, value, .. } => {
+            format!("let! {} = {}", print_pattern(target), print_expr(value))
+        }
+        CeItem::Let { target, value, .. } => {
+            format!("let {} = {}", print_pattern(target), print_expr(value))
+        }
         CeItem::DoBang(e) => format!("do! {}", print_expr(e)),
         CeItem::Return(e) => format!("return {}", print_expr(e)),
         CeItem::ReturnBang(e) => format!("return! {}", print_expr(e)),

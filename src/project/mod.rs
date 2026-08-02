@@ -389,8 +389,8 @@ fn export_arities(module: &Module) -> HashMap<String, usize> {
                 } else {
                     None
                 };
-                if let Some(a) = arity {
-                    out.insert(binding.name.clone(), a);
+                if let (Some(a), Some(name)) = (arity, binding.name()) {
+                    out.insert(name.to_string(), a);
                 }
             }
             Item::Type(decl) => {

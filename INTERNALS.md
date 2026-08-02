@@ -212,8 +212,10 @@ stdio. All features reuse the existing front end:
   It works because the checker, in a `record`-enabled pass (`types::check_collecting`, surfaced via
   `analyze`), accumulates a `(span, ty)` table for every expression node, binding name, function
   parameter, and pattern variable, then resolves each entry against the final substitution and renders
-  it. Bindings carry a `name_span`, and parameters / pattern variables carry their own spans, so a
+  it. Bindings carry a `target_span`, and parameters / pattern variables carry their own spans, so a
   function name hovers to its full inferred signature and a parameter hovers to its element type. A
+  destructuring binding records *both*: the whole target (hover the tuple, see the tuple's type) and
+  each name inside it, at its own span. A
   `##` doc attached to a top-level `let`/`type`/`extern` (DESIGN §7) is appended below the type when
   hovering the declaration name *or any reference resolving to it* (`resolve::symbol_at` → the item's
   `doc`); a documented symbol with no recorded type hovers to the doc text alone.
@@ -293,8 +295,11 @@ the project-wide cache. Diagnostics for a dependent are still *published* only w
 next analyzed; proactively re-publishing dependents' diagnostics on an import edit stays deferred.
 
 The AST changes that enable local navigation: function/binding parameters are `Param { name, span }`
-(was `Vec<String>`), `Pattern::Var { name, span }` (was `Var(String)`), and the
-`CeItem::Let`/`LetBang` variants carry a `name_span`. The spans are `NodeSpan` (which compares equal
+(was `Vec<String>`), `Pattern::Var { name, span }` (was `Var(String)`), and `LetBinding` and the
+`CeItem::Let`/`LetBang` variants carry a `target: Pattern` plus its `target_span` (each was a
+`String` name and its span, before a binding could destructure — `LetBinding::name()` is the
+plain-name shortcut every phase keeps for the common case, and `bound_names` / `bound_vars` are how
+a phase asks for *all* of them). The spans are `NodeSpan` (which compares equal
 unconditionally), so roundtrip/structural equality is unaffected; lowering erases them (`param_names`).
 
 Deferred: *truly* incremental reparsing — an edit still re-analyzes the whole document — and

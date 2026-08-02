@@ -71,13 +71,23 @@ module.exports = grammar({
     let_binding: $ => seq(
       'let',
       repeat(choice('mut', 'pure')),
-      field('name', choice($.identifier, $.wildcard)),
+      field('name', choice($.identifier, $.wildcard, $._binding_pattern)),
       repeat(field('parameter', $.parameter)),
       '=',
       field('body', $._body),
     ),
 
-    parameter: $ => $.identifier,
+    parameter: $ => choice($.identifier, $.wildcard, $._binding_pattern),
+
+    // What a binding position (a `let` target, a parameter, a CE `let`/`let!`)
+    // may destructure with. The compiler additionally holds these to
+    // irrefutability; the grammar stays permissive so code it rejects still
+    // highlights.
+    _binding_pattern: $ => choice(
+      $.parenthesized_pattern,
+      $.tuple_pattern,
+      $.record_pattern,
+    ),
 
     active_pattern_definition: $ => seq(
       'let',
@@ -515,8 +525,18 @@ module.exports = grammar({
       $.ce_yield,
     ),
 
-    ce_let: $ => seq('let', field('name', $.identifier), '=', $._expression),
-    ce_bind: $ => seq('let!', field('name', $.identifier), '=', $._expression),
+    ce_let: $ => seq(
+      'let',
+      field('name', choice($.identifier, $.wildcard, $._binding_pattern)),
+      '=',
+      $._expression,
+    ),
+    ce_bind: $ => seq(
+      'let!',
+      field('name', choice($.identifier, $.wildcard, $._binding_pattern)),
+      '=',
+      $._expression,
+    ),
     ce_do: $ => seq('do!', $._expression),
     ce_return: $ => seq(choice('return', 'return!'), $._expression),
     ce_yield: $ => seq(choice('yield', 'yield!'), $._expression),

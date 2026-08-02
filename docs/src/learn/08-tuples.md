@@ -47,6 +47,54 @@ Tuples also bridge lists and maps. `Map.ofList` builds a `Map` from a list of pa
 `Map.toList` turns a map back into its pairs, so a zip followed by `Map.ofList` is a compact way to
 build a lookup table from two parallel lists.
 
+## Binding both parts at once
+
+When a pattern covers every value, as a tuple pattern does, a whole `match` is more ceremony than
+the job needs. A `let` takes the same pattern directly, which is how Python writes it too:
+
+```pyfun
+type Point = { x: int, y: int }
+
+let (name, score) = ("ada", 10)
+let (first, (second, third)) = (1, (2, 3))
+let Point { x, y } = Point { x = 3, y = 4 }
+
+let swap p =
+  let (a, b) = p
+  (b, a)
+
+print f"{name} scored {score}"
+print (first + second + third)
+print (x * y)
+print (swap (1, 2))
+```
+
+```console
+ada scored 10
+6
+12
+(2, 1)
+```
+
+A function parameter takes the same patterns, so `let line (name, score) = f"{name}: {score}"`
+binds both parts on the way in and skips the `match` from the previous example entirely.
+
+The rule in all three positions is that the pattern has to match every value of its type. Names,
+`_`, tuples and records qualify, and they nest. A constructor pattern does not, because it can
+fail:
+
+```pyfun
+let Some x = Some 1
+```
+
+```console
+error: a `let` binding must always match, so it takes a name, `_`, or a tuple or record of those,
+not a constructor pattern (use `match` instead, which has somewhere to fall through to)
+```
+
+That is the trade. `match` handles the patterns that can fail, because it has other arms to fall
+through to, and `let` handles the ones that cannot, because it does not.
+
 ## Lists destructure too
 
 The same `match` works over a `List`. A list pattern names elements in brackets, just like the

@@ -852,18 +852,12 @@ impl Parser {
                  (no `mut`/`pure`, not inside a block or module)",
             ));
         }
-        let name_start = self.cur_start();
-        // `let _ = e` discards the result (useful for a non-`unit` expression whose
-        // value isn't needed but whose effect is). A discard takes no parameters and
-        // can't be `mut` — it binds nothing.
-        let is_discard = matches!(self.peek(), Tok::Underscore);
-        let name = if is_discard {
-            self.bump();
-            "_".to_string()
-        } else {
-            self.parse_ident("binding name")?
+        let (target, name_span) = self.parse_binding_target()?;
+        let is_discard = matches!(target, Pattern::Wildcard);
+        let name = match &target {
+            Pattern::Var { name, .. } => name.clone(),
+            _ => String::new(),
         };
-        let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
         let mut params = Vec::new();
         while starts_param(self.peek()) {
             params.push(self.parse_param()?);
@@ -887,14 +881,34 @@ impl Parser {
         if is_discard && mutable {
             return Err(self.error("a discard binding `_` cannot be `mut`"));
         }
+        // A destructuring target binds several names at once, so there is no one
+        // name for a `def` to take or for `<-` to reassign.
+        if !matches!(target, Pattern::Var { .. } | Pattern::Wildcard) {
+            if !params.is_empty() {
+                return Err(ParseError {
+                    message: "a function binding needs a name, so it cannot destructure \
+                              (bind the value first, then take it apart)"
+                        .to_string(),
+                    span: name_span.span(),
+                });
+            }
+            if mutable {
+                return Err(ParseError {
+                    message: "a `mut` binding needs a name for `<-` to reassign, so it cannot \
+                              destructure (bind each part with its own `let mut`)"
+                        .to_string(),
+                    span: name_span.span(),
+                });
+            }
+        }
         self.expect(&Tok::Eq, "`=`")?;
         let value = self.parse_block_or_expr()?;
         Ok(LetBinding {
             doc: None,
             mutable,
             pure,
-            name,
-            name_span,
+            target,
+            target_span: name_span,
             params,
             value,
         })
@@ -993,6 +1007,46 @@ impl Parser {
         Ok(self.mk(start, ExprKind::Fn { params, body }))
     }
 
+    /// Parse what a binding binds, with its span: `_` discards the value (useful
+    /// for a non-`unit` expression whose value isn't needed but whose effect is), a
+    /// `(`-led pattern or a record tag destructures it (`let (r, c) = …`), and
+    /// anything else is a plain name. Shared by `let` bindings and the `let`/`let!`
+    /// items of a computation expression, which admit exactly the same targets.
+    ///
+    /// A record tag is unambiguous here because `Point {` cannot begin a binding
+    /// *name* (a name is followed by `=` or a parameter), and a `(`-led target is
+    /// held to irrefutability for the same reason a parameter is: a binding has no
+    /// second arm to fall through to.
+    fn parse_binding_target(&mut self) -> Result<(Pattern, NodeSpan), ParseError> {
+        let start = self.cur_start();
+        let destructures = matches!(self.peek(), Tok::LParen)
+            || (matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::LBrace));
+        let target = if matches!(self.peek(), Tok::Underscore) {
+            self.bump();
+            Pattern::Wildcard
+        } else if destructures {
+            let pattern = self.parse_pattern()?;
+            if let Some(what) = refutable_shape(&pattern) {
+                return Err(ParseError {
+                    message: format!(
+                        "a `let` binding must always match, so it takes a name, `_`, or a \
+                         tuple or record of those, not {what} (use `match` instead, which \
+                         has somewhere to fall through to)"
+                    ),
+                    span: Span::new(start, self.prev_end()),
+                });
+            }
+            pattern
+        } else {
+            let name = self.parse_ident("binding name")?;
+            Pattern::Var {
+                name,
+                span: NodeSpan::new(Span::new(start, self.prev_end())),
+            }
+        };
+        Ok((target, NodeSpan::new(Span::new(start, self.prev_end()))))
+    }
+
     /// Parse a single parameter, capturing its span (for editor jump/hover): a
     /// name, `_`, or a parenthesized **irrefutable** pattern (`fun (t, sq) -> …`).
     ///
@@ -1010,11 +1064,12 @@ impl Parser {
             }
             Tok::LParen => {
                 let pattern = self.parse_pattern()?;
-                if let Some(what) = refutable_in_param(&pattern) {
+                if let Some(what) = refutable_shape(&pattern) {
                     return Err(ParseError {
                         message: format!(
                             "a parameter must always match, so it takes a name, `_`, or a tuple \
-                             of those, not {what} (match on the value in the body instead)"
+                             or record of those, not {what} (match on the value in the body \
+                             instead)"
                         ),
                         span: Span::new(start, self.prev_end()),
                     });
@@ -1738,21 +1793,19 @@ impl Parser {
             Tok::Let => {
                 self.bump();
                 let bang = self.eat(&Tok::Bang);
-                let name_start = self.cur_start();
-                let name = self.parse_ident("binding name")?;
-                let name_span = NodeSpan::new(Span::new(name_start, self.prev_end()));
+                let (target, target_span) = self.parse_binding_target()?;
                 self.expect(&Tok::Eq, "`=`")?;
                 let value = self.parse_expr()?;
                 Ok(if bang {
                     CeItem::LetBang {
-                        name,
-                        name_span,
+                        target,
+                        target_span,
                         value,
                     }
                 } else {
                     CeItem::Let {
-                        name,
-                        name_span,
+                        target,
+                        target_span,
                         value,
                     }
                 })
@@ -2187,23 +2240,22 @@ fn starts_param(tok: &Tok) -> bool {
 }
 
 /// Whether `pattern` can fail to match, and if so what to call it in the error.
-/// Parameters admit only the shapes that always match: a name, `_`, tuples, and
-/// **record** patterns, each over irrefutable sub-patterns. A tuple's arity is
-/// fixed by its type and a record has exactly one shape (naming a subset of its
-/// fields still matches every value), so both are irrefutable when their parts
-/// are. Everything else (a literal, a constructor, a list pattern, an or-pattern)
-/// can fail, and a parameter has nowhere to fail *to*.
+/// The two **binding** positions — a parameter and a `let` target — admit only the
+/// shapes that always match: a name, `_`, tuples, and **record** patterns, each
+/// over irrefutable sub-patterns. A tuple's arity is fixed by its type and a
+/// record has exactly one shape (naming a subset of its fields still matches every
+/// value), so both are irrefutable when their parts are. Everything else (a
+/// literal, a constructor, a list pattern, an or-pattern) can fail, and neither
+/// position has anywhere to fail *to*.
 ///
 /// A record pattern's tag is only *checked* to name a record later, in the type
 /// checker; a tag that turns out to be a sum-type constructor is rejected there as
 /// "not a record type", so nothing refutable slips through this way.
-fn refutable_in_param(pattern: &Pattern) -> Option<&'static str> {
+fn refutable_shape(pattern: &Pattern) -> Option<&'static str> {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => None,
-        Pattern::Tuple { elems } => elems.iter().find_map(refutable_in_param),
-        Pattern::Record { fields, .. } => {
-            fields.iter().find_map(|f| refutable_in_param(&f.pattern))
-        }
+        Pattern::Tuple { elems } => elems.iter().find_map(refutable_shape),
+        Pattern::Record { fields, .. } => fields.iter().find_map(|f| refutable_shape(&f.pattern)),
         Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => Some("a literal pattern"),
         Pattern::Ctor { .. } => Some("a constructor pattern"),
         Pattern::List { .. } => Some("a list pattern"),
@@ -2298,7 +2350,7 @@ mod tests {
             .items
             .iter()
             .filter_map(|i| match i {
-                Item::Let(b) => Some(b.name.as_str()),
+                Item::Let(b) => b.name(),
                 _ => None,
             })
             .collect()
@@ -2330,5 +2382,52 @@ mod tests {
         let (module, errors) = parse_recover(lex(src).unwrap());
         assert_eq!(names(&module), ["a", "b"]);
         assert!(errors.is_empty());
+    }
+
+    /// The message of the single parse error in `src` (panics if it parses).
+    fn parse_error(src: &str) -> String {
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        errors
+            .first()
+            .unwrap_or_else(|| panic!("expected a parse error in {src:?}"))
+            .message
+            .clone()
+    }
+
+    #[test]
+    fn a_let_target_admits_only_patterns_that_always_match() {
+        // The same rule a parameter is held to, and for the same reason: there is
+        // no second arm to fall through to (`DESIGN.md` §7).
+        for (src, what) in [
+            ("let (Some x) = Some 1", "a constructor pattern"),
+            ("let ([a, b]) = [1, 2]", "a list pattern"),
+        ] {
+            let msg = parse_error(src);
+            assert!(msg.contains(what), "{src:?} reported: {msg}");
+            assert!(msg.contains("must always match"), "{src:?} reported: {msg}");
+        }
+    }
+
+    #[test]
+    fn a_destructuring_target_takes_no_parameters_and_no_mut() {
+        assert!(parse_error("let (a, b) c = (1, 2)").contains("a function binding needs a name"));
+        assert!(parse_error("let mut (a, b) = (1, 2)").contains("needs a name for `<-`"));
+    }
+
+    #[test]
+    fn a_destructuring_let_binds_every_name_in_its_target() {
+        let src = "type P = { x: int, y: int }\nlet (a, (b, _)) = (1, (2, 3))\nlet P { x, y } = P { x = 1, y = 2 }";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "errors: {errors:?}");
+        let bound: Vec<String> = module
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Let(b) => Some(b.bound_names()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(bound, ["a", "b", "x", "y"]);
     }
 }

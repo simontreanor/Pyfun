@@ -23,7 +23,7 @@
 //! thunk `'t -> m a` (force it by applying to any value).
 
 use crate::lexer::Span;
-use crate::parser::ast::{BinOp, CeItem, Expr, ExprKind, NodeSpan, Param};
+use crate::parser::ast::{BinOp, CeItem, Expr, ExprKind, NodeSpan, Param, Pattern};
 
 /// Desugar a user-builder CE body into a plain expression. Returns
 /// `Err((message, span))` for a structurally invalid body (e.g. a non-final
@@ -36,8 +36,8 @@ pub fn desugar_ce(builder: &str, items: &[CeItem], span: Span) -> Result<Expr, (
     let is_last = rest.is_empty();
     match head {
         CeItem::LetBang {
-            name,
-            name_span,
+            target,
+            target_span,
             value,
         } => {
             let cont = require_rest(builder, rest, span, "`let!`", value)?;
@@ -45,7 +45,7 @@ pub fn desugar_ce(builder: &str, items: &[CeItem], span: Span) -> Result<Expr, (
                 builder,
                 "bind",
                 value.clone(),
-                lam(name.clone(), *name_span, cont, span),
+                lam(target.clone(), *target_span, cont, span),
                 span,
             ))
         }
@@ -64,14 +64,14 @@ pub fn desugar_ce(builder: &str, items: &[CeItem], span: Span) -> Result<Expr, (
             }
         }
         CeItem::Let {
-            name,
-            name_span,
+            target,
+            target_span,
             value,
         } => {
             let cont = require_rest(builder, rest, span, "a `let`", value)?;
             // `let x = e` followed by the rest is an immediately-applied lambda.
             Ok(app(
-                lam(name.clone(), *name_span, cont, span),
+                lam(target.clone(), *target_span, cont, span),
                 value.clone(),
                 span,
             ))
@@ -249,10 +249,13 @@ fn call2(module: &str, method: &str, a: Expr, b: Expr, span: Span) -> Expr {
 
 /// `fun name -> body`, the param carrying the binder's original span so hover and
 /// rename still work on a `let!`-bound name.
-fn lam(name: String, name_span: NodeSpan, body: Expr, span: Span) -> Expr {
+fn lam(pattern: Pattern, pattern_span: NodeSpan, body: Expr, span: Span) -> Expr {
     mk(
         ExprKind::Fn {
-            params: vec![Param::var(name, name_span)],
+            params: vec![Param {
+                pattern,
+                span: pattern_span,
+            }],
             body: Box::new(body),
         },
         span,
@@ -261,5 +264,14 @@ fn lam(name: String, name_span: NodeSpan, body: Expr, span: Span) -> Expr {
 
 /// `fun _ -> body` — an ignored-argument lambda (for `do!` and `delay` thunks).
 fn wild_lam(body: Expr, span: Span) -> Expr {
-    lam("_".to_string(), NodeSpan::new(span), body, span)
+    let span_node = NodeSpan::new(span);
+    lam(
+        Pattern::Var {
+            name: "_".to_string(),
+            span: span_node,
+        },
+        span_node,
+        body,
+        span,
+    )
 }

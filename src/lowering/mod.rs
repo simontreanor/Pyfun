@@ -391,14 +391,14 @@ impl Lowerer {
         for item in &module.items {
             match item {
                 Item::Let(binding) => {
-                    binder_names.insert(binding.name.clone());
+                    binder_names.extend(binding.bound_names());
                     binder_names.extend(param_names(&binding.params));
                     collect_binders(&binding.value, &mut binder_names);
                 }
                 Item::Expr(e) => collect_binders(e, &mut binder_names),
                 Item::Module { items, .. } => {
                     for member in items {
-                        binder_names.insert(member.name.clone());
+                        binder_names.extend(member.bound_names());
                         binder_names.extend(param_names(&member.params));
                         collect_binders(&member.value, &mut binder_names);
                     }
@@ -440,11 +440,14 @@ impl Lowerer {
                     extern_module_imports.push((path.clone(), alias.clone()));
                 }
                 Item::Let(binding) => {
-                    user_defs.insert(binding.name.clone());
+                    user_defs.extend(binding.bound_names());
                     // A binding's callable arity is the number of parameters of the
                     // Python def/lambda it lowers to: its own `let` parameters, or —
                     // if it's a bare `let name = fun ... -> ...` — the lambda's. Extra
                     // arguments are handled as over-application at the call site.
+                    // A destructuring target has no single name to key any of these
+                    // registries by (and cannot be a function), so it registers
+                    // nothing beyond the binder names above.
                     let arity = if !binding.params.is_empty() {
                         Some(binding.params.len())
                     } else if let ExprKind::Fn { params, .. } = &binding.value.kind {
@@ -452,14 +455,17 @@ impl Lowerer {
                     } else {
                         None
                     };
-                    if let Some(k) = arity {
-                        arities.insert(binding.name.clone(), k);
+                    if let (Some(k), Some(name)) = (arity, binding.name()) {
+                        arities.insert(name.to_string(), k);
                     }
                     // Record a top-level, non-`mut`, parameterless value binding
                     // so the decode-specialization pass can classify a *named*
                     // decoder (`let user = Decode.map2 …`).
-                    if !binding.mutable && binding.params.is_empty() {
-                        top_val_defs.insert(binding.name.clone(), binding.value.clone());
+                    if !binding.mutable
+                        && binding.params.is_empty()
+                        && let Some(name) = binding.name()
+                    {
+                        top_val_defs.insert(name.to_string(), binding.value.clone());
                     }
                     // Record the body of a top-level, non-`mut`, 2-parameter binding
                     // so the fold-loop pass can inline it as a named folder. The
@@ -476,8 +482,8 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        if let Some(fb) = folder {
-                            top_fn_defs.insert(binding.name.clone(), fb);
+                        if let (Some(fb), Some(name)) = (folder, binding.name()) {
+                            top_fn_defs.insert(name.to_string(), fb);
                         }
                     }
                 }
@@ -515,8 +521,8 @@ impl Lowerer {
                         } else {
                             None
                         };
-                        if let Some(k) = arity {
-                            arities.insert(format!("{name}.{}", member.name), k);
+                        if let (Some(k), Some(member_name)) = (arity, member.name()) {
+                            arities.insert(format!("{name}.{member_name}"), k);
                         }
                     }
                 }
@@ -750,13 +756,24 @@ impl Lowerer {
                             body,
                             is_async: false,
                         });
-                        code.push(PyStmt::Assign {
-                            target: py_value_name(&binding.name),
-                            value: PyExpr::Call {
-                                func: Box::new(PyExpr::Name(fname)),
-                                args: vec![],
-                            },
-                        });
+                        let value = PyExpr::Call {
+                            func: Box::new(PyExpr::Name(fname)),
+                            args: vec![],
+                        };
+                        match &binding.target {
+                            Pattern::Var { name, .. } => code.push(PyStmt::Assign {
+                                target: py_value_name(name),
+                                value,
+                            }),
+                            Pattern::Wildcard => code.push(PyStmt::Assign {
+                                target: "_".to_string(),
+                                value,
+                            }),
+                            target => {
+                                let target = target.clone();
+                                self.unpack_binding(&target, None, value, &mut code);
+                            }
+                        }
                     } else {
                         self.lower_let(binding, &HashSet::new(), &mut code)?;
                     }
@@ -781,11 +798,33 @@ impl Lowerer {
                 // references rewrite to the same names via `cur_module` (set in
                 // `lower_var`/`lower_call`).
                 Item::Module { name, items, .. } => {
-                    let members = items.iter().map(|m| m.name.clone()).collect();
+                    let members = items.iter().flat_map(|m| m.bound_names()).collect();
                     self.cur_module = Some((name.clone(), members));
                     for member in items {
-                        let mangled = format!("{name}_{}", py_value_name(&member.name));
-                        self.lower_binding_as(&mangled, member, &HashSet::new(), &mut code)?;
+                        match &member.target {
+                            Pattern::Var {
+                                name: member_name, ..
+                            } => {
+                                let mangled = format!("{name}_{}", py_value_name(member_name));
+                                self.lower_binding_as(
+                                    &mangled,
+                                    member,
+                                    &HashSet::new(),
+                                    &mut code,
+                                )?;
+                            }
+                            Pattern::Wildcard => {
+                                self.lower_binding_as("_", member, &HashSet::new(), &mut code)?;
+                            }
+                            // A destructuring member exports each of its names, so
+                            // each one takes the module's mangled spelling.
+                            _ => self.lower_destructuring(
+                                member,
+                                Some(name),
+                                &HashSet::new(),
+                                &mut code,
+                            )?,
+                        }
                     }
                     self.cur_module = None;
                 }
@@ -865,7 +904,103 @@ impl Lowerer {
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
-        self.lower_binding_as(&binding.name, binding, locals, out)
+        match &binding.target {
+            Pattern::Var { name, .. } => self.lower_binding_as(name, binding, locals, out),
+            // A discard keeps Python's own throwaway name, which reads as the
+            // deliberate "evaluated for its effect" that it is.
+            Pattern::Wildcard => self.lower_binding_as("_", binding, locals, out),
+            _ => self.lower_destructuring(binding, None, locals, out),
+        }
+    }
+
+    /// Lower a destructuring value binding: `let (r, c) = e` emits `r, c = e`, the
+    /// statement a Python programmer would have written. `prefix` mangles the bound
+    /// names for an in-file `module` member (`Geometry_width`), matching what
+    /// [`Lowerer::lower_binding_as`] receives already composed.
+    fn lower_destructuring(
+        &mut self,
+        binding: &LetBinding,
+        prefix: Option<&str>,
+        locals: &HashSet<String>,
+        out: &mut Vec<PyStmt>,
+    ) -> Result<(), LowerError> {
+        let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
+        out.append(&mut stmts);
+        let target = binding.target.clone();
+        self.unpack_binding(&target, prefix, value, out);
+        Ok(())
+    }
+
+    /// Bind a computation expression's `let`/`let!` target to an already-lowered
+    /// value: a plain assignment for a name, the unpacking statements for a
+    /// destructuring target. The native CE lowerings emit statements, so a
+    /// destructuring binder costs nothing here beyond the unpacking itself.
+    fn bind_ce_target(&mut self, target: &Pattern, value: PyExpr, out: &mut Vec<PyStmt>) {
+        match target {
+            Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+                target: py_value_name(name),
+                value,
+            }),
+            Pattern::Wildcard => out.push(PyStmt::Assign {
+                target: "_".to_string(),
+                value,
+            }),
+            target => {
+                let target = target.clone();
+                self.unpack_binding(&target, None, value, out);
+            }
+        }
+    }
+
+    /// Bind `value` to a binding target that is not a single name. A tuple of plain
+    /// names unpacks in one statement straight from the value; anything deeper goes
+    /// through a temp, since the unpacking reads the source more than once.
+    fn unpack_binding(
+        &mut self,
+        target: &Pattern,
+        prefix: Option<&str>,
+        value: PyExpr,
+        out: &mut Vec<PyStmt>,
+    ) {
+        let rename = |n: &str| match prefix {
+            Some(p) => format!("{p}_{}", py_value_name(n)),
+            None => py_value_name(n),
+        };
+        // The common shape, and the one worth emitting directly: `r, c = e`.
+        if let Pattern::Tuple { elems } = target
+            && elems
+                .iter()
+                .all(|e| matches!(e, Pattern::Var { .. } | Pattern::Wildcard))
+        {
+            let targets = elems
+                .iter()
+                .map(|e| match e {
+                    Pattern::Var { name, .. } => rename(name),
+                    // Several `_` targets in one unpacking are fine (unlike
+                    // duplicate function arguments).
+                    _ => "_".to_string(),
+                })
+                .collect();
+            out.push(PyStmt::UnpackAssign { targets, value });
+            return;
+        }
+        // Otherwise unpack from a name: reuse one the value already is, or bind a
+        // temp so the source is evaluated exactly once. Either way the *nested*
+        // temps are named off a fresh reserved base, never off a user's name — a
+        // binding called `p` must not have `p_1` invented next to it.
+        let source = match &value {
+            PyExpr::Name(n) => n.clone(),
+            _ => {
+                let tmp = self.fresh_tmp();
+                out.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value,
+                });
+                tmp
+            }
+        };
+        let base = self.fresh_tmp();
+        unpack_into_as(target, &source, &base, &rename, out);
     }
 
     /// Whether a top-level parameterless binding's value introduces frame-level
@@ -903,12 +1038,16 @@ impl Lowerer {
         } else {
             None
         };
-        match folder {
-            Some(fb) => {
-                self.local_fn_defs.insert(b.name.clone(), fb);
+        match (folder, b.name()) {
+            (Some(fb), Some(name)) => {
+                self.local_fn_defs.insert(name.to_string(), fb);
             }
-            None => {
-                self.local_fn_defs.remove(&b.name);
+            // Anything else rebinding a name evicts its entry — including each
+            // name a destructuring target binds.
+            _ => {
+                for name in b.bound_names() {
+                    self.local_fn_defs.remove(&name);
+                }
             }
         }
     }
@@ -1109,7 +1248,7 @@ impl Lowerer {
                 BlockStmt::Let(b) => {
                     self.lower_let(b, &locals, &mut out)?;
                     self.note_block_let(b);
-                    locals.insert(b.name.clone());
+                    locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
                 BlockStmt::Expr(e) => {
@@ -1449,7 +1588,7 @@ impl Lowerer {
                 BlockStmt::Let(b) => {
                     self.lower_let(b, &locals, &mut out)?;
                     self.note_block_let(b);
-                    locals.insert(b.name.clone());
+                    locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) => {
                     let (mut s, v) = self.lower_value(e, &locals)?;
@@ -3288,14 +3427,11 @@ impl Lowerer {
                     body.push(PyStmt::YieldFrom(v));
                     has_yield = true;
                 }
-                CeItem::Let { name, value, .. } => {
+                CeItem::Let { target, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
-                    body.push(PyStmt::Assign {
-                        target: py_value_name(name),
-                        value: v,
-                    });
-                    locals.insert(name.clone());
+                    self.bind_ce_target(target, v, &mut body);
+                    locals.extend(target.bound_names());
                 }
                 _ => return Err(ce_item_error("seq")),
             }
@@ -3353,27 +3489,23 @@ impl Lowerer {
                 s.push(PyStmt::Return(v));
                 Ok(s)
             }
-            CeItem::Let { name, value, .. } => {
+            CeItem::Let { target, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
-                s.push(PyStmt::Assign {
-                    target: py_value_name(name),
-                    value: v,
-                });
+                self.bind_ce_target(target, v, &mut s);
                 let mut locals = locals.clone();
-                locals.insert(name.clone());
+                locals.extend(target.bound_names());
                 s.extend(self.lower_result_items(rest, &locals)?);
                 Ok(s)
             }
-            CeItem::LetBang { name, value, .. } => {
+            CeItem::LetBang { target, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 let mut inner_locals = locals.clone();
-                inner_locals.insert(name.clone());
+                inner_locals.extend(target.bound_names());
                 let rest_stmts = self.lower_result_items(rest, &inner_locals)?;
-                s.push(self.result_bind_match(
-                    v,
-                    PyPattern::Capture(py_value_name(name)),
-                    rest_stmts,
-                ));
+                // The target rides inside the `Ok` pattern, so a destructuring
+                // `let!` costs no extra statement: `case Ok((r, c)):`.
+                let py_pattern = self.lower_pattern(target);
+                s.push(self.result_bind_match(v, py_pattern, rest_stmts));
                 Ok(s)
             }
             CeItem::DoBang(e) => {
@@ -3423,23 +3555,17 @@ impl Lowerer {
         let mut locals = locals.clone();
         for item in items {
             match item {
-                CeItem::LetBang { name, value, .. } => {
+                CeItem::LetBang { target, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
-                    body.push(PyStmt::Assign {
-                        target: py_value_name(name),
-                        value: PyExpr::Await(Box::new(v)),
-                    });
-                    locals.insert(name.clone());
+                    self.bind_ce_target(target, PyExpr::Await(Box::new(v)), &mut body);
+                    locals.extend(target.bound_names());
                 }
-                CeItem::Let { name, value, .. } => {
+                CeItem::Let { target, value, .. } => {
                     let (mut s, v) = self.lower_value(value, &locals)?;
                     body.append(&mut s);
-                    body.push(PyStmt::Assign {
-                        target: py_value_name(name),
-                        value: v,
-                    });
-                    locals.insert(name.clone());
+                    self.bind_ce_target(target, v, &mut body);
+                    locals.extend(target.bound_names());
                 }
                 CeItem::DoBang(e) => {
                     let (mut s, v) = self.lower_value(e, &locals)?;
@@ -7024,38 +7150,7 @@ fn ce_item_error(builder: &str) -> LowerError {
 
 /// Names a pattern binds, so they can be treated as locals when lowering the arm.
 fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
-    match pattern {
-        Pattern::Var { name, .. } => vec![name.clone()],
-        Pattern::Ctor { args, .. } => args.iter().flat_map(pattern_bindings).collect(),
-        Pattern::Record { fields, .. } => fields
-            .iter()
-            .flat_map(|f| pattern_bindings(&f.pattern))
-            .collect(),
-        Pattern::Tuple { elems } => elems.iter().flat_map(pattern_bindings).collect(),
-        // A list pattern binds its prefix/suffix elements' vars plus the rest binder.
-        Pattern::List {
-            prefix,
-            rest,
-            suffix,
-        } => {
-            let mut v: Vec<String> = prefix.iter().flat_map(pattern_bindings).collect();
-            if let Some(r) = rest {
-                v.extend(pattern_bindings(r));
-            }
-            v.extend(suffix.iter().flat_map(pattern_bindings));
-            v
-        }
-        // Every alternative binds the same variables (enforced by the checker), so
-        // the first alternative's bindings are representative.
-        Pattern::Or(alts) => alts.first().map(pattern_bindings).unwrap_or_default(),
-        // `p as x` binds `x` plus whatever `p` binds.
-        Pattern::As { pattern, name, .. } => {
-            let mut v = pattern_bindings(pattern);
-            v.push(name.clone());
-            v
-        }
-        _ => vec![],
-    }
+    pattern.bound_names()
 }
 
 /// A `match` is exhaustive at lowering time only if some *unguarded* arm is
@@ -7102,7 +7197,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             for stmt in stmts {
                 match stmt {
                     BlockStmt::Let(b) => {
-                        bound.insert(b.name.clone());
+                        bound.extend(b.bound_names());
                         // A value binding's RHS is in this scope; a nested function's
                         // body (params > 0) is its own scope — don't enter it.
                         if b.params.is_empty() {
@@ -7201,7 +7296,7 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
             for stmt in stmts {
                 match stmt {
                     BlockStmt::Let(b) => {
-                        out.insert(b.name.clone());
+                        out.extend(b.bound_names());
                         out.extend(param_names(&b.params));
                         collect_binders(&b.value, out);
                     }
@@ -7276,8 +7371,8 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
         ExprKind::Ce { items, .. } => {
             for item in items {
                 match item {
-                    CeItem::LetBang { name, value, .. } | CeItem::Let { name, value, .. } => {
-                        out.insert(name.clone());
+                    CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
+                        out.extend(target.bound_names());
                         collect_binders(value, out);
                     }
                     CeItem::DoBang(e)
@@ -7393,14 +7488,26 @@ fn destructure_params(params: &[Param], args: &[String]) -> Vec<PyStmt> {
     let mut out = Vec::new();
     for (p, arg) in params.iter().zip(args) {
         if p.name().is_none() {
-            unpack_into(&p.pattern, arg, &mut out);
+            // A parameter's source is already a reserved argument name, so it
+            // doubles as the base for any nested temps.
+            unpack_into_as(&p.pattern, arg, arg, &|n| py_value_name(n), &mut out);
         }
     }
     out
 }
 
-/// Emit the unpacking of `pattern` from the value already bound to `source`.
-fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
+/// Emit the unpacking of `pattern` from the value already bound to `source`,
+/// binding each name as `rename` spells it (plain for a parameter or a local
+/// binding, `Module_`-mangled for an in-file module member). A pattern nested
+/// deeper than one level reads through temps named off `base`, which must be a
+/// name the program cannot also have written.
+fn unpack_into_as(
+    pattern: &Pattern,
+    source: &str,
+    base: &str,
+    rename: &dyn Fn(&str) -> String,
+    out: &mut Vec<PyStmt>,
+) {
     match pattern {
         // A tuple unpacks in one statement, the way Python spells it.
         Pattern::Tuple { elems } => {
@@ -7408,10 +7515,10 @@ fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
             let mut nested = Vec::new();
             for (i, elem) in elems.iter().enumerate() {
                 match elem {
-                    Pattern::Var { name, .. } => targets.push(py_value_name(name.as_str())),
+                    Pattern::Var { name, .. } => targets.push(rename(name.as_str())),
                     Pattern::Wildcard => targets.push("_".to_string()),
                     _ => {
-                        let temp = format!("{source}_{i}");
+                        let temp = format!("{base}_{i}");
                         targets.push(temp.clone());
                         nested.push((elem, temp));
                     }
@@ -7422,7 +7529,7 @@ fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
                 value: PyExpr::Name(py_value_name(source)),
             });
             for (elem, temp) in nested {
-                unpack_into(elem, &temp, out);
+                unpack_into_as(elem, &temp, &temp, rename, out);
             }
         }
         // A record reads the fields it names, one attribute each — the same
@@ -7436,16 +7543,16 @@ fn unpack_into(pattern: &Pattern, source: &str, out: &mut Vec<PyStmt>) {
                 match &field.pattern {
                     Pattern::Wildcard => {}
                     Pattern::Var { name, .. } => out.push(PyStmt::Assign {
-                        target: py_value_name(name.as_str()),
+                        target: rename(name.as_str()),
                         value,
                     }),
                     nested => {
-                        let temp = format!("{source}_{i}");
+                        let temp = format!("{base}_{i}");
                         out.push(PyStmt::Assign {
                             target: temp.clone(),
                             value,
                         });
-                        unpack_into(nested, &temp, out);
+                        unpack_into_as(nested, &temp, &temp, rename, out);
                     }
                 }
             }

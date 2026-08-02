@@ -632,3 +632,55 @@ fn serves_rename() {
             .all(|e| e.get("newText").and_then(Json::as_str) == Some("uno"))
     );
 }
+
+#[test]
+fn go_to_definition_resolves_one_element_of_a_destructuring() {
+    let exe = env!("CARGO_BIN_EXE_pyfun");
+    let mut child = Command::new(exe)
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn `pyfun lsp`");
+
+    // `let (w, h) = (3, 4)` on line 0, `let a = h` on line 1: the reference to
+    // `h` (line 1, character 8) jumps to `h` inside the tuple target (line 0,
+    // character 8) — not to the start of the binding. A destructuring `let`
+    // defines one symbol per name, each at its own span.
+    let session = [
+        frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        frame(
+            r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///p.pyfun","text":"let (w, h) = (3, 4)\nlet a = h"}}}"#,
+        ),
+        frame(
+            r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///p.pyfun"},"position":{"line":1,"character":8}}}"#,
+        ),
+        frame(r#"{"jsonrpc":"2.0","method":"exit"}"#),
+    ]
+    .concat();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(session.as_bytes())
+        .unwrap();
+    let mut out = Vec::new();
+    child.stdout.take().unwrap().read_to_end(&mut out).unwrap();
+    child.wait().unwrap();
+
+    let def = unframe(&out)
+        .into_iter()
+        .find(|m| m.get("id").and_then(Json::as_i64) == Some(2))
+        .expect("definition response");
+    let start = def
+        .get("result")
+        .unwrap()
+        .get("range")
+        .unwrap()
+        .get("start")
+        .unwrap();
+    assert_eq!(start.get("line").unwrap().as_i64(), Some(0));
+    assert_eq!(start.get("character").unwrap().as_i64(), Some(8));
+}
