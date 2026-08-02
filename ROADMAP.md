@@ -378,7 +378,9 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 The mdBook site shipped 2026-07-15 (learner track, educator pack, internals tour, in-page runnable
 code blocks; the playground moved to `/playground/` with `#code=` permalinks). Teaching prose is
 CC BY 4.0. When lessons change, re-verify with `python docs/verify_lessons.py` (checks every deep
-link decodes to its displayed starter and every solution's output matches). Still open:
+link decodes to its displayed starter and every solution's output matches); `ci.yml` runs it on
+every PR, and it refuses a `target/debug` binary older than `Cargo.toml` rather than reporting
+green against a stale compiler. Still open:
 
 - **Notebook-format lessons** (M, demand-gated) — the same lessons as `.ipynb` files riding the
   shipped Jupyter kernel, so instructors can distribute them through existing course
@@ -387,6 +389,30 @@ link decodes to its displayed starter and every solution's output matches). Stil
   tour's "Where you would add..." notes; label a handful of well-scoped issues.
 - **Printable educator pack** (S, demand-gated) — a PDF export of the five session docs for
   departments that circulate paper.
+
+## Two surface gaps the 0.5.0 documentation audit found (2026-08-02)
+
+Both surfaced while checking what the docs claim against what the compiler does, and neither is a
+documentation problem, so they are recorded here rather than papered over in prose.
+
+1. **An uppercase `let` binding silently defines a function** (S) — `let Some x = Some 1`
+   type-checks. `parser::parse_binding_target` enters the pattern grammar only after `(` or
+   `Ident {`, so a bare constructor name is read as the *function name* of `let f x = …`, and the
+   program defines a function called `Some` that shadows the constructor. The irrefutability rule
+   that exists for exactly this case (`refutable_shape`, which does reject `let (Some x) = …`) never
+   sees it. Nothing downstream can use such a name as a constructor, so the shape is a mistake
+   every time it is written. Fix: reject an uppercase-initial binding name, with a message pointing
+   at the parenthesized pattern form when a constructor pattern was plainly intended. Lesson 8 had
+   to work around it (it quotes the parenthesized spelling), which is how it was found.
+2. **The hole-fit shortlist can hide the answer it exists to name** (S–M) — `hole_fits` ranks by
+   generality, then by qualified-vs-bare, then **by name**, and truncates at `HOLE_FIT_CAP = 6`. For
+   a common shape like `string -> string` the stdlib sweep left far more than six equally specific
+   fits, so the tail is decided alphabetically: `String.upper` now falls off the end of a
+   `string -> string` hole while `String.trimStart` stays. That is arbitrary from the reader's side,
+   and it cost lesson 9 its worked example. Options, in increasing effort: rank the remaining tier
+   by *shortest name* or by prelude-declaration order rather than alphabetically; say "and N more"
+   when the list is truncated; or filter by the hole's own name against candidate names (`?upper`
+   plainly wants `upper`), which is the one that would have kept the lesson working.
 
 ## Non-goals (decided against — with the reason, so they're not re-litigated)
 
