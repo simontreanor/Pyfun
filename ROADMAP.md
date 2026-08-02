@@ -334,10 +334,11 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
   mode + legacy CE, 2024.2+). At **0.4.0** (2026-08-02, verified against the plugins API — the
   earlier "0.4.0 is not uploaded yet" note was stale, as the "awaiting moderation" one had been
-  before it; check the API rather than this line). **0.5.0 is owed.** Acceptance is granted, so
-  nothing gates it but the toolchain: `gradle publishPlugin` needs JDK 21 **and Gradle**, and
-  Gradle is not installed on the dev machine (there is no wrapper in `editors/jetbrains/`, so
-  `gradle` must come from PATH). Adding a Gradle wrapper would make this scriptable like Open VSX.
+  before it; check the API rather than this line). **0.5.0 uploaded 2026-08-02 and is awaiting
+  moderation** — the API lists approved versions only, so it will read 0.4.0 until that clears.
+  `editors/jetbrains/` now has a **committed Gradle wrapper**: `./gradlew publishPlugin` (JDK 21 +
+  `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this machine and
+  two releases running lost time rediscovering that before reaching for a bare `gradle`.
 - **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.4.0** (2026-08-02, verified
   against the gallery API; **0.5.0 is owed** — the vsix is built at
   `editors/vscode/pyfun-0.5.0.vsix` and attached to the GitHub release). The **only surface that cannot be scripted**: the vsix is uploaded by
