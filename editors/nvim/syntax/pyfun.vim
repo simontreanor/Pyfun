@@ -14,7 +14,7 @@ syn keyword pyfunOperatorWord and or not
 syn keyword pyfunBoolean true false
 
 " Built-in computation-expression builders (async { … }, seq { … }, result { … })
-syn keyword pyfunBuilder async seq result
+syn keyword pyfunBuilder async seq result option
 
 " Comments
 syn match pyfunComment "#.*$" contains=@Spell

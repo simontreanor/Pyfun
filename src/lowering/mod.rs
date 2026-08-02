@@ -3395,7 +3395,11 @@ impl Lowerer {
             CeBuilder::Seq => self.lower_seq(items, locals),
             CeBuilder::Result => {
                 self.needs_result = true;
-                self.lower_result_ce(items, locals)
+                self.lower_short_circuit_ce(items, locals, RESULT_CE)
+            }
+            CeBuilder::Option => {
+                self.needs_option = true;
+                self.lower_short_circuit_ce(items, locals, OPTION_CE)
             }
             CeBuilder::Async => self.lower_async(items, locals),
             // A user builder desugars to plain calls; lower the desugared form.
@@ -3457,9 +3461,15 @@ impl Lowerer {
         Ok((vec![def], call0(&name)))
     }
 
-    /// `result { ... }` → a function that short-circuits on `Error`.
-    fn lower_result_ce(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
-        let body = self.lower_result_items(items, locals)?;
+    /// `result { ... }` / `option { ... }` → a function that short-circuits on the
+    /// builder's failure case ([`ShortCircuit`]).
+    fn lower_short_circuit_ce(
+        &mut self,
+        items: &[CeItem],
+        locals: &HashSet<String>,
+        sc: ShortCircuit,
+    ) -> Lowered {
+        let body = self.lower_short_circuit_items(items, locals, sc)?;
         let name = self.fresh_fn();
         let def = PyStmt::FuncDef {
             name: name.clone(),
@@ -3470,10 +3480,11 @@ impl Lowerer {
         Ok((vec![def], call0(&name)))
     }
 
-    fn lower_result_items(
+    fn lower_short_circuit_items(
         &mut self,
         items: &[CeItem],
         locals: &HashSet<String>,
+        sc: ShortCircuit,
     ) -> Result<Vec<PyStmt>, LowerError> {
         let Some((first, rest)) = items.split_first() else {
             return Ok(vec![]);
@@ -3481,7 +3492,7 @@ impl Lowerer {
         match first {
             CeItem::Return(e) => {
                 let (mut s, v) = self.lower_value(e, locals)?;
-                s.push(PyStmt::Return(call1("Ok", v)));
+                s.push(PyStmt::Return(call1(sc.success, v)));
                 Ok(s)
             }
             CeItem::ReturnBang(e) => {
@@ -3494,44 +3505,56 @@ impl Lowerer {
                 self.bind_ce_target(target, v, &mut s);
                 let mut locals = locals.clone();
                 locals.extend(target.bound_names());
-                s.extend(self.lower_result_items(rest, &locals)?);
+                s.extend(self.lower_short_circuit_items(rest, &locals, sc)?);
                 Ok(s)
             }
             CeItem::LetBang { target, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 let mut inner_locals = locals.clone();
                 inner_locals.extend(target.bound_names());
-                let rest_stmts = self.lower_result_items(rest, &inner_locals)?;
-                // The target rides inside the `Ok` pattern, so a destructuring
+                let rest_stmts = self.lower_short_circuit_items(rest, &inner_locals, sc)?;
+                // The target rides inside the success pattern, so a destructuring
                 // `let!` costs no extra statement: `case Ok((r, c)):`.
                 let py_pattern = self.lower_pattern(target);
-                s.push(self.result_bind_match(v, py_pattern, rest_stmts));
+                s.push(self.short_circuit_bind_match(v, py_pattern, rest_stmts, sc));
                 Ok(s)
             }
             CeItem::DoBang(e) => {
                 let (mut s, v) = self.lower_value(e, locals)?;
-                let rest_stmts = self.lower_result_items(rest, locals)?;
-                s.push(self.result_bind_match(v, PyPattern::Wildcard, rest_stmts));
+                let rest_stmts = self.lower_short_circuit_items(rest, locals, sc)?;
+                s.push(self.short_circuit_bind_match(v, PyPattern::Wildcard, rest_stmts, sc));
                 Ok(s)
             }
-            _ => Err(ce_item_error("result")),
+            _ => Err(ce_item_error(sc.name)),
         }
     }
 
-    /// `match <subject>: case Ok(<ok_pat>): <rest>  case Error(e): return Error(e)`
-    fn result_bind_match(
+    /// `match <subject>: case Ok(<ok_pat>): <rest>  case Error(e): return Error(e)`,
+    /// or the `Some`/`None_` spelling of the same shape. A payload-free failure
+    /// (`None`) forwards a fresh one rather than binding and re-wrapping, which is
+    /// both shorter and what a person would write: `case None_(): return None_()`.
+    fn short_circuit_bind_match(
         &mut self,
         subject: PyExpr,
         ok_pat: PyPattern,
         rest: Vec<PyStmt>,
+        sc: ShortCircuit,
     ) -> PyStmt {
-        let e_tmp = self.fresh_tmp();
+        let (failure_pat, failure_body) = if sc.failure_payload {
+            let e_tmp = self.fresh_tmp();
+            (
+                vec![PyPattern::Capture(e_tmp.clone())],
+                PyStmt::Return(call1(sc.failure, PyExpr::Name(e_tmp))),
+            )
+        } else {
+            (vec![], PyStmt::Return(call0(sc.failure)))
+        };
         PyStmt::Match {
             subject,
             cases: vec![
                 PyCase {
                     pattern: PyPattern::Class {
-                        name: "Ok".to_string(),
+                        name: sc.success.to_string(),
                         args: vec![ok_pat],
                     },
                     guard: None,
@@ -3539,11 +3562,11 @@ impl Lowerer {
                 },
                 PyCase {
                     pattern: PyPattern::Class {
-                        name: "Error".to_string(),
-                        args: vec![PyPattern::Capture(e_tmp.clone())],
+                        name: sc.failure.to_string(),
+                        args: failure_pat,
                     },
                     guard: None,
-                    body: vec![PyStmt::Return(call1("Error", PyExpr::Name(e_tmp)))],
+                    body: vec![failure_body],
                 },
             ],
         }
@@ -7140,6 +7163,38 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
         })
         .collect()
 }
+
+/// How a short-circuiting computation expression spells its two cases. `result`
+/// and `option` are the same lowering — a flat sequence of `match` statements with
+/// early returns — differing only here, so they share one code path rather than
+/// two that must be kept in step (`DESIGN.md` §8.1).
+#[derive(Clone, Copy)]
+struct ShortCircuit {
+    /// The builder keyword, for the defensive item error.
+    name: &'static str,
+    /// The constructor a `return` wraps with, and the one a bind unwraps.
+    success: &'static str,
+    /// The constructor the block returns unchanged when a bind fails.
+    failure: &'static str,
+    /// Whether the failure constructor carries a payload to forward. `Error e`
+    /// does; `None` does not, which is what makes `option`'s lowering the simpler
+    /// of the two.
+    failure_payload: bool,
+}
+
+const RESULT_CE: ShortCircuit = ShortCircuit {
+    name: "result",
+    success: "Ok",
+    failure: "Error",
+    failure_payload: true,
+};
+
+const OPTION_CE: ShortCircuit = ShortCircuit {
+    name: "option",
+    success: "Some",
+    failure: "None_",
+    failure_payload: false,
+};
 
 /// A defensive error for a CE item the type checker should already have rejected.
 fn ce_item_error(builder: &str) -> LowerError {

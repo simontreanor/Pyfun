@@ -1055,7 +1055,7 @@ be run for its effect.
 
 MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
 blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
-and **record** declarations, the three computation expressions of §8, units of measure (§8), readable
+and **record** declarations, the computation expressions of §8, units of measure (§8), readable
 Python output. (Effect tracking is designed but deferred — §4.)
 
 Lexical conventions: line comments start with `#` (Python-style — `//` is floor division, §7.1);
@@ -1541,8 +1541,18 @@ compile-time machinery erased at runtime). They are an intentional, bounded exce
 F# CEs desugar `builder { ... }` into calls on a *builder* with methods like `Bind`, `Return`,
 `ReturnFrom`, `Zero`, `Combine`, `Delay`, `For`, `While`. Pyfun follows the same model:
 
-- The three built-ins (`async`/`seq`/`result`) keep **bespoke native lowerings** (await / generators /
-  railway) — a generic bind/return desugar can't produce those idiomatically.
+- The four built-ins (`async`/`seq`/`result`/`option`) keep **bespoke native lowerings** (await /
+  generators / railway) — a generic bind/return desugar can't produce those idiomatically.
+- **The built-in set is closed by a rule, not by taste:** one per built-in *short-circuit type*
+  (`Option`, `Result`) and one per Python *control-flow form* (`async`, `seq`). There is no fifth
+  candidate, which is what stops "add a fourth" from becoming "add a fifth"; everything else is a
+  user builder. Each is spelled in lowercase, mirroring its type where it has one
+  (`option`/`Option`, `result`/`Result`). Builder keywords are contextual rather than reserved, and
+  a bare `{ … }` record literal no longer exists (§8.3), so nothing else can parse in that position.
+  Writing the *type's* capital is the one likely near-miss, so `Option { let! … }` is rejected by the
+  parser with a message naming the lowercase form rather than resolving against the prelude module
+  `Option`, whose members are ordered for `|>` (`Option.bind` takes its function first) and could
+  never satisfy the value-first builder protocol below.
 - **User-defined builders are now supported** (`src/desugar.rs`). A builder is an in-file `module`
   providing the protocol functions; `Builder { … }` (an uppercase module name before `{`) desugars to
   calls on them, after which ordinary HM inference and lowering take over — no per-builder type rules
@@ -1566,13 +1576,23 @@ The protocol (F#'s, lowercased and keyword-safe); a builder need only define wha
 lookahead: a CE body starts with a CE keyword, a record with `ident =`. `delay` receives a thunk
 `unit -> m a` (force it with the unit value: `let delay f = f ()`).
 
-The three built-ins and how they lower to Python:
+The four built-ins and how they lower to Python:
 
 | CE          | Semantics                          | Lowers to                                              |
 |-------------|------------------------------------|--------------------------------------------------------|
 | `async {}`  | asynchronous, `let!`/`do!` = await | Python `async def` + `await` (native coroutines); carries the `Async` effect (§4) |
 | `seq {}`    | lazy sequence, `yield`/`yield!`    | Python generator functions (`yield` / `yield from`); pure, lazy |
 | `result {}` | railway-oriented; short-circuit on `Error` | the `Result` ADT + early-return / nested-bind chain; pure but short-circuiting |
+| `option {}` | short-circuit on `None`            | the `Option` ADT, the same early-return chain; pure but short-circuiting |
+
+`result` and `option` are one lowering (`lowering::ShortCircuit`) differing only in how they spell
+their two cases, so neither can drift from the other. `option`'s is the simpler: `None` carries no
+payload, so its failure arm binds nothing and returns a fresh one (`case None_(): return None_()`)
+where `result`'s must capture the error value to forward it. Both emit a flat sequence of `match`
+statements with early returns, which is the whole reason they are built in: the user-builder path is
+an *expression* transform, so the same program written against a hand-rolled `Opt` module compiles
+to a chain of nested `bind` lambdas on one line. A CE earns its keep at **two or more** binds; a
+single bind reads better as `Option.map`/`Option.bind`.
 
 Notes:
 - `result {}` depends on a `Result`/`Option` ADT in the prelude — its Python representation is a

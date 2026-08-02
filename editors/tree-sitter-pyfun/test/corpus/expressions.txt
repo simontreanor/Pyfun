@@ -157,6 +157,28 @@ let chained =
         (identifier)))))
 
 ================================================================================
+option computation expression
+================================================================================
+
+let chained =
+  option { let! x = Some 1
+           return x }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (ce_expression
+      (ce_bind
+        (identifier)
+        (application
+          (constructor_identifier)
+          (integer)))
+      (ce_return
+        (identifier)))))
+
+================================================================================
 user-defined builder computation expression
 ================================================================================
 

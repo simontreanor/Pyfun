@@ -7419,6 +7419,9 @@ impl Infer {
         match builder {
             CeBuilder::Seq => self.infer_seq(items, span, env),
             CeBuilder::Result => self.infer_monad(items, span, env, "Result", true),
+            // `Option a` short-circuits on `None`, which carries nothing — so it is
+            // the unary case of the very shape `result` uses.
+            CeBuilder::Option => self.infer_monad(items, span, env, "Option", false),
             CeBuilder::Async => {
                 let ty = self.infer_monad(items, span, env, "Async", false)?;
                 // An `async {}` block introduces the `async` effect (`DESIGN.md`
@@ -7563,7 +7566,8 @@ impl Infer {
                 CeItem::Yield(_) | CeItem::YieldBang(_) => {
                     return Err(TypeError {
                         message: format!(
-                            "`yield` is not allowed in a `{}` block",
+                            "`yield` is not allowed in {} `{}` block",
+                            article(con),
                             con.to_lowercase()
                         ),
                         span,
@@ -7575,7 +7579,11 @@ impl Infer {
         match result_val {
             Some(inner) => Ok(monad(self.apply(&inner), self)),
             None => Err(TypeError {
-                message: format!("a `{}` block must end with `return`", con.to_lowercase()),
+                message: format!(
+                    "{} `{}` block must end with `return`",
+                    article(con),
+                    con.to_lowercase()
+                ),
                 span,
             }),
         }
@@ -8715,6 +8723,15 @@ fn occurs(var: u32, ty: &Ty) -> bool {
         Ty::Fun(a, b, _) => occurs(var, a) || occurs(var, b),
         Ty::Con(_, args) | Ty::Tuple(args) => args.iter().any(|a| occurs(var, a)),
         _ => false,
+    }
+}
+
+/// `a`/`an` for a builder name, so the CE diagnostics read as English for
+/// `async`, `option` and `result` alike.
+fn article(con: &str) -> &'static str {
+    match con.chars().next() {
+        Some('A' | 'E' | 'I' | 'O' | 'U' | 'a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
     }
 }
 

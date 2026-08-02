@@ -2541,6 +2541,10 @@
                 "value": "result"
               },
               {
+                "type": "STRING",
+                "value": "option"
+              },
+              {
                 "type": "SYMBOL",
                 "name": "_module_identifier"
               }

@@ -5764,3 +5764,93 @@ fn e2e_a_destructuring_bind_in_a_result_block() {
         &[("ok", "21")],
     );
 }
+
+// ---------- the `option` computation expression (`DESIGN.md` §8.1) ----------
+
+#[test]
+fn option_block_lowers_to_flat_match_statements() {
+    // The reason `option` is a built-in rather than a user builder: a bespoke
+    // lowering emits early returns, not a chain of nested `bind` lambdas.
+    let py = pyfun::compile("let f o = option {\n  let! x = o\n  return (x + 1)\n}").unwrap();
+    assert!(py.contains("case Some(x):"), "{py}");
+    assert!(py.contains("case None_():"), "{py}");
+    assert!(py.contains("return Some(x + 1)"), "{py}");
+    assert!(!py.contains("lambda"), "{py}");
+}
+
+#[test]
+fn option_short_circuit_forwards_a_fresh_none() {
+    // `None` carries no payload, so the failure arm binds nothing and returns a
+    // fresh one, where `result`'s must capture its error value to forward it.
+    let py = pyfun::compile("let f o = option {\n  let! x = o\n  return x\n}").unwrap();
+    assert!(py.contains("case None_():"), "{py}");
+    assert!(py.contains("return None_()"), "{py}");
+    // Nothing is bound in the failure arm.
+    assert!(!py.contains("case None_(_pf_t"), "{py}");
+}
+
+#[test]
+fn option_block_chains_binds_without_nesting_lambdas() {
+    let py = pyfun::compile(
+        "let f xs = option {\n  let! a = List.get 0 xs\n  let! b = List.get 1 xs\n  return (a + b)\n}",
+    )
+    .unwrap();
+    assert_eq!(py.matches("case Some(").count(), 2, "{py}");
+    assert!(!py.contains("functools.partial"), "{py}");
+}
+
+#[test]
+fn a_destructuring_bind_rides_inside_the_some_pattern() {
+    let py = pyfun::compile("let f o = option {\n  let! (a, b) = o\n  return a + b\n}").unwrap();
+    assert!(py.contains("case Some((a, b)):"), "{py}");
+}
+
+#[test]
+fn e2e_option_block_short_circuits_on_none() {
+    run_and_check(
+        "
+        let f xs =
+          option {
+            let! a = List.get 0 xs
+            let! b = List.get 1 xs
+            return (a + b)
+          }
+        let hit =
+          match f [1, 2]:
+            case Some n: n
+            case None: 0
+        let miss =
+          match f [1]:
+            case Some n: n
+            case None: 0
+        ",
+        &[("hit", "3"), ("miss", "0")],
+    );
+}
+
+#[test]
+fn e2e_option_block_return_bang_and_do_bang() {
+    run_and_check(
+        "
+        let f o p =
+          option {
+            do! p
+            let! x = o
+            return! (if x > 0 then Some (x * 2) else None)
+          }
+        let a =
+          match f (Some 3) (Some ()):
+            case Some n: n
+            case None: 0
+        let b =
+          match f (Some 3) None:
+            case Some n: n
+            case None: 0
+        let c =
+          match f (Some 0) (Some ()):
+            case Some n: n
+            case None: 0
+        ",
+        &[("a", "6"), ("b", "0"), ("c", "0")],
+    );
+}

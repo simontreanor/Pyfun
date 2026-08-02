@@ -603,14 +603,20 @@ pub struct FieldUpdate {
     pub value: Expr,
 }
 
-/// A computation-expression builder: one of the three built-ins (each with a
+/// A computation-expression builder: one of the four built-ins (each with a
 /// bespoke native Python lowering) or a user-defined builder named by an in-file
 /// `module` (desugared to that module's `bind`/`return_`/`yield_`/… functions).
+///
+/// The built-in set is closed by a rule rather than by taste: **one per built-in
+/// short-circuit type** (`Option`, `Result`) and **one per Python control-flow
+/// form** (`async`, `seq`). There is no fifth candidate, which is what keeps the
+/// set at four instead of open-ended — anything else is a user builder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CeBuilder {
     Async,
     Seq,
     Result,
+    Option,
     /// A user builder, named by an (uppercase) module.
     User(String),
 }
@@ -624,6 +630,7 @@ impl CeBuilder {
             "async" => Some(CeBuilder::Async),
             "seq" => Some(CeBuilder::Seq),
             "result" => Some(CeBuilder::Result),
+            "option" => Some(CeBuilder::Option),
             _ => None,
         }
     }
@@ -633,6 +640,7 @@ impl CeBuilder {
             CeBuilder::Async => "async",
             CeBuilder::Seq => "seq",
             CeBuilder::Result => "result",
+            CeBuilder::Option => "option",
             CeBuilder::User(name) => name,
         }
     }

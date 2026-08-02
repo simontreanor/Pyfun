@@ -49,6 +49,55 @@ Error('bad b')
 back an `Option` (lesson 3), so `Option.toResult` bridges it to a `Result` with a message for the
 `None` case before `let!` binds it.
 
+## When every step is an `Option`
+
+The example above bridges each `Option` to a `Result` so that `result { }` can bind it. When you
+have no error message to add, and the steps are already `Option`, `option { }` binds them directly
+and stops at the first `None`:
+
+```pyfun
+let addStrings a b =
+  option {
+    let! x = String.toInt a
+    let! y = String.toInt b
+    return x + y
+  }
+
+print (addStrings "3" "4")
+print (addStrings "3" "oops")
+```
+
+```console
+Some(7)
+None_
+```
+
+`None` prints as `None_` because that is the name the emitted Python class carries, `None` being a
+Python keyword. You see it only when you print a bare `Option`; matching on it uses `None` as
+written.
+
+It reads exactly like `result { }` because it is the same shape: `let!` unwraps a `Some`, `return`
+wraps the answer back up, and the first `None` ends the block. The difference is what a failure
+carries. A `Result` carries a value explaining what went wrong, so `result { }` passes that value
+along, and `option { }` has nothing to pass along because `None` holds nothing.
+
+That is also how you choose between them. Reach for `Result` when the caller needs to know *why* a
+step failed, and `Option` when the absence is the whole answer, as it is for a lookup that finds
+nothing.
+
+A block earns its keep at two or more `let!` steps. For a single one, `Option.map` and
+`Option.bind` say the same thing on one line:
+
+```pyfun
+let double s = String.toInt s |> Option.map (fun n -> n * 2)
+
+print (double "21")
+```
+
+```console
+Some(42)
+```
+
 A second built-in builder is `seq { }`, which describes a sequence one `yield` at a time. It stays
 lazy, and it lowers to a Python generator function, which you may already know from Python's own
 `yield`:

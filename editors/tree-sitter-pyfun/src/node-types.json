@@ -1086,6 +1086,10 @@
             "named": true
           },
           {
+            "type": "option",
+            "named": false
+          },
+          {
             "type": "result",
             "named": false
           },
@@ -4866,6 +4870,10 @@
   },
   {
     "type": "opaque",
+    "named": false
+  },
+  {
+    "type": "option",
     "named": false
   },
   {

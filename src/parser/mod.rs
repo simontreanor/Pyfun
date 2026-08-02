@@ -1497,9 +1497,9 @@ impl Parser {
                 ExprKind::Bool(false)
             }
             Tok::Ident(name) => {
-                // `async`/`seq`/`result` are computation-expression builders only
-                // when immediately followed by `{`; otherwise they are ordinary
-                // identifiers.
+                // `async`/`seq`/`result`/`option` are computation-expression
+                // builders only when immediately followed by `{`; otherwise they are
+                // ordinary identifiers.
                 if let Some(builder) = CeBuilder::from_name(&name)
                     && *self.peek2() == Tok::LBrace
                 {
@@ -1530,6 +1530,21 @@ impl Parser {
                 // distinguishes `Maybe { let! … }` (a CE) from `Some { x = 1 }`
                 // (a constructor applied to a record literal).
                 if is_upper(&name) && *self.peek2() == Tok::LBrace && starts_ce_item(self.peek3()) {
+                    // A built-in spelled with its type's capital is the one likely
+                    // near-miss: `Option { let! … }` would otherwise resolve against
+                    // the *prelude module* `Option`, whose members are ordered for
+                    // `|>` rather than for the builder protocol, and fail with a
+                    // signature error pointing into prelude code. Name the fix here.
+                    if let Some(builtin) = CeBuilder::from_name(&name.to_lowercase()) {
+                        let lower = builtin.name();
+                        return Err(ParseError {
+                            message: format!(
+                                "`{name}` is not a computation-expression builder — the \
+                                 built-in one is spelled `{lower}` (write `{lower} {{ … }}`)"
+                            ),
+                            span: Span::new(start, start + name.len()),
+                        });
+                    }
                     self.bump(); // builder name
                     return self.parse_ce(CeBuilder::User(name), start);
                 }
