@@ -430,8 +430,9 @@ returned topological order (dependencies first, entry last). `project::build_fro
 in the entry's directory). Cross-module *checking* and *emit* consume this `Project`.
 
 **Cross-module checking** (`types::check_module` + `project::check`). *Implementation:* the single-file `run` was generalized to take the imports map and return the module's
-exported value schemes (which now include `extern` names), its exported sum types, **its exported records**,
-**and its measures + measure-aliases**; `check_module(module,
+`ModuleExports` interface: its exported value schemes (which include `extern` names), its exported sum
+types, **its exported records**, **its opaque handle types** (`collect_exported_opaques` /
+`ExportedOpaque`: name + arity, issue #72), **and its measures + measure-aliases**; `check_module(module,
 imports)` seeds imported values under qualified keys and imported sum types into the decls under **qualified
 constructor keys**. The type merge happens in **two halves**, because a local `type` declaration may name an
 imported type (`type Holder = { item: Shapes.Placed }`, DESIGN §6.1): `merge_imported_type_names` runs
@@ -456,6 +457,22 @@ and leaked local variables into the "free in the env" set — blocking generaliz
 bindings, which then exported un-quantified and cascaded onward (#26). Every imported scheme is therefore
 alpha-renamed into the consumer's id space as it is seeded (`Infer::refresh_scheme`, values and constructors
 alike, in sorted order so the ids do not depend on `HashMap` iteration).
+*Transitive interface closure* (issues #72/#75): before `run` hands back its `ModuleExports`,
+`close_over_references` walks every exported scheme, constructor scheme, and record field for `Ty::Con`
+names (`collect_con_names`) and pulls any name satisfied by an import's record/opaque tables into this
+module's own exports, tagged `origin: Some(declaring module)` (own declarations carry `origin: None`);
+newly pulled records are walked in turn, and a seen set terminates the walk on mutually referencing
+records. Each import's interface is itself closed, so one pull per hop reaches any depth. On the consumer
+side `merge_imported_type_names` registers carried entries **last** and under the **bare identity name
+only** (no qualified key, no `record_aliases` entry, so constructing or pattern-matching a carried record
+still requires the direct import); a taken bare name skips the carried entry silently (`record_home`
+recognizes the same record arriving along two paths), and a genuinely shadowed record's fields land in
+`Decls::field_hints`, which `record_of_field` / `record_of_field_on` render as "the record `Config` in
+module `Inner` declares this field" instead of a bare unknown. The lowering side:
+`ModuleExports::carried_records` feeds `project::compile`'s per-module `ImportContext::record_class_modules`
+plus field data keyed by the *declaring* module's tag, so a record **update** in a consumer that never
+imports the declaring module still reconstructs via the right class (`inner.Config(...)`,
+`Lowerer::record_class_name` accepts those modules and hoists their imports).
 `project::check` threads the `ModuleExports` map through the topological order, seeding each module from
 only the modules it actually imports (so an unimported module's members/constructors stay invisible), and
 returns errors grouped by module. *Lowering* routes a qualified constructor — in expression or pattern

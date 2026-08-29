@@ -122,6 +122,12 @@ pub struct ImportContext {
     /// (`x` → `Geometry.Point`), so a cross-module update `{ p with x = 3 }`
     /// (which carries no tag) routes to the imported class.
     pub record_field_owners: HashMap<String, String>,
+    /// Modules that declare a **transitively** visible record (`DESIGN.md` §6.1)
+    /// without being imported by this module directly. A record update on such a
+    /// record reconstructs via the declaring module's class (`inner.Config(...)`),
+    /// so its module must be recognized as a class source (and its Python import
+    /// hoisted) even though no `import` names it here.
+    pub record_class_modules: HashSet<String>,
 }
 
 /// A module lowered as part of a multi-file project.
@@ -149,6 +155,7 @@ pub fn lower_in_project(
     let mut lowerer = Lowerer::new(module);
     lowerer.float_literals = float_literals.clone();
     lowerer.imported_modules = ctx.modules.clone();
+    lowerer.record_class_modules = ctx.record_class_modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
     lowerer
         .newtype_ctors
@@ -318,6 +325,11 @@ struct Lowerer {
     /// A `Geometry.member` reference routes to Python `geometry.member` (vs the
     /// `Geometry_member` mangling used for in-file `module` declarations).
     imported_modules: HashSet<String>,
+    /// Modules that declare a transitively visible record without being imported
+    /// here directly ([`ImportContext::record_class_modules`]). Consulted only by
+    /// [`Lowerer::record_class_name`], so nothing but a record reconstruction can
+    /// route through such a module.
+    record_class_modules: HashSet<String>,
     /// Qualified names of imported nullary constructors (`Palette.Red`), referenced
     /// as values, which must lower to a call (`palette.Red()`) not the bare class.
     imported_nullary_ctors: HashSet<String>,
@@ -610,6 +622,7 @@ impl Lowerer {
             float_literals: HashSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
+            record_class_modules: HashSet::new(),
             imported_nullary_ctors: HashSet::new(),
             use_runtime: false,
             project_mode: false,
@@ -2850,10 +2863,13 @@ impl Lowerer {
     /// file module (`Geometry.Point`) becomes dotted attribute access on that module
     /// (`geometry.Point`, with `import geometry` hoisted) so it references the *same*
     /// class the module defines (the consumer never redefines it); a bare tag is the
-    /// record class name (mangled for the reserved `Exception`).
+    /// record class name (mangled for the reserved `Exception`). A tag rooted in a
+    /// module visible only through a transitively carried record
+    /// (`record_class_modules`) routes the same way — an update on such a record
+    /// reconstructs via the declaring module's class.
     fn record_class_name(&mut self, tag: &str) -> String {
         if let Some((base, rec)) = tag.split_once('.')
-            && self.imported_modules.contains(base)
+            && (self.imported_modules.contains(base) || self.record_class_modules.contains(base))
         {
             let module = self.py_module_ref(base);
             format!("{module}.{}", py_record_class(rec))

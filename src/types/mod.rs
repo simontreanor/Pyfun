@@ -1805,6 +1805,13 @@ struct Decls {
     /// name (`Point`), so a qualified construction/pattern resolves to the same
     /// `RecordInfo` (and `Ty::Con`) the exporting module uses.
     record_aliases: HashMap<String, String>,
+    /// Field name → `(record, declaring module)` for each record an import's
+    /// interface carries **transitively** whose bare name is already taken here
+    /// (by a local type or another import), so the record itself stays out of
+    /// scope. Consulted only to improve the "unknown record field" /
+    /// "has no field" diagnostics: the field's owner is knowable even though the
+    /// record is not visible.
+    field_hints: HashMap<String, Vec<(String, String)>>,
     /// User-declared in-file module names (`module Foo = …`), for the "X is a
     /// module" diagnostic on a bare reference.
     modules: HashSet<String>,
@@ -1817,8 +1824,7 @@ struct Decls {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _schemes, _exports, _records, _measures, _holes, _ordered) =
-        run(module, false, &HashMap::new());
+    let (errors, _types, _exports, _holes, _ordered) = run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -1829,7 +1835,8 @@ pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
 /// One sum type a module exports (`DESIGN.md` §6.1): its name, type-parameter
 /// arity, and constructors (bare name + signature/arity). Carried in
 /// [`ModuleExports`] so an importing module can construct and pattern-match the
-/// type's values. Records / measures / externs are not yet cross-module exported.
+/// type's values. Records, measures, externs, and opaque handle types cross the
+/// boundary through the other [`ModuleExports`] slots.
 #[derive(Clone)]
 struct ExportedType {
     name: String,
@@ -1837,18 +1844,55 @@ struct ExportedType {
     ctors: Vec<(String, CtorInfo)>,
 }
 
+/// One record a module's interface carries (`DESIGN.md` §8.3): its bare identity
+/// name and its [`RecordInfo`] (params + fields).
+#[derive(Clone)]
+struct ExportedRecord {
+    name: String,
+    info: RecordInfo,
+    /// The module that **declares** the record: `None` when this module declares
+    /// it itself, `Some(module)` when the record is carried transitively because
+    /// an exported scheme or record field references it (`DESIGN.md` §6.1).
+    origin: Option<String>,
+}
+
+/// One opaque handle type (`extern type Rng`) a module's interface carries: its
+/// name and type-parameter arity. There is nothing more to a handle type — no
+/// constructors, no fields — so exporting the name is exporting the type.
+#[derive(Clone)]
+struct ExportedOpaque {
+    name: String,
+    arity: usize,
+    /// As on [`ExportedRecord`]: `None` for this module's own declaration,
+    /// `Some(module)` for one carried transitively from that module.
+    origin: Option<String>,
+}
+
 /// A module's exported interface (`DESIGN.md` §6.1): its public top-level `let`
 /// values' schemes (keyed by **bare** name) and its public sum types. Opaque —
 /// the scheme/ctor representation is internal — produced by [`check_module`] and
 /// fed back in as a dependent module's imports.
+///
+/// The record and opaque-type slots are **transitively closed**: they hold this
+/// module's own declarations plus every record / opaque type its exported
+/// schemes, constructors, and record fields reference out of its own imports'
+/// interfaces (each tagged with the module that declares it). `Wrap` cannot
+/// honestly be exported without the `Config` its field is typed with, or a
+/// consumer two hops from `Config`'s module could hold a value whose fields it
+/// cannot access and whose type it cannot name.
 #[derive(Clone, Default)]
 pub struct ModuleExports {
     schemes: Env,
     types: Vec<ExportedType>,
-    /// Public **record** types (`DESIGN.md` §8.3): each bare name + its
-    /// [`RecordInfo`] (params + fields), so an importing module can construct,
-    /// pattern-match, update, and field-access the record via qualified tags.
-    records: Vec<(String, RecordInfo)>,
+    /// **Record** types (`DESIGN.md` §8.3) — own + transitively referenced — so
+    /// an importing module can construct, pattern-match, update, and
+    /// field-access a record via qualified tags (own records), and field-access
+    /// / name transitively carried ones.
+    records: Vec<ExportedRecord>,
+    /// **Opaque handle types** (`extern type Rng`) — own + transitively
+    /// referenced — so an importing module can write the type's name in a
+    /// record field, an `extern` signature, or an ADT payload.
+    opaques: Vec<ExportedOpaque>,
     /// Public **base measure** names (`measure m`). Merged **unqualified** into a
     /// consumer's decls — there is no qualified unit syntax (`<m>` is bare), so
     /// measures cross by name and erase at lowering (`DESIGN.md` §6.1).
@@ -1856,6 +1900,27 @@ pub struct ModuleExports {
     /// Public **derived-measure aliases** (`measure N = kg m / s^2`) → their
     /// expansion over base measures, so `<N>` unifies the same way in the consumer.
     measure_aliases: HashMap<String, Unit>,
+}
+
+impl ModuleExports {
+    /// The records this interface carries from **other** modules' declarations
+    /// (the transitively pulled entries): `(declaring module, record name,
+    /// declared field order)`. The project lowerer uses this to route a record
+    /// update in a consumer that never imports the declaring module directly —
+    /// the update must reconstruct via the declaring module's class.
+    pub(crate) fn carried_records(&self) -> Vec<(String, String, Vec<String>)> {
+        self.records
+            .iter()
+            .filter_map(|rec| {
+                let origin = rec.origin.clone()?;
+                Some((
+                    origin,
+                    rec.name.clone(),
+                    rec.info.fields.iter().map(|(f, _)| f.clone()).collect(),
+                ))
+            })
+            .collect()
+    }
 }
 
 /// Type-check `module` as one node of a multi-file project (`DESIGN.md` §6.1).
@@ -1872,18 +1937,8 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, schemes, types, records, (measures, measure_aliases), _holes, _ordered) =
-        run(module, false, imports);
-    (
-        errors,
-        ModuleExports {
-            schemes,
-            types,
-            records,
-            measures,
-            measure_aliases,
-        },
-    )
+    let (errors, _types, exports, _holes, _ordered) = run(module, false, imports);
+    (errors, exports)
 }
 
 /// Like [`check_module`] but also returns the span→type table (as
@@ -1894,19 +1949,8 @@ pub fn check_module_collecting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports) {
-    let (errors, types, schemes, tys, records, (measures, measure_aliases), _holes, _ordered) =
-        run(module, true, imports);
-    (
-        errors,
-        types,
-        ModuleExports {
-            schemes,
-            types: tys,
-            records,
-            measures,
-            measure_aliases,
-        },
-    )
+    let (errors, types, exports, _holes, _ordered) = run(module, true, imports);
+    (errors, types, exports)
 }
 
 /// Like [`check_collecting`] but with imported modules' exports seeded
@@ -1916,8 +1960,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
-    let (errors, types, _schemes, _exports, _records, _measures, holes, _ordered) =
-        run(module, true, imports);
+    let (errors, types, _exports, holes, _ordered) = run(module, true, imports);
     (errors, types, holes)
 }
 
@@ -1929,8 +1972,7 @@ pub fn check_collecting_with_imports(
 pub fn check_collecting(
     module: &Module,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>, HashSet<String>) {
-    let (errors, types, _schemes, _exports, _records, _measures, holes, ordered) =
-        run(module, true, &HashMap::new());
+    let (errors, types, _exports, holes, ordered) = run(module, true, &HashMap::new());
     (errors, types, holes, ordered)
 }
 
@@ -1939,24 +1981,17 @@ pub fn check_collecting(
 /// node, which we resolve and render once inference is complete. `imports` pre-binds
 /// imported modules' interfaces (members under qualified keys, sum types under
 /// qualified constructor keys, for the multi-file driver); it is empty for a
-/// single-file check. Returns the errors, the hover table, the module's exported
-/// value schemes (top-level `let` bindings under their bare names), and its
-/// exported sum types, and its exported records.
+/// single-file check. Returns the errors, the hover table, and the module's
+/// [`ModuleExports`] interface (value schemes, sum types, records, opaque handle
+/// types, measures — transitively closed over what the interface references).
 type RunResult = (
     Vec<TypeError>,
     Vec<TypeSpan>,
-    Env,
-    Vec<ExportedType>,
-    Vec<(String, RecordInfo)>,
-    ExportedMeasures,
+    ModuleExports,
     Vec<Hole>,
     // User type names the program compares (need ordering methods emitted).
     HashSet<String>,
 );
-
-/// This module's own measures, for its export interface: base names and derived
-/// aliases (`DESIGN.md` §6.1).
-type ExportedMeasures = (HashSet<String>, HashMap<String, Unit>);
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
     let mut errors = Vec::new();
@@ -1964,15 +1999,17 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     // `type` declaration can be written in terms of an imported type; it hands back
     // the names it accepted for the body merge below.
     let (mut decls, ctor_env, imported) = build_decls(module, imports, &mut errors);
-    // This module's own public sum types + records: `collect_exported_*` walk this
-    // module's own items, so only what it declares is exported.
+    // This module's own public sum types + records + opaque handle types:
+    // `collect_exported_*` walk this module's own items, so only what it declares
+    // starts here (the transitive closure below may add carried records/opaques).
     let exported_types = collect_exported_types(module, &decls);
     let exported_records = collect_exported_records(module, &decls);
+    let exported_opaques = collect_exported_opaques(module, &decls);
     // Captured before imports are merged, so we export only this module's own
     // measures. `decls.measures` holds base + alias names; `decls.measure_aliases`
     // holds the aliases' expansions.
-    let exported_measures: ExportedMeasures =
-        (decls.measures.clone(), decls.measure_aliases.clone());
+    let exported_measures = decls.measures.clone();
+    let exported_measure_aliases = decls.measure_aliases.clone();
     // Merge imported modules' type *bodies* into the decls (qualified constructor
     // keys), so `Geometry.Circle` construction, qualified ctor patterns, and
     // exhaustiveness all resolve against the imported type. This half runs after
@@ -2245,21 +2282,133 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         .collect();
 
     let ordered = std::mem::take(&mut inf.ordered);
+    let (exported_records, exported_opaques) = close_over_references(
+        &exports,
+        &exported_types,
+        exported_records,
+        exported_opaques,
+        imports,
+    );
     (
         errors,
         types,
-        exports,
-        exported_types,
-        exported_records,
-        exported_measures,
+        ModuleExports {
+            schemes: exports,
+            types: exported_types,
+            records: exported_records,
+            opaques: exported_opaques,
+            measures: exported_measures,
+            measure_aliases: exported_measure_aliases,
+        },
         holes,
         ordered,
     )
 }
 
+/// Close a module's export interface over the records and opaque handle types it
+/// references (`DESIGN.md` §6.1, issues #72/#75): any `Ty::Con` name mentioned by
+/// an exported scheme, an exported constructor's scheme, or an exported record's
+/// field type that is satisfied by an import's record/opaque tables joins this
+/// module's own exports, tagged with the module that declares it. Newly pulled
+/// records are walked in turn, so a chain of any depth crosses; the `seen` set
+/// makes the walk terminate on cycles (mutually-referencing records are legal).
+/// Each import's interface is itself closed, so one level of pulling per hop
+/// reaches everything. Names not found in any import (builtins, type parameters,
+/// imported sum types) are simply skipped.
+fn close_over_references(
+    schemes: &Env,
+    types: &[ExportedType],
+    mut records: Vec<ExportedRecord>,
+    mut opaques: Vec<ExportedOpaque>,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<ExportedRecord>, Vec<ExportedOpaque>) {
+    if imports.is_empty() {
+        return (records, opaques);
+    }
+    // Names this module's interface already provides need no pull.
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.extend(types.iter().map(|t| t.name.clone()));
+    seen.extend(records.iter().map(|r| r.name.clone()));
+    seen.extend(opaques.iter().map(|o| o.name.clone()));
+
+    let mut work: Vec<String> = Vec::new();
+    for scheme in schemes.values() {
+        collect_con_names(&scheme.ty, &mut work);
+    }
+    for ty in types {
+        for (_, info) in &ty.ctors {
+            collect_con_names(&info.scheme.ty, &mut work);
+        }
+    }
+    for rec in &records {
+        for (_, field_ty) in &rec.info.fields {
+            collect_con_names(field_ty, &mut work);
+        }
+    }
+
+    // Sorted so the pull is deterministic when two imports carry the same name
+    // (they then carry the same record, so the choice only fixes iteration order).
+    let mut import_names: Vec<&String> = imports.keys().collect();
+    import_names.sort();
+    while let Some(name) = work.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        for module_name in &import_names {
+            let exp = &imports[*module_name];
+            if let Some(rec) = exp.records.iter().find(|r| r.name == name) {
+                let origin = rec.origin.clone().unwrap_or_else(|| (*module_name).clone());
+                for (_, field_ty) in &rec.info.fields {
+                    collect_con_names(field_ty, &mut work);
+                }
+                records.push(ExportedRecord {
+                    name: name.clone(),
+                    info: rec.info.clone(),
+                    origin: Some(origin),
+                });
+                break;
+            }
+            if let Some(op) = exp.opaques.iter().find(|o| o.name == name) {
+                let origin = op.origin.clone().unwrap_or_else(|| (*module_name).clone());
+                opaques.push(ExportedOpaque {
+                    name: name.clone(),
+                    arity: op.arity,
+                    origin: Some(origin),
+                });
+                break;
+            }
+        }
+    }
+    (records, opaques)
+}
+
+/// Collect the name of every applied type constructor in `ty`, at any depth
+/// (through arrows, tuples, and constructor arguments).
+fn collect_con_names(ty: &Ty, out: &mut Vec<String>) {
+    match ty {
+        Ty::Con(name, args) => {
+            out.push(name.clone());
+            for a in args {
+                collect_con_names(a, out);
+            }
+        }
+        Ty::Fun(a, b, _) => {
+            collect_con_names(a, out);
+            collect_con_names(b, out);
+        }
+        Ty::Tuple(elems) => {
+            for e in elems {
+                collect_con_names(e, out);
+            }
+        }
+        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Str | Ty::Unit | Ty::Num(..) | Ty::Var(_) => {}
+    }
+}
+
 /// Capture a module's own public **sum** types from the freshly-built decls, for
-/// its export interface (`DESIGN.md` §6.1). Records / measures / externs are not
-/// yet cross-module exported.
+/// its export interface (`DESIGN.md` §6.1). Records, opaque handle types, and
+/// measures are captured by their own collectors below; externs export like
+/// values (their schemes join the env).
 fn collect_exported_types(module: &Module, decls: &Decls) -> Vec<ExportedType> {
     let mut out = Vec::new();
     for item in &module.items {
@@ -2293,7 +2442,7 @@ fn collect_exported_types(module: &Module, decls: &Decls) -> Vec<ExportedType> {
 /// (`DESIGN.md` §8.3), for its export interface: each bare name + its [`RecordInfo`]
 /// (params + fields). The reserved `Exception` record is seeded, not user-declared,
 /// so it is never exported.
-fn collect_exported_records(module: &Module, decls: &Decls) -> Vec<(String, RecordInfo)> {
+fn collect_exported_records(module: &Module, decls: &Decls) -> Vec<ExportedRecord> {
     let mut out = Vec::new();
     for item in &module.items {
         let Item::Type(decl) = item else { continue };
@@ -2301,20 +2450,50 @@ fn collect_exported_records(module: &Module, decls: &Decls) -> Vec<(String, Reco
             continue;
         }
         if let Some(info) = decls.records.get(&decl.name) {
-            out.push((decl.name.clone(), info.clone()));
+            out.push(ExportedRecord {
+                name: decl.name.clone(),
+                info: info.clone(),
+                origin: None,
+            });
         }
     }
     out
 }
 
-/// Register imported modules' sum-type and record **names** in `decls`
-/// (`DESIGN.md` §6.1 + §8.3): each under its **bare identity name** (`Point`, so an
-/// imported type is the same `Ty::Con` everywhere) *and* under a qualified key
-/// (`Geometry.Point`) at the same arity, which [`resolve`] accepts in a type
-/// position and folds back to the identity name. A name clashing with one already
-/// present is reported (the bare-name uniqueness sum types already rely on) and
-/// then skipped, so the returned set of accepted `(module, name)` pairs is what
-/// [`merge_imported_types`] may go on to fill in.
+/// Capture a module's own **opaque handle types** (`extern type Rng`) from the
+/// freshly-built decls, for its export interface (`DESIGN.md` §6.1 / issue #72):
+/// each name + arity, so an importing module can write `Gen.Rng` (or bare `Rng`)
+/// in a type position. Values of the type already cross through the exported
+/// schemes; this makes the *name* cross with them.
+fn collect_exported_opaques(module: &Module, decls: &Decls) -> Vec<ExportedOpaque> {
+    let mut out = Vec::new();
+    for item in &module.items {
+        let Item::Type(decl) = item else { continue };
+        if !matches!(decl.kind, TypeDeclKind::Opaque) {
+            continue;
+        }
+        if let Some(&arity) = decls.type_arity.get(&decl.name) {
+            out.push(ExportedOpaque {
+                name: decl.name.clone(),
+                arity,
+                origin: None,
+            });
+        }
+    }
+    out
+}
+
+/// Register imported modules' sum-type, record, and opaque-handle-type **names**
+/// in `decls` (`DESIGN.md` §6.1 + §8.3): each under its **bare identity name**
+/// (`Point`, so an imported type is the same `Ty::Con` everywhere) *and* under a
+/// qualified key (`Geometry.Point`) at the same arity, which [`resolve`] accepts
+/// in a type position and folds back to the identity name. A directly imported
+/// name clashing with one already present is reported (the bare-name uniqueness
+/// sum types already rely on) and then skipped, so the returned set of accepted
+/// `(module, name)` pairs is what [`merge_imported_types`] may go on to fill in.
+/// Records and opaque types an import carries **transitively** register last,
+/// under the bare identity name only, and a taken name skips them silently — see
+/// the pass comments below.
 ///
 /// This runs from [`build_decls`] **between** its two passes: after local type
 /// names are registered (so a local declaration still wins a clash) and before
@@ -2351,8 +2530,18 @@ fn merge_imported_type_names(
         }
     }
     // Records after types (both share the `type_arity` namespace and clash check).
+    // Only an import's **own** records here (`origin: None`); the transitively
+    // carried ones follow below, after every directly named declaration, so a
+    // direct import always wins the bare name. `record_home` tracks each accepted
+    // record's declaring module so the same record arriving along two paths is
+    // recognized as one.
+    let mut record_home: HashMap<String, String> = HashMap::new();
     for module_name in &module_names {
-        for (name, info) in &imports[*module_name].records {
+        for rec in &imports[*module_name].records {
+            if rec.origin.is_some() {
+                continue;
+            }
+            let name = &rec.name;
             if decls.type_arity.contains_key(name) {
                 errors.push(TypeError {
                     message: format!(
@@ -2362,11 +2551,78 @@ fn merge_imported_type_names(
                 });
                 continue;
             }
-            decls.type_arity.insert(name.clone(), info.params_count);
+            decls.type_arity.insert(name.clone(), rec.info.params_count);
             decls
                 .type_arity
-                .insert(format!("{module_name}.{name}"), info.params_count);
+                .insert(format!("{module_name}.{name}"), rec.info.params_count);
             accepted.insert(((*module_name).clone(), name.clone()));
+            record_home.insert(name.clone(), (*module_name).clone());
+        }
+    }
+    // An import's own opaque handle types (`extern type Rng`): name + arity under
+    // the bare identity and a qualified key, exactly like a sum type — there is
+    // nothing more to a handle type, so this is the whole export (issue #72).
+    for module_name in &module_names {
+        for op in &imports[*module_name].opaques {
+            if op.origin.is_some() {
+                continue;
+            }
+            if decls.type_arity.contains_key(&op.name) {
+                errors.push(TypeError {
+                    message: format!(
+                        "imported type `{}` (from `{module_name}`) clashes with an existing type",
+                        op.name
+                    ),
+                    span: Span::new(0, 0),
+                });
+                continue;
+            }
+            decls.type_arity.insert(op.name.clone(), op.arity);
+            decls
+                .type_arity
+                .insert(format!("{module_name}.{}", op.name), op.arity);
+        }
+    }
+    // Transitively carried records (`origin: Some`, `DESIGN.md` §6.1): declared in
+    // a module this one does not import directly, referenced by an import's
+    // interface. They register under the **bare identity name only** — no
+    // qualified key, no construction alias — so the type can be named, unified,
+    // and field-accessed, while constructing or pattern-matching it still asks
+    // for a direct import of the declaring module. A bare name already taken is
+    // **not** an error (the consumer never asked for this name): the same record
+    // arriving along another path is already in, and a genuinely different type
+    // keeps the name — local and direct declarations win — while the hidden
+    // record's fields feed the unknown-field hints.
+    for module_name in &module_names {
+        for rec in &imports[*module_name].records {
+            let Some(origin) = &rec.origin else { continue };
+            let name = &rec.name;
+            if decls.type_arity.contains_key(name) {
+                if record_home.get(name) == Some(origin) {
+                    continue; // the same record, already visible along another path
+                }
+                for (field, _) in &rec.info.fields {
+                    let hint = (name.clone(), origin.clone());
+                    let hints = decls.field_hints.entry(field.clone()).or_default();
+                    if !hints.contains(&hint) {
+                        hints.push(hint);
+                    }
+                }
+                continue;
+            }
+            decls.type_arity.insert(name.clone(), rec.info.params_count);
+            accepted.insert(((*module_name).clone(), name.clone()));
+            record_home.insert(name.clone(), origin.clone());
+        }
+    }
+    // Transitively carried opaque handle types: bare identity name only, and a
+    // taken name is skipped silently (there are no fields to hint about).
+    for module_name in &module_names {
+        for op in &imports[*module_name].opaques {
+            if op.origin.is_none() || decls.type_arity.contains_key(&op.name) {
+                continue;
+            }
+            decls.type_arity.insert(op.name.clone(), op.arity);
         }
     }
     accepted
@@ -2400,23 +2656,36 @@ fn merge_imported_types(
             decls.type_ctors.insert(ty.name.clone(), ctor_names);
         }
     }
-    for module_name in &module_names {
-        for (name, info) in &imports[*module_name].records {
-            if !accepted.contains(&((*module_name).clone(), name.clone())) {
-                continue;
-            }
-            decls.records.insert(name.clone(), info.clone());
-            decls
-                .record_aliases
-                .insert(format!("{module_name}.{name}"), name.clone());
-            // Fields join the multimap under the record's bare identity name. Local
-            // records were registered first (in `build_decls`), so they lead.
-            for (field, _) in &info.fields {
-                decls
-                    .field_owner
-                    .entry(field.clone())
-                    .or_default()
-                    .push(name.clone());
+    // Directly imported records first, then transitively carried ones, so the
+    // field multimap keeps a stable order: local records (from `build_decls`),
+    // then direct imports by module name, then carried records. A carried record
+    // joins `records` and `field_owner` like any other — it participates in
+    // field resolution and access-site ambiguity identically — but gets **no**
+    // qualified construction alias: constructing or pattern-matching it still
+    // requires importing its declaring module directly.
+    for transitive in [false, true] {
+        for module_name in &module_names {
+            for rec in &imports[*module_name].records {
+                if rec.origin.is_some() != transitive
+                    || !accepted.contains(&((*module_name).clone(), rec.name.clone()))
+                {
+                    continue;
+                }
+                let name = &rec.name;
+                decls.records.insert(name.clone(), rec.info.clone());
+                if rec.origin.is_none() {
+                    decls
+                        .record_aliases
+                        .insert(format!("{module_name}.{name}"), name.clone());
+                }
+                // Fields join the multimap under the record's bare identity name.
+                for (field, _) in &rec.info.fields {
+                    decls
+                        .field_owner
+                        .entry(field.clone())
+                        .or_default()
+                        .push(name.clone());
+                }
             }
         }
     }
@@ -7139,8 +7408,9 @@ impl Infer {
                 .filter(|&(d, n)| d <= (field.chars().count().max(n.chars().count()) / 3).max(2))
                 .map(|(_, n)| format!(" (did you mean `{n}`?)"))
                 .unwrap_or_default();
+            let hidden = self.hidden_field_hint(field);
             return Err(TypeError {
-                message: format!("record `{rec}` has no field `{field}`{near}"),
+                message: format!("record `{rec}` has no field `{field}`{near}{hidden}"),
                 span,
             });
         }
@@ -7157,6 +7427,16 @@ impl Infer {
             Some([only]) => Ok(only.clone()),
             Some(owners) if owners.len() >= 2 => Err(self.ambiguous_field(field, span)),
             _ => {
+                // A record carried transitively but shadowed by a same-named type
+                // is out of scope, yet its interface data still says where the
+                // field lives — say so instead of a dead-end "unknown".
+                let hidden = self.hidden_field_hint(field);
+                if !hidden.is_empty() {
+                    return Err(TypeError {
+                        message: format!("unknown record field `{field}`{hidden}"),
+                        span,
+                    });
+                }
                 // Empty `decls.records` means records aren't in use at all.
                 let hint = if self.decls.records.is_empty() {
                     " (no record types are declared)"
@@ -7168,6 +7448,21 @@ impl Infer {
                     span,
                 })
             }
+        }
+    }
+
+    /// A rendered note when `field` is declared by a record the consumer's
+    /// interface data knows of but that is **not in scope here** (a transitively
+    /// carried record whose bare name a local or directly imported type already
+    /// holds — `Decls::field_hints`). Empty when there is nothing to say, so the
+    /// plain messages stay as they are.
+    fn hidden_field_hint(&self, field: &str) -> String {
+        match self.decls.field_hints.get(field).and_then(|h| h.first()) {
+            Some((rec, module)) => format!(
+                "; the record `{rec}` in module `{module}` declares this field, but another \
+                 type named `{rec}` is already in scope here, so that record is hidden"
+            ),
+            None => String::new(),
         }
     }
 
