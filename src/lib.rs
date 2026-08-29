@@ -204,7 +204,10 @@ pub(crate) fn float_literal_spans(
 }
 
 /// Turn a lex/parse `CompileError` into a `TypeError` so `check` can report a
-/// uniform, span-carrying error list.
+/// uniform, span-carrying error list. The message is the bare one: the span
+/// travels in its own field, so every consumer (the LSP publishes it as a
+/// range, the REPL/kernel render it against the source) locates the error
+/// without byte offsets in the text.
 fn to_type_error(error: &CompileError) -> types::TypeError {
     let span = match error {
         CompileError::Lex(e) => e.span,
@@ -213,7 +216,7 @@ fn to_type_error(error: &CompileError) -> types::TypeError {
         _ => lexer::Span::new(0, 0),
     };
     types::TypeError {
-        message: error.to_string(),
+        message: error.message(),
         span,
     }
 }
@@ -239,11 +242,15 @@ impl CompileError {
         }
     }
 
-    /// The bare message, without the `… error:` prefix from `Display`.
+    /// The bare message, without the `… error:` prefix from `Display` and
+    /// without the `(at N..M)` byte-span suffix that `LexError`/`ParseError`
+    /// append there. Callers pair it with [`Self::span`] (usually through
+    /// `diagnostics::render`, which points into the source itself), so the raw
+    /// offsets would only repeat what the rendering already shows.
     pub fn message(&self) -> String {
         match self {
-            CompileError::Lex(e) => e.to_string(),
-            CompileError::Parse(e) => e.to_string(),
+            CompileError::Lex(e) => e.message.clone(),
+            CompileError::Parse(e) => e.message.clone(),
             CompileError::Type(e) => e.to_string(),
             CompileError::Lower(e) => e.to_string(),
         }

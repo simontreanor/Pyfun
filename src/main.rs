@@ -274,7 +274,10 @@ fn render_project_error(entry: &str, error: &ProjectError) -> ExitCode {
                     "{}",
                     diagnostics::render(&src, Level::Error, &error.message(), error.span())
                 ),
-                Err(_) => eprintln!("error: in module `{name}`: {}", error.message()),
+                // The module's source could not be re-read, so nothing renders
+                // the span; the error's `Display` keeps the byte offsets as the
+                // only location information this path has.
+                Err(_) => eprintln!("error: in module `{name}`: {error}"),
             }
         }
         other => eprintln!("error: {other}"),
