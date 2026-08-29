@@ -62,7 +62,7 @@ impl std::fmt::Display for ParseError {
 
 /// Parse a token stream (terminated by [`Tok::Eof`]) into a [`Module`].
 pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
-    Parser { tokens, pos: 0 }.parse_module()
+    Parser::new(tokens).parse_module()
 }
 
 /// Parse a token stream into a [`Module`], **recovering** from errors at item
@@ -71,15 +71,34 @@ pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
 /// the file. This is the entry point the editor tooling uses ([`crate::analyze`]);
 /// the compiler keeps the strict [`parse`] (it must reject any broken program).
 pub fn parse_recover(tokens: Vec<Token>) -> (Module, Vec<ParseError>) {
-    Parser { tokens, pos: 0 }.parse_module_recover()
+    Parser::new(tokens).parse_module_recover()
 }
 
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// The computation-expression items being parsed, innermost last. Each
+    /// frame is the item's start column plus the bracket depth just inside its
+    /// CE's braces; [`Self::ce_item_ends_here`] compares upcoming line-leading
+    /// tokens against the innermost frame.
+    ce_items: Vec<CeFrame>,
+}
+
+/// See [`Parser::ce_items`].
+struct CeFrame {
+    col: u32,
+    depth: u32,
 }
 
 impl Parser {
+    fn new(tokens: Vec<Token>) -> Parser {
+        Parser {
+            tokens,
+            pos: 0,
+            ce_items: Vec::new(),
+        }
+    }
+
     fn peek(&self) -> &Tok {
         &self.tokens[self.pos].tok
     }
@@ -154,6 +173,41 @@ impl Parser {
     /// Build an expression spanning from `start` to the end of the last token.
     fn mk(&self, start: usize, kind: ExprKind) -> Expr {
         Expr::new(kind, Span::new(start, self.prev_end()))
+    }
+
+    /// The column of the token at `pos`: its own `line_col` when it opens its
+    /// line, otherwise derived from the nearest preceding line-leading token.
+    /// The derivation adds the byte distance, which equals the column distance
+    /// because everything between the two tokens sits on the same line.
+    fn token_col(&self, pos: usize) -> u32 {
+        let mut i = pos;
+        loop {
+            if let Some(col) = self.tokens[i].line_col {
+                return col + (self.tokens[pos].span.start - self.tokens[i].span.start) as u32;
+            }
+            if i == 0 {
+                return 0;
+            }
+            i -= 1;
+        }
+    }
+
+    /// Inside a computation expression, an item's expression ends at the first
+    /// line that is not indented past the item — the CE analogue of the offside
+    /// rule, whose layout tokens the braces suppress. True when the upcoming
+    /// token opens a source line at or left of the innermost CE item's column,
+    /// directly inside that CE's braces: the caller stops extending the current
+    /// expression, so the item loop examines the line as a CE item and rejects
+    /// a bare statement with the message naming the item keywords. Brackets
+    /// nested within an item sit at a greater depth, so line breaks inside
+    /// them continue to separate nothing, and lines led by an operator or
+    /// another continuation token never reach the application loop that asks.
+    fn ce_item_ends_here(&self) -> bool {
+        let Some(frame) = self.ce_items.last() else {
+            return false;
+        };
+        let t = &self.tokens[self.pos];
+        t.depth == frame.depth && matches!(t.line_col, Some(col) if col <= frame.col)
     }
 
     // ----- grammar -----
@@ -1431,7 +1485,7 @@ impl Parser {
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let mut func = self.parse_postfix()?;
-        while starts_atom(self.peek()) {
+        while starts_atom(self.peek()) && !self.ce_item_ends_here() {
             let arg = self.parse_postfix()?;
             func = self.mk(
                 start,
@@ -1606,7 +1660,7 @@ impl Parser {
             match part {
                 FStrPart::Lit(s) => out.push(InterpPart::Lit(s)),
                 FStrPart::Hole(tokens) => {
-                    let mut sub = Parser { tokens, pos: 0 };
+                    let mut sub = Parser::new(tokens);
                     let expr = sub.parse_expr()?;
                     if !sub.at_eof() {
                         return Err(sub.error("unexpected token after f-string hole expression"));
@@ -1789,21 +1843,41 @@ impl Parser {
     }
 
     /// Parse `builder { items }`. Items are delimited by their leading keyword
-    /// (`let!`, `let`, `do!`, `return`, `yield`), so no separators are needed.
+    /// (`let!`, `let`, `do!`, `return`, `yield`) plus the offside rule: an
+    /// item's expression owns the rest of its line and any following lines
+    /// indented past the item, so a line that starts at or left of it is the
+    /// next item (see [`Self::ce_item_ends_here`]).
     fn parse_ce(&mut self, builder: CeBuilder, start: usize) -> Result<Expr, ParseError> {
         self.expect(&Tok::LBrace, "`{`")?;
+        // The bracket depth just inside the braces. Item boundaries are judged
+        // at this depth only, so brackets nested within an item keep treating
+        // line breaks as continuations.
+        let depth = self.tokens[self.pos - 1].depth + 1;
         let mut items = Vec::new();
         while !matches!(self.peek(), Tok::RBrace) {
             if self.at_eof() {
                 return Err(self.error("unterminated computation expression"));
             }
-            items.push(self.parse_ce_item()?);
+            items.push(self.parse_ce_item(depth)?);
         }
         self.expect(&Tok::RBrace, "`}`")?;
         Ok(self.mk(start, ExprKind::Ce { builder, items }))
     }
 
-    fn parse_ce_item(&mut self) -> Result<CeItem, ParseError> {
+    /// Parse one CE item with its offside frame in place, so the item's
+    /// expression stops at the first following line that is not indented past
+    /// the item. Control then returns to the item loop, which rejects a bare
+    /// statement line with the `expected `let!`, …` message on that line
+    /// instead of swallowing it as application arguments (issue #64).
+    fn parse_ce_item(&mut self, depth: u32) -> Result<CeItem, ParseError> {
+        let col = self.token_col(self.pos);
+        self.ce_items.push(CeFrame { col, depth });
+        let item = self.parse_ce_item_inner();
+        self.ce_items.pop();
+        item
+    }
+
+    fn parse_ce_item_inner(&mut self) -> Result<CeItem, ParseError> {
         match self.peek() {
             Tok::Let => {
                 self.bump();
@@ -2397,6 +2471,82 @@ mod tests {
         let (module, errors) = parse_recover(lex(src).unwrap());
         assert_eq!(names(&module), ["a", "b"]);
         assert!(errors.is_empty());
+    }
+
+    /// Assert that `src` fails to parse at its `print` line with the CE item
+    /// message (issue #64: the line after a binding must be examined as a CE
+    /// item, not swallowed as application arguments of the binding's value).
+    fn assert_rejects_statement_line(src: &str) {
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        let err = errors
+            .first()
+            .unwrap_or_else(|| panic!("expected a parse error in {src:?}"));
+        assert!(
+            err.message
+                .contains("expected `let!`, `let`, `do!`, `return`, or `yield`"),
+            "{src:?} reported: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("identifier `print`"),
+            "{src:?} reported: {}",
+            err.message
+        );
+        assert_eq!(
+            err.span.start,
+            src.find("print").unwrap(),
+            "{src:?} reported at the wrong position: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_statement_line_after_a_ce_binding_is_rejected_as_an_item() {
+        // The issue #64 repro: without the item-offside rule, `print …` was
+        // parsed as extra arguments to `x * 2` and surfaced as a type error on
+        // the line above.
+        assert_rejects_statement_line(
+            "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n    print f\"y is {y}\"\n    return y\n  }",
+        );
+    }
+
+    #[test]
+    fn every_builder_rejects_a_statement_line_after_any_item() {
+        for src in [
+            // after a plain `let` in `seq`
+            "let s =\n  seq {\n    let y = 1 * 2\n    print y\n    yield y\n  }",
+            // after a `do!` in `async`
+            "let a =\n  async {\n    do! pause 1\n    print \"done\"\n    return 0\n  }",
+            // after a `let!` in `option`
+            "let o =\n  option {\n    let! x = Some 1\n    print x\n    return x\n  }",
+            // after a `yield` in `seq`
+            "let q =\n  seq {\n    yield f 1\n    print 2\n  }",
+            // a user-defined builder goes through the same item loop
+            "let m =\n  Maybe {\n    let! x = lookup 1\n    print x\n    return x\n  }",
+        ] {
+            assert_rejects_statement_line(src);
+        }
+    }
+
+    #[test]
+    fn a_ce_item_expression_may_span_lines_indented_past_the_item() {
+        // Legal multi-line items keep parsing: a value continued on deeper
+        // lines, a pipeline broken across lines, a multi-line `match`, and a
+        // nested CE.
+        let src = "let f n =\n  result {\n    let! x =\n      Option.toResult \"bad\"\n        (String.toInt n)\n    let y = x\n      |> (fun v -> v * 2)\n    let z =\n      match y:\n        case 0: 0\n        case other: other\n    let! w = result { return z }\n    return w\n  }";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "errors: {errors:?}");
+        assert_eq!(names(&module), ["f"]);
+    }
+
+    #[test]
+    fn brackets_inside_a_ce_item_still_continue_across_lines() {
+        // Inside explicit brackets a line break never separates, whatever its
+        // column — the item-offside rule applies only directly inside the CE's
+        // braces.
+        let src = "let f =\n  result {\n    let! x = g (h\ni)\n    return x\n  }";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "errors: {errors:?}");
+        assert_eq!(names(&module), ["f"]);
     }
 
     /// The message of the single parse error in `src` (panics if it parses).
