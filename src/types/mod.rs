@@ -2669,10 +2669,12 @@ fn merge_imported_types(
     // Directly imported records first, then transitively carried ones, so the
     // field multimap keeps a stable order: local records (from `build_decls`),
     // then direct imports by module name, then carried records. A carried record
-    // joins `records` and `field_owner` like any other — it participates in
-    // field resolution and access-site ambiguity identically — but gets **no**
-    // qualified construction alias: constructing or pattern-matching it still
-    // requires importing its declaring module directly.
+    // joins `records` and `field_owner`, but in a by-name field lookup it is a
+    // **fallback tier**: a field it declares resolves to it only when no local or
+    // directly imported record declares that field (`field_owner_tier`), so a
+    // carried record can never make an existing access ambiguous. It also gets
+    // **no** qualified construction alias: constructing or pattern-matching it
+    // still requires importing its declaring module directly.
     for transitive in [false, true] {
         for module_name in &module_names {
             for rec in &imports[*module_name].records {
@@ -7321,15 +7323,11 @@ impl Infer {
         Ok(Ty::Unit)
     }
 
-    /// The ambiguity error, naming both ways out. The parameter form is usually the
+    /// The ambiguity error, naming both ways out. `owners` is the tier that
+    /// decided the lookup ([`Infer::field_owner_tier`]), so the message names
+    /// only the records that actually competed. The parameter form is usually the
     /// nicer one and is easy to miss, since it arrived after the message did.
-    fn ambiguous_field(&self, field: &str, span: Span) -> TypeError {
-        let owners = self
-            .decls
-            .field_owner
-            .get(field)
-            .cloned()
-            .unwrap_or_default();
+    fn ambiguous_field(&self, field: &str, owners: &[String], span: Span) -> TypeError {
         let names = owners
             .iter()
             .map(|r| format!("`{r}`"))
@@ -7348,7 +7346,10 @@ impl Infer {
     }
 
     /// Whether this field name is declared by more than one visible record, so an
-    /// access on an unknown base cannot be resolved by name alone.
+    /// access on an unknown base cannot be resolved by name alone. Deliberately
+    /// counts **all** owners, carried included: deferring the access keeps the
+    /// chance to resolve it by the base's actual type once inference pins it,
+    /// which beats any by-name precedence.
     fn field_is_ambiguous(&self, field: &str) -> bool {
         self.decls
             .field_owner
@@ -7356,27 +7357,60 @@ impl Infer {
             .is_some_and(|owners| owners.len() >= 2)
     }
 
+    /// The record names competing to own `field` in a **by-name** lookup, tiered
+    /// (`DESIGN.md` §6.1): records this module declares or imports directly
+    /// decide first, and records carried transitively are a fallback consulted
+    /// only when no direct one declares the field. This mirrors the bare-name
+    /// rule for carried type names (local and direct declarations win, since the
+    /// consumer never wrote the carried name): without the tier, editing a
+    /// dependency two hops away could make a working access ambiguous.
+    fn field_owner_tier(&self, field: &str) -> Vec<String> {
+        let owners = self
+            .decls
+            .field_owner
+            .get(field)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let direct: Vec<String> = owners
+            .iter()
+            .filter(|o| !self.decls.carried_record_home.contains_key(*o))
+            .cloned()
+            .collect();
+        if direct.is_empty() {
+            owners.to_vec()
+        } else {
+            direct
+        }
+    }
+
     /// Settle every deferred field access, now that the enclosing binding is fully
     /// inferred. A base that some later statement pinned down resolves exactly as it
-    /// would have at the access site; one that is *still* unknown is the genuine
-    /// ambiguity, and is reported at the access with the ways out.
+    /// would have at the access site; one that is *still* unknown falls back to the
+    /// by-name lookup with its owner tiers ([`Infer::record_of_field`]), so a field
+    /// whose only competition is a carried record still resolves to the direct one,
+    /// and only a genuine within-tier tie is reported as the ambiguity.
     fn resolve_pending_fields(&mut self) -> Result<(), TypeError> {
         let pending = std::mem::take(&mut self.pending_fields);
         for p in pending {
             let base = self.apply(&p.base);
-            let Ty::Con(record, _) = &base else {
-                return Err(self.ambiguous_field(&p.field, p.span));
+            let owner = if let Ty::Con(record, _) = &base {
+                let Some(info) = self.decls.records.get(record) else {
+                    return Err(self.ambiguous_field(
+                        &p.field,
+                        &self.field_owner_tier(&p.field),
+                        p.span,
+                    ));
+                };
+                if !info.fields.iter().any(|(n, _)| *n == p.field) {
+                    return Err(TypeError {
+                        message: format!("record `{record}` has no field `{}`", p.field),
+                        span: p.span,
+                    });
+                }
+                record.clone()
+            } else {
+                self.record_of_field(&p.field, p.span)?
             };
-            let Some(info) = self.decls.records.get(record) else {
-                return Err(self.ambiguous_field(&p.field, p.span));
-            };
-            if !info.fields.iter().any(|(n, _)| *n == p.field) {
-                return Err(TypeError {
-                    message: format!("record `{record}` has no field `{}`", p.field),
-                    span: p.span,
-                });
-            }
-            let owner = record.clone();
             let (record_ty, field_tys) = self.instantiate_record(&owner);
             self.unify(&record_ty, &base, p.span)?;
             let fty = field_tys
@@ -7428,14 +7462,15 @@ impl Infer {
     }
 
     /// The bare identity name of the record type owning `field`, **by name alone**
-    /// (`DESIGN.md` §8.3) — the fallback for a base whose type is not yet known:
-    /// **0** owners is an unknown field, **1** owner resolves, **2+** is an ambiguity
-    /// error *at this access site*. Ambiguity is never an error at declaration or
-    /// import; module isolation is preserved.
+    /// (`DESIGN.md` §8.3) — the fallback for a base whose type is not yet known.
+    /// Owners are consulted in tiers ([`Infer::field_owner_tier`]): within the
+    /// deciding tier, **0** owners is an unknown field, **1** owner resolves,
+    /// **2+** is an ambiguity error *at this access site*. Ambiguity is never an
+    /// error at declaration or import; module isolation is preserved.
     fn record_of_field(&self, field: &str, span: Span) -> Result<String, TypeError> {
-        match self.decls.field_owner.get(field).map(Vec::as_slice) {
-            Some([only]) => Ok(only.clone()),
-            Some(owners) if owners.len() >= 2 => Err(self.ambiguous_field(field, span)),
+        match self.field_owner_tier(field).as_slice() {
+            [only] => Ok(only.clone()),
+            owners if owners.len() >= 2 => Err(self.ambiguous_field(field, owners, span)),
             _ => {
                 // A record carried transitively but shadowed by a same-named type
                 // is out of scope, yet its interface data still says where the

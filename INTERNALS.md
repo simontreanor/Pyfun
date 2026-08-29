@@ -466,7 +466,12 @@ records. Each import's interface is itself closed, so one pull per hop reaches a
 side `merge_imported_type_names` registers carried entries **last** and under the **bare identity name
 only** (no qualified key, no `record_aliases` entry, so constructing or pattern-matching a carried record
 still requires the direct import); a taken bare name skips the carried entry silently (`record_home`
-recognizes the same record arriving along two paths), and a genuinely shadowed record's fields land in
+recognizes the same record arriving along two paths). By-name field lookup applies the same precedence in
+tiers (`Infer::field_owner_tier`, consulted by `record_of_field` and the pending-field fallback): local
+and directly imported records decide first, and a carried record owns a field only when no direct one
+declares it, so a carried record can never make an existing access ambiguous; a tie between carried
+records with no direct owner is still the ambiguity error, naming the tier that decided. A genuinely
+shadowed record's fields land in
 `Decls::field_hints`, which `record_of_field` / `record_of_field_on` render as "the record `Config` in
 module `Inner` declares this field" instead of a bare unknown. Constructing or matching a carried record
 bare is refused with the fix spelled out (`resolve_record_tag` via `Decls::carried_record_home`: "the

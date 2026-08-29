@@ -1110,10 +1110,13 @@ fn mutually_referencing_records_cross_transitively() {
 }
 
 #[test]
-fn a_transitive_record_participates_in_field_ambiguity() {
-    // A local record and a transitively carried one both declare `cSize`; a bare
-    // access on an untyped base is ambiguous at the access site, exactly as with
-    // a directly imported record.
+fn a_direct_record_wins_a_field_name_over_a_carried_one() {
+    // A local record and a transitively carried one both declare `cSize`. Carried
+    // records are a fallback tier for by-name field lookup (mirroring the
+    // bare-name rule: local and direct declarations win, the consumer never
+    // wrote the carried name), so the access resolves to `Local` and stays
+    // unambiguous — a record in a module this file cannot see must not be able
+    // to break a working access.
     let project = build_mem(
         "Main",
         &[
@@ -1122,17 +1125,81 @@ fn a_transitive_record_participates_in_field_ambiguity() {
             (
                 "Main",
                 "import Middle\n\
-                 type Local = { cSize: int, other: int }\n\
-                 let get w = w.cSize",
+                 type Local = { cSize: bool, other: int }\n\
+                 let get w = w.cSize\n\
+                 let v = get (Local { cSize = true, other = 1 })",
             ),
         ],
     );
     let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn e2e_a_carried_record_cannot_break_a_working_field_access() {
+    // The full breaking shape: the consumer's program never names `Inner`, so a
+    // shared field name there must not reach its `p.size` — the access keeps
+    // resolving to the local record and the program keeps running.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Inner",
+                "type Config = { size: int }\nlet make n = Config { size = n }",
+            ),
+            (
+                "Middle",
+                "import Inner\n\
+                 type Wrap = { wConf: Inner.Config }\n\
+                 let mk n = Wrap { wConf = Inner.make n }",
+            ),
+            (
+                "Main",
+                "import Middle\n\
+                 type Local = { size: bool }\n\
+                 let f p = p.size\n\
+                 print (f (Local { size = true }))",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_tiered_field");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "True");
+    }
+}
+
+#[test]
+fn two_carried_records_sharing_a_field_are_still_ambiguous() {
+    // With nothing local or direct declaring `size`, the carried tier decides
+    // the lookup, and a tie within it is the genuine ambiguity — the message
+    // names the carried records.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Twin",
+                "type A = { size: int }\n\
+                 type B = { size: bool }\n\
+                 let mkA n = A { size = n }\n\
+                 let mkB b = B { size = b }",
+            ),
+            (
+                "Carry",
+                "import Twin\n\
+                 type WrapA = { wa: Twin.A }\n\
+                 type WrapB = { wb: Twin.B }\n\
+                 let mka n = WrapA { wa = Twin.mkA n }\n\
+                 let mkb b = WrapB { wb = Twin.mkB b }",
+            ),
+            ("Main", "import Carry\nlet get w = w.size"),
+        ],
+    );
+    let errors = project::check(&project);
     assert_eq!(errors.len(), 1);
+    let message = &errors[0].errors[0].message;
     assert!(
-        errors[0].errors[0].message.contains("ambiguous"),
-        "got: {}",
-        errors[0].errors[0].message
+        message.contains("ambiguous") && message.contains("`A`") && message.contains("`B`"),
+        "got: {message}"
     );
 }
 

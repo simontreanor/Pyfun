@@ -919,7 +919,12 @@ directly. A carried name already taken here (by a local type or a direct import)
 than reported, since the consumer never wrote that name: local and direct declarations win the bare name,
 the same record arriving along two import paths is recognized by its declaring module and admitted once,
 and a genuinely different type shadows the carried record, whose fields then feed the "unknown record
-field" diagnostic (the message names the hidden record and the module that declares it). **Externs and
+field" diagnostic (the message names the hidden record and the module that declares it). Field lookup
+mirrors the same precedence: in a by-name field access (a base whose type is not yet known), records
+declared here or imported directly form the deciding tier, and a carried record owns a field only when no
+record in that tier declares it, so editing a dependency two hops away can never make a working access
+ambiguous. Two carried records that alone declare a field still tie, and the ambiguity message names
+them. **Externs and
 measures cross too:** an imported `extern` (`Mathx.cbrt`) is exported like a value (its scheme joins the
 interface) and — in the project lowering path — also **bound at top level in its own module** (`cbrt =
 math.cbrt`, `import math` hoisted) so a dependent module references it as `mathx.cbrt`; single-file lowering
