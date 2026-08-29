@@ -242,9 +242,11 @@ pub fn compile_targeting(
     // Per-module spans of integer literals that inference resolved to `float`, so
     // lowering emits them as `7.0`. Computed in topological order (like `check`) so
     // each module's imports are seeded before it — a literal's float-ness can depend
-    // on a cross-module call. Exports are threaded forward in the same pass.
+    // on a cross-module call. Exports are threaded forward in the same pass and kept:
+    // an import's interface also carries the records it references transitively
+    // (`DESIGN.md` §6.1), which the lowering context below needs.
+    let mut exports: HashMap<String, crate::types::ModuleExports> = HashMap::new();
     let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
-        let mut exports: HashMap<String, crate::types::ModuleExports> = HashMap::new();
         let mut spans = HashMap::new();
         for module in &project.modules {
             let imports: HashMap<String, crate::types::ModuleExports> = module
@@ -292,6 +294,26 @@ pub fn compile_targeting(
                     }
                     ctx.record_fields.insert(tag, fields.clone());
                 }
+            }
+        }
+        // Records an import's interface carries transitively (declared in a
+        // module this one does not import directly): keyed by the *declaring*
+        // module's tag, so an update on such a record reconstructs via the right
+        // class (`inner.Config(...)`, with `import inner` hoisted). Registered
+        // after the direct entries, which keep precedence for shared field names.
+        for import in &module.imports {
+            let Some(exp) = exports.get(import) else {
+                continue;
+            };
+            for (origin, rec, fields) in exp.carried_records() {
+                let tag = format!("{origin}.{rec}");
+                for field in &fields {
+                    ctx.record_field_owners
+                        .entry(field.clone())
+                        .or_insert_with(|| tag.clone());
+                }
+                ctx.record_fields.entry(tag).or_insert(fields);
+                ctx.record_class_modules.insert(origin);
             }
         }
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);

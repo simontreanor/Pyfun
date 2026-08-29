@@ -879,6 +879,513 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
     );
 }
 
+// ---------- transitive interface closure (issues #72 / #75) ----------
+
+/// The three-module shape of issue #75: `Inner` declares a record, `Middle`
+/// wraps it, and the consumer imports only `Middle`.
+const INNER: &str = "type Config = { cSize: int }\nlet make n = Config { cSize = n }";
+const MIDDLE: &str = "import Inner\n\
+     type Wrap = { wConf: Inner.Config }\n\
+     let mk n = Wrap { wConf = Inner.make n }\n\
+     let size w = w.wConf.cSize";
+
+#[test]
+fn e2e_an_extern_type_can_be_named_across_the_module_boundary() {
+    // issue #72: the *name* of an `extern type` crosses with its module's
+    // interface, so a consumer can type a record field `Gen.Rng` (values of the
+    // type always crossed through the imported schemes).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Gen",
+                "extern type Rng\n\
+                 extern newRng : int -> Rng = random.Random\n\
+                 let make seed = newRng seed",
+            ),
+            (
+                "Main",
+                "import Gen\n\
+                 type Holder = { h: Gen.Rng }\n\
+                 let x = Holder { h = Gen.make 1 }\n\
+                 print \"ok\"",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_extern_type_name");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "ok");
+    }
+}
+
+#[test]
+fn an_unknown_type_qualified_to_an_opaque_exporting_module_reports_once() {
+    // A genuinely unknown qualified type still reports cleanly — one error, no
+    // cascade — now that the module also exports opaque type names.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Gen",
+                "extern type Rng\nextern newRng : int -> Rng = random.Random",
+            ),
+            ("Main", "import Gen\ntype Holder = { h: Gen.Nope }"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors.len(), 1, "got: {:?}", errors[0].errors);
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("unknown type `Gen.Nope`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn an_opaque_type_carried_transitively_can_be_named_bare() {
+    // `Middle.fresh : int -> Rng` mentions Gen's handle type, so `Rng` crosses
+    // with Middle's interface and the consumer can name it (bare — constructing
+    // or qualifying still asks for the declaring module).
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Gen",
+                "extern type Rng\n\
+                 extern newRng : int -> Rng = random.Random\n\
+                 let make seed = newRng seed",
+            ),
+            ("Middle", "import Gen\nlet fresh n = Gen.make n"),
+            (
+                "Main",
+                "import Middle\n\
+                 type H = { h: Rng }\n\
+                 let x = H { h = Middle.fresh 1 }",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn a_local_type_clashing_with_an_imported_opaque_type_is_reported() {
+    // A handle type now registers like any imported type, so a same-named local
+    // declaration is the ordinary import clash (it would otherwise silently
+    // conflate two distinct nominal types).
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Gen",
+                "extern type Rng\nextern newRng : int -> Rng = random.Random",
+            ),
+            ("Main", "import Gen\ntype Rng = A | B\nlet x = A"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("imported type `Rng` (from `Gen`) clashes"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn e2e_a_transitive_record_field_is_accessible() {
+    // issue #75: `Wrap`'s field is typed `Inner.Config`, so `Config` crosses
+    // with Middle's interface and the consumer can read `x.wConf.cSize` without
+    // importing `Inner` directly.
+    let files = compile(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\nlet x = Middle.mk 5\nprint x.wConf.cSize",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_transitive_field");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "5");
+    }
+}
+
+#[test]
+fn e2e_a_record_update_through_a_transitive_boundary_routes_to_the_declaring_class() {
+    // An update reconstructs the record, so the consumer's emitted Python must
+    // reference the *declaring* module's class (`inner.Config`), with its import
+    // hoisted, even though the consumer never writes `import Inner`.
+    let files = compile(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 let x = Middle.mk 5\n\
+                 let y = { x with wConf.cSize = 9 }\n\
+                 let z = { x.wConf with cSize = 7 }\n\
+                 print y.wConf.cSize\n\
+                 print z.cSize",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("import inner"), "{main}");
+    assert!(main.contains("inner.Config("), "{main}");
+    let dir = Scratch::new("e2e_transitive_update");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "9\n7");
+    }
+}
+
+#[test]
+fn e2e_a_transitive_record_crosses_any_depth() {
+    // The record is declared three imports away; each hop's interface carries it
+    // onward, so the chain works at any depth.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Deep",
+                "type Core = { cv: int }\nlet mkCore n = Core { cv = n }",
+            ),
+            (
+                "Mid",
+                "import Deep\n\
+                 type Two = { w1: Deep.Core }\n\
+                 let mk2 n = Two { w1 = Deep.mkCore n }",
+            ),
+            (
+                "Top",
+                "import Mid\n\
+                 type Three = { w2: Mid.Two }\n\
+                 let mk3 n = Three { w2 = Mid.mk2 n }",
+            ),
+            ("Main", "import Top\nlet x = Top.mk3 7\nprint x.w2.w1.cv"),
+        ],
+    );
+    let dir = Scratch::new("e2e_transitive_depth");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "7");
+    }
+}
+
+#[test]
+fn mutually_referencing_records_cross_transitively() {
+    // Two records that reference each other (via Option) are legal; the export
+    // closure must follow the cycle and terminate rather than recurse forever.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Inner",
+                "type A = { av: int, ab: Option B }\n\
+                 type B = { bv: int, ba: Option A }\n\
+                 let mkA n = A { av = n, ab = None }\n\
+                 let mkB n = B { bv = n, ba = Some (mkA n) }",
+            ),
+            ("Middle", "import Inner\nlet make n = Inner.mkB n"),
+            (
+                "Main",
+                "import Middle\n\
+                 let b = Middle.make 3\n\
+                 let v = b.bv\n\
+                 let w = Option.map (fun a -> a.av) b.ba",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn a_direct_record_wins_a_field_name_over_a_carried_one() {
+    // A local record and a transitively carried one both declare `cSize`. Carried
+    // records are a fallback tier for by-name field lookup (mirroring the
+    // bare-name rule: local and direct declarations win, the consumer never
+    // wrote the carried name), so the access resolves to `Local` and stays
+    // unambiguous — a record in a module this file cannot see must not be able
+    // to break a working access.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 type Local = { cSize: bool, other: int }\n\
+                 let get w = w.cSize\n\
+                 let v = get (Local { cSize = true, other = 1 })",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn e2e_a_carried_record_cannot_break_a_working_field_access() {
+    // The full breaking shape: the consumer's program never names `Inner`, so a
+    // shared field name there must not reach its `p.size` — the access keeps
+    // resolving to the local record and the program keeps running.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Inner",
+                "type Config = { size: int }\nlet make n = Config { size = n }",
+            ),
+            (
+                "Middle",
+                "import Inner\n\
+                 type Wrap = { wConf: Inner.Config }\n\
+                 let mk n = Wrap { wConf = Inner.make n }",
+            ),
+            (
+                "Main",
+                "import Middle\n\
+                 type Local = { size: bool }\n\
+                 let f p = p.size\n\
+                 print (f (Local { size = true }))",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_tiered_field");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "True");
+    }
+}
+
+#[test]
+fn two_carried_records_sharing_a_field_are_still_ambiguous() {
+    // With nothing local or direct declaring `size`, the carried tier decides
+    // the lookup, and a tie within it is the genuine ambiguity — the message
+    // names the carried records.
+    let project = build_mem(
+        "Main",
+        &[
+            (
+                "Twin",
+                "type A = { size: int }\n\
+                 type B = { size: bool }\n\
+                 let mkA n = A { size = n }\n\
+                 let mkB b = B { size = b }",
+            ),
+            (
+                "Carry",
+                "import Twin\n\
+                 type WrapA = { wa: Twin.A }\n\
+                 type WrapB = { wb: Twin.B }\n\
+                 let mka n = WrapA { wa = Twin.mkA n }\n\
+                 let mkb b = WrapB { wb = Twin.mkB b }",
+            ),
+            ("Main", "import Carry\nlet get w = w.size"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    let message = &errors[0].errors[0].message;
+    assert!(
+        message.contains("ambiguous") && message.contains("`A`") && message.contains("`B`"),
+        "got: {message}"
+    );
+}
+
+#[test]
+fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
+    // A local type already holds the name `Config`, so the carried record stays
+    // out of scope (local and direct declarations win the bare name, and the
+    // consumer never asked for the carried one — no clash error). Its fields
+    // still feed the diagnostics: both the known-base and the untyped-base
+    // failure name the record and the module that declares it.
+    let with_known_base = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 type Config = { other: int }\n\
+                 let x = Middle.mk 5\n\
+                 let bad = x.wConf.cSize",
+            ),
+        ],
+    );
+    let errors = project::check(&with_known_base);
+    assert_eq!(errors.len(), 1);
+    let message = &errors[0].errors[0].message;
+    assert!(
+        message.contains("has no field `cSize`")
+            && message.contains("module `Inner`")
+            && message.contains("hidden"),
+        "got: {message}"
+    );
+
+    let with_untyped_base = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 type Config = { other: int }\n\
+                 let get w = w.cSize",
+            ),
+        ],
+    );
+    let errors = project::check(&with_untyped_base);
+    assert_eq!(errors.len(), 1);
+    let message = &errors[0].errors[0].message;
+    assert!(
+        message.contains("unknown record field `cSize`") && message.contains("module `Inner`"),
+        "got: {message}"
+    );
+}
+
+#[test]
+fn a_diamond_of_carried_records_does_not_clash() {
+    // Two imports both carry `Inner.Config` transitively; the consumer must see
+    // one record, not a spurious clash for a name it never asked for.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            (
+                "Left",
+                "import Inner\n\
+                 type LWrap = { lc: Inner.Config }\n\
+                 let mkL n = LWrap { lc = Inner.make n }",
+            ),
+            (
+                "Right",
+                "import Inner\n\
+                 type RWrap = { rc: Inner.Config }\n\
+                 let mkR n = RWrap { rc = Inner.make n }",
+            ),
+            (
+                "Main",
+                "import Left\n\
+                 import Right\n\
+                 let a = (Left.mkL 1).lc.cSize\n\
+                 let b = (Right.mkR 2).rc.cSize",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn importing_the_declaring_module_alongside_the_carrier_is_fine() {
+    // Direct import and transitive carry of the same record coexist: one record,
+    // full access, and construction through the direct import.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Inner\n\
+                 import Middle\n\
+                 let x = Middle.mk 5\n\
+                 let a = x.wConf.cSize\n\
+                 let mine = Inner.Config { cSize = 1 }",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+}
+
+#[test]
+fn a_carried_record_cannot_be_constructed_without_a_direct_import() {
+    // The carried record crosses as an identity (naming, unification, field
+    // access), not as a member: constructing it still asks for `import Inner`.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\nlet bad = Inner.Config { cSize = 1 }",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0].errors[0]
+            .message
+            .contains("not a member of `Inner`"),
+        "got: {}",
+        errors[0].errors[0].message
+    );
+}
+
+#[test]
+fn a_bare_carried_record_construction_names_the_declaring_module() {
+    // `Config` *is* a record type here (its fields are readable through the same
+    // name), so the refusal must say what is actually missing: the direct import
+    // that construction requires.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            ("Main", "import Middle\nlet bad = Config { cSize = 1 }"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors.len(), 1, "got: {:?}", errors[0].errors);
+    assert_eq!(
+        errors[0].errors[0].message,
+        "the record `Config` is declared in module `Inner`; import `Inner` to construct \
+         its values here"
+    );
+}
+
+#[test]
+fn a_bare_carried_record_pattern_names_the_declaring_module() {
+    // The pattern site gets the same treatment, worded for matching.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 let f w =\n  match w:\n    case Config { cSize = n }: n",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors.len(), 1, "got: {:?}", errors[0].errors);
+    assert_eq!(
+        errors[0].errors[0].message,
+        "the record `Config` is declared in module `Inner`; import `Inner` to match \
+         its values here"
+    );
+}
+
 #[test]
 fn a_binding_colliding_with_a_module_alias_gets_a_mangled_import() {
     // `import Ids` + `let ids = …` used to emit `ids = …` after `import ids`,

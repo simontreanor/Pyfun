@@ -893,7 +893,8 @@ checker already uses for built-in/in-file modules, so the existing `Field`-node 
 cross-module reference with no new lookup logic. A module's interface is its top-level **`let`
 values** plus its **sum types** (since the cross-module-ADT follow-on; `ModuleExports` carries each public
 sum type's name, arity, and constructors) **and its records** (since the cross-module-record follow-on;
-`ModuleExports` also carries each public record's name + fields). A consumer can construct (`Geometry.Circle
+`ModuleExports` also carries each public record's name + fields) **and its opaque handle types** (name +
+arity, so `extern type Rng` can be named across the boundary). A consumer can construct (`Geometry.Circle
 2.0`) and pattern-match (`| Geometry.Circle r ->`, a qualified constructor pattern) the imported type's
 values, with **exhaustiveness checked across the boundary** (a missing arm reports the qualified witness
 `Geometry.Rect _ _`). **Records cross too** (`DESIGN.md` §8.3): construct `Geometry.Point { x = 1, y = 2 }`,
@@ -904,10 +905,26 @@ an ADT variant payload or an `extern` signature. Both spellings are accepted, ba
 `Shapes.Placed`, and they denote the same type: an imported type registers under its bare identity name
 (unique across everything visible, as the import clash check enforces) plus a qualified key, and a written
 qualifier is validated and then folded back to that identity, so the two unify freely. Prefer the qualified
-spelling where the reader benefits from knowing which module a type came from. The one thing this does not
-extend to is *transitive* naming: a third module importing `Holder` without importing `Shapes` can hold and
-pass its `item` around, but cannot access that value's fields or construct one, since only `Shapes` brings
-`Placed`'s field registry into scope. **Externs and
+spelling where the reader benefits from knowing which module a type came from. **Opaque handle types
+(`extern type Rng`, §6) cross like any other type name:** the interface carries the name + arity, so a
+consumer can write `Gen.Rng` (or bare `Rng`) in a record field, an ADT payload, or an `extern` signature;
+values of the type always crossed through the exported schemes. **Interfaces close transitively over what
+they reference:** a record or opaque type that an exported scheme, constructor, or record field mentions is
+carried in the exporter's interface, tagged with the module that declares it, and the pull repeats through
+each hop (a worklist walk with a seen set, so mutually referencing records terminate). A third module
+importing `Holder` without importing `Shapes` can therefore hold its `item`, read that value's fields, and
+name its type bare (`Placed`). A carried type crosses as an *identity*, not as a member: constructing it,
+pattern-matching it, or writing the qualified spelling still requires importing the declaring module
+directly. A carried name already taken here (by a local type or a direct import) is skipped silently rather
+than reported, since the consumer never wrote that name: local and direct declarations win the bare name,
+the same record arriving along two import paths is recognized by its declaring module and admitted once,
+and a genuinely different type shadows the carried record, whose fields then feed the "unknown record
+field" diagnostic (the message names the hidden record and the module that declares it). Field lookup
+mirrors the same precedence: in a by-name field access (a base whose type is not yet known), records
+declared here or imported directly form the deciding tier, and a carried record owns a field only when no
+record in that tier declares it, so editing a dependency two hops away can never make a working access
+ambiguous. Two carried records that alone declare a field still tie, and the ambiguity message names
+them. **Externs and
 measures cross too:** an imported `extern` (`Mathx.cbrt`) is exported like a value (its scheme joins the
 interface) and — in the project lowering path — also **bound at top level in its own module** (`cbrt =
 math.cbrt`, `import math` hoisted) so a dependent module references it as `mathx.cbrt`; single-file lowering
