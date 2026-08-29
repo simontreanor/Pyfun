@@ -159,11 +159,30 @@ impl Tok {
     }
 }
 
-/// A token paired with its source span.
+/// The position of a token that opens its source line: which line (1-based, as
+/// diagnostics count) and at what column (0-based bytes from the line start).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LineStart {
+    pub line: u32,
+    pub col: u32,
+}
+
+/// A token paired with its source span, plus the two facts of line layout the
+/// parser needs inside brackets, where the offside rule emits no layout tokens:
+/// whether the token opens its source line (and where), and the bracket depth
+/// in force where it starts. The computation-expression item rules read both
+/// (`parser::Parser::ce_item_ends_here`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub tok: Tok,
     pub span: Span,
+    /// The token's line and column when it is the first token on its source
+    /// line; `None` mid-line. Layout tokens (`Sep`/`Indent`/`Dedent`) carry
+    /// `None` — the line's first real token holds the position.
+    pub line_start: Option<LineStart>,
+    /// Nesting depth of `()`/`{}`/`[]` where the token starts, so an opening
+    /// bracket carries the depth outside itself.
+    pub depth: u32,
 }
 
 /// One segment of an interpolated `f"..."` string ([`Tok::FStr`]): a literal chunk

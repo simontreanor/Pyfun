@@ -19,7 +19,7 @@
 
 mod token;
 
-pub use token::{FStrPart, Span, Tok, Token};
+pub use token::{FStrPart, LineStart, Span, Tok, Token};
 
 /// An error produced during lexing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,9 @@ struct Lexer<'a> {
     /// Set right after an `=` at bracket depth 0: the next token, if it begins a
     /// deeper line, opens an indentation block (the let binding's body).
     pending_block: bool,
+    /// Newline-counting cursor for [`Self::current_line`]: the position counted
+    /// up to, and the 1-based line number there.
+    line_scan: (usize, u32),
 }
 
 impl<'a> Lexer<'a> {
@@ -84,7 +87,22 @@ impl<'a> Lexer<'a> {
             depth: 0,
             layout: Vec::new(),
             pending_block: false,
+            line_scan: (0, 1),
         }
+    }
+
+    /// The 1-based line number at the cursor, counted incrementally from the
+    /// last position asked about. Counting bytes (rather than tracking every
+    /// consumer of `pos`) stays exact across trivia and multi-line string
+    /// literals alike; the cursor only moves forward between calls.
+    fn current_line(&mut self) -> u32 {
+        let (from, line) = self.line_scan;
+        let newlines = self.src[from..self.pos]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
+        self.line_scan = (self.pos, line + newlines as u32);
+        self.line_scan.1
     }
 
     fn run(mut self) -> (Vec<Token>, Vec<LexError>) {
@@ -100,6 +118,8 @@ impl<'a> Lexer<'a> {
                 self.out.push(Token {
                     tok: Tok::Eof,
                     span: Span::new(end, end),
+                    line_start: None,
+                    depth: self.depth as u32,
                 });
                 return (self.out, self.errors);
             }
@@ -120,6 +140,20 @@ impl<'a> Lexer<'a> {
                     self.offside(col);
                 }
             }
+            // Record where the token sits: whether it opens its line (the file's
+            // first token counts) and the bracket depth in force at its start.
+            // Both are snapshotted here because `lex_one` mutates `depth`, and
+            // patched onto the token below once it exists.
+            let line_start = if crossed_newline || self.out.is_empty() {
+                Some(LineStart {
+                    line: self.current_line(),
+                    col: col as u32,
+                })
+            } else {
+                None
+            };
+            let tok_depth = self.depth as u32;
+            let tok_index = self.out.len();
             let before = self.pos;
             if let Err(error) = self.lex_one() {
                 self.errors.push(error);
@@ -131,6 +165,10 @@ impl<'a> Lexer<'a> {
                     self.skip_char();
                 }
                 continue;
+            }
+            if let Some(t) = self.out.get_mut(tok_index) {
+                t.line_start = line_start;
+                t.depth = tok_depth;
             }
             // A block-opening token at bracket depth 0 primes a block to open if the
             // body begins on a deeper line: a `let` binding's `=`, a `match` arm or
@@ -179,6 +217,8 @@ impl<'a> Lexer<'a> {
         self.out.push(Token {
             tok,
             span: Span::new(self.pos, self.pos),
+            line_start: None,
+            depth: self.depth as u32,
         });
     }
 
@@ -302,9 +342,14 @@ impl<'a> Lexer<'a> {
     }
 
     fn push(&mut self, tok: Tok, start: usize) {
+        // `line_col` and `depth` are patched by `run` once the token is lexed
+        // (it snapshots both before `lex_one`, so an opening bracket records
+        // the depth outside itself).
         self.out.push(Token {
             tok,
             span: Span::new(start, self.pos),
+            line_start: None,
+            depth: self.depth as u32,
         });
     }
 
@@ -900,6 +945,28 @@ mod tests {
     #[test]
     fn distinguishes_pipe_from_bar() {
         assert_eq!(kinds("|> |"), vec![Tok::PipeOp, Tok::Bar, Tok::Eof]);
+    }
+
+    #[test]
+    fn tokens_carry_line_column_and_bracket_depth() {
+        // The parser's CE item rule reads both fields (brackets suppress layout
+        // tokens, so this is the line information that survives into a block).
+        let tokens = lex("let x = (1,\n  2)").unwrap();
+        let tok = |target: &Tok| tokens.iter().find(|t| &t.tok == target).unwrap();
+        assert_eq!(
+            tok(&Tok::Let).line_start,
+            Some(LineStart { line: 1, col: 0 })
+        );
+        assert_eq!(tok(&Tok::Let).depth, 0);
+        // An opening bracket carries the depth outside itself.
+        assert_eq!(tok(&Tok::LParen).depth, 0);
+        assert_eq!(tok(&Tok::Int(1)).line_start, None);
+        assert_eq!(tok(&Tok::Int(1)).depth, 1);
+        assert_eq!(
+            tok(&Tok::Int(2)).line_start,
+            Some(LineStart { line: 2, col: 2 })
+        );
+        assert_eq!(tok(&Tok::Int(2)).depth, 1);
     }
 
     #[test]

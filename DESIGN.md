@@ -1128,7 +1128,8 @@ synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates t
   inside brackets), the canonical pretty-printer renders block-bearing `if`/`match`/`fun` with offside
   indentation rather than the inline parenthesized form.
 
-The rule is orthogonal to the brace-delimited CEs and records (§8.1).
+The rule is orthogonal to the brace-delimited CEs and records; inside a CE's braces the parser
+applies its own item-level offside rule (§8.1).
 
 ### 7.1 Numbers & arithmetic — Python-familiar
 The design for floats puts **familiarity to Python programmers first** — Pyfun brings functional
@@ -1638,6 +1639,21 @@ would inherit exactly that limitation. So Pyfun keeps the braces deliberately, n
 - The offside rule for `let`/`match`/function bodies proved **orthogonal** and composed with this
   (exactly as in F#): adding it required no change to CE or record braces. Records (§8.3) reuse
   `{ }` as well, so the brace family stays consistent.
+- Indentation still structures the items *inside* the braces (again as in F#): an item's
+  expression owns the rest of its line plus any following lines indented past the item, and the
+  first line that is not sits in item position, where it must start with `let!`/`let`/`do!`/
+  `return`/`yield`. A bare statement line inside a CE block is therefore reported as a misplaced
+  item wherever it appears, instead of being swallowed as application arguments of the binding
+  above it. A continuation line that does supply an application argument must in turn start at or
+  right of the function expression it attaches to (F#'s FS0058 offside warning, applied to
+  application and made an error): a line indented past the item but left of the expression is
+  almost always a statement the writer meant as a new item, so the parser rejects it at the
+  offending token, naming the item being continued (its keyword and line) and both fixes: bind
+  the line as its own item (`let _ = …`, since an atom start can never begin an item), or indent
+  it past the start of the expression to continue it.
+  Both rules are applied by the parser (the braces suppress the lexer's layout tokens)
+  and judged only directly inside the CE's braces, so brackets nested within an item keep
+  treating line breaks as continuations.
 
 ### 8.2 Units of measure
 
