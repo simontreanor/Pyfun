@@ -1805,6 +1805,13 @@ struct Decls {
     /// name (`Point`), so a qualified construction/pattern resolves to the same
     /// `RecordInfo` (and `Ty::Con`) the exporting module uses.
     record_aliases: HashMap<String, String>,
+    /// Bare identity name → declaring module for each record an import's
+    /// interface carries **transitively** and that registered here. Such a
+    /// record deliberately has no construction alias (constructing or matching
+    /// it requires importing its declaring module directly), so the tag
+    /// resolver uses this to say exactly that instead of the false
+    /// "not a record type".
+    carried_record_home: HashMap<String, String>,
     /// Field name → `(record, declaring module)` for each record an import's
     /// interface carries **transitively** whose bare name is already taken here
     /// (by a local type or another import), so the record itself stays out of
@@ -2613,6 +2620,9 @@ fn merge_imported_type_names(
             decls.type_arity.insert(name.clone(), rec.info.params_count);
             accepted.insert(((*module_name).clone(), name.clone()));
             record_home.insert(name.clone(), origin.clone());
+            decls
+                .carried_record_home
+                .insert(name.clone(), origin.clone());
         }
     }
     // Transitively carried opaque handle types: bare identity name only, and a
@@ -7470,9 +7480,12 @@ impl Infer {
     /// or pattern site to its **bare identity name** (`DESIGN.md` §8.3). A qualified
     /// tag resolves via the imported-record alias table; a bare tag resolves only to
     /// a **local** record (an imported record must be tagged qualified, exactly as an
-    /// imported sum-type constructor must be). Anything else is "not a record type"
+    /// imported sum-type constructor must be). A bare tag naming a **transitively
+    /// carried** record is a record type, just not one this module may construct or
+    /// match, so the error says so and names the module to import (`verb` is the
+    /// site's word: "construct" or "match"). Anything else is "not a record type"
     /// (or "not a member of `M`" for an unknown qualified tag).
-    fn resolve_record_tag(&self, tag: &str, span: Span) -> Result<String, TypeError> {
+    fn resolve_record_tag(&self, tag: &str, span: Span, verb: &str) -> Result<String, TypeError> {
         if let Some((module, rec)) = tag.split_once('.') {
             if let Some(bare) = self.decls.record_aliases.get(tag) {
                 return Ok(bare.clone());
@@ -7484,6 +7497,14 @@ impl Infer {
         }
         if self.decls.local_records.contains(tag) {
             Ok(tag.to_string())
+        } else if let Some(home) = self.decls.carried_record_home.get(tag) {
+            Err(TypeError {
+                message: format!(
+                    "the record `{tag}` is declared in module `{home}`; import `{home}` \
+                     to {verb} its values here"
+                ),
+                span,
+            })
         } else {
             Err(TypeError {
                 message: format!("`{tag}` is not a record type"),
@@ -7539,7 +7560,7 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        let owner = self.resolve_record_tag(ty, ty_span)?;
+        let owner = self.resolve_record_tag(ty, ty_span, "construct")?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
 
         let mut seen: HashSet<String> = HashSet::new();
@@ -7985,7 +8006,7 @@ impl Infer {
                 ty_span,
                 fields,
             } => {
-                let owner = self.resolve_record_tag(ty, ty_span.span())?;
+                let owner = self.resolve_record_tag(ty, ty_span.span(), "match")?;
                 let (record_ty, field_tys) = self.instantiate_record(&owner);
                 self.unify(&record_ty, scrut_ty, span)?;
                 let mut seen: HashSet<String> = HashSet::new();

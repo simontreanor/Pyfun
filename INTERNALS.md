@@ -468,7 +468,10 @@ only** (no qualified key, no `record_aliases` entry, so constructing or pattern-
 still requires the direct import); a taken bare name skips the carried entry silently (`record_home`
 recognizes the same record arriving along two paths), and a genuinely shadowed record's fields land in
 `Decls::field_hints`, which `record_of_field` / `record_of_field_on` render as "the record `Config` in
-module `Inner` declares this field" instead of a bare unknown. The lowering side:
+module `Inner` declares this field" instead of a bare unknown. Constructing or matching a carried record
+bare is refused with the fix spelled out (`resolve_record_tag` via `Decls::carried_record_home`: "the
+record `Config` is declared in module `Inner`; import `Inner` to construct its values here", the pattern
+site says "to match"), while a name that is no record at all keeps "not a record type". The lowering side:
 `ModuleExports::carried_records` feeds `project::compile`'s per-module `ImportContext::record_class_modules`
 plus field data keyed by the *declaring* module's tag, so a record **update** in a consumer that never
 imports the declaring module still reconstructs via the right class (`inner.Config(...)`,

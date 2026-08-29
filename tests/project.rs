@@ -1272,6 +1272,54 @@ fn a_carried_record_cannot_be_constructed_without_a_direct_import() {
 }
 
 #[test]
+fn a_bare_carried_record_construction_names_the_declaring_module() {
+    // `Config` *is* a record type here (its fields are readable through the same
+    // name), so the refusal must say what is actually missing: the direct import
+    // that construction requires.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            ("Main", "import Middle\nlet bad = Config { cSize = 1 }"),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors.len(), 1, "got: {:?}", errors[0].errors);
+    assert_eq!(
+        errors[0].errors[0].message,
+        "the record `Config` is declared in module `Inner`; import `Inner` to construct \
+         its values here"
+    );
+}
+
+#[test]
+fn a_bare_carried_record_pattern_names_the_declaring_module() {
+    // The pattern site gets the same treatment, worded for matching.
+    let project = build_mem(
+        "Main",
+        &[
+            ("Inner", INNER),
+            ("Middle", MIDDLE),
+            (
+                "Main",
+                "import Middle\n\
+                 let f w =\n  match w:\n    case Config { cSize = n }: n",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].errors.len(), 1, "got: {:?}", errors[0].errors);
+    assert_eq!(
+        errors[0].errors[0].message,
+        "the record `Config` is declared in module `Inner`; import `Inner` to match \
+         its values here"
+    );
+}
+
+#[test]
 fn a_binding_colliding_with_a_module_alias_gets_a_mangled_import() {
     // `import Ids` + `let ids = …` used to emit `ids = …` after `import ids`,
     // clobbering the module object. The collided import is now aliased and every
