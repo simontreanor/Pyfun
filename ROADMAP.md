@@ -340,8 +340,8 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   needs nothing installed, because Gradle is *not* on this machine and two releases running lost
   time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
   API lists approved versions only, so it reads the previous one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.5.0**; the 0.6.0 vsix is
-  attached to the v0.6.0 release and still needs its manual upload (verified against the gallery API). Verification takes minutes, during which the API keeps reading the
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.6.0** (2026-08-29, verified
+  against the gallery API after the upload cleared verification). Verification takes minutes, during which the API keeps reading the
   previous version and the publisher UI shows the pending one as "Verifying" — a lag, not a failed
   upload. The **only surface that cannot be scripted**: the vsix is uploaded by hand through
   the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI
@@ -351,17 +351,22 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   surfaces Pyfun controls (PyPI, VS Code Marketplace, Open VSX, JetBrains) are the ones that get
   kept current every release; these do not, and their status is deliberately *not* re-checked each
   time. Two of them already told us the same thing in different words, which is what makes the rule
-  rather than the exception:
+  rather than the exception. The rule is about *adoption gates*: a registry that closed on a process
+  rule with a stated way back in is worth finishing when that condition is met, which is why MELPA
+  below was resubmitted while the star-gated ones stay parked.
   - **nvim-lspconfig** (#4476, closed) and **Mason** (#16012, withdrawn — its path was lspconfig
     approval): new languages need adoption evidence, informally ~100 stars.
   - **MELPA** `pyfun-mode` (melpa/melpa#10094, closed 2026-07-19): *not* a rejection of the recipe,
     which they had already signed off; they require the Emacs package to live in a public repository
     for **one month or more** and `pyfun-mode.el` was five days old. The one-month gate passed on 2026-08-14
-    (`pyfun-mode.el` public since 2026-07-14), so the PR is ready to re-open with the recipe
-    unchanged. Their closing note also records a *preference*, not a requirement: MELPA would rather
-    a package not live in a monorepo, because their build machinery has to pull the whole thing.
-    Splitting `pyfun-mode.el` into its own repository is the alternative if the re-opened PR meets
-    resistance.
+    (`pyfun-mode.el` public since 2026-07-14), and **resubmitted 2026-08-29 as melpa/melpa#10189**,
+    recipe unchanged. GitHub refuses to reopen #10094, so a fresh PR from a branch off current
+    `master` is the way back in. Their closing note also carried a *preference*, not a requirement:
+    MELPA would rather a package not live in a monorepo, because their build machinery has to pull
+    the whole thing. **Decided 2026-08-29 to stay in the monorepo** and say so in the PR: a full bare
+    clone is 3.3 MB, the mode's version is bumped in lockstep with the compiler by `RELEASING.md`, and
+    a separate repository would mean two places to keep in step for one file plus a reset of the very
+    soak time the submission was waiting on. Split it out only if MELPA asks.
   - **Zed** (zed-industries/extensions#6814 — the main repo as a submodule at `editors/zed`, with
     the LICENSE the registry wanted inside the extension dir) had changes requested on 2026-08-10:
     the submodule pointed at a branch commit that stopped being reachable once that branch was
