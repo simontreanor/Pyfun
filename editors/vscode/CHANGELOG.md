@@ -3,6 +3,14 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.6.0
+
+- Version aligned to the compiler's 0.6.0 release. No client changes; the language server it drives
+  now publishes bare diagnostic text, so the `parse error:` prefix and the trailing byte span no
+  longer sit beside the range the editor already has. A misplaced line inside a computation
+  expression is reported at that line, naming the item it continues, and `extern type` names and
+  record fields that reach a module through another module's exports now resolve.
+
 ## 0.5.0
 
 - Version aligned to the compiler's 0.5.0 release. No client changes; the language server it drives
