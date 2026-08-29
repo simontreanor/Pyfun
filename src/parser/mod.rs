@@ -210,6 +210,46 @@ impl Parser {
         t.depth == frame.depth && matches!(t.line_col, Some(col) if col <= frame.col)
     }
 
+    /// Inside a CE item, an application argument that opens a source line must
+    /// start at or right of the function expression it attaches to (F#'s
+    /// FS0058 offside rule, applied to application). A line indented past the
+    /// item but left of the expression is almost always a statement the writer
+    /// meant as a new item, and reading it as an argument would resurface as a
+    /// type error on the wrong line (issue #64); reject it here, at the
+    /// offending token, naming both readings. Judged only directly inside the
+    /// CE's braces, like [`Self::ce_item_ends_here`], so brackets nested
+    /// within an item stay exempt.
+    fn check_ce_argument_alignment(&self, head_pos: usize) -> Result<(), ParseError> {
+        let Some(frame) = self.ce_items.last() else {
+            return Ok(());
+        };
+        let t = &self.tokens[self.pos];
+        let Some(col) = t.line_col else {
+            return Ok(());
+        };
+        if t.depth != frame.depth {
+            return Ok(());
+        }
+        let head_col = self.token_col(head_pos);
+        if col >= head_col {
+            return Ok(());
+        }
+        Err(ParseError {
+            message: format!(
+                "{} is indented less than the expression it would continue, so it reads \
+                 as an argument to that expression (which starts at column {}); start \
+                 the line at column {} to make it a new `let!`/`let`/`do!`/`return`/\
+                 `yield` item, or indent it to column {} or beyond to continue the \
+                 expression",
+                describe(self.peek()),
+                head_col + 1,
+                frame.col + 1,
+                head_col + 1
+            ),
+            span: self.span(),
+        })
+    }
+
     // ----- grammar -----
 
     fn parse_module(&mut self) -> Result<Module, ParseError> {
@@ -1484,8 +1524,10 @@ impl Parser {
 
     fn parse_application(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
+        let head_pos = self.pos;
         let mut func = self.parse_postfix()?;
         while starts_atom(self.peek()) && !self.ce_item_ends_here() {
+            self.check_ce_argument_alignment(head_pos)?;
             let arg = self.parse_postfix()?;
             func = self.mk(
                 start,
@@ -2528,6 +2570,42 @@ mod tests {
     }
 
     #[test]
+    fn an_offside_argument_line_inside_a_ce_names_both_readings() {
+        // The indented spelling of the issue #64 repro: `print` sits past the
+        // item, so the item-boundary rule reads it as a continuation, yet it
+        // sits left of the expression it would extend (F#'s FS0058, applied to
+        // application). The error points at `print` and names the column that
+        // continues the expression and the column that starts a new item.
+        let src = "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n      print f\"y is {y}\"\n    return y\n  }";
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        let err = errors
+            .first()
+            .unwrap_or_else(|| panic!("expected a parse error in {src:?}"));
+        assert!(
+            err.message
+                .contains("indented less than the expression it would continue"),
+            "reported: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("start the line at column 5"),
+            "reported: {}",
+            err.message
+        );
+        assert_eq!(err.span.start, src.find("print").unwrap(), "{err:?}");
+    }
+
+    #[test]
+    fn a_line_opening_argument_at_its_functions_column_keeps_parsing() {
+        // The boundary of the FS0058-style rule: a trailing argument opening a
+        // line at exactly the function's column (or beyond) is a continuation.
+        let src = "let f =\n  result {\n    let! x =\n      g\n      1\n    return x\n  }";
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "errors: {errors:?}");
+        assert_eq!(names(&module), ["f"]);
+    }
+
+    #[test]
     fn a_ce_item_expression_may_span_lines_indented_past_the_item() {
         // Legal multi-line items keep parsing: a value continued on deeper
         // lines, a pipeline broken across lines, a multi-line `match`, and a
@@ -2541,8 +2619,9 @@ mod tests {
     #[test]
     fn brackets_inside_a_ce_item_still_continue_across_lines() {
         // Inside explicit brackets a line break never separates, whatever its
-        // column — the item-offside rule applies only directly inside the CE's
-        // braces.
+        // column — both the item-boundary rule and the argument-alignment rule
+        // apply only directly inside the CE's braces. Here `i` opens a line at
+        // column 0, left of everything, and is still the argument of `h`.
         let src = "let f =\n  result {\n    let! x = g (h\ni)\n    return x\n  }";
         let (module, errors) = parse_recover(lex(src).unwrap());
         assert!(errors.is_empty(), "errors: {errors:?}");

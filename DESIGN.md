@@ -1627,9 +1627,14 @@ would inherit exactly that limitation. So Pyfun keeps the braces deliberately, n
   first line that is not sits in item position, where it must start with `let!`/`let`/`do!`/
   `return`/`yield`. A bare statement line inside a CE block is therefore reported as a misplaced
   item wherever it appears, instead of being swallowed as application arguments of the binding
-  above it. The rule is applied by the parser (the braces suppress the lexer's layout tokens) and
-  judged only directly inside the CE's braces, so brackets nested within an item keep treating
-  line breaks as continuations.
+  above it. A continuation line that does supply an application argument must in turn start at or
+  right of the function expression it attaches to (F#'s FS0058 offside warning, applied to
+  application and made an error): a line indented past the item but left of the expression is
+  almost always a statement the writer meant as a new item, so the parser rejects it at the
+  offending token, naming the column that continues the expression and the column that starts a
+  new item. Both rules are applied by the parser (the braces suppress the lexer's layout tokens)
+  and judged only directly inside the CE's braces, so brackets nested within an item keep
+  treating line breaks as continuations.
 
 ### 8.2 Units of measure
 
