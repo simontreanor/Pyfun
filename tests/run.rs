@@ -149,6 +149,79 @@ fn run_leaves_the_working_directory_alone() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A program that prints its own `sys.argv`, the shape from issue #73.
+const ARGV_SOURCE: &str = "extern import sys\n\
+     extern getArgv : unit -> List string = sys.argv.copy\n\
+     print (getArgv ())";
+
+/// Run `ARGV_SOURCE` under `pyfun run` with `extra` after the file path and
+/// return the printed `sys.argv` line.
+fn run_with_args(name: &str, extra: &[&str]) -> String {
+    let file = write_temp(name, ARGV_SOURCE);
+    let output = Command::new(pyfun_bin())
+        .arg("run")
+        .arg(&file)
+        .args(extra)
+        .output()
+        .expect("spawn pyfun run");
+    let _ = std::fs::remove_file(&file);
+    assert!(
+        output.status.success(),
+        "argv program should run cleanly, stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
+fn run_forwards_arguments_to_the_program() {
+    if !have_python() {
+        eprintln!("skipping `run` argv test: no python interpreter found");
+        return;
+    }
+    // Everything after the file path reaches the program's `sys.argv`, and
+    // `sys.argv[0]` is the staged script, matching the compiled form.
+    let stdout = run_with_args("argv_bare", &["hello", "42"]);
+    assert!(
+        stdout.contains("'hello', '42'"),
+        "arguments should reach sys.argv, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("_pyfun_main.py"),
+        "sys.argv[0] should be the staged script, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn run_consumes_a_single_leading_separator() {
+    if !have_python() {
+        eprintln!("skipping `run` argv separator test: no python interpreter found");
+        return;
+    }
+    // `pyfun run f.pyfun -- hello 42` means the same as the bare spelling: the
+    // `--` marks where program arguments start and is not itself forwarded.
+    let stdout = run_with_args("argv_sep", &["--", "hello", "42"]);
+    assert!(
+        stdout.contains("'hello', '42'") && !stdout.contains("'--'"),
+        "the separator should be consumed, not forwarded, got:\n{stdout}"
+    );
+}
+
+#[test]
+fn run_forwards_arguments_that_look_like_flags() {
+    if !have_python() {
+        eprintln!("skipping `run` argv flag test: no python interpreter found");
+        return;
+    }
+    // Arguments after the path belong to the program even when they spell a
+    // pyfun flag: `-o` and `--help` land in sys.argv rather than the CLI.
+    let stdout = run_with_args("argv_flags", &["-o", "--help"]);
+    assert!(
+        stdout.contains("'-o', '--help'"),
+        "flag-like arguments should reach sys.argv, got:\n{stdout}"
+    );
+}
+
 #[test]
 fn run_refuses_to_execute_ill_typed_code() {
     // The compiler is the gatekeeper: a type error stops `run` before any Python
