@@ -370,9 +370,18 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   - **Zed** (zed-industries/extensions#6814 — the main repo as a submodule at `editors/zed`, with
     the LICENSE the registry wanted inside the extension dir) had changes requested on 2026-08-10:
     the submodule pointed at a branch commit that stopped being reachable once that branch was
-    squash-merged and deleted. Repointed at the v0.6.0 commit on 2026-08-29, awaiting re-review.
-    **Squash-merging deletes the commit a submodule pin names**, so a pin must always be a commit on
-    `main`, and it wants rechecking whenever it is bumped. **Helix**
+    squash-merged and deleted. Repointed at the v0.6.0 commit on 2026-08-29; checks green, awaiting
+    re-review. Two traps a future pin bump walks straight into, both learned the hard way that day:
+    **squash-merging deletes the commit a submodule pin names**, so a pin must always be a commit on
+    `main` and wants rechecking whenever it is bumped; and **moving the pin moves every file inside
+    it**, including `editors/zed/extension.toml`, whose `version` their `package-extensions` script
+    checks against the `version` in *their* `extensions.toml`. The repoint carried the extension from
+    0.1.0 to 0.2.0 and failed with `Incorrect version for extension pyfun`, fixed by bumping their
+    entry to match. **Bump both numbers together.** Note the Zed extension is versioned on the
+    grammar's schedule, not the compiler's (`RELEASING.md`), so the two are not the same number and
+    the pairing has to be checked rather than assumed. When reading that failure, the loud
+    `could not find Cargo.toml` error in the log is **benign**: it appears identically in the July run
+    that passed, and the real error sits ten lines below it. **Helix**
     (helix-editor/helix#16036 — languages.toml, git/rev/subpath grammar, Helix-scope queries, their
     checks clean locally) is still open and needs nothing from us; if it merges, it merges.
   - **nvim-treesitter**: upstream ARCHIVED 2026-04 with no successor (candidates: the
