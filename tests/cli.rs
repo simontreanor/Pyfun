@@ -207,6 +207,52 @@ fn run_executes_a_multi_file_project() {
 }
 
 #[test]
+fn run_forwards_arguments_to_a_multi_file_project() {
+    if !have_python() {
+        eprintln!("skipping multi-file `run` argv test: no python interpreter");
+        return;
+    }
+    // Arguments after the entry file reach the program's `sys.argv` on the
+    // project path too, with and without the `--` separator (issue #73).
+    let proj = Project::new(
+        "run_argv",
+        &[
+            GEOMETRY,
+            (
+                "main.pyfun",
+                "import Geometry\n\
+                 extern import sys\n\
+                 extern getArgv : unit -> List string = sys.argv.copy\n\
+                 print (Geometry.area 4 5)\n\
+                 print (getArgv ())",
+            ),
+        ],
+    );
+    for extra in [["hello", "42"].as_slice(), ["--", "hello", "42"].as_slice()] {
+        let out = Command::new(pyfun_bin())
+            .arg("run")
+            .arg(proj.path("main.pyfun"))
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("'hello', '42'") && !stdout.contains("'--'"),
+            "arguments {extra:?} should reach sys.argv, got:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("main.py"),
+            "sys.argv[0] should be the staged entry script, got:\n{stdout}"
+        );
+    }
+}
+
+#[test]
 fn the_committed_modules_example_runs() {
     // Keep the shipped multi-file example (`examples/modules/`) working end-to-end.
     if !have_python() {

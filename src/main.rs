@@ -6,7 +6,7 @@
 //! Usage:
 //!   pyfun check   <file.pyfun>                  # type-check, report diagnostics
 //!   pyfun compile <file.pyfun> [-o <out>]       # type-check then lower to Python
-//!   pyfun run     <file.pyfun>                  # compile then execute with Python
+//!   pyfun run     <file.pyfun> [--] [args...]   # compile then execute with Python
 //!   pyfun parse   <file.pyfun>                  # canonical pretty-print
 //!   pyfun <file.pyfun>                          # shorthand for `compile`
 //!
@@ -47,7 +47,17 @@ fn main() -> ExitCode {
             Err(msg) => fail(&msg),
         },
         Some("run") => match args.get(1) {
-            Some(path) => run(path),
+            Some(path) => {
+                // Everything after the path belongs to the program (even a
+                // `-o` or `--help`), so it reaches `sys.argv` exactly as it
+                // would when the compiled file is run with `python` directly.
+                // One leading `--` is an optional separator and is consumed.
+                let prog_args = match args.get(2).map(String::as_str) {
+                    Some("--") => &args[3..],
+                    _ => &args[2..],
+                };
+                run(path, prog_args)
+            }
             None => fail("`run` needs a file path"),
         },
         Some("parse") => match args.get(1) {
@@ -77,7 +87,10 @@ fn help() {
     eprintln!(
         "                                            PEP 701 f-strings so the output runs on PyPy)"
     );
-    eprintln!("  pyfun run     <file.pyfun>                compile then execute with Python");
+    eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
+    eprintln!(
+        "                                            (args after the path go to the program's sys.argv)"
+    );
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
@@ -201,14 +214,18 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
 /// source: Python puts the script's directory first on `sys.path`, so a source
 /// stem like `json.pyfun` would otherwise shadow the stdlib module an `extern`
 /// in that very program imports.
-fn run(path: &str) -> ExitCode {
+///
+/// `prog_args` are handed to the interpreter after the script path, so the
+/// program sees them as `sys.argv[1..]`; `sys.argv[0]` is the staged script
+/// path, matching what `python out/main.py args...` gives the compiled form.
+fn run(path: &str, prog_args: &[String]) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
     if let Ok(module) = pyfun::parse(&source)
         && has_imports(&module)
     {
-        return run_project(path);
+        return run_project(path, prog_args);
     }
     let python = match pyfun::compile_collecting(&source, PyTarget::default()) {
         Ok((py, notes)) => {
@@ -238,7 +255,10 @@ fn run(path: &str) -> ExitCode {
     // Absolute path, and *no* `current_dir`: the program keeps the user's working
     // directory, so its relative file paths mean what they meant on the command
     // line. Python still puts the script's own directory first on `sys.path`.
-    let status = Command::new(&interp).arg(dir.join(entry_py)).status();
+    let status = Command::new(&interp)
+        .arg(dir.join(entry_py))
+        .args(prog_args)
+        .status();
     let _ = std::fs::remove_dir_all(&dir);
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
@@ -393,7 +413,7 @@ fn compile_project(entry: &str, out: Option<&str>, target: PyTarget) -> ExitCode
     }
 }
 
-fn run_project(entry: &str) -> ExitCode {
+fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
     let project = match resolve_project(entry) {
         Ok(p) => p,
         Err(code) => return code,
@@ -424,7 +444,10 @@ fn run_project(entry: &str) -> ExitCode {
         }
     }
     let entry_py = project::module_py_name(&project.entry().name);
-    let status = Command::new(&interp).arg(dir.join(&entry_py)).status();
+    let status = Command::new(&interp)
+        .arg(dir.join(&entry_py))
+        .args(prog_args)
+        .status();
     let _ = std::fs::remove_dir_all(&dir);
     match status {
         Ok(s) if s.success() => ExitCode::SUCCESS,
