@@ -1957,5 +1957,7 @@ outside it is deferred. Hold the line:
 - Machine-facing: lowercase `pyfun` — CLI command, Rust crate, PyPI package, repo.
 - File extension: **`.pyfun`**. CLI: `pyfun compile foo.pyfun`, `pyfun check foo.pyfun`, later
   `pyfun fmt`, `pyfun lsp`.
-- `pyfun-lang` is the distribution fallback if PyPI/GitHub `pyfun` collide with abandoned
-  existing projects; the crate and prose name stay `pyfun`/Pyfun regardless.
+- `pyfun-lang` is the PyPI distribution name (`pip install pyfun-lang`), because the bare `pyfun`
+  was already taken by an abandoned 2015 package. Settled, not provisional: write it plainly with
+  no hedging about a future rename. The command it installs, the crate, and the prose name stay
+  `pyfun`/Pyfun.
