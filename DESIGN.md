@@ -1631,8 +1631,10 @@ would inherit exactly that limitation. So Pyfun keeps the braces deliberately, n
   right of the function expression it attaches to (F#'s FS0058 offside warning, applied to
   application and made an error): a line indented past the item but left of the expression is
   almost always a statement the writer meant as a new item, so the parser rejects it at the
-  offending token, naming the column that continues the expression and the column that starts a
-  new item. Both rules are applied by the parser (the braces suppress the lexer's layout tokens)
+  offending token, naming the item being continued (its keyword and line) and both fixes: bind
+  the line as its own item (`let _ = …`, since an atom start can never begin an item), or indent
+  it past the start of the expression to continue it.
+  Both rules are applied by the parser (the braces suppress the lexer's layout tokens)
   and judged only directly inside the CE's braces, so brackets nested within an item keep
   treating line breaks as continuations.
 

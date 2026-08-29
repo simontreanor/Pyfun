@@ -86,8 +86,14 @@ struct Parser {
 
 /// See [`Parser::ce_items`].
 struct CeFrame {
+    /// Column of the item's leading keyword.
     col: u32,
+    /// Bracket depth just inside the CE's braces.
     depth: u32,
+    /// The 1-based source line the item starts on, for diagnostics.
+    line: u32,
+    /// The item's leading keyword (`let!`, `do!`, …), for diagnostics.
+    kind: &'static str,
 }
 
 impl Parser {
@@ -175,18 +181,20 @@ impl Parser {
         Expr::new(kind, Span::new(start, self.prev_end()))
     }
 
-    /// The column of the token at `pos`: its own `line_col` when it opens its
-    /// line, otherwise derived from the nearest preceding line-leading token.
-    /// The derivation adds the byte distance, which equals the column distance
-    /// because everything between the two tokens sits on the same line.
-    fn token_col(&self, pos: usize) -> u32 {
+    /// The line (1-based) and column (0-based) of the token at `pos`: its own
+    /// `line_start` when it opens its line, otherwise derived from the nearest
+    /// preceding line-leading token. The derivation adds the byte distance to
+    /// the column, which equals the column distance because everything between
+    /// the two tokens sits on the same line.
+    fn token_pos(&self, pos: usize) -> (u32, u32) {
         let mut i = pos;
         loop {
-            if let Some(col) = self.tokens[i].line_col {
-                return col + (self.tokens[pos].span.start - self.tokens[i].span.start) as u32;
+            if let Some(ls) = self.tokens[i].line_start {
+                let col = ls.col + (self.tokens[pos].span.start - self.tokens[i].span.start) as u32;
+                return (ls.line, col);
             }
             if i == 0 {
-                return 0;
+                return (1, 0);
             }
             i -= 1;
         }
@@ -207,7 +215,7 @@ impl Parser {
             return false;
         };
         let t = &self.tokens[self.pos];
-        t.depth == frame.depth && matches!(t.line_col, Some(col) if col <= frame.col)
+        t.depth == frame.depth && matches!(t.line_start, Some(ls) if ls.col <= frame.col)
     }
 
     /// Inside a CE item, an application argument that opens a source line must
@@ -216,35 +224,36 @@ impl Parser {
     /// item but left of the expression is almost always a statement the writer
     /// meant as a new item, and reading it as an argument would resurface as a
     /// type error on the wrong line (issue #64); reject it here, at the
-    /// offending token, naming both readings. Judged only directly inside the
-    /// CE's braces, like [`Self::ce_item_ends_here`], so brackets nested
-    /// within an item stay exempt.
+    /// offending token, naming the item being continued and both fixes. An
+    /// atom start can never begin a CE item, so becoming a new item takes a
+    /// binding, not just un-indenting; the message says so (`let _ = …`).
+    /// Judged only directly inside the CE's braces, like
+    /// [`Self::ce_item_ends_here`], so brackets nested within an item stay
+    /// exempt.
     fn check_ce_argument_alignment(&self, head_pos: usize) -> Result<(), ParseError> {
         let Some(frame) = self.ce_items.last() else {
             return Ok(());
         };
         let t = &self.tokens[self.pos];
-        let Some(col) = t.line_col else {
+        let Some(ls) = t.line_start else {
             return Ok(());
         };
         if t.depth != frame.depth {
             return Ok(());
         }
-        let head_col = self.token_col(head_pos);
-        if col >= head_col {
+        let (_, head_col) = self.token_pos(head_pos);
+        if ls.col >= head_col {
             return Ok(());
         }
         Err(ParseError {
             message: format!(
-                "{} is indented less than the expression it would continue, so it reads \
-                 as an argument to that expression (which starts at column {}); start \
-                 the line at column {} to make it a new `let!`/`let`/`do!`/`return`/\
-                 `yield` item, or indent it to column {} or beyond to continue the \
-                 expression",
+                "{} is indented as a continuation of the `{}` item on line {}, where it \
+                 can only be an argument to that item's expression; to make it a new \
+                 item, align it with that item and bind its value (`let _ = ...`), or \
+                 indent it past the start of the expression to continue it",
                 describe(self.peek()),
-                head_col + 1,
-                frame.col + 1,
-                head_col + 1
+                frame.kind,
+                frame.line
             ),
             span: self.span(),
         })
@@ -1912,8 +1921,24 @@ impl Parser {
     /// statement line with the `expected `let!`, …` message on that line
     /// instead of swallowing it as application arguments (issue #64).
     fn parse_ce_item(&mut self, depth: u32) -> Result<CeItem, ParseError> {
-        let col = self.token_col(self.pos);
-        self.ce_items.push(CeFrame { col, depth });
+        let (line, col) = self.token_pos(self.pos);
+        let kind = match (self.peek(), self.peek2()) {
+            (Tok::Let, Tok::Bang) => "let!",
+            (Tok::Let, _) => "let",
+            (Tok::Do, _) => "do!",
+            (Tok::Return, Tok::Bang) => "return!",
+            (Tok::Return, _) => "return",
+            (Tok::Yield, Tok::Bang) => "yield!",
+            (Tok::Yield, _) => "yield",
+            // Anything else fails the match below before the frame is read.
+            _ => "item",
+        };
+        self.ce_items.push(CeFrame {
+            col,
+            depth,
+            line,
+            kind,
+        });
         let item = self.parse_ce_item_inner();
         self.ce_items.pop();
         item
@@ -2574,8 +2599,10 @@ mod tests {
         // The indented spelling of the issue #64 repro: `print` sits past the
         // item, so the item-boundary rule reads it as a continuation, yet it
         // sits left of the expression it would extend (F#'s FS0058, applied to
-        // application). The error points at `print` and names the column that
-        // continues the expression and the column that starts a new item.
+        // application). The error points at `print`, names the item being
+        // continued by keyword and line, and offers both fixes without column
+        // numbers. The new-item fix must include the binding: an atom start
+        // can never begin a CE item, so un-indenting alone is not a fix.
         let src = "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n      print f\"y is {y}\"\n    return y\n  }";
         let (_, errors) = parse_recover(lex(src).unwrap());
         let err = errors
@@ -2583,16 +2610,32 @@ mod tests {
             .unwrap_or_else(|| panic!("expected a parse error in {src:?}"));
         assert!(
             err.message
-                .contains("indented less than the expression it would continue"),
+                .contains("continuation of the `let` item on line 4"),
             "reported: {}",
             err.message
         );
         assert!(
-            err.message.contains("start the line at column 5"),
+            err.message.contains("`let _ = ...`"),
             "reported: {}",
             err.message
         );
+        assert!(!err.message.contains("column"), "reported: {}", err.message);
         assert_eq!(err.span.start, src.find("print").unwrap(), "{err:?}");
+
+        // The bracket-opening shape: no item spelling exists for a `(` line at
+        // all, so the same message (naming the `let!` item) must carry it.
+        let src = "let f n =\n  result {\n    let! x = Option.toResult \"bad\"\n      (String.toInt n)\n    return x\n  }";
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        let err = errors
+            .first()
+            .unwrap_or_else(|| panic!("expected a parse error in {src:?}"));
+        assert!(
+            err.message
+                .contains("continuation of the `let!` item on line 3"),
+            "reported: {}",
+            err.message
+        );
+        assert_eq!(err.span.start, src.find('(').unwrap(), "{err:?}");
     }
 
     #[test]
