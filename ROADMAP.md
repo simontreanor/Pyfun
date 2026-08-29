@@ -325,22 +325,23 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **PyPI** — `pyfun-lang` at **0.5.0** (2026-08-02, published by the tag and verified by installing
-  it into a clean venv and running both 0.5.0 features against it). Rides the tag; no manual step.
+- **PyPI** — `pyfun-lang` at **0.6.0** (2026-08-29, published by the tag and verified by installing
+  it into a clean venv and running all four 0.6.0 fixes against it). Rides the tag; no manual step.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.5.0** (2026-08-02, verified against the registry API). Every release:
+  At **0.6.0** (2026-08-29, verified against the registry API; indexing lags the publish by a minute
+  or two, so check twice before believing it failed). Every release:
   `ovsx publish <vsix> -p <token>` (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.5.0**, uploaded and **approved 2026-08-02** (verified against
+  mode + legacy CE, 2024.2+). At **0.6.0**, uploaded 2026-08-29 and **awaiting moderation** (verified against
   the plugins API; an earlier "0.4.0 is not uploaded yet" note here was stale, as an "awaiting
   moderation" one had been before it — check the API, not this line). `editors/jetbrains/` has a
   **committed Gradle wrapper**: `./gradlew publishPlugin` (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`)
   needs nothing installed, because Gradle is *not* on this machine and two releases running lost
   time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
   API lists approved versions only, so it reads the previous one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.5.0** (2026-08-02, verified
-  against the gallery API). Verification takes minutes, during which the API keeps reading the
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.5.0**; the 0.6.0 vsix is
+  attached to the v0.6.0 release and still needs its manual upload (verified against the gallery API). Verification takes minutes, during which the API keeps reading the
   previous version and the publisher UI shows the pending one as "Verifying" — a lag, not a failed
   upload. The **only surface that cannot be scripted**: the vsix is uploaded by hand through
   the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI
@@ -355,12 +356,20 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
     approval): new languages need adoption evidence, informally ~100 stars.
   - **MELPA** `pyfun-mode` (melpa/melpa#10094, closed 2026-07-19): *not* a rejection of the recipe,
     which they had already signed off; they require the Emacs package to live in a public repository
-    for **one month or more** and `pyfun-mode.el` was five days old. Re-openable any time from
-    mid-August with the same recipe unchanged.
+    for **one month or more** and `pyfun-mode.el` was five days old. The one-month gate passed on 2026-08-14
+    (`pyfun-mode.el` public since 2026-07-14), so the PR is ready to re-open with the recipe
+    unchanged. Their closing note also records a *preference*, not a requirement: MELPA would rather
+    a package not live in a monorepo, because their build machinery has to pull the whole thing.
+    Splitting `pyfun-mode.el` into its own repository is the alternative if the re-opened PR meets
+    resistance.
   - **Zed** (zed-industries/extensions#6814 — the main repo as a submodule at `editors/zed`, with
-    the LICENSE the registry wanted inside the extension dir) and **Helix**
+    the LICENSE the registry wanted inside the extension dir) had changes requested on 2026-08-10:
+    the submodule pointed at a branch commit that stopped being reachable once that branch was
+    squash-merged and deleted. Repointed at the v0.6.0 commit on 2026-08-29, awaiting re-review.
+    **Squash-merging deletes the commit a submodule pin names**, so a pin must always be a commit on
+    `main`, and it wants rechecking whenever it is bumped. **Helix**
     (helix-editor/helix#16036 — languages.toml, git/rev/subpath grammar, Helix-scope queries, their
-    checks clean locally) are still open and need nothing from us; if they merge, they merge.
+    checks clean locally) is still open and needs nothing from us; if it merges, it merges.
   - **nvim-treesitter**: upstream ARCHIVED 2026-04 with no successor (candidates: the
     neovim-treesitter fork org, or parser management in Neovim core — neovim/neovim#39006). A fully
     validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`), ready to retarget
