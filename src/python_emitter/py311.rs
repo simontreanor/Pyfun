@@ -163,6 +163,12 @@ fn rewrite_expr(e: &mut PyExpr) {
                 rewrite_expr(el);
             }
         }
+        PyExpr::Dict(items) => {
+            for (k, v) in items {
+                rewrite_expr(k);
+                rewrite_expr(v);
+            }
+        }
     }
 }
 

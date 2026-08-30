@@ -418,6 +418,10 @@ stdio. All features reuse the existing front end:
   `string ->{io} unit`) plus a **dedicated `Effect:` line** summarizing the concrete effect performed
   on full application (the union of the type's *result-spine* arrows — `io`/`async`; argument arrows
   are a callback's effect, not the value's, and pure values omit the line — `types::effect_summary`).
+  (The same pass hands lowering the derived codecs: `types::check_collecting` returns a
+  `types::Codecs`, one `Codec` per `Decode.auto` site keyed by span plus the named table, and
+  `lowering::lower_collecting` / `lower_in_project` take it beside the float-literal spans —
+  `DESIGN.md` §6, "Derived codecs".)
   It works because the checker, in a `record`-enabled pass (`types::check_collecting`, surfaced via
   `analyze`), accumulates a `(span, ty)` table for every expression node, binding name, function
   parameter, and pattern variable, then resolves each entry against the final substitution and renders

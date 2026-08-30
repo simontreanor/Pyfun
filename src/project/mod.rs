@@ -261,6 +261,7 @@ pub fn compile_targeting(
     // an import's interface also carries the records it references transitively
     // (`DESIGN.md` §6.1), which the lowering context below needs.
     let mut exports: HashMap<String, crate::types::ModuleExports> = HashMap::new();
+    let mut codecs_by_module: HashMap<String, crate::types::Codecs> = HashMap::new();
     let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
         let mut spans = HashMap::new();
         for module in &project.modules {
@@ -269,14 +270,16 @@ pub fn compile_targeting(
                 .iter()
                 .filter_map(|n| exports.get(n).map(|e| (n.clone(), e.clone())))
                 .collect();
-            let (_errors, types, module_exports) =
+            let (_errors, types, module_exports, codecs) =
                 crate::types::check_module_collecting(&module.ast, &imports);
             spans.insert(module.name.clone(), crate::float_literal_spans(&types));
+            codecs_by_module.insert(module.name.clone(), codecs);
             exports.insert(module.name.clone(), module_exports);
         }
         spans
     };
     let no_floats = std::collections::HashSet::new();
+    let no_codecs = crate::types::Codecs::default();
 
     let mut files = Vec::new();
     let mut needs_runtime = false;
@@ -337,7 +340,8 @@ pub fn compile_targeting(
             }
         }
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
-        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats)?;
+        let codecs = codecs_by_module.get(&module.name).unwrap_or(&no_codecs);
+        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats, codecs)?;
         needs_runtime |= lowered.uses_runtime;
         notes.extend(
             lowered

@@ -2711,6 +2711,47 @@ fn a_trailing_unit_expression_ends_a_monad_block() {
 }
 
 #[test]
+fn decode_auto_is_pinned_by_a_later_use_and_open_otherwise() {
+    // #110: the site's variable stays weak at generalization, so the `match`
+    // below the top-level `let` fixes it.
+    let src = "type P = { x: int }\n\
+               let back = Decode.decodeString Decode.auto \"{}\"\n\
+               match back:\n  case Ok p: print p.x\n  case Error _: print 0";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    // Inside a function the arms pin it before the function generalizes.
+    let src = "type Msg = Hello string | Resign\n\
+               let parse s =\n  match Decode.decodeString Decode.auto s:\n    \
+                 case Ok (Hello who): who\n    case Ok Resign: \"resign\"\n    case Error _: \"bad\"";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    // Nothing pins it: an error at the site, naming how to.
+    assert_error_contains(
+        "let loose = Decode.decodeString Decode.auto \"1\"",
+        "cannot tell what `Decode.auto` decodes into here",
+    );
+    // Types with no JSON form say so.
+    assert_error_contains(
+        "let f = Decode.decodeString Decode.auto \"1\"\nlet g = match f:\n  case Ok h: h 1\n  case Error _: 0",
+        "a function has no JSON form",
+    );
+    assert_error_contains(
+        "extern type Conn\nextern use: Conn -> int = m.use\nlet r = Decode.decodeString Decode.auto \"1\"\nlet n = match r:\n  case Ok c: use c\n  case Error _: 0",
+        "it is an extern type",
+    );
+}
+
+#[test]
+fn encode_auto_is_pure_and_takes_anything() {
+    let src = "type P = { x: int }\nlet pure wire p = Encode.auto p\nlet s = wire (P { x = 1 })\nlet t = Encode.auto [Some 1, None]";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    let analysis = pyfun::analyze("let s = Encode.auto 1");
+    assert!(
+        analysis.types.iter().any(|t| t.ty == "string"),
+        "{:?}",
+        analysis.types
+    );
+}
+
+#[test]
 fn async_ce_block_performs_the_async_effect() {
     // Building an `async {}` workflow introduces the `async` effect, so a `let pure`
     // binding whose body is an async block is rejected (`DESIGN.md` §4).
@@ -3772,7 +3813,7 @@ fn a_user_definition_shadows_the_prelude_combinators() {
 /// The holes reported for `source` (their `name`, resolved `ty`).
 fn holes_of(source: &str) -> Vec<(Option<String>, String)> {
     let module = pyfun::parse(source).expect("parse");
-    let (_errors, _types, holes, _ordered) = pyfun::types::check_collecting(&module);
+    let (_errors, _types, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
     holes.into_iter().map(|h| (h.name, h.ty)).collect()
 }
 
@@ -3812,7 +3853,7 @@ fn a_hole_blocks_compilation() {
 /// The valid hole fits reported for the (single) hole in `source`.
 fn fits_of(source: &str) -> Vec<String> {
     let module = pyfun::parse(source).expect("parse");
-    let (_e, _t, holes, _ordered) = pyfun::types::check_collecting(&module);
+    let (_e, _t, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
     assert_eq!(holes.len(), 1, "expected exactly one hole");
     holes.into_iter().next().unwrap().fits
 }
@@ -3845,7 +3886,7 @@ fn an_unconstrained_hole_lists_no_fits() {
 /// The refinement fits (functions applied to holes) reported for the single hole.
 fn refinements_of(source: &str) -> Vec<String> {
     let module = pyfun::parse(source).expect("parse");
-    let (_e, _t, holes, _ordered) = pyfun::types::check_collecting(&module);
+    let (_e, _t, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
     assert_eq!(holes.len(), 1, "expected exactly one hole");
     holes.into_iter().next().unwrap().refinements
 }

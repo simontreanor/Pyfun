@@ -4263,6 +4263,65 @@ fn e2e_for_items_in_seq_async_result_and_a_user_builder() {
 }
 
 #[test]
+fn e2e_derived_codecs_round_trip_a_rich_type() {
+    // #110: a record holding a Map with tuple keys, nested cases, an Option, a
+    // recursive tree, a tuple and a set survives Encode.auto → Decode.auto.
+    let Some(python) = python_cmd() else { return };
+    let src = "type Placed = { letter: string, score: int }\n\
+               type Player = Ann | Bob\n\
+               type Msg = Hello Player | Move string | Resign\n\
+               type Tree = Leaf | Node Tree int Tree\n\
+               type View = { board: Map (int, int) Placed, players: List Player, turn: Option Player, last: Msg, tree: Tree, pair: (string, float), tags: Set string }\n\
+               let view = View {\n  \
+                 board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })],\n  \
+                 players = [Ann, Bob],\n  turn = Some Bob,\n  last = Move \"K11 a QUIZ\",\n  \
+                 tree = Node Leaf 1 (Node Leaf 2 Leaf),\n  pair = (\"x\", 1.5),\n  tags = Set.ofList [\"a\"]\n}\n\
+               let wire = Encode.auto view\n\
+               print wire\n\
+               let back = Decode.decodeString Decode.auto wire\n\
+               match back:\n  case Ok v: print (v == view)\n  case Error e: print f\"failed: {e.errorKind} {e.errorMessage}\"\n\
+               let showMsg m =\n  match m:\n    case Hello p: f\"hello {p}\"\n    case Move s: f\"move {s}\"\n    case Resign: \"resign\"\n\
+               let decodeMsg s =\n  match Decode.decodeString Decode.auto s:\n    case Ok m: showMsg m\n    case Error e: f\"error {e.errorKind}: {e.errorMessage}\"\n\
+               print (decodeMsg \"{\\\"type\\\": \\\"Resign\\\"}\")\n\
+               print (decodeMsg \"{\\\"type\\\": \\\"Hello\\\", \\\"fields\\\": [{\\\"type\\\": \\\"Ann\\\"}]}\")\n\
+               print (decodeMsg \"{\\\"type\\\": \\\"Nope\\\"}\")\n\
+               print (decodeMsg \"[1, 2]\")\n\
+               print (decodeMsg \"{\\\"type\\\": \\\"Move\\\", \\\"fields\\\": [1]}\")";
+    let program = pyfun::compile(src).unwrap();
+    // The descriptor table names the classes and refers to the recursive tree by name.
+    assert!(program.contains("_pf_codecs = {"), "{program}");
+    assert!(program.contains("\"Tree\": (\"adt\", {\"Leaf\": (_Leaf, []), \"Node\": (Node, [(\"ref\", \"Tree\"), (\"int\",), (\"ref\", \"Tree\")])})"), "{program}");
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(
+        out.trim(),
+        "{\"board\": [[[1, 2], {\"letter\": \"Q\", \"score\": 10}]], \"players\": [{\"type\": \"Ann\"}, {\"type\": \"Bob\"}], \"turn\": {\"type\": \"Bob\"}, \"last\": {\"type\": \"Move\", \"fields\": [\"K11 a QUIZ\"]}, \"tree\": {\"type\": \"Node\", \"fields\": [{\"type\": \"Leaf\"}, 1, {\"type\": \"Node\", \"fields\": [{\"type\": \"Leaf\"}, 2, {\"type\": \"Leaf\"}]}]}, \"pair\": [\"x\", 1.5], \"tags\": [\"a\"]}\n\
+         True\n\
+         resign\n\
+         hello Ann\n\
+         error ValueError: unknown case Nope\n\
+         error ValueError: expected an object, got list\n\
+         error ValueError: expected a string, got int"
+    );
+}
+
+#[test]
+fn e2e_derived_codecs_read_through_a_newtype_and_a_keyword_field() {
+    let Some(python) = python_cmd() else { return };
+    let src = "opaque type UserId = string\n\
+               type Row = { class: string, id: UserId, ok: Result int string }\n\
+               let row = Row { class = \"a\", id = UserId \"u1\", ok = Error \"no\" }\n\
+               let wire = Encode.auto row\n\
+               print wire\n\
+               match Decode.decodeString Decode.auto wire:\n  case Ok r: print (r == row)\n  case Error e: print e.errorMessage";
+    let program = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(
+        out.trim(),
+        "{\"class\": \"a\", \"id\": \"u1\", \"ok\": {\"type\": \"Error\", \"fields\": [\"no\"]}}\nTrue"
+    );
+}
+
+#[test]
 fn e2e_format_module_formats_numbers_and_strings() {
     // The `Format` members run and produce the expected strings. Uses an ASCII `$`
     // (not `£`) so the assertion doesn't depend on the console's output encoding.

@@ -228,6 +228,40 @@ fn e2e_runs_a_cross_module_program() {
     }
 }
 
+#[test]
+fn e2e_derived_codecs_cross_a_module_import() {
+    // #110: the descriptor names the exporting module's classes (`rules.View`).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Rules\nlet wire = Encode.auto Rules.sample\nprint wire\n\
+                 let back = Decode.decodeString Decode.auto wire\n\
+                 match back:\n  case Ok v: print (v == Rules.sample)\n  case Error e: print e.errorMessage",
+            ),
+            (
+                "Rules",
+                "type Placed = { letter: string, score: int }\ntype Player = Ann | Bob\n\
+                 type View = { board: Map (int, int) Placed, turn: Option Player }\n\
+                 let sample = View { board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })], turn = Some Bob }",
+            ),
+        ],
+    );
+    assert!(
+        file(&files, "main.py").contains("rules.View"),
+        "{}",
+        file(&files, "main.py")
+    );
+    let dir = Scratch::new("e2e_codecs");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(
+            out.trim().replace("\r\n", "\n"),
+            "{\"board\": [[[1, 2], {\"letter\": \"Q\", \"score\": 10}]], \"turn\": {\"type\": \"Bob\"}}\nTrue"
+        );
+    }
+}
+
 // ---------- cross-module sum types (construction + matching) ----------
 
 #[test]

@@ -88,6 +88,40 @@ missingField |> Decode.decodeString bookDecoder |> describe |> print
 
 The well-formed object decodes to a typed `Book`. The object missing `pages` short-circuits to an `Error` carrying the Python exception, which `match` forces you to handle. The output is `Dune, 412 pages` then `failed (KeyError)`.
 
+## Derived codecs
+
+Hand-written decoders are the right tool at a boundary you do not control. When both ends of the
+wire are your own Pyfun types, the compiler already knows every field and every case, so it can
+derive the codec. `Encode.auto` turns any value into JSON text, and `Decode.auto` is a decoder
+derived from the type it is used at:
+
+```pyfun
+type Player = Ann | Bob
+type Msg = Hello Player | Move string | Resign
+type Turn = { player: Player, msg: Msg, score: Option int }
+
+let turn = Turn { player = Bob, msg = Move "K11 a QUIZ", score = Some 42 }
+let wire = Encode.auto turn
+print wire
+
+let describe t = f"{t.player} played {t.msg}"
+
+match Decode.decodeString Decode.auto wire:
+  case Ok back: print (describe back)
+  case Error e: print f"failed: {e.errorMessage}"
+```
+
+```console
+{"player": {"type": "Bob"}, "msg": {"type": "Move", "fields": ["K11 a QUIZ"]}, "score": 42}
+Bob played Move('K11 a QUIZ')
+```
+
+A record is an object keyed by its field names, a case is `{"type": …, "fields": […]}`, an `Option`
+is `null` or the value, and a `Map` with string keys is an object. The decoder is strict like the
+primitives, so `{"type": "Nope"}` is an `Error` naming the unknown case rather than a crash later.
+`Decode.auto` reads the type from where it is used: here `describe back` fixes `back` to a `Turn`. If
+nothing fixes it, the compiler says so at the site instead of guessing.
+
 ## Handing Python a function
 
 A callback crosses the boundary the other way, and two rules keep it honest. Write a callback of

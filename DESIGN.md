@@ -800,6 +800,40 @@ the new general `PyStmt::Raise` node and the `is` comparison for `null`). The ge
 (user-registered combinators, a `Value` type for already-parsed data) is deferred; the shipped set already
 covers records, lists, options, and unions.
 
+**Derived codecs — `Decode.auto` and `Encode.auto`.** A program that speaks to itself over a wire
+(or a save file) has the same Pyfun type on both ends, and writing the two halves by hand is where
+they drift. `Encode.auto : a -> string` and `Decode.auto : Decoder a` are derived from the type, so
+both ends are one line and the property the tests state once is `Decode.decodeString Decode.auto
+(Encode.auto v) == Ok v` for every type the derivation accepts: the primitives, records, sum types,
+tuples, `List`, `Set`, `Map`, `Option`, `Result`, newtypes (erased, so the wire carries the
+underlying value), and any recursion through them. **The shape** is the convention serde
+(`#[serde(tag = "type")]`), Pydantic discriminated unions and System.Text.Json share: a record is an
+object keyed by its Pyfun field names; a sum-type case is `{"type": "Move", "fields": [...]}` with
+positional payloads (`{"type": "Resign"}` for a nullary case; F#'s `{"Case", "Fields"}` is the outlier
+and was not copied); `Option` is `null` or the value; tuples and `List`/`Set` are arrays; a `Map` with
+string keys is an object and any other key type is a list of `[key, value]` pairs; `unit` is `null`.
+**Two mechanisms.** `Encode.auto` is a run-time helper: the emitted classes already carry a record's
+field names and a case's class name (the same knowledge `__repr__` uses), so `_pf_enc_value` reads
+the value's shape (`dataclasses.fields`, a keyword-mangled `class_` travelling as `class`) and
+`json.dumps` the result. `Decode.auto` is **type-directed lowering after inference**: the checker
+records every `Decode.auto` site with its instantiated `Decoder a`, resolves `a` once inference is
+complete, and derives a [`Codec`] from the declarations (records' fields, constructors' payloads at
+the instantiated type, newtypes read through); lowering turns it into a descriptor the emitted
+`_pf_dec_auto` interprets (`("record", Point, [("x", ("int",)), …])`, `("adt", {"Move": (Move,
+[("str",)])})`), user-declared types living in a per-module `_pf_codecs` table under their displayed
+type so a recursive `Tree` is a `("ref", "Tree")` back into it. The derived decoder is a `Decoder`
+like any other (a callable that raises on a mismatch, strict like the primitives, `unknown case Nope`
+/ `expected an object, got list` as the message), so it composes with `Decode.field`/`map2`/`andThen`
+and runs under `decodeString`'s `try`. An `a` still open at the site is an error there, with the ways
+to pin it named; a function, an extern type, a lazy `Seq` or an `Async` have no JSON form and say so.
+Because the codec is derived from the *resolved* type, a `Decode.auto` site's type variable stays
+**weak** at `let`-generalization (OCaml's `'_a`, the same discipline a deferred field access already
+follows), so `let back = Decode.decodeString Decode.auto wire` at the top level is pinned by the
+`match` that follows rather than each use getting a copy that pins nothing. Cross-module types work
+when the declaring module is imported directly (the descriptor names `rules.View`); a transitively
+carried record says to import its module. Type classes stay rejected: this is one derivation for one
+built-in decoder, not a mechanism for user-defined derivations.
+
 **String interpolation — `f"..."`.** Python-style interpolated strings: an `f` prefix
 (adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
 holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a

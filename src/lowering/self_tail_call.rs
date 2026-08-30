@@ -540,6 +540,12 @@ fn walk_children(expr: &PyExpr, f: &mut impl FnMut(&PyExpr)) {
                 f(e);
             }
         }
+        PyExpr::Dict(items) => {
+            for (k, v) in items {
+                f(k);
+                f(v);
+            }
+        }
         PyExpr::FStr(parts) => {
             for p in parts {
                 if let PyFStrPart::Expr(e) = p {
