@@ -318,10 +318,20 @@ the value lowers. A `let mut` is covered: an `<-` target spells through `py_bind
 through the renames active when the nested function is lowered, which is while the outer rename is
 in force.
 
-Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), a
+Deliberately not counted: binders (a later `let x` in the frame assigns before it reads) and a
 reference bound by a disjoint arm or block (its own slot in Pyfun and, by the time it runs, its own
-value in Python), and a CE `let!`/`let` target, which is block-scoped in Pyfun exactly as in Python
-and so needs no freshening.
+value in Python).
+
+**Computation-expression binders.** A built-in CE body (`option`/`result`/`seq`/`async`) is its own
+Python def and its own frame (`Frame::of_ce`), and a `let`/`let!` target in it is a root-level binder
+of that frame, so it takes the root-level rule: `enter_ce_binder` asks `must_rename_root` for each
+bound name, evicts the name from the local-function registries, and installs any rename in `renames`
+for the rest of the CE body (the CE's `save_local_scope`/`restore_local_scope` wrap drops it after);
+`bind_ce_target_as` then emits the assignment under the chosen spelling, through `unpack_binding`'s
+`targets` for a destructuring target. The `let!` of `result`/`option` lowers its continuation before
+its ladder is built, so `lower_short_circuit_items` registers the binder first and hands the spelling
+to `short_circuit_bind`; the failure branch still returns the subject untouched. `seq` and `async`
+bind after lowering the value and before the next item, so `bind_ce_target` does both steps in one.
 
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 

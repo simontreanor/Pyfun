@@ -7458,3 +7458,144 @@ fn e2e_a_destructuring_root_let_renames_only_the_colliding_name() {
     assert!(!py.contains("_b"), "{py}");
     run_and_check(src, &[("r", "131")]);
 }
+
+// A computation expression's body is its own def, so its `let`/`let!` targets are
+// root-level binders of that frame and take the same rule.
+
+#[test]
+fn e2e_a_ce_bind_shadowing_a_module_binding_read_earlier_is_renamed() {
+    // `m = n + 1` reads the module `n`; the later `n = _pf_t0._0` would make `n`
+    // local to the whole def and the read would raise UnboundLocalError.
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let m = n + 1
+            let! n = Some 2
+            return n + m
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        m = n + 1\n"), "{py}");
+    assert!(py.contains("_n = _pf_t0._0"), "{py}");
+    assert!(py.contains("return Some(_n + m)"), "{py}");
+    run_and_check(src, &[("r", "Some(8)")]);
+}
+
+#[test]
+fn e2e_a_result_bind_shadowing_an_outer_name_keeps_its_failure_return() {
+    let src = "
+        let n = 5
+        let f u =
+          result {
+            let m = n + 1
+            let! n = if u > 0 then Ok 2 else Error \"no\"
+            return n + m
+          }
+        let a = f 1
+        let b = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n = _pf_t0._0"), "{py}");
+    assert!(py.contains("return Ok(_n + m)"), "{py}");
+    // The failure branch still forwards the subject untouched.
+    assert!(
+        py.contains("        else:\n            return _pf_t0\n"),
+        "{py}"
+    );
+    run_and_check(src, &[("a", "Ok(8)"), ("b", "Error('no')")]);
+}
+
+#[test]
+fn e2e_an_async_bind_shadowing_an_outer_name_is_renamed() {
+    let Some(python) = python_cmd() else { return };
+    let src = "
+        let n = 5
+        let f u =
+          async {
+            let m = n + 1
+            let! n = async { return 2 }
+            return n + m
+          }
+        let r = f 0
+        ";
+    let mut program = pyfun::compile(src).unwrap();
+    assert!(program.contains("_n = await "), "{program}");
+    assert!(program.contains("return _n + m"), "{program}");
+    program.push_str("\nimport asyncio\nprint(asyncio.run(r))\n");
+    assert_eq!(run_python(&python, &program).trim(), "8");
+}
+
+#[test]
+fn e2e_a_seq_let_shadowing_an_outer_name_is_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          seq {
+            let m = n + 1
+            let n = 2
+            yield n + m
+          }
+        let r = f 0 |> Seq.toList
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        m = n + 1\n        _n = 2\n"), "{py}");
+    run_and_check(src, &[("r", "[8]")]);
+}
+
+#[test]
+fn a_ce_bind_read_only_after_it_is_not_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let! n = Some 2
+            let k = 1
+            return n + k
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("            n = _pf_t0._0\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "Some(3)")]);
+}
+
+#[test]
+fn a_ce_bind_rebinding_an_earlier_ce_binder_is_not_renamed() {
+    // Both `n`s are the CE's own; rebinding in sequence is what Python does too.
+    let src = "
+        let f u =
+          option {
+            let n = 1
+            let! n = Some (n + 1)
+            return n
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        n = 1\n"), "{py}");
+    assert!(py.contains("            n = _pf_t0._0\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    run_and_check(src, &[("r", "Some(2)")]);
+}
+
+#[test]
+fn e2e_a_destructuring_ce_bind_renames_only_the_colliding_name() {
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let m = n + 1
+            let! (n, k) = Some (2, 3)
+            return n + k + m
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n, k = _pf_t0._0"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "Some(11)")]);
+}
