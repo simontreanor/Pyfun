@@ -4060,15 +4060,11 @@ impl Lowerer {
             (CeBuilder::User(_), Some(enclosing)) => {
                 let mut frame = enclosing.clone();
                 for it in items {
-                    let e = match it {
-                        CeItem::LetBang { value, .. } | CeItem::Let { value, .. } => value,
-                        CeItem::DoBang(e)
-                        | CeItem::Return(e)
-                        | CeItem::ReturnBang(e)
-                        | CeItem::Yield(e)
-                        | CeItem::YieldBang(e) => e,
-                    };
-                    frame = frame.merged_with(e);
+                    let mut exprs = Vec::new();
+                    fold_loop::ce_item_exprs(it, &mut exprs);
+                    for e in exprs {
+                        frame = frame.merged_with(e);
+                    }
                 }
                 frame
             }
@@ -4114,29 +4110,7 @@ impl Lowerer {
         let mut body = Vec::new();
         let mut locals = locals.clone();
         let mut has_yield = false;
-        for item in items {
-            match item {
-                CeItem::Yield(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Yield(v));
-                    has_yield = true;
-                }
-                CeItem::YieldBang(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::YieldFrom(v));
-                    has_yield = true;
-                }
-                CeItem::Let { target, value, .. } => {
-                    let (mut s, v) = self.lower_value(value, &locals)?;
-                    body.append(&mut s);
-                    self.bind_ce_target(target, v, &mut body);
-                    locals.extend(target.bound_names());
-                }
-                _ => return Err(ce_item_error("seq")),
-            }
-        }
+        self.lower_seq_items(items, &mut locals, &mut body, &mut has_yield)?;
         // A function with no `yield` isn't a generator, so an element-free `seq`
         // returns an empty iterator instead.
         if !has_yield {
@@ -4156,6 +4130,75 @@ impl Lowerer {
             is_async: false,
         };
         Ok((vec![def], call0(&name)))
+    }
+
+    /// One level of `seq` items into `body`; a `for` item nests a level inside a
+    /// Python `for` statement (the idiomatic generator, `DESIGN.md` §8.1).
+    fn lower_seq_items(
+        &mut self,
+        items: &[CeItem],
+        locals: &mut HashSet<String>,
+        body: &mut Vec<PyStmt>,
+        has_yield: &mut bool,
+    ) -> Result<(), LowerError> {
+        for item in items {
+            match item {
+                CeItem::Yield(e) => {
+                    let (mut s, v) = self.lower_value(e, locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Yield(v));
+                    *has_yield = true;
+                }
+                CeItem::YieldBang(e) => {
+                    let (mut s, v) = self.lower_value(e, locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::YieldFrom(v));
+                    *has_yield = true;
+                }
+                CeItem::Let { target, value, .. } => {
+                    let (mut s, v) = self.lower_value(value, locals)?;
+                    body.append(&mut s);
+                    self.bind_ce_target(target, v, body);
+                    locals.extend(target.bound_names());
+                }
+                CeItem::For {
+                    target,
+                    source,
+                    body: inner,
+                    ..
+                } => {
+                    let (mut s, iter) = self.lower_value(source, locals)?;
+                    body.append(&mut s);
+                    let mut inner_locals = locals.clone();
+                    inner_locals.extend(target.bound_names());
+                    let (py_target, mut loop_body) = self.for_target(target);
+                    self.lower_seq_items(inner, &mut inner_locals, &mut loop_body, has_yield)?;
+                    body.push(PyStmt::For {
+                        target: py_target,
+                        iter,
+                        body: loop_body,
+                    });
+                }
+                _ => return Err(ce_item_error("seq")),
+            }
+        }
+        Ok(())
+    }
+
+    /// The Python `for` target for a CE loop pattern: a name, `_`, or a tuple of
+    /// those unpacks in the header; anything else takes a temp and binds in the
+    /// body, whose prologue is returned alongside.
+    fn for_target(
+        &mut self,
+        target: &Pattern,
+    ) -> (crate::python_emitter::PyForTarget, Vec<PyStmt>) {
+        if let Some(t) = fold_loop::loop_target(target) {
+            return (t, vec![]);
+        }
+        let tmp = self.fresh_tmp();
+        let mut prologue = Vec::new();
+        self.bind_ce_target(target, PyExpr::Name(tmp.clone()), &mut prologue);
+        (crate::python_emitter::PyForTarget::Name(tmp), prologue)
     }
 
     /// `result { ... }` / `option { ... }` → a function that short-circuits on the
@@ -4228,6 +4271,28 @@ impl Lowerer {
                 s.extend(self.short_circuit_bind(v, None, rest_stmts, sc));
                 Ok(s)
             }
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } => {
+                // The body short-circuits like the level above it (a failed
+                // `let!` inside returns from the whole function); the items after
+                // the loop follow the `for` statement.
+                let (mut s, iter) = self.lower_value(source, locals)?;
+                let mut inner_locals = locals.clone();
+                inner_locals.extend(target.bound_names());
+                let (py_target, mut loop_body) = self.for_target(target);
+                loop_body.extend(self.lower_short_circuit_items(body, &inner_locals, sc)?);
+                s.push(PyStmt::For {
+                    target: py_target,
+                    iter,
+                    body: loop_body,
+                });
+                s.extend(self.lower_short_circuit_items(rest, locals, sc)?);
+                Ok(s)
+            }
             _ => Err(ce_item_error(sc.name)),
         }
     }
@@ -4286,38 +4351,7 @@ impl Lowerer {
     fn lower_async(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
         let mut body = Vec::new();
         let mut locals = locals.clone();
-        for item in items {
-            match item {
-                CeItem::LetBang { target, value, .. } => {
-                    let (mut s, v) = self.lower_value(value, &locals)?;
-                    body.append(&mut s);
-                    self.bind_ce_target(target, PyExpr::Await(Box::new(v)), &mut body);
-                    locals.extend(target.bound_names());
-                }
-                CeItem::Let { target, value, .. } => {
-                    let (mut s, v) = self.lower_value(value, &locals)?;
-                    body.append(&mut s);
-                    self.bind_ce_target(target, v, &mut body);
-                    locals.extend(target.bound_names());
-                }
-                CeItem::DoBang(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Expr(PyExpr::Await(Box::new(v))));
-                }
-                CeItem::Return(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Return(v));
-                }
-                CeItem::ReturnBang(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Return(PyExpr::Await(Box::new(v))));
-                }
-                _ => return Err(ce_item_error("async")),
-            }
-        }
+        self.lower_async_items(items, &mut locals, &mut body)?;
         let name = self.fresh_fn();
         let def = PyStmt::FuncDef {
             name: name.clone(),
@@ -4326,6 +4360,67 @@ impl Lowerer {
             is_async: true,
         };
         Ok((vec![def], call0(&name)))
+    }
+
+    /// One level of `async` items into `body`; a `for` item nests a level inside
+    /// a Python `for` statement (awaits inside a loop of an `async def`).
+    fn lower_async_items(
+        &mut self,
+        items: &[CeItem],
+        locals: &mut HashSet<String>,
+        body: &mut Vec<PyStmt>,
+    ) -> Result<(), LowerError> {
+        for item in items {
+            match item {
+                CeItem::LetBang { target, value, .. } => {
+                    let (mut s, v) = self.lower_value(value, locals)?;
+                    body.append(&mut s);
+                    self.bind_ce_target(target, PyExpr::Await(Box::new(v)), body);
+                    locals.extend(target.bound_names());
+                }
+                CeItem::Let { target, value, .. } => {
+                    let (mut s, v) = self.lower_value(value, locals)?;
+                    body.append(&mut s);
+                    self.bind_ce_target(target, v, body);
+                    locals.extend(target.bound_names());
+                }
+                CeItem::DoBang(e) => {
+                    let (mut s, v) = self.lower_value(e, locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Expr(PyExpr::Await(Box::new(v))));
+                }
+                CeItem::Return(e) => {
+                    let (mut s, v) = self.lower_value(e, locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Return(v));
+                }
+                CeItem::ReturnBang(e) => {
+                    let (mut s, v) = self.lower_value(e, locals)?;
+                    body.append(&mut s);
+                    body.push(PyStmt::Return(PyExpr::Await(Box::new(v))));
+                }
+                CeItem::For {
+                    target,
+                    source,
+                    body: inner,
+                    ..
+                } => {
+                    let (mut s, iter) = self.lower_value(source, locals)?;
+                    body.append(&mut s);
+                    let mut inner_locals = locals.clone();
+                    inner_locals.extend(target.bound_names());
+                    let (py_target, mut loop_body) = self.for_target(target);
+                    self.lower_async_items(inner, &mut inner_locals, &mut loop_body)?;
+                    body.push(PyStmt::For {
+                        target: py_target,
+                        iter,
+                        body: loop_body,
+                    });
+                }
+                _ => return Err(ce_item_error("async")),
+            }
+        }
+        Ok(())
     }
 
     /// Apply currying policy (`DESIGN.md` §5) given the callee's known arity.
@@ -8568,6 +8663,32 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
     }
 }
 
+fn collect_ce_binders(items: &[CeItem], out: &mut HashSet<String>) {
+    for item in items {
+        match item {
+            CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
+                out.extend(target.bound_names());
+                collect_binders(value, out);
+            }
+            CeItem::DoBang(e)
+            | CeItem::Return(e)
+            | CeItem::ReturnBang(e)
+            | CeItem::Yield(e)
+            | CeItem::YieldBang(e) => collect_binders(e, out),
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } => {
+                out.extend(target.bound_names());
+                collect_binders(source, out);
+                collect_ce_binders(body, out);
+            }
+        }
+    }
+}
+
 /// Collect every binder name in an expression tree, ENTERING nested scopes
 /// (functions, lambdas, CE bodies) — unlike [`scan_scope`], which stops at
 /// scope boundaries because it feeds per-scope machinery. This feeds the
@@ -8655,21 +8776,7 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
             out.extend(param_names(params));
             collect_binders(body, out);
         }
-        ExprKind::Ce { items, .. } => {
-            for item in items {
-                match item {
-                    CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
-                        out.extend(target.bound_names());
-                        collect_binders(value, out);
-                    }
-                    CeItem::DoBang(e)
-                    | CeItem::Return(e)
-                    | CeItem::ReturnBang(e)
-                    | CeItem::Yield(e)
-                    | CeItem::YieldBang(e) => collect_binders(e, out),
-                }
-            }
-        }
+        ExprKind::Ce { items, .. } => collect_ce_binders(items, out),
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Str(_)

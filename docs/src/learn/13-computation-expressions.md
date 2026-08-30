@@ -122,6 +122,31 @@ counts = _pf_fn0()
 print(list(counts))
 ```
 
+A block can also loop. `for target in source:` runs its body once per element of a list or a
+sequence, with the target bound, exactly the way Python's own `for … in …: yield` reads, and it
+lowers to that statement. A body on the same line is one item; a longer body goes on indented lines:
+
+```pyfun
+let squares =
+  seq {
+    for x in [1, 2, 3]:
+      let y = x * x
+      yield y
+    yield 100
+  }
+
+squares |> Seq.toList |> print
+```
+
+```console
+[1, 4, 9, 100]
+```
+
+The same `for` works inside `async { }` (awaiting once per element), `result { }` and `option { }`
+(a failed step inside the loop short-circuits the whole block), and in a builder of your own
+(lesson 20). The one thing a loop body cannot do is `return`, because the block's value comes after
+the loop.
+
 ## Exercise
 
 Fill the two holes so `multiply` parses both strings and returns their product as a `Result`. Each

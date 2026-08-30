@@ -59,7 +59,8 @@ Each `let!` becomes a `Maybe_bind` call whose continuation is a lambda binding t
 branch never calls `f`, so `addOpt (Some 3) None` is `None` without running the `+`.
 
 Builders can do more than `bind` and `return_`. A sequence-style builder adds `yield_` for a
-`yield`, and `combine`/`delay` to glue and defer multiple yields, the same members the built-in
+`yield`, `combine`/`delay` to glue and defer multiple yields, and `for_` so a block can loop
+(`for r in rows: yield row r` becomes `B.for_ rows (fun r -> ...)`), the same members the built-in
 `seq { }` relies on. The four built-in builders, `async { }`, `seq { }`, `result { }` and
 `option { }`, keep bespoke lowerings so their output reads as idiomatic Python (`async`/`await`,
 generators, and a `Result` or `Option` short-circuit) rather than a chain of method calls. The full

@@ -249,6 +249,14 @@ const PROGRAMS: &[&str] = &[
     "let a = Maybe { let! x = m return x }",
     "let a = Build { yield 1 yield 2 }",
     "let a = M { let x = 1 do! e return! r }",
+    // `for` items: a one-line body is one item; a longer body lays the block out
+    // on lines, which is what the printer emits.
+    "let a = seq { for x in xs: yield x }",
+    "let a = seq { for x in xs: yield x yield 2 }",
+    "let a = seq { for (a, b) in ps: yield a for c in cs: yield c }",
+    "let a = Html { yield h for r in rows: yield r yield f }",
+    "let a = seq {\n    for x in xs:\n        let y = x\n        yield y\n    yield 2\n}",
+    "let a = async {\n    for x in xs:\n        do! f x\n        for y in ys:\n            do! g y\n    return 1\n}",
     "let a = Some (Cell { x = 1 })",
     // Units of measure.
     "measure m",

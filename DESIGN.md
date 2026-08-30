@@ -1726,6 +1726,7 @@ The protocol (F#'s, lowercased and keyword-safe); a builder need only define wha
 | `return! e`     | `B.returnFrom e`     (must be last)                  |
 | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
 | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+| `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 | (empty)         | `B.zero`                                             |
 
 A bare expression on its own line is an item in every builder, built-in or user (F# admits a unit
@@ -1737,9 +1738,23 @@ as its value (`M unit`), as the table's user-builder row already did, so a fire-
 item owns its line and any line indented past it), so an expression item never swallows the line
 below it as arguments.
 
+**`for` inside a block** is the Python spelling, `for target in source:` with an offside body,
+consistent with `match e:`/`case`; `for` is a keyword only in item position inside CE braces (Pyfun
+has no loop statement elsewhere, a `fun` recurses and folds iterate). The source is a `List a` or a
+`Seq a` (Python's `for` takes either; an unresolved source is taken to be a `List`), the target is
+any irrefutable pattern, and the body is a nested level of the same block: `yield`s in `seq`,
+`let!`/`do!` in `async` and `result`/`option` (a failed step inside the loop short-circuits the whole
+block), anything but `return` (the block's value comes after the loop). Native `seq`/`async`/
+`result`/`option` lower it to Python's `for` statement, the idiomatic generator that `yield!
+(List.map f xs)` was standing in for; a user builder gets F#'s `For` as `B.for_ e (fun x -> body)`,
+combined with what follows like a `yield`. Braces carry no layout tokens, so the body is delimited
+by columns like every other item, with one Python-shaped rule: a body that begins on the same line
+as the `:` is exactly one item (`for x in xs: yield x`), and a longer body goes on indented lines,
+which is also what the pretty-printer emits.
+
 `Builder { let! … }` is told from `Some { x = 1 }` (a constructor applied to a record) by one-token
-lookahead: a CE body starts with a CE keyword, a record with `ident =`. A first line that is neither
-(`Html { for …`, or a would-be custom operation `Html { class_ "board"`) is diagnosed as "not a
+lookahead: a CE body starts with a CE keyword (`for` included), a record with `ident =`. A first
+line that is neither (a would-be custom operation, `Html { class_ "board"`) is diagnosed as "not a
 computation-expression item", naming what the position takes, rather than as a record literal
 missing its `=`. `delay` receives a thunk `unit -> m a` (force it with the unit value:
 `let delay f = f ()`).

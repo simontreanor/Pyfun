@@ -673,6 +673,15 @@ pub enum CeItem {
     Yield(Expr),
     /// `yield! value` — splice a sub-sequence (seq).
     YieldBang(Expr),
+    /// `for target in source: body` — run the body items once per element of
+    /// `source` (a `List` or `Seq`) with `target` bound (`DESIGN.md` §8.1). The
+    /// Python spelling, offside like `match e:`; `for` is a keyword only here.
+    For {
+        target: Pattern,
+        target_span: NodeSpan,
+        source: Expr,
+        body: Vec<CeItem>,
+    },
 }
 
 /// One arm of a `match` expression: `case pattern [if guard]: body`

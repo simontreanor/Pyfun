@@ -466,8 +466,20 @@ pub fn print_expr(expr: &Expr) -> String {
             format!("({} {op} {})", print_expr(lhs), print_expr(rhs))
         }
         ExprKind::Ce { builder, items } => {
-            let items: Vec<String> = items.iter().map(print_ce_item).collect();
-            format!("{} {{ {} }}", builder.name(), items.join(" "))
+            // One line, unless a `for` body holds several items: on one line a
+            // `for` body is exactly one item (the parser's rule), so a longer
+            // body needs its own indented lines, and the whole block goes
+            // multi-line so the columns delimit it (braces carry no layout).
+            if items.iter().any(ce_item_needs_lines) {
+                format!(
+                    "{} {{\n{}\n}}",
+                    builder.name(),
+                    print_ce_items(items, 1).join("\n")
+                )
+            } else {
+                let items: Vec<String> = items.iter().map(print_ce_item).collect();
+                format!("{} {{ {} }}", builder.name(), items.join(" "))
+            }
         }
         ExprKind::Annot { value, unit } => {
             format!("{}<{}>", print_expr(value), print_unit(unit))
@@ -507,6 +519,41 @@ fn print_field_update(field: &crate::syntax::FieldUpdate) -> String {
     format!("{} = {}", field.path.join("."), print_expr(&field.value))
 }
 
+/// Whether an item forces the enclosing CE onto separate lines: a `for` with a
+/// body of several items, or one that contains such a `for`.
+fn ce_item_needs_lines(item: &CeItem) -> bool {
+    match item {
+        CeItem::For { body, .. } => body.len() > 1 || body.iter().any(ce_item_needs_lines),
+        _ => false,
+    }
+}
+
+/// CE items as lines at `indent` (four spaces per level); a `for` body of
+/// several items nests one level deeper, a single-item body stays inline.
+fn print_ce_items(items: &[CeItem], indent: usize) -> Vec<String> {
+    let pad = "    ".repeat(indent);
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } if body.len() > 1 || body.iter().any(ce_item_needs_lines) => {
+                out.push(format!(
+                    "{pad}for {} in {}:",
+                    print_pattern(target),
+                    print_expr(source)
+                ));
+                out.extend(print_ce_items(body, indent + 1));
+            }
+            other => out.push(format!("{pad}{}", print_ce_item(other))),
+        }
+    }
+    out
+}
+
 fn print_ce_item(item: &CeItem) -> String {
     match item {
         CeItem::LetBang { target, value, .. } => {
@@ -520,6 +567,20 @@ fn print_ce_item(item: &CeItem) -> String {
         CeItem::ReturnBang(e) => format!("return! {}", print_expr(e)),
         CeItem::Yield(e) => format!("yield {}", print_expr(e)),
         CeItem::YieldBang(e) => format!("yield! {}", print_expr(e)),
+        CeItem::For {
+            target,
+            source,
+            body,
+            ..
+        } => {
+            let body: Vec<String> = body.iter().map(print_ce_item).collect();
+            format!(
+                "for {} in {}: {}",
+                print_pattern(target),
+                print_expr(source),
+                body.join(" ")
+            )
+        }
     }
 }
 

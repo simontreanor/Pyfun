@@ -1037,10 +1037,47 @@ fn rejects_return_before_end() {
 }
 
 #[test]
+fn for_items_type_in_every_builder() {
+    // #103: `for target in source:` binds the element of a `List` or `Seq` for
+    // its body, in `seq`, `async`, `result`/`option` and a user builder.
+    let src = "let squares = seq {\n  for x in [1, 2, 3]:\n    let y = x * x\n    yield y\n  yield 100\n}\n\
+               let pairs = seq { for (a, b) in [(1, 2)]: yield a + b }\n\
+               let lazy = seq { for x in Seq.ofList [1]: yield x }\n\
+               let check x = if x > 0 then Ok x else Error \"neg\"\n\
+               let all xs = result {\n  for x in xs:\n    let! _ = check x\n  return true\n}\n\
+               let main = async {\n  for n in [1, 2]:\n    do! Async.sleep 0.001\n  return ()\n}\n\
+               module B =\n  let yield_ x = [x]\n  let for_ xs f = List.collect f xs\n  let combine a b = List.concat a b\n  let delay f = f ()\n\
+               let built = B { for x in [1, 2]: yield x }";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    let analysis = pyfun::analyze("let s = seq { for (a, b) in [(1, \"x\")]: yield b }");
+    assert!(
+        analysis.types.iter().any(|t| t.ty == "Seq string"),
+        "{:?}",
+        analysis.types
+    );
+}
+
+#[test]
+fn a_for_body_cannot_return_and_a_for_source_must_be_a_collection() {
+    assert_error_contains(
+        "let r = result {\n  for x in [1]:\n    return x\n}",
+        "`return` cannot appear inside a `for` body in a `result` block",
+    );
+    assert_error_contains(
+        "let s = seq { for x in 3: yield x }",
+        "expected List 'a, found int",
+    );
+    assert_error_contains(
+        "let s = seq { for x in [1]: yield x  yield \"s\" }",
+        "mismatch",
+    );
+}
+
+#[test]
 fn rejects_seq_with_return() {
     assert_error_contains(
         "let a = seq { return 5 }",
-        "only `yield`, `yield!`, and `let`",
+        "only `yield`, `yield!`, `let`, and `for`",
     );
 }
 

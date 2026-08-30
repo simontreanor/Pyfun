@@ -3469,6 +3469,30 @@ pub fn ap_fn_key(decl: &ActivePatternDecl) -> String {
     s
 }
 
+fn scan_ap_ce_items(
+    items: &[CeItem],
+    cases: &HashSet<&str>,
+    found: &mut HashMap<String, usize>,
+) -> Result<(), String> {
+    for item in items {
+        match item {
+            CeItem::Let { value, .. } | CeItem::LetBang { value, .. } => {
+                scan_ap_body(value, cases, found)?;
+            }
+            CeItem::DoBang(e)
+            | CeItem::Return(e)
+            | CeItem::ReturnBang(e)
+            | CeItem::Yield(e)
+            | CeItem::YieldBang(e) => scan_ap_body(e, cases, found)?,
+            CeItem::For { source, body, .. } => {
+                scan_ap_body(source, cases, found)?;
+                scan_ap_ce_items(body, cases, found)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The construction arity of each case of a **total** active pattern, determined
 /// syntactically from its body (`DESIGN.md` §7.2): an application/pipe spine
 /// headed by a case name records that case at the spine's argument count; a bare
@@ -3606,21 +3630,7 @@ fn scan_ap_body(
             }
             Ok(())
         }
-        ExprKind::Ce { items, .. } => {
-            for item in items {
-                match item {
-                    CeItem::Let { value, .. } | CeItem::LetBang { value, .. } => {
-                        scan_ap_body(value, cases, found)?;
-                    }
-                    CeItem::DoBang(e)
-                    | CeItem::Return(e)
-                    | CeItem::ReturnBang(e)
-                    | CeItem::Yield(e)
-                    | CeItem::YieldBang(e) => scan_ap_body(e, cases, found)?,
-                }
-            }
-            Ok(())
-        }
+        ExprKind::Ce { items, .. } => scan_ap_ce_items(items, cases, found),
         ExprKind::Annot { value, .. } => scan_ap_body(value, cases, found),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {
@@ -3668,6 +3678,34 @@ fn ap_arg_expr(pat: &Pattern, span: Span) -> Option<Expr> {
         _ => return None,
     };
     Some(Expr::new(kind, span))
+}
+
+fn collect_free_ce_items(items: &[CeItem], bound: &HashSet<String>, out: &mut HashSet<String>) {
+    let mut b = bound.clone();
+    for it in items {
+        match it {
+            CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
+                collect_free(value, &b, out);
+                b.extend(target.bound_names());
+            }
+            CeItem::DoBang(e)
+            | CeItem::Return(e)
+            | CeItem::ReturnBang(e)
+            | CeItem::Yield(e)
+            | CeItem::YieldBang(e) => collect_free(e, &b, out),
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } => {
+                collect_free(source, &b, out);
+                let mut inner = b.clone();
+                inner.extend(target.bound_names());
+                collect_free_ce_items(body, &inner, out);
+            }
+        }
+    }
 }
 
 /// The top-level alternatives a pattern denotes: an or-pattern flattens to its
@@ -3740,22 +3778,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
             collect_free(lhs, bound, out);
             collect_free(rhs, bound, out);
         }
-        ExprKind::Ce { items, .. } => {
-            let mut b = bound.clone();
-            for item in items {
-                match item {
-                    CeItem::Let { target, value, .. } | CeItem::LetBang { target, value, .. } => {
-                        collect_free(value, &b, out);
-                        b.extend(target.bound_names());
-                    }
-                    CeItem::DoBang(e)
-                    | CeItem::Return(e)
-                    | CeItem::ReturnBang(e)
-                    | CeItem::Yield(e)
-                    | CeItem::YieldBang(e) => collect_free(e, &b, out),
-                }
-            }
-        }
+        ExprKind::Ce { items, .. } => collect_free_ce_items(items, bound, out),
         ExprKind::Annot { value, .. } => collect_free(value, bound, out),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {
@@ -7940,14 +7963,28 @@ impl Infer {
     fn infer_seq(&mut self, items: &[CeItem], span: Span, env: &Env) -> Result<Ty, TypeError> {
         let elem = self.fresh();
         let mut env = env.clone();
+        self.infer_seq_items(items, &elem, &mut env, span)?;
+        Ok(Ty::Con("Seq".to_string(), vec![self.apply(&elem)]))
+    }
+
+    /// One level of `seq` items: `yield`/`yield!` unify with `elem`, `let` binds
+    /// for the following items, and `for` runs its body once per element of the
+    /// source with the target bound (a nested level over the same `elem`).
+    fn infer_seq_items(
+        &mut self,
+        items: &[CeItem],
+        elem: &Ty,
+        env: &mut Env,
+        span: Span,
+    ) -> Result<(), TypeError> {
         for item in items {
             match item {
                 CeItem::Yield(e) => {
-                    let t = self.infer_expr(e, &env)?;
-                    self.unify(&elem, &t, e.span())?;
+                    let t = self.infer_expr(e, env)?;
+                    self.unify(elem, &t, e.span())?;
                 }
                 CeItem::YieldBang(e) => {
-                    let t = self.infer_expr(e, &env)?;
+                    let t = self.infer_expr(e, env)?;
                     self.unify(
                         &Ty::Con("Seq".to_string(), vec![elem.clone()]),
                         &t,
@@ -7958,27 +7995,87 @@ impl Infer {
                     target,
                     target_span,
                     value,
+                } => self.bind_ce_let(target, *target_span, value, env)?,
+                CeItem::For {
+                    target,
+                    target_span,
+                    source,
+                    body,
                 } => {
-                    let t = self.infer_expr(value, &env)?;
-                    let applied = self.apply(&t);
-                    if self.record_types {
-                        self.recorded.push((target_span.span(), applied.clone()));
-                    }
-                    self.bind_pattern(target, &applied, target_span.span(), &mut env)?;
+                    let mut inner = env.clone();
+                    self.bind_for_target(target, *target_span, source, &mut inner)?;
+                    self.infer_seq_items(body, elem, &mut inner, span)?;
                 }
                 _ => {
                     return Err(TypeError {
-                        message: "only `yield`, `yield!`, and `let` are allowed in a `seq` block"
+                        message: "only `yield`, `yield!`, `let`, and `for` are allowed in a `seq` \
+                                  block"
                             .to_string(),
                         span,
                     });
                 }
             }
         }
-        Ok(Ty::Con("Seq".to_string(), vec![self.apply(&elem)]))
+        Ok(())
     }
 
-    /// Shared inference for the `result` and `async` monads.
+    /// `let target = value` inside a CE: infer, record for hover, bind.
+    fn bind_ce_let(
+        &mut self,
+        target: &Pattern,
+        target_span: crate::syntax::NodeSpan,
+        value: &Expr,
+        env: &mut Env,
+    ) -> Result<(), TypeError> {
+        let t = self.infer_expr(value, env)?;
+        let applied = self.apply(&t);
+        if self.record_types {
+            self.recorded.push((target_span.span(), applied.clone()));
+        }
+        self.bind_pattern(target, &applied, target_span.span(), env)
+    }
+
+    /// The target of `for target in source:` binds the element type of the
+    /// source, a `List a` or a `Seq a` (Python's `for` takes either; a source
+    /// whose type is still open is taken to be a `List`).
+    fn bind_for_target(
+        &mut self,
+        target: &Pattern,
+        target_span: crate::syntax::NodeSpan,
+        source: &Expr,
+        env: &mut Env,
+    ) -> Result<(), TypeError> {
+        let t = self.infer_expr(source, env)?;
+        let elem = match self.apply(&t) {
+            Ty::Con(name, args) if (name == "List" || name == "Seq") && args.len() == 1 => {
+                args[0].clone()
+            }
+            other => {
+                let a = self.fresh();
+                self.unify(
+                    &Ty::Con("List".to_string(), vec![a.clone()]),
+                    &other,
+                    source.span(),
+                )?;
+                self.apply(&a)
+            }
+        };
+        if self.record_types {
+            self.recorded.push((target_span.span(), elem.clone()));
+        }
+        self.bind_pattern(target, &elem, target_span.span(), env)
+    }
+
+    /// The monad type `Con inner` (or `Con inner err` for the binary `Result`).
+    fn monad_ty(&self, con: &str, binary: bool, inner: Ty, err: &Ty) -> Ty {
+        if binary {
+            Ty::Con(con.to_string(), vec![inner, self.apply(err)])
+        } else {
+            Ty::Con(con.to_string(), vec![inner])
+        }
+    }
+
+    /// Shared inference for the `result`, `option` and `async` monads.
     fn infer_monad(
         &mut self,
         items: &[CeItem],
@@ -7988,16 +8085,39 @@ impl Infer {
         binary: bool,
     ) -> Result<Ty, TypeError> {
         let err = self.fresh();
-        let monad = |inner: Ty, this: &Self| {
-            if binary {
-                Ty::Con(con.to_string(), vec![inner, this.apply(&err)])
-            } else {
-                Ty::Con(con.to_string(), vec![inner])
-            }
-        };
         let mut env = env.clone();
-        let mut result_val: Option<Ty> = None;
+        let result_val = self.infer_monad_items(items, &mut env, con, binary, &err, false, span)?;
+        match result_val {
+            Some(inner) => {
+                let inner = self.apply(&inner);
+                Ok(self.monad_ty(con, binary, inner, &err))
+            }
+            None => Err(TypeError {
+                message: format!(
+                    "{} `{}` block must end with `return`",
+                    article(con),
+                    con.to_lowercase()
+                ),
+                span,
+            }),
+        }
+    }
 
+    /// One level of monad items. Returns the block's value type when the level
+    /// ends in `return`/`return!` or a trailing `do!` (never inside a `for` body,
+    /// which binds and awaits but cannot end the block).
+    #[allow(clippy::too_many_arguments)]
+    fn infer_monad_items(
+        &mut self,
+        items: &[CeItem],
+        env: &mut Env,
+        con: &str,
+        binary: bool,
+        err: &Ty,
+        in_loop: bool,
+        span: Span,
+    ) -> Result<Option<Ty>, TypeError> {
+        let mut result_val: Option<Ty> = None;
         for (i, item) in items.iter().enumerate() {
             let is_last = i + 1 == items.len();
             match item {
@@ -8006,9 +8126,9 @@ impl Infer {
                     target_span,
                     value,
                 } => {
-                    let t = self.infer_expr(value, &env)?;
+                    let t = self.infer_expr(value, env)?;
                     let inner = self.fresh();
-                    let expected = monad(inner.clone(), self);
+                    let expected = self.monad_ty(con, binary, inner.clone(), err);
                     self.unify(&expected, &t, value.span())?;
                     let bound = self.apply(&inner);
                     if self.record_types {
@@ -8016,55 +8136,60 @@ impl Infer {
                     }
                     // The target binds against the *unwrapped* type, so
                     // `let! (r, c) = …` destructures what the bind produced.
-                    self.bind_pattern(target, &bound, target_span.span(), &mut env)?;
+                    self.bind_pattern(target, &bound, target_span.span(), env)?;
                 }
                 CeItem::Let {
                     target,
                     target_span,
                     value,
-                } => {
-                    let t = self.infer_expr(value, &env)?;
-                    let applied = self.apply(&t);
-                    if self.record_types {
-                        self.recorded.push((target_span.span(), applied.clone()));
-                    }
-                    self.bind_pattern(target, &applied, target_span.span(), &mut env)?;
-                }
+                } => self.bind_ce_let(target, *target_span, value, env)?,
                 CeItem::DoBang(e) => {
-                    let t = self.infer_expr(e, &env)?;
+                    let t = self.infer_expr(e, env)?;
                     let inner = self.fresh();
-                    let expected = monad(inner.clone(), self);
+                    let expected = self.monad_ty(con, binary, inner.clone(), err);
                     self.unify(&expected, &t, e.span())?;
                     // A trailing `do! e` is the block's value, as in F# and the
                     // user-builder table: the last step of a fire-and-forget
                     // `async { … do! drain w }` needs no `return ()` after it. It
                     // pins the step to `M unit`, so the block is `M unit` too.
-                    if is_last {
+                    if is_last && !in_loop {
                         self.unify(&inner, &Ty::Unit, e.span())?;
                         result_val = Some(Ty::Unit);
                     }
                 }
-                CeItem::Return(e) => {
+                CeItem::Return(e) | CeItem::ReturnBang(e) => {
+                    let what = if matches!(item, CeItem::Return(_)) {
+                        "`return`"
+                    } else {
+                        "`return!`"
+                    };
+                    if in_loop {
+                        return Err(TypeError {
+                            message: format!(
+                                "{what} cannot appear inside a `for` body in {} `{}` block: the \
+                                 body runs once per element, and the block's value comes after \
+                                 the loop",
+                                article(con),
+                                con.to_lowercase()
+                            ),
+                            span: e.span(),
+                        });
+                    }
                     if !is_last {
                         return Err(TypeError {
-                            message: "`return` must be the final item".to_string(),
+                            message: format!("{what} must be the final item"),
                             span,
                         });
                     }
-                    result_val = Some(self.infer_expr(e, &env)?);
-                }
-                CeItem::ReturnBang(e) => {
-                    if !is_last {
-                        return Err(TypeError {
-                            message: "`return!` must be the final item".to_string(),
-                            span,
-                        });
+                    if matches!(item, CeItem::Return(_)) {
+                        result_val = Some(self.infer_expr(e, env)?);
+                    } else {
+                        let t = self.infer_expr(e, env)?;
+                        let inner = self.fresh();
+                        let expected = self.monad_ty(con, binary, inner.clone(), err);
+                        self.unify(&expected, &t, e.span())?;
+                        result_val = Some(self.apply(&inner));
                     }
-                    let t = self.infer_expr(e, &env)?;
-                    let inner = self.fresh();
-                    let expected = monad(inner.clone(), self);
-                    self.unify(&expected, &t, e.span())?;
-                    result_val = Some(self.apply(&inner));
                 }
                 CeItem::Yield(_) | CeItem::YieldBang(_) => {
                     return Err(TypeError {
@@ -8076,20 +8201,19 @@ impl Infer {
                         span,
                     });
                 }
+                CeItem::For {
+                    target,
+                    target_span,
+                    source,
+                    body,
+                } => {
+                    let mut inner = env.clone();
+                    self.bind_for_target(target, *target_span, source, &mut inner)?;
+                    self.infer_monad_items(body, &mut inner, con, binary, err, true, span)?;
+                }
             }
         }
-
-        match result_val {
-            Some(inner) => Ok(monad(self.apply(&inner), self)),
-            None => Err(TypeError {
-                message: format!(
-                    "{} `{}` block must end with `return`",
-                    article(con),
-                    con.to_lowercase()
-                ),
-                span,
-            }),
-        }
+        Ok(result_val)
     }
 
     fn infer_apply(
