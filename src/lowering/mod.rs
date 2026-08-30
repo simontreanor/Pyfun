@@ -1274,6 +1274,11 @@ impl Lowerer {
                 if self.match_uses_ap(arms) {
                     return self.lower_ap_match(scrutinee, arms, locals, None);
                 }
+                // A match consuming a stdlib lookup on the spot skips the `Option`
+                // (`DESIGN.md` §5.2).
+                if let Some(stmts) = self.try_lower_lookup_match(scrutinee, arms, locals, None)? {
+                    return Ok(stmts);
+                }
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
@@ -1455,6 +1460,16 @@ impl Lowerer {
                     let tmp = self.fresh_tmp();
                     let stmts = self.lower_ap_match(scrutinee, arms, locals, Some(&tmp))?;
                     return Ok((stmts, PyExpr::Name(tmp)));
+                }
+                // A match consuming a stdlib lookup on the spot skips the `Option`
+                // (`DESIGN.md` §5.2); the `if` assigns the temp.
+                if is_lookup_match(scrutinee, arms) {
+                    let tmp = self.fresh_tmp();
+                    if let Some(stmts) =
+                        self.try_lower_lookup_match(scrutinee, arms, locals, Some(&tmp))?
+                    {
+                        return Ok((stmts, PyExpr::Name(tmp)));
+                    }
                 }
                 // Python `match` is a statement, so always hoist into a temp.
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
@@ -1941,6 +1956,17 @@ impl Lowerer {
             return Ok(result);
         }
 
+        // Equality-predicate specialization (`DESIGN.md` §5.2): a fully-applied
+        // `List.findIndex`/`List.find`/`List.exists` whose predicate is the section
+        // `(==) x` routes to the C-level list scan (`xs.index(x)` / `x in xs`)
+        // instead of a Python-level scan driving a lambda per element.
+        if let ExprKind::Field { .. } = &head.kind
+            && let Some(q) = crate::types::qualified_name(head)
+            && let Some(result) = self.try_inline_eq_predicate(&q, &args_ast, locals)?
+        {
+            return Ok(result);
+        }
+
         // An instance-access extern applies to a receiver: `= .read()` calls
         // `recv.read(args)`, `= .text` reads `recv.text`. The first argument is the
         // receiver; for a method the rest are its arguments.
@@ -2227,6 +2253,184 @@ impl Lowerer {
             _ => unreachable!("try_inline_stdlib arity gate admitted {qualified}"),
         };
         Ok(Some((stmts, value)))
+    }
+
+    /// Equality-predicate specialization (`DESIGN.md` §5.2): a fully-applied
+    /// `List.findIndex`/`List.find`/`List.exists` whose predicate is `(==) x` (or
+    /// the lambda `fun y -> x == y` / `fun y -> y == x`) lowers to the C-level scan
+    /// Python answers fastest — `_pf_index_of(x, xs)` (`xs.index`), `_pf_find_eq(x,
+    /// xs)` (`xs[xs.index(x)]`, so the *element* is returned, exactly as the helper
+    /// does), and `x in xs`. `x` is evaluated once, before `xs`, the order the
+    /// helper call evaluated its arguments. Returns `None` for any other predicate
+    /// or arity, so the caller falls through to the generic helper.
+    fn try_inline_eq_predicate(
+        &mut self,
+        qualified: &str,
+        args_ast: &[&Expr],
+        locals: &HashSet<String>,
+    ) -> Result<Option<(Vec<PyStmt>, PyExpr)>, LowerError> {
+        if !matches!(qualified, "List.findIndex" | "List.find" | "List.exists")
+            || args_ast.len() != 2
+        {
+            return Ok(None);
+        }
+        let Some(x) = eq_predicate_value(args_ast[0]) else {
+            return Ok(None);
+        };
+        let (mut stmts, x_val) = self.lower_value(x, locals)?;
+        let (xs_stmts, xs_val) = self.lower_value(args_ast[1], locals)?;
+        stmts.extend(xs_stmts);
+        let value = match qualified {
+            // `any(map(lambda b: x == b, xs))` → `x in xs`
+            "List.exists" => PyExpr::Compare {
+                left: Box::new(x_val),
+                ops: vec![PyBinOp::In],
+                comparators: vec![xs_val],
+            },
+            helper_owner => {
+                let helper = if helper_owner == "List.findIndex" {
+                    "_pf_index_of"
+                } else {
+                    "_pf_find_eq"
+                };
+                self.needs_option = true;
+                self.needed_collection_helpers.insert(helper);
+                PyExpr::Call {
+                    func: Box::new(PyExpr::Name(helper.to_string())),
+                    args: vec![x_val, xs_val],
+                }
+            }
+        };
+        Ok(Some((stmts, value)))
+    }
+
+    /// Match-consumed lookup (`DESIGN.md` §5.2): a `match` whose scrutinee is a
+    /// fully-applied `Map.tryFind k m` / `List.head xs` / `List.get i xs` and whose
+    /// arms are exactly `None` and `Some v` (`v` a name, `_`, or a tuple of those)
+    /// lowers to the `if` a person would write — `if k in m: v = m[k] …` — instead
+    /// of building an `Option` the very next statement takes apart. The operands
+    /// are bound to temps unless they are names or literals, so each is evaluated
+    /// once. `assign_to` is the value-position temp (`None` in return position).
+    /// Returns `None` for any other shape (guards, other arms, a partial
+    /// application), leaving the ordinary `match` lowering to run.
+    fn try_lower_lookup_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[crate::parser::ast::MatchArm],
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+    ) -> Result<Option<Vec<PyStmt>>, LowerError> {
+        let Some((v, some_arm, none_arm)) = option_arms(arms) else {
+            return Ok(None);
+        };
+        let mut args_ast = Vec::new();
+        let head = flatten_app(scrutinee, &mut args_ast);
+        let Some(q) = crate::types::qualified_name(head) else {
+            return Ok(None);
+        };
+        let arity = match q.as_str() {
+            "Map.tryFind" | "List.get" => 2,
+            "List.head" => 1,
+            _ => return Ok(None),
+        };
+        if args_ast.len() != arity {
+            return Ok(None);
+        }
+        // Operands, evaluated once and in order.
+        let mut stmts = Vec::new();
+        let mut vals = Vec::with_capacity(arity);
+        for arg in &args_ast {
+            let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+            stmts.extend(arg_stmts);
+            let val = if is_atomic(&arg_val) {
+                arg_val
+            } else {
+                let tmp = self.fresh_tmp();
+                stmts.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value: arg_val,
+                });
+                PyExpr::Name(tmp)
+            };
+            vals.push(val);
+        }
+        let subscript = |value: PyExpr, index: PyExpr| PyExpr::Subscript {
+            value: Box::new(value),
+            index: Box::new(index),
+        };
+        let (test, payload) = match q.as_str() {
+            // `_pf_map_try_find`: `Some(m.get(k)) if k in m else None_()`
+            "Map.tryFind" => {
+                let (k, m) = (vals[0].clone(), vals[1].clone());
+                (
+                    PyExpr::Compare {
+                        left: Box::new(k.clone()),
+                        ops: vec![PyBinOp::In],
+                        comparators: vec![m.clone()],
+                    },
+                    subscript(m, k),
+                )
+            }
+            // `_pf_head`: `Some(xs[0]) if xs else None_()`
+            "List.head" => {
+                let xs = vals[0].clone();
+                (xs.clone(), subscript(xs, PyExpr::Int(0)))
+            }
+            // `_pf_list_get`: `Some(xs[i]) if 0 <= i < len(xs) else None_()`
+            _ => {
+                let (i, xs) = (vals[0].clone(), vals[1].clone());
+                (
+                    PyExpr::Compare {
+                        left: Box::new(PyExpr::Int(0)),
+                        ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                        comparators: vec![
+                            i.clone(),
+                            PyExpr::Call {
+                                func: Box::new(PyExpr::Name("len".to_string())),
+                                args: vec![xs.clone()],
+                            },
+                        ],
+                    },
+                    subscript(xs, i),
+                )
+            }
+        };
+        // The `Some v` arm: bind `v` from the payload, then the body.
+        let bindings = pattern_bindings(&some_arm.pattern);
+        let arm_locals = extend(locals, &bindings);
+        let shadowed = self.shadow_local_fns(&bindings);
+        let mut some_body = Vec::new();
+        // A `_` payload is never read, so the subscript is not emitted either.
+        if !matches!(v, Pattern::Wildcard) {
+            self.bind_ce_target(v, payload, &mut some_body);
+        }
+        let lowered = self.lower_arm_body(&some_arm.body, &arm_locals, assign_to);
+        self.unshadow_local_fns(shadowed);
+        some_body.extend(lowered?);
+        let none_body = self.lower_arm_body(&none_arm.body, locals, assign_to)?;
+        stmts.push(PyStmt::If {
+            test,
+            body: some_body,
+            orelse: none_body,
+        });
+        Ok(Some(stmts))
+    }
+
+    /// One arm body of a lowered-to-`if` match: returned in return position, or
+    /// assigned to the value-position temp.
+    fn lower_arm_body(
+        &mut self,
+        body: &Expr,
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        match assign_to {
+            None => self.lower_return(body, locals),
+            Some(tmp) => {
+                let (s, v) = self.lower_value(body, locals)?;
+                Ok(with_assign(s, tmp, v))
+            }
+        }
     }
 
     /// Lower a variable reference, special-casing data constructors: a nullary
@@ -6158,6 +6362,42 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     PyStmt::Return(call("None_", vec![])),
                 ],
             ),
+            // List.findIndex ((==) x) xs: the C-level scan (`DESIGN.md` §5.2)
+            //   try: return Some(xs.index(x))
+            //   except ValueError: return None_()
+            "_pf_index_of" => def(
+                "_pf_index_of",
+                &["x", "xs"],
+                vec![PyStmt::Try {
+                    body: vec![PyStmt::Return(call(
+                        "Some",
+                        vec![method(name("xs"), "index", vec![name("x")])],
+                    ))],
+                    exc_type: Some("ValueError".to_string()),
+                    binding: None,
+                    handler: vec![PyStmt::Return(call("None_", vec![]))],
+                }],
+            ),
+            // List.find ((==) x) xs: the element found (not `x` itself: the two
+            // may be `==` yet distinguishable, `0.0`/`-0.0`), via the same scan
+            //   try: return Some(xs[xs.index(x)])
+            //   except ValueError: return None_()
+            "_pf_find_eq" => def(
+                "_pf_find_eq",
+                &["x", "xs"],
+                vec![PyStmt::Try {
+                    body: vec![PyStmt::Return(call(
+                        "Some",
+                        vec![PyExpr::Subscript {
+                            value: Box::new(name("xs")),
+                            index: Box::new(method(name("xs"), "index", vec![name("x")])),
+                        }],
+                    ))],
+                    exc_type: Some("ValueError".to_string()),
+                    binding: None,
+                    handler: vec![PyStmt::Return(call("None_", vec![]))],
+                }],
+            ),
             // List.max(xs) -> Some(max(xs)) if xs else None_()
             "_pf_max" => def1(
                 "_pf_max",
@@ -7342,6 +7582,99 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
 fn has_catch_all(arms: &[crate::parser::ast::MatchArm]) -> bool {
     arms.iter()
         .any(|arm| arm.guard.is_none() && is_irrefutable(&arm.pattern))
+}
+
+/// The value `x` of an equality predicate spelled as the section `(==) x` or as
+/// the lambda `fun y -> x == y` / `fun y -> y == x` (with `y` not free in `x`, so
+/// hoisting `x` out of the lambda cannot change what it means).
+fn eq_predicate_value(pred: &Expr) -> Option<&Expr> {
+    match &pred.kind {
+        ExprKind::App { func, arg } if matches!(func.kind, ExprKind::OpFunc(BinOp::Eq)) => {
+            Some(arg)
+        }
+        ExprKind::Fn { params, body } if params.len() == 1 => {
+            let y = params[0].name()?;
+            let ExprKind::Binary {
+                op: BinOp::Eq,
+                lhs,
+                rhs,
+            } = &body.kind
+            else {
+                return None;
+            };
+            let is_y = |e: &Expr| matches!(&e.kind, ExprKind::Var(n) if n == y);
+            let other: &Expr = if is_y(lhs) {
+                rhs
+            } else if is_y(rhs) {
+                lhs
+            } else {
+                return None;
+            };
+            let mut free = HashSet::new();
+            fold_loop::collect_free(other, &HashSet::new(), &mut free);
+            (!free.contains(y)).then_some(other)
+        }
+        _ => None,
+    }
+}
+
+/// Whether a match has the shape [`Lowerer::try_lower_lookup_match`] rewrites: a
+/// fully-applied lookup scrutinee and the two plain `Option` arms. Pure, so the
+/// value-position caller can check before it allocates a temp (a rejected shape
+/// must not perturb temp numbering).
+fn is_lookup_match(scrutinee: &Expr, arms: &[crate::parser::ast::MatchArm]) -> bool {
+    if option_arms(arms).is_none() {
+        return false;
+    }
+    let mut args = Vec::new();
+    let head = flatten_app(scrutinee, &mut args);
+    match crate::types::qualified_name(head).as_deref() {
+        Some("Map.tryFind" | "List.get") => args.len() == 2,
+        Some("List.head") => args.len() == 1,
+        _ => false,
+    }
+}
+
+/// The `Some v` / `None` arms of a two-arm, guard-free `Option` match, as
+/// `(v, some_arm, none_arm)`, where `v` is a name, `_`, or a tuple of those (the
+/// shapes a plain assignment can bind). Any other arm set is `None`.
+fn option_arms(
+    arms: &[crate::parser::ast::MatchArm],
+) -> Option<(
+    &Pattern,
+    &crate::parser::ast::MatchArm,
+    &crate::parser::ast::MatchArm,
+)> {
+    fn simple(p: &Pattern) -> bool {
+        match p {
+            Pattern::Var { .. } | Pattern::Wildcard => true,
+            Pattern::Tuple { elems } => elems.iter().all(simple),
+            _ => false,
+        }
+    }
+    fn ctor(arm: &crate::parser::ast::MatchArm) -> Option<(&str, &[Pattern])> {
+        match &arm.pattern {
+            Pattern::Ctor { name, args, .. } if arm.guard.is_none() => {
+                Some((name.as_str(), args.as_slice()))
+            }
+            _ => None,
+        }
+    }
+    let [a, b] = arms else {
+        return None;
+    };
+    let (some_arm, none_arm) = match (ctor(a)?, ctor(b)?) {
+        (("Some", _), ("None", [])) => (a, b),
+        (("None", []), ("Some", _)) => (b, a),
+        _ => return None,
+    };
+    let Pattern::Ctor { args, .. } = &some_arm.pattern else {
+        unreachable!()
+    };
+    let [v] = args.as_slice() else {
+        return None;
+    };
+    simple(v).then_some((v, some_arm, none_arm))
 }
 
 fn is_irrefutable(pattern: &Pattern) -> bool {

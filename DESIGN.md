@@ -207,6 +207,28 @@ inline form is value-identical to the helper. A partial application (`String.con
 helper, so `List.map (String.contains "x") xs` still works. This is a readability win first; mechanics
 in `INTERNALS.md`.
 
+The same lever covers two call-site shapes where the idiomatic Pyfun spelling and the fastest Python
+answer differ by more than a function call.
+
+**Equality predicates.** `List.findIndex ((==) x) xs` is the way to ask "where is `x`", and Python
+answers that in C with `list.index`. A fully-applied `List.findIndex`, `List.find`, or `List.exists`
+whose predicate is the section `(==) x` (or the lambda `fun y -> x == y` / `fun y -> y == x`, with `y`
+not free in `x`) lowers to that scan: `_pf_index_of(x, xs)` (`xs.index(x)` under a `try`),
+`_pf_find_eq(x, xs)` (`xs[xs.index(x)]`, so the *element* found is returned, as the generic helper
+returns it), and `x in xs`. `x` is evaluated once, before `xs`, exactly as the helper call evaluated
+its arguments. Any other predicate, and any partial application, keeps the generic Python-level scan.
+
+**Match-consumed lookups.** `match Map.tryFind k m:` with the arms `Some v` and `None` is the language's
+way to say "look it up, and here is what to do in each case", and the `Option` in the middle exists only
+to carry the answer from the helper to the `match`. When the two are adjacent it need not exist: the
+match lowers to `if k in m:` with `v` bound from `m[k]` in the first branch and the `None` arm in the
+`else`, in return and in value position alike. `List.head xs` (`if xs:`, `xs[0]`) and `List.get i xs`
+(`if 0 <= i < len(xs):`, `xs[i]`, the helper's own bounds test) take the same route. The operands are
+bound to temps unless they are names or literals, so each is evaluated once. The rewrite needs exactly
+the two arms, unguarded, with a payload pattern a plain assignment can bind (a name, `_`, or a tuple of
+those); anything else, including the `Option` escaping into a variable, keeps the helper and the
+`match`.
+
 ### 5.3 Specializing statically-known `Decode` decoders
 
 A `Decode.decodeString` whose decoder is a **syntactically-known composition** of the simple combinators
