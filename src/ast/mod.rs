@@ -236,7 +236,7 @@ fn print_variant(variant: &VariantDecl) -> String {
 }
 
 /// Print a full type expression (may contain `->`).
-fn print_type(ty: &TypeExpr) -> String {
+pub fn print_type(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Fun(a, b, effects) if effects.is_empty() => {
             format!("{} -> {}", print_type_atom(a), print_type(b))

@@ -276,17 +276,18 @@ ran out when the program reached for concurrency, a wire format, or a page. The 
 made on 2026-08-30 and each entry records what was chosen and what was turned down with it. Network
 play comes first; the browser target is last because it depends on the async decisions.
 
-13. **An `->{async}` extern is checked but never awaited** (#104, S, decided). The lowering has no
-    hook for the `async` effect label: an extern typed `float ->{async} unit` is emitted as a plain
-    call, the coroutine is dropped with a `RuntimeWarning`, and lesson 18 plus
-    `examples/interop/http_fetch.pyfun` teach exactly that spelling. **Decided:** the `Async` *type*
-    stays the only thing the lowering awaits, and an `->{async}` extern whose result is not `Async _`
-    is rejected at the declaration with the working spelling (`-> Async a`, bound with `let!`) named;
-    the lesson and the example move to it. Effect-directed lowering (emit `await` wherever the label
-    says so) was turned down: an `async`-effect function handed to `List.map` or any effect-polymorphic
+13. ~~**An `->{async}` extern is checked but never awaited**~~ **CLOSED 2026-08-30** (#104, in the
+    PR carrying this entry). The lowering had no hook for the `async` effect label: an extern typed
+    `float ->{async} unit` was emitted as a plain call, the coroutine dropped with a
+    `RuntimeWarning`, and lesson 18 plus `examples/interop/http_fetch.pyfun` taught exactly that
+    spelling. **Decided and done:** the `Async` *type* is the only thing the lowering awaits, and an
+    `->{async}` extern whose result is not `Async _` is rejected at the declaration with the working
+    spelling named (`-> Async a`, bound with `let!`); lesson 18, `hello.pyfun` and `http_fetch`
+    moved to it (`DESIGN.md` §4). Effect-directed lowering (emit `await` wherever the label says so)
+    was turned down: an `async`-effect function handed to `List.map` or any effect-polymorphic
     higher-order function would propagate the label onto a call that cannot await, so the result is
-    silently a list of coroutines, and the rule needed to forbid that is a new checker concept for the
-    gain of one `let!`. F# chose a type for the same reason.
+    silently a list of coroutines, and the rule needed to forbid that is a new checker concept for
+    the gain of one `let!`. F# chose a type for the same reason.
 
 14. ~~**CE bodies reject expression and `match` items, and `async` rejects a trailing `do!`**~~
     **CLOSED 2026-08-30** (#105, in the PR carrying this section). A unit-typed expression on its own
@@ -313,27 +314,31 @@ play comes first; the browser target is last because it depends on the async dec
     they need a per-builder name table, and a list-shaped markup DSL (`div [attrs] [kids]`) is where
     F#'s own community settled.
 
-16. **A `unit -> a` thunk handed to Python is miscalled** (#107, S, decided). `fun _ -> 41` lowers to
-    `lambda _: 41` and `asyncio.to_thread` calls it with no arguments. **Decided:** an argument to an
-    extern whose static type is `unit -> a` is wrapped as `lambda: f(None)` at the call site. The
-    issue's second rule, spreading a tuple parameter (`(a, b) -> c` wrapped as `lambda a, b:
-    f((a, b))`), was turned down: Python callbacks that receive one tuple are everywhere
-    (`sorted(pairs, key=f)`, `map(f, d.items())`) and the boundary cannot tell the two conventions
-    apart from the Pyfun type. The rule is "curry your callbacks", and lesson 12 gets a
-    `start_server`-shaped higher-order extern showing it, with the callback's effects written on the
-    parameter arrow. To check while there: a partially applied function (`serve (handler cfg)`)
-    crossing the same boundary.
+16. ~~**A `unit -> a` thunk handed to Python is miscalled**~~ **CLOSED 2026-08-30** (#107, in the PR
+    carrying this entry). `fun _ -> 41` lowered to `lambda _: 41` and `asyncio.to_thread` called it
+    with no arguments. **Done:** an argument to an extern whose declared parameter type is
+    `unit -> a` is wrapped as `lambda: f(None)` at the call site (a literal `fun _ -> body` collapses
+    to `lambda: body`), at every extern call path (plain, kwargs, receiver). The issue's second rule,
+    spreading a tuple parameter (`(a, b) -> c` wrapped as `lambda a, b: f((a, b))`), was turned
+    down: Python callbacks that receive one tuple are everywhere (`sorted(pairs, key=f)`,
+    `map(f, d.items())`) and the boundary cannot tell the two conventions apart from the Pyfun type.
+    The rule is "curry your callbacks", and lesson 12 now has a section on handing Python a
+    function, with the callback's effects on the parameter arrow (`DESIGN.md` §6). Still to check:
+    a partially applied function (`serve (handler cfg)`) crossing the same boundary.
 
-17. **An `Async` module, `Async.catch`, and structured concurrency** (#106, #108, #109, M). `Async`
-    is a type with `async { }` and nothing else: no `sleep`, `timeout`, `toThread`, `parallel`,
-    `race`, and no way to catch an exception at the await (`try e` catches at call time, so it wraps
-    the coroutine and the `TimeoutError` or `ConnectionResetError` escapes at the `let!`). The first
-    three are prelude externs; `parallel` (`gather(*xs)`) and `race` (`wait(FIRST_COMPLETED)`, losers
-    cancelled) are runtime helpers because the extern syntax has no spread; `Async.catch : Async a ->
-    Async (Result a Exception)` is a helper that builds the same `Exception` record `try` does and lets
-    `CancelledError` through. Structured concurrency ships as a library first, `Task.scope : (Scope ->
-    Async a) -> Async a` over `asyncio.TaskGroup` and `Task.start : Scope -> Async unit -> unit`, so a
-    start outside a scope is a missing argument. A `task { }` spelling is wanted; **decided:** try it
+17. **An `Async` module, `Async.catch`, and structured concurrency** (#106, #108, #109, M; the
+    module and `catch` **shipped 2026-08-30** in the PR carrying this entry, the scope is what
+    remains). `Async` was a type with `async { }` and nothing else: no `sleep`, `timeout`,
+    `toThread`, `parallel`, `race`, and no way to catch an exception at the await (`try e` catches
+    at call time, so it wraps the coroutine and the `TimeoutError` or `ConnectionResetError` escapes
+    at the `let!`). Now `Async.sleep`/`timeout`/`toThread`/`parallel`/`race`/`catch` are prelude
+    members (`DESIGN.md` §6, "Async combinators"): `sleep` is `asyncio.sleep` itself, the rest are
+    emitted `_pf_async_*` helpers because the extern syntax has no spread for `gather(*xs)`, `wait`
+    returns task sets, and `timeout`/`catch` build `Option`/`Result` values; `catch` builds the same
+    `Exception` record `try` does and lets `CancelledError` through. Structured concurrency ships as
+    a library next, `Task.scope : (Scope -> Async a) -> Async a` over `asyncio.TaskGroup` and
+    `Task.start : Scope -> Async unit -> unit`, so a start outside a scope is a missing argument
+    (needs an `async with` node in the Python IR). A `task { }` spelling is wanted; **decided:** try it
     as a *user builder* over those helpers first (the §8.1 mechanism, no fifth built-in) and, if the
     result is ugly, amend the §8.1 rule in `DESIGN.md` with the argument written down rather than
     admit `async with` as "a control-flow form the rule did not count" (by that reading `with`, `for`

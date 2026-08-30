@@ -98,12 +98,20 @@ is **canonical and deterministic**: labels render in a fixed order, `io` first (
 **Effect annotations on declared arrows.** Function arrows in *declared* types — `type`
 declarations (ADT ctor / record field types) and `extern` signatures — may carry an explicit
 annotation `->{label, …}` (e.g. `type Handler = H (string ->{io} unit)`, `extern fetch : string
-->{async} string = httpx.get`). A bare `->` stays pure; an unknown label is a compile error. This is
+->{async} Async string = client.get`). A bare `->` stays pure; an unknown label is a compile error. This is
 the *declaration-side* exception to "never written": ordinary code remains annotation-free. For an
 `extern`, an annotation on the **innermost** arrow is trusted as written and replaces the
 `io`-by-default boundary rule (that's how an async client binds as `->{async}` rather than `->{io}`);
 an annotation elsewhere (say on a higher-order *argument* arrow) does not suppress the default — the
-extern still calls Python. Note declared effects are **exact** (no sub-effecting): a *pure* function
+extern still calls Python. An `->{async}` extern must return the `Async` *type*: an async Python
+function returns a coroutine, and the only thing the lowering awaits is an `Async` value bound with
+`let!`/`do!` inside an `async { }` block, so `string ->{async} string` would create a coroutine and
+drop it (issue #104). The checker rejects that declaration and names the working spelling; the
+label stays an inferred, checkable fact and the type is what the emitter acts on. Effect-directed
+lowering (emit `await` wherever the label says so) was considered and turned down: an
+`async`-effect function passed to `List.map` or any effect-polymorphic combinator would carry the
+label onto a call that cannot await, and the rule needed to forbid that is a checker concept F#
+avoided by making async a type. Note declared effects are **exact** (no sub-effecting): a *pure* function
 does not satisfy a declared `->{io}` parameter, because two closed effect sets unify only when equal.
 Effect subsumption (pure ≤ io) is a **non-goal** (ROADMAP): sound subsumption is directional, so it
 would thread polarity through the symmetric unifier and risk the `let pure` guarantee on a variance
@@ -465,7 +473,15 @@ prefix keeps it distinct from Pyfun's own file-module `import Geometry` (§6.1) 
 LSP are untouched. Receiver-reachable members can of course still use the instance-access form below
 instead. A **nullary** extern (`unit -> a`,
 e.g. `time.time`) applied to `()` lowers to a zero-argument call (`time.time()`), not `time.time(None)`
-— the unit argument is evaluated for effects but dropped. Arity is the number of leading arrows, so partial application of an
+— the unit argument is evaluated for effects but dropped. The mirror image is a **thunk parameter**:
+an extern parameter typed `unit -> a` (`asyncio.to_thread`'s function, an event handler with no
+arguments) is a Pyfun function of one parameter, the unit value, that Python will call with none, so
+the call site wraps that argument as `lambda: f(None)` (a literal `fun _ -> body` collapses to
+`lambda: body`). Only the slots the declared type marks are touched; a curried multi-parameter
+callback is already a multi-parameter `def` and passes as it is, which is why callbacks are written
+curried, not over a tuple: Python has no way to tell `(a, b) -> c` meant "call me with two
+arguments" from "call me with one pair" (`sorted(pairs, key=f)` wants the pair), so the boundary
+does not guess (issue #107). Arity is the number of leading arrows, so partial application of an
 extern still lowers to `functools.partial` exactly like a prelude builtin. Calls are still
 type-checked at the boundary (`cbrt "x"` is rejected) — but only against the *declared* type; Pyfun
 trusts the annotation, which is where the §4 "effectful/unsafe at the boundary" relaxation bites.
@@ -476,7 +492,8 @@ This makes the boundary's effectful-by-default rule (§4) concrete: a plain `ext
 arrow carries `io` (the Python call is the effect, performed on full application), so an impure
 `extern` cannot be called from a `let pure` binding. `extern pure` asserts the call is effect-free
 ("pure up to its arguments", like `let pure`) — used for the likes of `math.cbrt`; or an explicit
-innermost-arrow annotation (`->{async}`) overrides the `io` default (§4). Externs are
+innermost-arrow annotation (`->{async}`, which must then return `Async _`) overrides the `io`
+default (§4). Externs are
 erased to nothing themselves; only their reference sites and imports survive lowering. The prelude
 (`print`/`abs`/`min`/`max`) remains separately seeded because it needs `num`/unit polymorphism the
 `extern` type syntax can't yet express.
@@ -716,6 +733,24 @@ monomorphic over `string` (`fill` is a length-1 string, per the no-`char` rule).
 lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a nested f-string assembled
 from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
 Python `datetime` `extern`).
+
+**Async combinators — the `Async` module.** `Async a` is the type of a coroutine and `async { }`
+builds one; the module is the rest of what F#'s `Async` offers that `asyncio` can supply, typed once
+(single source of truth `types::ASYNC_PRELUDE` + `seed_async_prelude`): `Async.sleep secs`,
+`Async.timeout secs c : Async (Option a)` (`asyncio.wait_for`, `None` on the deadline),
+`Async.toThread thunk` (a blocking call off the event loop, `asyncio.to_thread`), `Async.parallel
+xs : Async (List a)` (`gather`, results in order), `Async.race xs : Async a` (`wait(FIRST_COMPLETED)`,
+the losers cancelled) and `Async.catch c : Async (Result a Exception)`, the await-time `try`: `try e`
+catches at *call* time, and an async extern does not throw when called, it returns a coroutine that
+throws when awaited, so `try` would wrap the coroutine and the `TimeoutError` would escape at the
+`let!`. `catch` catches `Exception`, not `BaseException`, so `asyncio.CancelledError` passes through
+and structured cancellation keeps working. Building any of these is pure (a coroutine is a value);
+the `async` effect is attributed where the value is awaited, except `toThread`, whose arrow carries
+the thunk's effect. `sleep` is `asyncio.sleep` itself; the rest are emitted `_pf_async_*` helpers,
+because `gather(*xs)` spreads a list the extern syntax cannot, `wait` returns task sets, and two of
+them build `Option`/`Result` values. **Deliberately absent:** `Async.start` and `Async.cancel`. A task
+should only start inside a scope that will join or cancel it, which is the structured-concurrency
+item on the roadmap (`Task.scope`/`Task.start` over `asyncio.TaskGroup`); a free `start` is the leak.
 
 **JSON decoding — the `Decode` module.** An Elm-style (`elm/json`) decoder-combinator
 library over an opaque built-in `Decoder a`, module-qualified like the others (single source of truth

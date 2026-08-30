@@ -314,9 +314,12 @@ extern pure fabs: float -> float = math.fabs
 # Declared-arrow effect annotations: effects are inferred everywhere, but an
 # `extern` (or declared `type`) arrow may state effect labels explicitly with
 # `->{label, …}` — beyond the default inferred `io`, e.g. the `async` label.
-# (Uncalled here, so it erases; calling `fetchAsync` would make its caller
-# perform `async`, so it couldn't sit inside a `let pure`.)
-extern fetchAsync: string ->{async} string = httpx.get
+# An async Python client returns a coroutine, so its result is the `Async`
+# type and `let!` inside an `async { }` block is where it is awaited; an
+# `->{async}` arrow that returns anything else is rejected. (Uncalled here, so
+# it erases; calling `sleepAsync` would make its caller perform `async`, so it
+# couldn't sit inside a `let pure`.)
+extern sleepAsync: float ->{async} Async unit = asyncio.sleep
 
 let label = show 42                  # "42"  (str(42))
 let root = fabs (0.0 - 3.0)          # 3.0   (math.fabs(-3.0))

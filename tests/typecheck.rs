@@ -2584,9 +2584,55 @@ fn annotated_async_extern_carries_the_async_label() {
     // The `->{async}` annotation is trusted as written: `fetch` performs `async`
     // (not the boundary's default `io`), so the `pure` violation names `async`.
     assert_error_contains(
-        "extern fetch: string ->{async} string = httpx.get\nlet pure go u = fetch u",
+        "extern fetch: string ->{async} Async string = httpx.get\nlet pure go u = fetch u",
         "declared `pure` but performs `async`",
     );
+}
+
+#[test]
+fn an_async_extern_must_return_the_async_type() {
+    // #104: the label is checked but only an `Async` value is ever awaited, so a
+    // `->{async}` arrow returning anything else would drop its coroutine.
+    assert_error_contains(
+        "extern sleep: float ->{async} unit = asyncio.sleep",
+        "`sleep` is declared `->{async}` but returns `unit`, which cannot be awaited",
+    );
+    assert_error_contains(
+        "extern get: string ->{async} List string = client.get",
+        "declare the result as `Async (List string)`",
+    );
+    // The working spellings: the `Async` type, with or without the label.
+    for src in [
+        "extern sleep: float -> Async unit = asyncio.sleep",
+        "extern sleep: float ->{async} Async unit = asyncio.sleep",
+        // A label on an argument arrow is not the innermost arrow.
+        "extern each: (string ->{async} unit) -> unit = m.each",
+    ] {
+        assert!(pyfun::check(src).is_ok(), "{src}: {:?}", errors(src));
+    }
+}
+
+#[test]
+fn the_async_module_members_type_as_declared() {
+    let src = "let slow n = async { do! Async.sleep 0.01  return n }\n\
+               let main = async {\n  \
+                 let! xs = Async.parallel [slow 1, slow 2]\n  \
+                 let! first = Async.race [slow 3, slow 4]\n  \
+                 let! t = Async.timeout 0.5 (slow 5)\n  \
+                 let! v = Async.toThread (fun _ -> 41)\n  \
+                 let! r = Async.catch (slow 6)\n  \
+                 let total = match t:\n    case Some n: n\n    case None: 0\n  \
+                 let got = match r:\n    case Ok n: n\n    case Error e: String.len e.errorKind\n  \
+                 return List.sum xs + first + total + v + got\n\
+               }";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    // `toThread` carries the thunk's effect: a printing thunk makes the block
+    // builder impure even before the await, so `let pure` over it is rejected.
+    assert_error_contains(
+        "let pure go x = Async.toThread (fun _ -> print x)",
+        "declared `pure` but performs",
+    );
+    assert!(pyfun::check("let pure go x = Async.toThread (fun _ -> x + 1)").is_ok());
 }
 
 #[test]
@@ -2629,7 +2675,7 @@ fn async_ce_and_print_union_to_io_async() {
 fn labels_union_across_calls_and_display_in_canonical_order() {
     // A body that prints (io) and fetches (async) accumulates both labels; the
     // `pure` violation renders the set deterministically, `io` first.
-    let src = "extern fetch: string ->{async} string = httpx.get\n\
+    let src = "extern fetch: string ->{async} Async string = httpx.get\n\
                let pure shout u =\n    print u\n    fetch u";
     assert_error_contains(src, "declared `pure` but performs `io, async`");
 }
@@ -2638,7 +2684,7 @@ fn labels_union_across_calls_and_display_in_canonical_order() {
 fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
     // `->{async, io}` written backwards still displays canonically as
     // `->{io, async}` (labels live in an ordered set).
-    let src = "extern push: string ->{async, io} unit = hub.push\nlet go s = push s";
+    let src = "extern push: string ->{async, io} Async unit = hub.push\nlet go s = push s";
     let analysis = pyfun::analyze(src);
     assert!(
         analysis.diagnostics.is_empty(),
@@ -2649,8 +2695,8 @@ fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
         analysis
             .types
             .iter()
-            .any(|t| t.ty == "string ->{io, async} unit"),
-        "expected a `string ->{{io, async}} unit` entry, got {:?}",
+            .any(|t| t.ty == "string ->{io, async} Async unit"),
+        "expected a `string ->{{io, async}} Async unit` entry, got {:?}",
         analysis.types
     );
 }
@@ -2658,7 +2704,7 @@ fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
 #[test]
 fn inferred_multi_label_arrow_displays_on_the_binding() {
     // `go` both prints and fetches, so its inferred arrow shows both labels.
-    let src = "extern fetch: string ->{async} string = httpx.get\n\
+    let src = "extern fetch: string ->{async} Async string = httpx.get\n\
                let go u =\n    print u\n    fetch u";
     let analysis = pyfun::analyze(src);
     assert!(
@@ -2670,8 +2716,8 @@ fn inferred_multi_label_arrow_displays_on_the_binding() {
         analysis
             .types
             .iter()
-            .any(|t| t.ty == "string ->{io, async} string"),
-        "expected a `string ->{{io, async}} string` entry, got {:?}",
+            .any(|t| t.ty == "string ->{io, async} Async string"),
+        "expected a `string ->{{io, async}} Async string` entry, got {:?}",
         analysis.types
     );
 }
@@ -2680,7 +2726,7 @@ fn inferred_multi_label_arrow_displays_on_the_binding() {
 fn partial_application_of_an_annotated_extern_is_pure() {
     // Like the io default, a declared label sits on the innermost arrow: the
     // effect happens at full application only.
-    let src = "extern post: string -> string ->{async} string = httpx.post\n\
+    let src = "extern post: string -> string ->{async} Async string = httpx.post\n\
                let pure prep = post \"host\"";
     assert!(pyfun::check(src).is_ok());
 }
@@ -2814,7 +2860,7 @@ fn labels_and_effect_vars_mix_in_an_extern_signature() {
     );
     assert!(
         pyfun::check(
-            "extern gather: (a ->{e} b) -> List a ->{async, e} List b = mymod.gather\n\
+            "extern gather: (a ->{e} b) -> List a ->{async, e} Async (List b) = mymod.gather\n\
              let r = gather (fun x -> x) [1, 2]"
         )
         .is_ok()
