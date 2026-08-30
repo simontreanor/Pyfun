@@ -134,6 +134,38 @@ mostly the profiler's own per-call overhead on a ~1.87M-call trivial function, n
 `ROADMAP.md`). (`List`/`Set`/`Map.len` are not in this set: they already lower to a bare `len`, so a
 fully-applied call is already `len(xs)` with no helper in between.)
 
+Two further call-site shapes ride on the same lever (found on a Scrabble move generator that asked
+`List.findIndex ((==) l) rack` two million times and `match Map.tryFind rc checks:` four million
+times per position).
+
+**Equality predicates** (`try_inline_eq_predicate`, right after `try_inline_stdlib` in
+`lower_application`): a fully-applied `List.findIndex`/`List.find`/`List.exists` whose first argument
+`eq_predicate_value` recognises as `(==) x` (an `App` of `OpFunc(Eq)` to one argument) or as a
+one-parameter lambda whose body is `x == y` / `y == x` with `y` not free in `x` (checked with
+`fold_loop::collect_free`) routes to `_pf_index_of(x, xs)` (`try: return Some(xs.index(x)) except
+ValueError: return None_()`), `_pf_find_eq(x, xs)` (the same with `xs[xs.index(x)]`, because
+`list.index` finds an element that is `==` to `x` and the generic helper returns that element, which
+`0.0`/`-0.0` can tell apart), or the `Compare … In` expression `x in xs`. The two helpers live in
+`list_prelude` under the collection-helper registry, flagged like `_pf_find_index` so the `Option`
+prelude is emitted. `x` lowers first and `xs` second, the argument order of the call they replace.
+The arity gate is exact, so `List.findIndex ((==) l)` as a value still becomes
+`functools.partial(_pf_find_index, lambda b: l == b)`. Semantics are those of `list.index`/`in`: an
+identity shortcut before `==`, the same trade `List.contains`→`x in xs` already made.
+
+**Match-consumed lookups** (`try_lower_lookup_match`, an early return at the top of both the
+return-position and the value-position `Match` arms; `is_lookup_match` is the pure shape check the
+value-position caller runs before allocating its temp, so a rejected shape leaves temp numbering
+untouched): a match whose scrutinee flattens to a fully-applied `Map.tryFind k m`, `List.head xs`, or
+`List.get i xs`, and whose arms `option_arms` accepts (exactly two, unguarded, `None` and `Some v`
+in either order, `v` a name, `_`, or a tuple of those) lowers to a `PyStmt::If`: the test and payload
+are taken verbatim from the helper body (`k in m`/`m[k]`; `xs`/`xs[0]`; `0 <= i < len(xs)`/`xs[i]`),
+each operand bound to a fresh temp unless `is_atomic`, `v` bound from the payload through
+`bind_ce_target` (skipped for `_`, which is never read), and the two arm bodies lowered through
+`lower_arm_body` (return position returns, value position assigns the match temp), with the usual
+`shadow_local_fns` discipline around the `Some` arm. No `Option` is constructed, so a program whose
+only `Option` was this one emits no `Some`/`None_` classes at all. Anything else falls through to the
+`match`, unchanged.
+
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 
 `Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures —

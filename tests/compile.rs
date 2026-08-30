@@ -1085,6 +1085,237 @@ fn e2e_stdlib_predicate_partial_application() {
     );
 }
 
+// ---------- equality-predicate specialization (DESIGN §5.2) ----------
+
+#[test]
+fn eq_section_predicates_route_to_the_c_level_scan() {
+    let py = pyfun::compile(
+        "let a l rack = List.findIndex ((==) l) rack
+         let b l rack = List.find ((==) l) rack
+         let c l rack = List.exists ((==) l) rack
+         let d l rack = List.findIndex (fun y -> y == l) rack
+         let e l rack = List.findIndex (fun y -> l == y) rack",
+    )
+    .unwrap();
+    assert!(
+        py.contains("return _pf_index_of(l, rack)"),
+        "findIndex: {py}"
+    );
+    assert!(py.contains("return _pf_find_eq(l, rack)"), "find: {py}");
+    assert!(py.contains("return l in rack"), "exists: {py}");
+    // The lambda spellings of the same predicate take the same route.
+    assert_eq!(py.matches("_pf_index_of(l, rack)").count(), 3, "{py}");
+    // The helpers are `list.index` under a `try`, one C-level scan each.
+    assert!(py.contains("return Some(xs.index(x))"), "{py}");
+    assert!(py.contains("return Some(xs[xs.index(x)])"), "{py}");
+    assert!(py.contains("except ValueError:"), "{py}");
+    // The generic scanners are not referenced, so they are not emitted.
+    assert!(!py.contains("_pf_find_index"), "no generic findIndex: {py}");
+    assert!(!py.contains("_pf_list_find"), "no generic find: {py}");
+    assert!(!py.contains("_pf_exists"), "no generic exists: {py}");
+}
+
+#[test]
+fn eq_section_specialization_keeps_the_helper_otherwise() {
+    let py = pyfun::compile(
+        "let p l = List.findIndex ((==) l)
+         let q l rack = List.findIndex (fun y -> y > l) rack
+         let r rack = List.findIndex (fun y -> y == y) rack
+         let s l rack = List.exists (fun l -> l == l) rack",
+    )
+    .unwrap();
+    // A partial application keeps the generic helper (the section is a value).
+    assert!(
+        py.contains("functools.partial(_pf_find_index, lambda b: l == b)"),
+        "partial: {py}"
+    );
+    // A non-equality predicate is scanned by the generic helper.
+    assert!(
+        py.contains("_pf_find_index(lambda y: y > l, rack)"),
+        "other predicate: {py}"
+    );
+    // `y == y` mentions the lambda's own parameter on both sides, so there is no
+    // value to hoist; the lambda stays.
+    assert!(
+        py.contains("_pf_find_index(lambda y: y == y, rack)"),
+        "self-comparison: {py}"
+    );
+    assert!(py.contains("_pf_exists(lambda l: l == l, rack)"), "{py}");
+    assert!(!py.contains("_pf_index_of"), "{py}");
+}
+
+#[test]
+fn eq_section_value_is_evaluated_once_before_the_list() {
+    // A non-atomic `x` (a call) is lowered once, before the list, the order the
+    // helper call evaluated its arguments: it is the first argument of the call.
+    let py = pyfun::compile(
+        "let f n = n + 1
+         let a rack = List.findIndex ((==) (f 1)) rack
+         let b rack = List.exists ((==) (f 1)) rack",
+    )
+    .unwrap();
+    assert!(py.contains("return _pf_index_of(f(1), rack)"), "{py}");
+    assert!(py.contains("return f(1) in rack"), "{py}");
+}
+
+#[test]
+fn e2e_eq_section_specialization_matches_the_helper() {
+    run_and_check(
+        "
+        let a = List.findIndex ((==) 3) [1, 2, 3, 3]
+        let b = List.findIndex ((==) 9) [1, 2, 3]
+        let c = List.find ((==) \"b\") [\"a\", \"b\"]
+        let d = List.find ((==) \"z\") [\"a\", \"b\"]
+        let e = List.exists ((==) 2) [1, 2]
+        let f = List.exists ((==) 5) [1, 2]
+        let g = List.findIndex (fun y -> y == (1, 2)) [(0, 0), (1, 2)]
+        let h = List.findIndex ((==) 0) []
+        let i = List.find ((==) 0.0) [-0.0]
+        ",
+        &[
+            ("a", "Some(2)"),
+            ("b", "None_"),
+            ("c", "Some('b')"),
+            ("d", "None_"),
+            ("e", "True"),
+            ("f", "False"),
+            ("g", "Some(1)"),
+            ("h", "None_"),
+            // The element found, not the value searched for (they are `==`).
+            ("i", "Some(-0.0)"),
+        ],
+    );
+}
+
+// ---------- match-consumed lookups (DESIGN §5.2) ----------
+
+#[test]
+fn match_on_map_try_find_lowers_to_a_membership_test() {
+    let py = pyfun::compile(
+        "let allows checks rc l =
+           match Map.tryFind rc checks:
+             case None: true
+             case Some s: Set.contains l s",
+    )
+    .unwrap();
+    assert!(
+        py.contains(
+            "    if rc in checks:\n        s = checks[rc]\n        return l in s\n    else:\n        return True"
+        ),
+        "{py}"
+    );
+    assert!(!py.contains("_pf_map_try_find"), "no Option helper: {py}");
+    assert!(!py.contains("match "), "no match statement: {py}");
+    // Nothing constructs an `Option`, so the prelude is not pulled in either.
+    assert!(!py.contains("class Some"), "no Option prelude: {py}");
+}
+
+#[test]
+fn match_on_lookups_covers_head_and_get_in_both_positions() {
+    let py = pyfun::compile(
+        "let hd xs =
+           match List.head xs:
+             case Some h: h
+             case None: 0
+         let g i xs = 1 + (match List.get (i + 1) xs:
+           case Some (a, b): a + b
+           case None: 0)
+         let w m = match Map.tryFind 1 m:
+           case Some _: 1
+           case None: 0",
+    )
+    .unwrap();
+    // `List.head`: the list's own truthiness, then `xs[0]`.
+    assert!(
+        py.contains("    if xs:\n        h = xs[0]\n        return h\n    else:\n        return 0"),
+        "head: {py}"
+    );
+    // `List.get`: the helper's exact bounds test; a non-atomic index is bound to a
+    // temp so it is evaluated once; value position assigns the match temp; a tuple
+    // payload unpacks in one statement.
+    assert!(
+        py.contains(
+            "    _pf_t1 = i + 1\n    if 0 <= _pf_t1 < len(xs):\n        a, b = xs[_pf_t1]\n        _pf_t0 = a + b\n    else:\n        _pf_t0 = 0\n    return 1 + _pf_t0"
+        ),
+        "get: {py}"
+    );
+    // A `_` payload is never read, so no subscript is emitted for it.
+    assert!(
+        py.contains("    if 1 in m:\n        return 1\n    else:\n        return 0"),
+        "wildcard payload: {py}"
+    );
+    assert!(!py.contains("_pf_head"), "{py}");
+    assert!(!py.contains("_pf_list_get"), "{py}");
+}
+
+#[test]
+fn match_on_lookups_falls_through_for_other_shapes() {
+    let py = pyfun::compile(
+        "let a k m =
+           match Map.tryFind k m:
+             case Some 0: \"zero\"
+             case Some _: \"other\"
+             case None: \"none\"
+         let b k m =
+           match Map.tryFind k m:
+             case Some v if v > 0: v
+             case _: 0
+         let c f = match f 1:
+           case Some v: v
+           case None: 0",
+    )
+    .unwrap();
+    // A refutable payload, a guard, and a non-lookup scrutinee all keep the
+    // ordinary `match` over the helper's `Option` (a partial application of the
+    // lookup cannot reach a match at all: the checker rejects it).
+    assert_eq!(py.matches("match _pf_map_try_find(k, m):").count(), 2, "{py}");
+    assert_eq!(py.matches("match ").count(), 3, "{py}");
+}
+
+#[test]
+fn e2e_match_on_lookups_matches_the_helper() {
+    run_and_check(
+        "
+        let look k m =
+          match Map.tryFind k m:
+            case Some v: v
+            case None: \"absent\"
+        let m = Map.ofList [(1, \"one\"), (2, \"\")]
+        let a = look 1 m
+        let b = look 2 m
+        let c = look 3 m
+        let hd xs = match List.head xs:
+          case Some h: h
+          case None: -1
+        let d = hd [0, 1]
+        let e = hd []
+        let get i xs = match List.get i xs:
+          case Some x: x
+          case None: -1
+        let f = get 0 [0]
+        let g = get 1 [0]
+        let h = get (0 - 1) [0]
+        let ok = Map.ofList [(\"k\", [])]
+        let i = match Map.tryFind \"k\" ok:
+          case Some xs: List.len xs
+          case None: -1
+        ",
+        &[
+            ("a", "one"),
+            // A present key with a falsy value is still a hit.
+            ("b", ""),
+            ("c", "absent"),
+            ("d", "0"),
+            ("e", "-1"),
+            ("f", "0"),
+            ("g", "-1"),
+            // A negative index is out of range, exactly as `_pf_list_get` says.
+            ("h", "-1"),
+            ("i", "0"),
+        ],
+    );
+}
+
 #[test]
 fn exponentiation_lowers_right_assoc() {
     let py = pyfun::compile("let a = 2.0 ** 3.0 ** 2.0\nlet b = -2.0 ** 2.0").unwrap();
