@@ -58,6 +58,7 @@ the module documentation:
 //! | `return! e`     | `B.returnFrom e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
 //! | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+//! | `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 //! | (empty)         | `B.zero`                                             |
 ```
 

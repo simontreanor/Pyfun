@@ -466,6 +466,17 @@ impl Census {
                 | CeItem::ReturnBang(e)
                 | CeItem::Yield(e)
                 | CeItem::YieldBang(e) => self.expr(e),
+                CeItem::For {
+                    target,
+                    source,
+                    body,
+                    ..
+                } => {
+                    self.expr(source);
+                    let names = target.bound_names();
+                    self.bind_root(binder_key(it), &names);
+                    self.ce_items(body);
+                }
             }
         }
     }

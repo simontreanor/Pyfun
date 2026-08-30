@@ -17,6 +17,7 @@
 //! | `return! e`     | `B.returnFrom e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
 //! | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+//! | `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 //! | (empty)         | `B.zero`                                             |
 //!
 //! A builder need only define the functions its bodies actually use; a missing
@@ -92,6 +93,25 @@ pub fn desugar_ce(builder: &str, items: &[CeItem], span: Span) -> Result<Expr, (
         CeItem::YieldBang(e) => {
             let y = call1(builder, "yieldFrom", e.clone(), span);
             combined_with_rest(builder, y, rest, span)
+        }
+        CeItem::For {
+            target,
+            target_span,
+            source,
+            body,
+        } => {
+            // F#'s `For`: the body, desugared on its own, becomes the function
+            // applied to each element; what follows the loop combines like a
+            // `yield`.
+            let inner = desugar_ce(builder, body, span)?;
+            let f = call2(
+                builder,
+                "for_",
+                source.clone(),
+                lam(target.clone(), *target_span, inner, span),
+                span,
+            );
+            combined_with_rest(builder, f, rest, span)
         }
     }
 }

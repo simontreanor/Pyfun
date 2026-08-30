@@ -300,19 +300,21 @@ play comes first; the browser target is last because it depends on the async dec
     match arms (F# allows `let!` in an arm), a separate desugaring change that waits for a program
     to need it.
 
-15. **`for` inside computation expressions** (#103, S–M, spelling decided). `seq { }` has no `for`,
-    so "one per element" is `yield! (List.map f xs)`, which allocates a list to feed a generator; a
-    user builder has no `for_` row either, and `DESIGN.md` §8.1 lists `For` as part of the protocol
-    being followed. **Decided:** the Python spelling, `for x in xs:` with an offside block, consistent
-    with `match e:` / `case`; `for` is a contextual keyword inside CE braces only. Native `seq` lowers
-    to Python's `for` statement; a user builder desugars to `B.for_ e (fun x -> ...)`. Its two small
-    siblings shipped with item 14: the first-item near-miss (`Html { for ...`, `Html { class_ …`)
-    is now diagnosed as "not a computation-expression item", naming what the position takes, instead
-    of as a record literal missing `=`; and `docs/src/internals/03-desugaring.md` now quotes the whole
-    protocol table (`yield!` and `zero` were missing, the two a list-shaped DSL needs).
-    **Turned down:** custom operations (F#'s `[<CustomOperation>]`, `class' "board"` as a bare item);
-    they need a per-builder name table, and a list-shaped markup DSL (`div [attrs] [kids]`) is where
-    F#'s own community settled.
+15. ~~**`for` inside computation expressions**~~ **CLOSED 2026-08-30** (#103, in the PR carrying
+    this entry; its two small siblings shipped in #112). `seq { }` had no `for`, so "one per element"
+    was `yield! (List.map f xs)`, which allocates a list to feed a generator; a user builder had no
+    `for_` row either, and `DESIGN.md` §8.1 lists `For` as part of the protocol being followed.
+    **Decided and done:** the Python spelling, `for x in xs:` with an offside body, consistent with
+    `match e:` / `case`; `for` is a keyword only in item position inside CE braces. The source is a
+    `List` or a `Seq`, the target any irrefutable pattern, the body a nested level of the same block
+    (anything but `return`). Native `seq`/`async`/`result`/`option` lower to Python's `for`
+    statement (a failed `let!` inside a `result` loop still short-circuits the block); a user builder
+    desugars to `B.for_ e (fun x -> body)`, combined with what follows like a `yield`. One
+    Python-shaped rule keeps a one-line block unambiguous: a body on the same line as the `:` is
+    exactly one item, a longer body goes on indented lines, and the pretty-printer lays such a block
+    out on lines. **Turned down:** custom operations (F#'s `[<CustomOperation>]`, `class' "board"` as
+    a bare item); they need a per-builder name table, and a list-shaped markup DSL
+    (`div [attrs] [kids]`) is where F#'s own community settled.
 
 16. ~~**A `unit -> a` thunk handed to Python is miscalled**~~ **CLOSED 2026-08-30** (#107, in the PR
     carrying this entry). `fun _ -> 41` lowered to `lambda _: 41` and `asyncio.to_thread` called it

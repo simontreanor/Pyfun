@@ -1066,9 +1066,13 @@ fn mentions_sensitive(e: &Expr, sensitive: &HashSet<String>) -> bool {
             mentions_sensitive(first, sensitive)
                 || rest.iter().any(|(_, o)| mentions_sensitive(o, sensitive))
         }
-        ExprKind::Ce { items, .. } => items
-            .iter()
-            .any(|it| mentions_sensitive(ce_item_value(it), sensitive)),
+        ExprKind::Ce { items, .. } => {
+            let mut exprs = Vec::new();
+            for it in items {
+                ce_item_exprs(it, &mut exprs);
+            }
+            exprs.iter().any(|e| mentions_sensitive(e, sensitive))
+        }
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             elems.iter().any(|e| mentions_sensitive(e, sensitive))
         }
@@ -1090,15 +1094,22 @@ fn mentions_sensitive(e: &Expr, sensitive: &HashSet<String>) -> bool {
     }
 }
 
-/// The value expression carried by a computation-expression item.
-fn ce_item_value(it: &CeItem) -> &Expr {
+/// The value expressions carried by a computation-expression item (a `for`
+/// carries its source and, recursively, its body's).
+pub(super) fn ce_item_exprs<'a>(it: &'a CeItem, out: &mut Vec<&'a Expr>) {
     match it {
-        CeItem::LetBang { value, .. } | CeItem::Let { value, .. } => value,
+        CeItem::LetBang { value, .. } | CeItem::Let { value, .. } => out.push(value),
         CeItem::DoBang(e)
         | CeItem::Return(e)
         | CeItem::ReturnBang(e)
         | CeItem::Yield(e)
-        | CeItem::YieldBang(e) => e,
+        | CeItem::YieldBang(e) => out.push(e),
+        CeItem::For { source, body, .. } => {
+            out.push(source);
+            for it in body {
+                ce_item_exprs(it, out);
+            }
+        }
     }
 }
 
@@ -1197,6 +1208,34 @@ pub(super) fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
     }
 }
 
+fn collect_free_ce_items(items: &[CeItem], bound: &HashSet<String>, out: &mut HashSet<String>) {
+    let mut b = bound.clone();
+    for it in items {
+        match it {
+            CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
+                collect_free(value, &b, out);
+                b.extend(target.bound_names());
+            }
+            CeItem::DoBang(e)
+            | CeItem::Return(e)
+            | CeItem::ReturnBang(e)
+            | CeItem::Yield(e)
+            | CeItem::YieldBang(e) => collect_free(e, &b, out),
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } => {
+                collect_free(source, &b, out);
+                let mut inner = b.clone();
+                inner.extend(target.bound_names());
+                collect_free_ce_items(body, &inner, out);
+            }
+        }
+    }
+}
+
 /// P8: collect the free variables of `e` (names referenced but not bound within),
 /// given the already-bound set. Used for the named-folder capture check and the
 /// decode pass's named-decoder check (`decode_spec.rs`).
@@ -1249,22 +1288,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
                 }
             }
         }
-        ExprKind::Ce { items, .. } => {
-            let mut b = bound.clone();
-            for it in items {
-                match it {
-                    CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
-                        collect_free(value, &b, out);
-                        b.extend(target.bound_names());
-                    }
-                    CeItem::DoBang(e)
-                    | CeItem::Return(e)
-                    | CeItem::ReturnBang(e)
-                    | CeItem::Yield(e)
-                    | CeItem::YieldBang(e) => collect_free(e, &b, out),
-                }
-            }
-        }
+        ExprKind::Ce { items, .. } => collect_free_ce_items(items, bound, out),
         ExprKind::App { func, arg } => {
             collect_free(func, bound, out);
             collect_free(arg, bound, out);
@@ -1327,7 +1351,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
 /// The `for`-loop target for an element pattern, when Python can unpack it
 /// itself: a name, a wildcard (`_`), or a tuple of those, nested. Anything
 /// else needs a temp and an explicit unpack.
-fn loop_target(pattern: &Pattern) -> Option<PyForTarget> {
+pub(super) fn loop_target(pattern: &Pattern) -> Option<PyForTarget> {
     match pattern {
         Pattern::Var { name, .. } => Some(PyForTarget::Name(py_value_name(name))),
         Pattern::Wildcard => Some(PyForTarget::Name("_".to_string())),

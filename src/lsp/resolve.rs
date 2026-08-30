@@ -494,6 +494,45 @@ impl Resolver {
         }
     }
 
+    /// Each `let!`/`let` binds for the *following* items, so track a single
+    /// growing scope frame across the block; a reference resolves to the
+    /// binding's name span. A `for` body is a nested frame with the target bound.
+    fn walk_ce_items(&mut self, items: &[CeItem]) {
+        self.scopes.push(HashMap::new());
+        for item in items {
+            match item {
+                CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
+                    self.walk_expr(value);
+                    // A destructuring target binds each of its names at its
+                    // own span, like any other binding position.
+                    for (name, span) in target.bound_vars() {
+                        self.bind_in_scope(name.to_string(), span);
+                    }
+                }
+                CeItem::DoBang(e)
+                | CeItem::Return(e)
+                | CeItem::ReturnBang(e)
+                | CeItem::Yield(e)
+                | CeItem::YieldBang(e) => self.walk_expr(e),
+                CeItem::For {
+                    target,
+                    source,
+                    body,
+                    ..
+                } => {
+                    self.walk_expr(source);
+                    self.scopes.push(HashMap::new());
+                    for (name, span) in target.bound_vars() {
+                        self.bind_in_scope(name.to_string(), span);
+                    }
+                    self.walk_ce_items(body);
+                    self.scopes.pop();
+                }
+            }
+        }
+        self.scopes.pop();
+    }
+
     fn walk_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Int(_)
@@ -564,31 +603,7 @@ impl Resolver {
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);
             }
-            ExprKind::Ce { items, .. } => {
-                // Each `let!`/`let` binds for the *following* items, so track a
-                // single growing scope frame across the block; a reference resolves
-                // to the binding's name span.
-                self.scopes.push(HashMap::new());
-                for item in items {
-                    match item {
-                        CeItem::LetBang { target, value, .. }
-                        | CeItem::Let { target, value, .. } => {
-                            self.walk_expr(value);
-                            // A destructuring target binds each of its names at its
-                            // own span, like any other binding position.
-                            for (name, span) in target.bound_vars() {
-                                self.bind_in_scope(name.to_string(), span);
-                            }
-                        }
-                        CeItem::DoBang(e)
-                        | CeItem::Return(e)
-                        | CeItem::ReturnBang(e)
-                        | CeItem::Yield(e)
-                        | CeItem::YieldBang(e) => self.walk_expr(e),
-                    }
-                }
-                self.scopes.pop();
-            }
+            ExprKind::Ce { items, .. } => self.walk_ce_items(items),
             ExprKind::Annot { value, .. } => self.walk_expr(value),
             ExprKind::List { elems } | ExprKind::Tuple { elems } => {
                 for e in elems {

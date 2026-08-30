@@ -4219,6 +4219,50 @@ fn e2e_a_thunk_argument_to_an_extern_is_wrapped_for_python() {
 }
 
 #[test]
+fn e2e_for_items_in_seq_async_result_and_a_user_builder() {
+    // #103: native `for` statements in `seq`/`async`/`result`, `B.for_` for a
+    // user builder; a `let!` inside a `result` loop still short-circuits.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               module Html =\n  let yield_ n = [n]\n  let combine a b = List.concat a b\n  let delay f = f ()\n  let for_ xs f = List.collect f xs\n\
+               let page rows = Html {\n  yield \"h1\"\n  for r in rows:\n    yield f\"tr {r}\"\n  yield \"p\"\n}\n\
+               print (page [\"a\", \"b\"])\n\
+               let squares = seq {\n  for x in [1, 2, 3]:\n    let y = x * x\n    yield y\n  yield 100\n}\n\
+               print (Seq.toList squares)\n\
+               let nested = seq { for x in [1, 2]: for y in Seq.ofList [10, 20]: yield x + y }\n\
+               print (Seq.toList nested)\n\
+               let pairs = seq { for (a, b) in [(1, 2), (3, 4)]: yield a + b }\n\
+               print (Seq.toList pairs)\n\
+               let check x = if x > 0 then Ok x else Error f\"bad {x}\"\n\
+               let allGood xs = result {\n  for x in xs:\n    let! _ = check x\n  return \"all positive\"\n}\n\
+               print (allGood [1, 2, 3])\n\
+               print (allGood [1, -2, 3])\n\
+               let main = async {\n  for n in [1, 2]:\n    do! Async.sleep 0.001\n    print n\n  return ()\n}\n\
+               runAsync main";
+    let program = pyfun::compile(src).unwrap();
+    assert!(
+        program.contains(
+            "    for x in [1, 2, 3]:\n        y = x * x\n        yield y\n    yield 100\n"
+        ),
+        "{program}"
+    );
+    assert!(
+        program.contains("    for (a, b) in [(1, 2), (3, 4)]:\n"),
+        "{program}"
+    );
+    assert!(
+        program.contains("Html_for_(rows, lambda r: Html_yield_("),
+        "{program}"
+    );
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(
+        out.trim(),
+        "['h1', 'tr a', 'tr b', 'p']\n[1, 4, 9, 100]\n[11, 21, 12, 22]\n[3, 7]\nOk('all positive')\nError('bad -2')\n1\n2"
+    );
+}
+
+#[test]
 fn e2e_format_module_formats_numbers_and_strings() {
     // The `Format` members run and produce the expected strings. Uses an ASCII `$`
     // (not `£`) so the assertion doesn't depend on the console's output encoding.

@@ -210,6 +210,13 @@ impl Parser {
     /// nested within an item sit at a greater depth, so line breaks inside
     /// them continue to separate nothing, and lines led by an operator or
     /// another continuation token never reach the application loop that asks.
+    /// Inside CE braces `for` is a keyword (the loop item), so it can never be
+    /// an application argument there: `yield a for c in cs: …` on one line is
+    /// two items, not `a` applied to `for`.
+    fn ce_for_keyword_here(&self) -> bool {
+        !self.ce_items.is_empty() && matches!(self.peek(), Tok::Ident(name) if name == "for")
+    }
+
     fn ce_item_ends_here(&self) -> bool {
         let Some(frame) = self.ce_items.last() else {
             return false;
@@ -1535,7 +1542,7 @@ impl Parser {
         let start = self.cur_start();
         let head_pos = self.pos;
         let mut func = self.parse_postfix()?;
-        while starts_atom(self.peek()) && !self.ce_item_ends_here() {
+        while starts_atom(self.peek()) && !self.ce_item_ends_here() && !self.ce_for_keyword_here() {
             self.check_ce_argument_alignment(head_pos)?;
             let arg = self.parse_postfix()?;
             func = self.mk(
@@ -1657,9 +1664,9 @@ impl Parser {
                 // uppercase name, `{`, then an identifier that is not followed by
                 // `=`. As a record literal it would fail with "expected `=`" on the
                 // token after the identifier, which is the wrong complaint when the
-                // line was meant as a CE item (`Html { for r in rows: …` or a
-                // builder custom operation, `Html { class_ "board"`, neither of
-                // which the item protocol has). Name what the position takes.
+                // line was meant as a CE item (a builder custom operation,
+                // `Html { class_ "board"`, which the item protocol does not have).
+                // Name what the position takes.
                 if is_upper(&name)
                     && *self.peek2() == Tok::LBrace
                     && matches!(self.peek3(), Tok::Ident(_))
@@ -1672,7 +1679,7 @@ impl Parser {
                     return Err(ParseError {
                         message: format!(
                             "`{head}` is not a computation-expression item: a `{name} {{ … }}` \
-                             block takes `let!`, `let`, `do!`, `return`, `yield`, or an \
+                             block takes `let!`, `let`, `do!`, `return`, `yield`, `for`, or an \
                              expression, and a `{name} {{ … }}` record literal takes \
                              `field = value` pairs"
                         ),
@@ -1956,6 +1963,7 @@ impl Parser {
             (Tok::Return, _) => "return",
             (Tok::Yield, Tok::Bang) => "yield!",
             (Tok::Yield, _) => "yield",
+            (Tok::Ident(name), _) if name == "for" => "for",
             // A bare expression item; anything that is not one fails the match
             // below before the frame is read.
             _ => "expression",
@@ -1966,13 +1974,68 @@ impl Parser {
             line,
             kind,
         });
-        let item = self.parse_ce_item_inner();
+        let item = self.parse_ce_item_inner(depth);
         self.ce_items.pop();
         item
     }
 
-    fn parse_ce_item_inner(&mut self) -> Result<CeItem, ParseError> {
+    /// `for target in source:` then the body items. Braces carry no layout
+    /// tokens, so the body is delimited by columns like every other item: it
+    /// runs to the first token that starts a line at or left of the `for` (or
+    /// the closing brace). A body that begins on the same line as the `:` is
+    /// exactly one item (`for x in xs: yield x`), as in Python, so a one-line
+    /// block stays unambiguous; a longer body goes on indented lines.
+    fn parse_ce_for(&mut self, depth: u32) -> Result<CeItem, ParseError> {
+        let (_, for_col) = self.token_pos(self.pos);
+        self.bump(); // `for`
+        let (target, target_span) = self.parse_binding_target()?;
         match self.peek() {
+            Tok::Ident(name) if name == "in" => {
+                self.bump();
+            }
+            _ => return Err(self.error("expected `in` after the `for` target")),
+        }
+        let source = self.parse_expr()?;
+        self.expect(&Tok::Colon, "`:` after the `for` source")?;
+        let mut body = Vec::new();
+        let same_line = !self.at_eof()
+            && !matches!(self.peek(), Tok::RBrace)
+            && self.tokens[self.pos].line_start.is_none();
+        if same_line {
+            body.push(self.parse_ce_item(depth)?);
+        } else {
+            loop {
+                if self.at_eof() || matches!(self.peek(), Tok::RBrace) {
+                    break;
+                }
+                let t = &self.tokens[self.pos];
+                if t.depth != depth {
+                    break;
+                }
+                if let Some(ls) = t.line_start
+                    && ls.col <= for_col
+                {
+                    break;
+                }
+                body.push(self.parse_ce_item(depth)?);
+            }
+        }
+        if body.is_empty() {
+            return Err(self.error("a `for` needs at least one item in its body"));
+        }
+        Ok(CeItem::For {
+            target,
+            target_span,
+            source,
+            body,
+        })
+    }
+
+    fn parse_ce_item_inner(&mut self, depth: u32) -> Result<CeItem, ParseError> {
+        match self.peek() {
+            // `for target in source: body` — a contextual keyword, only in item
+            // position inside CE braces (Pyfun has no `for` loop elsewhere).
+            Tok::Ident(name) if name == "for" => self.parse_ce_for(depth),
             Tok::Let => {
                 self.bump();
                 let bang = self.eat(&Tok::Bang);
@@ -2033,10 +2096,9 @@ impl Parser {
                     value,
                 })
             }
-            _ => {
-                Err(self
-                    .error("expected `let!`, `let`, `do!`, `return`, `yield`, or an expression"))
-            }
+            _ => Err(self.error(
+                "expected `let!`, `let`, `do!`, `return`, `yield`, `for`, or an expression",
+            )),
         }
     }
 
@@ -2399,6 +2461,7 @@ fn starts_atom_pattern(tok: &Tok) -> bool {
 /// … }`) from a constructor applied to a record (`Some { x = 1 }`).
 fn starts_ce_item(tok: &Tok) -> bool {
     matches!(tok, Tok::Let | Tok::Return | Tok::Yield | Tok::Do)
+        || matches!(tok, Tok::Ident(name) if name == "for")
 }
 
 fn starts_type_atom(tok: &Tok) -> bool {
@@ -2667,8 +2730,9 @@ mod tests {
         let (_, errors) = parse_recover(lex(src).unwrap());
         let err = errors.first().expect("a parse error");
         assert!(
-            err.message
-                .contains("expected `let!`, `let`, `do!`, `return`, `yield`, or an expression"),
+            err.message.contains(
+                "expected `let!`, `let`, `do!`, `return`, `yield`, `for`, or an expression"
+            ),
             "reported: {}",
             err.message
         );
@@ -2677,22 +2741,18 @@ mod tests {
 
     #[test]
     fn a_first_item_that_is_not_a_ce_item_is_named_rather_than_read_as_a_record() {
-        // `Html { for …` and `Html { class_ "board"` fail the CE lookahead and
-        // used to be diagnosed as a record literal missing its `=`.
-        for (src, head) in [
-            ("let p = Html {\n  for r in rows: yield r\n}", "for"),
-            ("let q = Html { class_ \"board\" }", "class_"),
-        ] {
-            let (_, errors) = parse_recover(lex(src).unwrap());
-            let err = errors.first().expect("a parse error");
-            assert!(
-                err.message
-                    .contains(&format!("`{head}` is not a computation-expression item")),
-                "{src:?} reported: {}",
-                err.message
-            );
-            assert_eq!(err.span.start, src.find(head).unwrap(), "{err:?}");
-        }
+        // `Html { class_ "board"` fails the CE lookahead and used to be diagnosed
+        // as a record literal missing its `=`.
+        let src = "let q = Html { class_ \"board\" }";
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        let err = errors.first().expect("a parse error");
+        assert!(
+            err.message
+                .contains("`class_` is not a computation-expression item"),
+            "{src:?} reported: {}",
+            err.message
+        );
+        assert_eq!(err.span.start, src.find("class_").unwrap(), "{err:?}");
         // The record spellings the lookahead exists for still parse as records.
         for src in [
             "let p = Point { x = 1, y = 2 }",
