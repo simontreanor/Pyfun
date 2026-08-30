@@ -3,6 +3,13 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.8.0
+
+- Version aligned to the compiler's 0.8.0 release. No client changes; the compiler it drives adds
+  the `Async`/`Task`/`Encode` modules and `Decode.auto`, `for` and bare expression items in
+  computation expressions, async self tail calls that loop instead of recursing, and `pyfun bundle`
+  for a static Pyodide page. One breaking change: an `->{async}` extern must return `Async`.
+
 ## 0.7.0
 
 - Version aligned to the compiler's 0.7.0 release. No client changes; the compiler it drives emits
