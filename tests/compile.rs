@@ -1268,7 +1268,11 @@ fn match_on_lookups_falls_through_for_other_shapes() {
     // A refutable payload, a guard, and a non-lookup scrutinee all keep the
     // ordinary `match` over the helper's `Option` (a partial application of the
     // lookup cannot reach a match at all: the checker rejects it).
-    assert_eq!(py.matches("match _pf_map_try_find(k, m):").count(), 2, "{py}");
+    assert_eq!(
+        py.matches("match _pf_map_try_find(k, m):").count(),
+        2,
+        "{py}"
+    );
     assert_eq!(py.matches("match ").count(), 3, "{py}");
 }
 
