@@ -2673,6 +2673,44 @@ fn the_async_module_members_type_as_declared() {
 }
 
 #[test]
+fn task_scope_hands_out_the_scope_that_start_needs() {
+    // #109: a start outside a scope is a missing `Scope`, a type error.
+    let src = "let worker = async { do! Async.sleep 0.01 }\n\
+               let session = Task.scope (fun scope -> async {\n  \
+                 Task.start scope worker\n  \
+                 return 1\n\
+               })";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    assert_error_contains(
+        "let bad = Task.start (Async.sleep 1.0) (Async.sleep 2.0)",
+        "expected Scope, found Async unit",
+    );
+    // `start` performs io, so a `let pure` cannot start tasks.
+    assert_error_contains(
+        "let pure go scope = Task.start scope (Async.sleep 1.0)",
+        "declared `pure` but performs `io`",
+    );
+}
+
+#[test]
+fn a_trailing_unit_expression_ends_a_monad_block() {
+    let src = "let check x = if x > 0 then Ok x else Error \"neg\"\n\
+               let v = result {\n  let! a = check 1\n  print a\n}\n\
+               let o = option { print 1 }\n\
+               let a = async { print 1 }";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    let analysis = pyfun::analyze("let o = option { print 1 }");
+    assert!(
+        analysis.types.iter().any(|t| t.ty == "Option unit"),
+        "{:?}",
+        analysis.types
+    );
+    // A trailing non-unit expression is still discarded silently by `let _`;
+    // the checker requires unit of the block's last step.
+    assert_error_contains("let o = option { 1 + 1 }", "mismatch");
+}
+
+#[test]
 fn async_ce_block_performs_the_async_effect() {
     // Building an `async {}` workflow introduces the `async` effect, so a `let pure`
     // binding whose body is an async block is rejected (`DESIGN.md` §4).

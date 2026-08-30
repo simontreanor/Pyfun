@@ -156,6 +156,45 @@ finished with 4
 `asyncio.gather`, `asyncio.wait_for`, `asyncio.wait` and `asyncio.to_thread`, so the emitted Python is
 still the code you would have written.
 
+## Structured concurrency
+
+Starting a task is where async programs leak: a task nobody joins keeps running after the code
+that started it has moved on. Pyfun's `Task` module types the discipline. `Task.scope` runs an
+async body and hands it a `Scope`; `Task.start` needs that `Scope`, so a task can only start
+where something will join it, and when the body ends the scope waits for every task it started
+(or cancels them all if one fails). There is no `cancel` to forget.
+
+```pyfun
+extern runAsync: Async a -> a = asyncio.run
+
+let worker name =
+  async {
+    do! Async.sleep 0.01
+    print f"{name} done"
+  }
+
+let session =
+  Task.scope (fun scope ->
+    async {
+      Task.start scope (worker "a")
+      Task.start scope (worker "b")
+      return "both joined"
+    })
+
+print (runAsync session)
+```
+
+```console
+a done
+b done
+both joined
+```
+
+The body returns before the workers finish, and the scope holds the result until they have. A
+`Task.start` outside a scope has no `Scope` to give, which the checker reports as a type error.
+The interop cookbook's `structured_concurrency` entry builds a mailbox agent over `asyncio.Queue`
+on the same two functions.
+
 ## Where async pays off, and where it does not
 
 Async earns its keep when real I/O overlaps, so waiting on one network request or file read lets

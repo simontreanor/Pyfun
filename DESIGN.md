@@ -752,6 +752,30 @@ them build `Option`/`Result` values. **Deliberately absent:** `Async.start` and 
 should only start inside a scope that will join or cancel it, which is the structured-concurrency
 item on the roadmap (`Task.scope`/`Task.start` over `asyncio.TaskGroup`); a free `start` is the leak.
 
+**Structured concurrency — the `Task` module.** Every task is owned by a scope, the scope does not
+exit until its children finish, one failure cancels the siblings, and leaving the scope cancels
+everything. Python 3.11 has the primitive (`asyncio.TaskGroup`); Pyfun types the discipline:
+`Task.scope : (Scope ->{e} Async a) ->{e} Async a` runs an async body inside `async with
+asyncio.TaskGroup() as tg` and hands the body the `Scope` (an opaque built-in handle, the capability),
+and `Task.start : Scope -> Async unit ->{io} unit` needs it, so a start outside a scope is a missing
+argument at compile time rather than a leaked task at run time, and there is no `cancel` to forget.
+This is the **value form** of the gate; the effect form (a `spawn` label only a scope discharges,
+Pyfun's first effect handler) is the aspiration on the roadmap. `Async.parallel`/`race`/`timeout`
+stay the one-shot combinators they are; a `task { }` spelling was considered and set aside: the §8.1
+rule keeps the built-ins at four, and a user builder cannot open the scope around the whole block
+(the protocol has no `run` member), while `Task.scope (fun scope -> async { … })` reads well enough
+that adding `run` to the protocol waits for demand. A failed child raises an `ExceptionGroup` out of
+the scope, which `Async.catch` reports as one `Exception` (kind `ExceptionGroup`); a
+`Result a (List Exception)` reading of the scope stays open until a program needs the members. The
+lowering is two emitted helpers over `asyncio` and one Python IR node, `PyStmt::AsyncWith`. A
+blocking `input()` on a worker thread cannot be cancelled, so a keyboard task under `Async.toThread`
+outlives its scope until the process exits; that is the platform's limit, not the scope's.
+
+A mailbox **agent** (F#'s `MailboxProcessor`) is deliberately *not* a prelude module: it is an
+`asyncio.Queue` behind two externs and a recursive `async` loop that is a `match` over a message ADT,
+which the cookbook shows (`examples/interop/structured_concurrency.pyfun`) and the game consumes; it
+is promoted once its signature stops moving (whether `start` takes the scope, for one).
+
 **JSON decoding — the `Decode` module.** An Elm-style (`elm/json`) decoder-combinator
 library over an opaque built-in `Decoder a`, module-qualified like the others (single source of truth
 `types::DECODE_PRELUDE` + `seed_decode_prelude`). It is the batteries-included form of the "parse, don't
@@ -1734,7 +1758,8 @@ expression as `let () = e`): the parser reads it as `let _ = e`, which is what t
 of it (`unit`) and what the canonical pretty-print spells, so a `print`, a unit-typed `match` or
 `if` needs no `let _ =` in front of it. A trailing `do! e` ends a `result`/`option`/`async` block
 as its value (`M unit`), as the table's user-builder row already did, so a fire-and-forget
-`async { … do! drain w }` needs no `return ()` after it. The item boundary is the offside rule (an
+`async { … do! drain w }` needs no `return ()` after it; a trailing unit expression (`post inbox
+Quit`) ends the block the same way, F#'s implicit `Zero`. The item boundary is the offside rule (an
 item owns its line and any line indented past it), so an expression item never swallows the line
 below it as arguments.
 

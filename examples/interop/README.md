@@ -39,6 +39,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
+| [`structured_concurrency.pyfun`](./structured_concurrency.pyfun) | `asyncio` (stdlib) | ✅ | `Task.scope`/`Task.start` over `asyncio.TaskGroup` (a start needs the `Scope`, so nothing leaks); a mailbox **agent** over `asyncio.Queue` whose loop is a `match` over a message ADT; `for` and a trailing call in an `async` block |
 | [`datetime.pyfun`](./datetime.pyfun) | `datetime` (stdlib) | ✅ | a **pure** FFI: `extern pure` + `let pure` prove a date pipeline effect-free; class target as constructor; `extern import` for classmethods (`now`, `fromisoformat`); `operator.add`/`sub` as extern targets; `try` on an impossible date |
 | [`network-rail/`](./network-rail/) | `gzip`/`pathlib` (stdlib) | ✅ on the bundled fixture | the boundary at scale: the national rail timetable feed folded in constant memory through a lazy `Seq`, in two versions whose only difference is where the streaming boundary sits (~1.3× apart on the real 3 GB feed) |
 

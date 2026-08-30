@@ -2953,6 +2953,9 @@ impl Lowerer {
                 self.needs_exception = true;
                 asy(self, "_pf_async_catch")
             }
+            // Task — structured concurrency over `asyncio.TaskGroup`.
+            "Task.scope" => asy(self, "_pf_task_scope"),
+            "Task.start" => asy(self, "_pf_task_start"),
             // List
             "List.len" => bare("len"),
             "List.sum" => bare("sum"),
@@ -4243,6 +4246,12 @@ impl Lowerer {
             CeItem::Let { target, value, .. } => {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 self.bind_ce_target(target, v, &mut s);
+                if rest.is_empty() {
+                    // A trailing unit expression ends the block with `()` (the
+                    // checker pinned it to `unit` and the block to `M unit`).
+                    s.push(PyStmt::Return(call1(sc.success, PyExpr::NoneLit)));
+                    return Ok(s);
+                }
                 let mut locals = locals.clone();
                 locals.extend(target.bound_names());
                 s.extend(self.lower_short_circuit_items(rest, &locals, sc)?);
@@ -5674,6 +5683,26 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                     ))],
                 }],
             ),
+            // Task.scope(body): async with TaskGroup() as tg: return await body(tg)
+            "_pf_task_scope" => adef(
+                helper,
+                &["body"],
+                vec![PyStmt::AsyncWith {
+                    context: call(asyncio("TaskGroup"), vec![]),
+                    binding: "tg".to_string(),
+                    body: vec![PyStmt::Return(await_(call(name("body"), vec![name("tg")])))],
+                }],
+            ),
+            // Task.start(tg, c): tg.create_task(c); the task is the scope's.
+            "_pf_task_start" => PyStmt::FuncDef {
+                name: helper.to_string(),
+                params: vec!["tg".to_string(), "c".to_string()],
+                body: vec![
+                    PyStmt::Expr(call(attr(name("tg"), "create_task"), vec![name("c")])),
+                    PyStmt::Return(PyExpr::NoneLit),
+                ],
+                is_async: false,
+            },
             other => unreachable!("unknown Async helper {other}"),
         })
         .collect()

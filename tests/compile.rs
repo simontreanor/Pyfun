@@ -5270,6 +5270,37 @@ fn e2e_example_http_fetch() {
 }
 
 #[test]
+fn e2e_example_structured_concurrency() {
+    run_example(
+        "structured_concurrency.pyfun",
+        &[
+            "agent heard hello",
+            "agent heard world",
+            "agent handled 2 messages",
+        ],
+    );
+}
+
+#[test]
+fn e2e_a_trailing_unit_expression_ends_result_and_option_blocks() {
+    let Some(python) = python_cmd() else { return };
+    let src = "let check x = if x > 0 then Ok x else Error \"neg\"\n\
+               let v = result {\n  let! a = check 1\n  print a\n}\n\
+               print v\n\
+               let o = option { print 2 }\n\
+               print o\n\
+               let e = result {\n  let! a = check (0 - 1)\n  print a\n}\n\
+               print e";
+    let program = pyfun::compile(src).unwrap();
+    assert!(
+        program.contains("        _ = print(a)\n        return Ok(None)\n"),
+        "{program}"
+    );
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(out.trim(), "1\nOk(None)\n2\nSome(None)\nError('neg')");
+}
+
+#[test]
 fn example_network_rail_compiles() {
     // The Network Rail example lives in a subdir with a Python helper + a bundled
     // sample and writes a file rather than printing, so it doesn't fit the stdout-

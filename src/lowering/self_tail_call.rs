@@ -199,7 +199,7 @@ fn binds(stmts: &[PyStmt], name: &str) -> bool {
             .iter()
             .any(|c| pattern_binds(&c.pattern, name) || binds(&c.body, name)),
         PyStmt::Try { body, handler, .. } => binds(body, name) || binds(handler, name),
-        PyStmt::WhileTrue { body } => binds(body, name),
+        PyStmt::WhileTrue { body } | PyStmt::AsyncWith { body, .. } => binds(body, name),
         _ => false,
     })
 }
@@ -230,7 +230,9 @@ fn has_yield(stmts: &[PyStmt]) -> bool {
         PyStmt::Yield(_) | PyStmt::YieldFrom(_) => true,
         PyStmt::If { body, orelse, .. } => has_yield(body) || has_yield(orelse),
         PyStmt::Match { cases, .. } => cases.iter().any(|c| has_yield(&c.body)),
-        PyStmt::For { body, .. } | PyStmt::WhileTrue { body } => has_yield(body),
+        PyStmt::For { body, .. } | PyStmt::WhileTrue { body } | PyStmt::AsyncWith { body, .. } => {
+            has_yield(body)
+        }
         PyStmt::Try { body, handler, .. } => has_yield(body) || has_yield(handler),
         _ => false,
     })
@@ -268,7 +270,7 @@ fn collect_bound(stmts: &[PyStmt], out: &mut HashSet<String>) {
                 collect_bound(body, out);
                 collect_bound(handler, out);
             }
-            PyStmt::WhileTrue { body } => collect_bound(body, out),
+            PyStmt::WhileTrue { body } | PyStmt::AsyncWith { body, .. } => collect_bound(body, out),
             _ => {}
         }
     }
@@ -322,7 +324,7 @@ fn nested_refs_stmt(stmt: &PyStmt, out: &mut HashSet<String>) {
                 nested_refs_stmt(s, out);
             }
         }
-        PyStmt::WhileTrue { body } => {
+        PyStmt::WhileTrue { body } | PyStmt::AsyncWith { body, .. } => {
             for s in body {
                 nested_refs_stmt(s, out);
             }
@@ -416,7 +418,9 @@ fn free_stmts(stmts: &[PyStmt], bound: &HashSet<String>, out: &mut HashSet<Strin
                 }
                 free_stmts(handler, &inner, out);
             }
-            PyStmt::WhileTrue { body } => free_stmts(body, bound, out),
+            PyStmt::WhileTrue { body } | PyStmt::AsyncWith { body, .. } => {
+                free_stmts(body, bound, out)
+            }
             _ => {}
         }
     }
