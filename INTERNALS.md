@@ -231,6 +231,71 @@ driver computes each module's singleton set with the same two functions and pass
 defines it and `palette.Red()` otherwise; a project module that needs `Option` imports `_None_` from
 the runtime alongside `Some`/`None_` unless it binds that name itself.
 
+### Arm-scoped captures and nested-block `let`s — implements DESIGN §5
+
+A match arm's capture, and a `let` in a nested block, both become function-wide Python locals, so one
+that reuses a name the enclosing Python frame uses elsewhere is renamed (issues #92 and #96). The
+rule, in `src/lowering/captures.rs`: a capture `n` of arm `A` is freshened when `n` occurs in the
+frame outside `A`, not counting sibling arms of the same match that also capture `n`; a `let n` in a
+nested block `B` is freshened when `n` occurs in the frame outside `B` (occurrences inside `B`
+include the `let`'s own value, so `let x = x + 1` there reads the outer `x` and Python's
+`_x = x + 1` is right either way). An occurrence is a `Var` reference or an `<-` assignment
+target, never a binder. The census (`collect_occurrences`) walks the frame's whole body, nested
+closures included (a closure's free reference resolves to the frame's slot), but on entering a nested
+Python scope (an `ExprKind::Fn`, a parameterised block `let`, a computation expression) it hides every
+name that scope binds for itself, its parameters and its frame-level binders, so a lambda's own `x`
+is its own slot. Binders in the same frame hide nothing: a block `let`, a parameter, another arm's
+capture and a fold loop variable all share the frame's one slot per name, which is the whole problem.
+
+`Lowerer::frames` is a stack of `Frame { occurrences, fresh }`, pushed in `lower_fn_body` (every
+function and every statement-bodied lambda), in `lower_ce` (a built-in CE body is its own function; a
+user builder desugars into the enclosing frame, so its frame is the enclosing census with the CE
+body's occurrences added on top), and once in `lower_module` (top-level values evaluate at module
+scope; a parameterised top-level `let` and an active-pattern recognizer are their own defs). The
+fold-loop pass inlines a folder body into the enclosing frame, whose census hid that body as a nested
+scope, so `emit_fold_loop` pushes the enclosing frame merged with the body's occurrences for the
+duration. A def-emission site without its own push inherits the enclosing census, and every merge
+over-counts; both only ever freshen more, never less.
+
+`Lowerer::enter_arm(arms, idx, locals)` is the one place an arm is entered, used by every arm-binding
+site (the return- and value-position `match`, the active-pattern chain and fall-through sequence, the
+`Option`/`Result` ladder, the lookup peephole, the fold pass's inlined match). It extends the locals,
+shadows same-named registry entries, then for each capture computes
+`frame[n] - occurrences_in(A) - Σ occurrences_in(sibling arms capturing n)` and, when positive,
+installs `n → fresh` in `Lowerer::renames`, where `fresh_capture_name` is `_` + the name, bumped with
+a counter while the frame uses it, it was already handed out in the frame, it is a binder anywhere in
+the module, or it would land in the reserved `_pf_` space. `exit_arm` removes the arm's renames and
+unshadows. `renames` follows the block-scoped registries' discipline (`LocalScope`/`Shadowed`):
+saved and restored per block, displaced by parameters, lambda parameters and inner captures
+(`shadow_local_fns`), evicted by a block `let` or CE binder of the same name. Every place a binder or
+reference is spelled consults it: `lower_var` (first thing, before any routing), `lower_pattern`
+(captures, list rests, as-names), `bind_irrefutable`/`unpack_into_as` through their rename hook, the
+lookup peephole's `bind_arm_payload`, the ladder's whole-value binding and the active-pattern chain's
+binder assignments.
+
+**Nested-block `let`s.** Each `Frame` carries a block `depth`, bumped by `enter_block`/`exit_block`
+around the three block lowerings (`lower_block_return`, `lower_block_value`, the fold pass's inlined
+block) and reset by each frame push, plus `root_is_body`: whether the first block entered is the
+frame's own body (`lower_fn_body` sets it when the body is a block; a computation expression's items
+are not a block, so any block inside a CE is nested; the module frame treats a block-valued top-level
+binding as root, since a collision with a module-level binding is already isolated by
+`lower_module`'s frame wrap). A block that is not the root (`Frame::block_is_nested`) gets its own
+census (`block_occurrences`) on entry, and `lower_block_let` decides each bound name by
+`frame[n] - block[n] > 0`. A root-level `let` never renames: rebinding in sequence is what Python does
+too. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
+installs `n → _n` in `renames` for the rest of the block, where it dies with the block's
+`restore_local_scope`; a parameterised `let` installs it before its body so a recursive call resolves
+to the renamed def, and the def is emitted under the fresh name. The emitted target is passed down
+explicitly (`lower_let`'s `targets` map, through `lower_binding_as` and `unpack_binding`'s rename
+hook for a destructuring `let`), never read from `renames`, since the rename is not yet active while
+the value lowers. A `let mut` is covered: an `<-` target spells through `py_binder_name`, and the
+`global`/`nonlocal` declarations `lower_fn_body` computes from `scan_scope` (Pyfun names) map
+through the renames active when the nested function is lowered, which is while the outer rename is
+in force.
+
+Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), and a CE
+`let!`/`let` target, which is block-scoped in Pyfun exactly as in Python and so needs no freshening.
+
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 
 `Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures —

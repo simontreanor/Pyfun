@@ -26,6 +26,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+mod captures;
 mod decode_spec;
 mod fold_loop;
 mod self_tail_call;
@@ -375,6 +376,18 @@ struct Lowerer {
     /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
     /// (module-level) when emitting a closure.
     fn_local_stack: Vec<HashSet<String>>,
+    /// Stack of enclosing Python frames' occurrence censuses (`captures.rs`),
+    /// consulted when a match arm binds a name: a capture whose name the frame
+    /// uses elsewhere is renamed so the function-wide Python local it becomes
+    /// never rebinds another binding (`DESIGN.md` §5, "Arm-scoped captures").
+    /// Pushed per function body, per computation-expression body, and once for
+    /// the module; a def-emission site without its own push inherits the
+    /// enclosing census, which only ever freshens more.
+    frames: Vec<captures::Frame>,
+    /// Active capture renames (Pyfun name → emitted Python name) for the arms
+    /// currently being lowered. Block-scoped like `local_fn_defs`: saved and
+    /// restored per block, displaced by any inner binder of the same name.
+    renames: HashMap<String, String>,
     tmp_counter: usize,
     fn_counter: usize,
     needs_functools: bool,
@@ -640,6 +653,8 @@ impl Lowerer {
             // Default to the sound multi-file policy; single-file `lower` overrides it.
             order: OrderPolicy::All,
             fn_local_stack: Vec::new(),
+            frames: Vec::new(),
+            renames: HashMap::new(),
             tmp_counter: 0,
             fn_counter: 0,
             needs_functools: false,
@@ -650,6 +665,15 @@ impl Lowerer {
     }
 
     fn lower_module(&mut self, module: &Module) -> Result<PyModule, LowerError> {
+        // Module scope is the outermost Python frame: a top-level value's match
+        // captures are globals (`captures.rs`).
+        self.frames.push(captures::Frame::of_items(&module.items));
+        let lowered = self.lower_module_items(module);
+        self.frames.pop();
+        lowered
+    }
+
+    fn lower_module_items(&mut self, module: &Module) -> Result<PyModule, LowerError> {
         // User constructor classes (sum variants) and record classes.
         let mut classes = Vec::new();
         for item in &module.items {
@@ -801,11 +825,17 @@ impl Lowerer {
                             }),
                             target => {
                                 let target = target.clone();
-                                self.unpack_binding(&target, None, value, &mut code);
+                                self.unpack_binding(
+                                    &target,
+                                    None,
+                                    value,
+                                    &mut code,
+                                    &HashMap::new(),
+                                );
                             }
                         }
                     } else {
-                        self.lower_let(binding, &HashSet::new(), &mut code)?;
+                        self.lower_let(binding, &HashSet::new(), &mut code, &HashMap::new())?;
                     }
                 }
                 // The active-pattern recognizer lowers to a plain Python def
@@ -853,6 +883,7 @@ impl Lowerer {
                                 Some(name),
                                 &HashSet::new(),
                                 &mut code,
+                                &HashMap::new(),
                             )?,
                         }
                     }
@@ -941,13 +972,20 @@ impl Lowerer {
         binding: &LetBinding,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) -> Result<(), LowerError> {
         match &binding.target {
-            Pattern::Var { name, .. } => self.lower_binding_as(name, binding, locals, out),
+            Pattern::Var { name, .. } => {
+                let py_name = targets
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| py_value_name(name));
+                self.lower_binding_as(&py_name, binding, locals, out)
+            }
             // A discard keeps Python's own throwaway name, which reads as the
             // deliberate "evaluated for its effect" that it is.
             Pattern::Wildcard => self.lower_binding_as("_", binding, locals, out),
-            _ => self.lower_destructuring(binding, None, locals, out),
+            _ => self.lower_destructuring(binding, None, locals, out, targets),
         }
     }
 
@@ -961,11 +999,12 @@ impl Lowerer {
         prefix: Option<&str>,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) -> Result<(), LowerError> {
         let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
         out.append(&mut stmts);
         let target = binding.target.clone();
-        self.unpack_binding(&target, prefix, value, out);
+        self.unpack_binding(&target, prefix, value, out, targets);
         Ok(())
     }
 
@@ -979,6 +1018,7 @@ impl Lowerer {
         for name in target.bound_names() {
             self.local_fn_defs.remove(&name);
             self.local_arities.remove(&name);
+            self.renames.remove(&name);
         }
         match target {
             Pattern::Var { name, .. } => out.push(PyStmt::Assign {
@@ -991,7 +1031,31 @@ impl Lowerer {
             }),
             target => {
                 let target = target.clone();
-                self.unpack_binding(&target, None, value, out);
+                self.unpack_binding(&target, None, value, out, &HashMap::new());
+            }
+        }
+    }
+
+    /// Bind an arm's payload pattern to `value` (the lookup peephole's `m[k]`).
+    /// Unlike [`Lowerer::bind_ce_target`] this evicts nothing: the names are the
+    /// arm's own captures, spelled through their renames if any.
+    fn bind_arm_payload(&mut self, target: &Pattern, value: PyExpr, out: &mut Vec<PyStmt>) {
+        match target {
+            Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+                target: self.py_binder_name(name),
+                value,
+            }),
+            Pattern::Wildcard => {}
+            target => {
+                let base = self.fresh_tmp();
+                let rename = self.renames.clone();
+                bind_irrefutable(
+                    target,
+                    value,
+                    &base,
+                    &|n| rename.get(n).cloned().unwrap_or_else(|| py_value_name(n)),
+                    out,
+                );
             }
         }
     }
@@ -1005,10 +1069,11 @@ impl Lowerer {
         prefix: Option<&str>,
         value: PyExpr,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) {
         let rename = |n: &str| match prefix {
             Some(p) => format!("{p}_{}", py_value_name(n)),
-            None => py_value_name(n),
+            None => targets.get(n).cloned().unwrap_or_else(|| py_value_name(n)),
         };
         // The common shape, and the one worth emitting directly: `r, c = e`.
         if let Pattern::Tuple { elems } = target
@@ -1077,6 +1142,10 @@ impl Lowerer {
                 self.local_arities.remove(&name);
             }
         }
+        // Any rebinding means its own binding, not a renamed outer capture.
+        for name in b.bound_names() {
+            self.renames.remove(&name);
+        }
         let folder = if b.mutable {
             None
         } else if b.params.len() == 2 {
@@ -1121,12 +1190,14 @@ impl Lowerer {
         LocalScope {
             fn_defs: self.local_fn_defs.clone(),
             arities: self.local_arities.clone(),
+            renames: self.renames.clone(),
         }
     }
 
     fn restore_local_scope(&mut self, saved: LocalScope) {
         self.local_fn_defs = saved.fn_defs;
         self.local_arities = saved.arities;
+        self.renames = saved.renames;
     }
 
     /// Temporarily displace registry entries shadowed by newly-introduced binders
@@ -1145,6 +1216,12 @@ impl Lowerer {
                 .iter()
                 .filter_map(|n| self.local_arities.remove(n).map(|a| (n.clone(), a)))
                 .collect(),
+            // A same-named inner binder means its own binding, not the renamed
+            // outer capture.
+            renames: names
+                .iter()
+                .filter_map(|n| self.renames.remove(n).map(|r| (n.clone(), r)))
+                .collect(),
         }
     }
 
@@ -1155,20 +1232,176 @@ impl Lowerer {
         for (n, a) in saved.arities {
             self.local_arities.insert(n, a);
         }
+        for (n, r) in saved.renames {
+            self.renames.insert(n, r);
+        }
+    }
+
+    /// The emitted Python name for a binder or reference: the arm's capture
+    /// rename if one is active for it, else the ordinary keyword/builtin dodge.
+    fn py_binder_name(&self, name: &str) -> String {
+        match self.renames.get(name) {
+            Some(r) => r.clone(),
+            None => py_value_name(name),
+        }
+    }
+
+    /// Enter match arm `idx` of `arms`: extend the locals with its bindings,
+    /// shadow same-named registry entries, and rename any capture whose name the
+    /// enclosing Python frame uses outside this arm (`captures.rs`). Sibling arms
+    /// that capture the same name are disjoint alternatives reading their own
+    /// capture, so their occurrences do not count.
+    fn enter_arm(
+        &mut self,
+        arms: &[crate::parser::ast::MatchArm],
+        idx: usize,
+        locals: &HashSet<String>,
+    ) -> ArmScope {
+        let arm = &arms[idx];
+        let bindings = pattern_bindings(&arm.pattern);
+        let locals = extend(locals, &bindings);
+        // The arm's own binders displace outer entries first (an inner capture
+        // shadows any outer rename of the same name).
+        let shadowed = self.shadow_local_fns(&bindings);
+        let mut renamed = Vec::new();
+        let mut seen = HashSet::new();
+        for name in &bindings {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let Some(frame) = self.frames.last() else {
+                continue;
+            };
+            let total = frame.occurrences.get(name).copied().unwrap_or(0);
+            let mut inside = captures::arm_occurrences(arm, name);
+            for (j, other) in arms.iter().enumerate() {
+                if j != idx && pattern_bindings(&other.pattern).iter().any(|b| b == name) {
+                    inside += captures::arm_occurrences(other, name);
+                }
+            }
+            if total.saturating_sub(inside) == 0 {
+                continue;
+            }
+            let fresh = self.fresh_capture_name(name);
+            self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+            self.renames.insert(name.clone(), fresh);
+            renamed.push(name.clone());
+        }
+        ArmScope {
+            locals,
+            shadowed,
+            renamed,
+        }
+    }
+
+    fn exit_arm(&mut self, scope: ArmScope) {
+        for name in scope.renamed {
+            self.renames.remove(&name);
+        }
+        self.unshadow_local_fns(scope.shadowed);
+    }
+
+    /// Enter a block: bump the frame's block depth and, when the block is nested
+    /// (not the frame's root body), return its occurrence census so its `let`s
+    /// can be renamed (`captures.rs`). Paired with [`Lowerer::exit_block`].
+    fn enter_block(&mut self, stmts: &[BlockStmt]) -> Option<HashMap<String, usize>> {
+        let frame = self.frames.last_mut()?;
+        frame.depth += 1;
+        frame
+            .block_is_nested()
+            .then(|| captures::block_occurrences(stmts))
+    }
+
+    fn exit_block(&mut self) {
+        if let Some(frame) = self.frames.last_mut() {
+            frame.depth = frame.depth.saturating_sub(1);
+        }
+    }
+
+    /// Lower one `let` of a block. In a nested block, a name the enclosing Python
+    /// frame uses outside this block is renamed to `_name` for the rest of the
+    /// block (it would otherwise rebind the function-wide slot, issue #96): a
+    /// value `let` lowers its value first (references there mean the outer
+    /// binding) and installs the rename after; a parameterised `let` installs it
+    /// before its body so a recursive call resolves to the renamed def. The
+    /// rename dies with the block (`restore_local_scope`).
+    fn lower_block_let(
+        &mut self,
+        b: &LetBinding,
+        locals: &HashSet<String>,
+        out: &mut Vec<PyStmt>,
+        block_occ: Option<&HashMap<String, usize>>,
+    ) -> Result<(), LowerError> {
+        let mut targets = HashMap::new();
+        if let Some(occ) = block_occ {
+            for name in b.bound_names() {
+                if targets.contains_key(&name) {
+                    continue;
+                }
+                let Some(frame) = self.frames.last() else {
+                    break;
+                };
+                let total = frame.occurrences.get(&name).copied().unwrap_or(0);
+                let inside = occ.get(&name).copied().unwrap_or(0);
+                if total.saturating_sub(inside) == 0 {
+                    continue;
+                }
+                let fresh = self.fresh_capture_name(&name);
+                self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+                targets.insert(name, fresh);
+            }
+        }
+        self.enter_block_let(b);
+        if !b.params.is_empty() {
+            for (n, f) in &targets {
+                self.renames.insert(n.clone(), f.clone());
+            }
+        }
+        self.lower_let(b, locals, out, &targets)?;
+        self.note_block_let(b);
+        for (n, f) in targets {
+            self.renames.insert(n, f);
+        }
+        Ok(())
+    }
+
+    /// The fresh Python name for a renamed capture: `_` + the name, bumped with a
+    /// counter while it is already in use in the frame, already handed out, bound
+    /// anywhere in the module, or would land in the reserved `_pf_` space.
+    fn fresh_capture_name(&self, name: &str) -> String {
+        let base = format!("_{}", py_value_name(name));
+        let frame = self.frames.last().expect("a frame is pushed");
+        let taken = |candidate: &str| {
+            frame.uses(candidate)
+                || self.binder_names.contains(candidate)
+                || candidate.starts_with("_pf_")
+        };
+        if !taken(&base) {
+            return base;
+        }
+        let mut k = 2;
+        loop {
+            let candidate = format!("{base}{k}");
+            if !taken(&candidate) {
+                return candidate;
+            }
+            k += 1;
+        }
     }
 
     /// Lower a `let` binding, emitting it under `name` (so a module member can use
     /// its mangled `Module_member` name instead of `binding.name`).
     fn lower_binding_as(
         &mut self,
-        name: &str,
+        py_name: &str,
         binding: &LetBinding,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
-        // The emitted spelling of the binding (a `Module_member` name arrives here
-        // already composed, and is never itself reserved).
-        let py_name = py_value_name(name);
+        // `py_name` is the emitted spelling of the binding: the keyword/builtin
+        // dodge of the name, a composed `Module_member` name, or a nested-block
+        // rename (`lower_block_let`).
+        let py_name = py_name.to_string();
         if binding.params.is_empty() {
             let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
             // A binding whose value already *is* the (already-assigned) target — an
@@ -1245,17 +1478,26 @@ impl Lowerer {
         // Parameters shadow any same-named local folder for the body's duration.
         let shadowed = self.shadow_local_fns(params);
         self.fn_local_stack.push(bound);
+        // The body is its own Python frame for the capture-rename census.
+        self.frames.push(captures::Frame::of_body(body));
         let lowered = self.lower_return(body, inner);
+        self.frames.pop();
         self.fn_local_stack.pop();
         self.unshadow_local_fns(shadowed);
         let mut stmts = lowered?;
 
+        // A captured `mut` bound in an enclosing nested block may have been
+        // renamed there; the declaration names the slot the closure assigns.
         let mut decls = Vec::new();
         if !globals.is_empty() {
-            decls.push(PyStmt::Global(py_param_names(&globals)));
+            decls.push(PyStmt::Global(
+                globals.iter().map(|n| self.py_binder_name(n)).collect(),
+            ));
         }
         if !nonlocals.is_empty() {
-            decls.push(PyStmt::Nonlocal(py_param_names(&nonlocals)));
+            decls.push(PyStmt::Nonlocal(
+                nonlocals.iter().map(|n| self.py_binder_name(n)).collect(),
+            ));
         }
         // Destructuring parameters unpack first, after the `global`/`nonlocal`
         // declarations Python requires at the top of the block.
@@ -1299,15 +1541,14 @@ impl Lowerer {
                 }
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
-                for arm in arms {
+                for (i, arm) in arms.iter().enumerate() {
+                    // Binders shadow same-named registry entries, and a capture
+                    // the frame uses elsewhere is renamed (`enter_arm`).
+                    let scope = self.enter_arm(arms, i, locals);
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let bindings = pattern_bindings(&arm.pattern);
-                    let arm_locals = extend(locals, &bindings);
-                    // Pattern binders shadow same-named local folders (fold pass).
-                    let shadowed = self.shadow_local_fns(&bindings);
-                    let guard = self.lower_guard(&arm.guard, &arm_locals)?;
-                    let body = self.lower_return(&arm.body, &arm_locals)?;
-                    self.unshadow_local_fns(shadowed);
+                    let guard = self.lower_guard(&arm.guard, &scope.locals)?;
+                    let body = self.lower_return(&arm.body, &scope.locals)?;
+                    self.exit_arm(scope);
                     cases.push(PyCase {
                         pattern,
                         guard,
@@ -1340,12 +1581,11 @@ impl Lowerer {
         // Block scope for the local registries: entries this block adds (or
         // evicts) must not outlive it.
         let saved = self.save_local_scope();
+        let nested = self.enter_block(stmts);
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.enter_block_let(b);
-                    self.lower_let(b, &locals, &mut out)?;
-                    self.note_block_let(b);
+                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
@@ -1358,6 +1598,7 @@ impl Lowerer {
                 }
             }
         }
+        self.exit_block();
         self.restore_local_scope(saved);
         Ok(out)
     }
@@ -1505,15 +1746,12 @@ impl Lowerer {
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let tmp = self.fresh_tmp();
                 let mut cases = Vec::new();
-                for arm in arms {
+                for (i, arm) in arms.iter().enumerate() {
+                    let scope = self.enter_arm(arms, i, locals);
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let bindings = pattern_bindings(&arm.pattern);
-                    let arm_locals = extend(locals, &bindings);
-                    // Pattern binders shadow same-named local folders (fold pass).
-                    let shadowed = self.shadow_local_fns(&bindings);
-                    let guard = self.lower_guard(&arm.guard, &arm_locals)?;
-                    let (arm_stmts, arm_val) = self.lower_value(&arm.body, &arm_locals)?;
-                    self.unshadow_local_fns(shadowed);
+                    let guard = self.lower_guard(&arm.guard, &scope.locals)?;
+                    let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
+                    self.exit_arm(scope);
                     cases.push(PyCase {
                         pattern,
                         guard,
@@ -1685,7 +1923,7 @@ impl Lowerer {
             ExprKind::Assign { target, value } => {
                 let (mut stmts, v) = self.lower_value(value, locals)?;
                 stmts.push(PyStmt::Assign {
-                    target: py_value_name(target),
+                    target: self.py_binder_name(target),
                     value: v,
                 });
                 // An assignment is a Python statement; its value is unit.
@@ -1703,12 +1941,11 @@ impl Lowerer {
         let mut value = PyExpr::NoneLit;
         // Block scope for the local registries (see `lower_block_return`).
         let saved = self.save_local_scope();
+        let nested = self.enter_block(stmts);
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.enter_block_let(b);
-                    self.lower_let(b, &locals, &mut out)?;
-                    self.note_block_let(b);
+                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) => {
@@ -1722,6 +1959,7 @@ impl Lowerer {
                 }
             }
         }
+        self.exit_block();
         self.restore_local_scope(saved);
         Ok((out, value))
     }
@@ -2426,16 +2664,18 @@ impl Lowerer {
             }
         };
         // The `Some v` arm: bind `v` from the payload, then the body.
-        let bindings = pattern_bindings(&some_arm.pattern);
-        let arm_locals = extend(locals, &bindings);
-        let shadowed = self.shadow_local_fns(&bindings);
+        let some_idx = arms
+            .iter()
+            .position(|a| std::ptr::eq(a, some_arm))
+            .expect("the Some arm is one of the arms");
+        let scope = self.enter_arm(arms, some_idx, locals);
         let mut some_body = Vec::new();
         // A `_` payload is never read, so the subscript is not emitted either.
         if !matches!(v, Pattern::Wildcard) {
-            self.bind_ce_target(v, payload, &mut some_body);
+            self.bind_arm_payload(v, payload, &mut some_body);
         }
-        let lowered = self.lower_arm_body(&some_arm.body, &arm_locals, assign_to);
-        self.unshadow_local_fns(shadowed);
+        let lowered = self.lower_arm_body(&some_arm.body, &scope.locals, assign_to);
+        self.exit_arm(scope);
         some_body.extend(lowered?);
         let none_body = self.lower_arm_body(&none_arm.body, locals, assign_to)?;
         stmts.push(PyStmt::If {
@@ -2467,6 +2707,10 @@ impl Lowerer {
     /// constructor used as a value becomes an instance (`Ctor()`), and any
     /// constructor name is mangled to dodge Python keywords (`None` → `None_`).
     fn lower_var(&mut self, name: &str, locals: &HashSet<String>) -> PyExpr {
+        // A renamed match-arm capture: the arm reads it under its fresh name.
+        if let Some(renamed) = self.renames.get(name) {
+            return PyExpr::Name(renamed.clone());
+        }
         if name == "Ok" || name == "Error" {
             self.needs_result = true;
         }
@@ -3187,7 +3431,7 @@ impl Lowerer {
     fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
         match pattern {
             Pattern::Wildcard => PyPattern::Wildcard,
-            Pattern::Var { name, .. } => PyPattern::Capture(py_value_name(name)),
+            Pattern::Var { name, .. } => PyPattern::Capture(self.py_binder_name(name)),
             Pattern::Int(n) => PyPattern::Literal(PyExpr::Int(*n)),
             Pattern::Str(s) => PyPattern::Literal(PyExpr::Str(s.clone())),
             Pattern::Bool(b) => PyPattern::Literal(PyExpr::Bool(*b)),
@@ -3246,7 +3490,7 @@ impl Lowerer {
             } => {
                 let elems = prefix.iter().map(|p| self.lower_pattern(p)).collect();
                 let star = rest.as_deref().map(|r| match r {
-                    Pattern::Var { name, .. } => py_value_name(name),
+                    Pattern::Var { name, .. } => self.py_binder_name(name),
                     // `*_` and any other rest binder discard into a wildcard capture.
                     _ => "_".to_string(),
                 });
@@ -3263,7 +3507,7 @@ impl Lowerer {
             }
             Pattern::As { pattern, name, .. } => PyPattern::As {
                 pattern: Box::new(self.lower_pattern(pattern)),
-                name: py_value_name(name),
+                name: self.py_binder_name(name),
             },
         }
     }
@@ -3370,21 +3614,18 @@ impl Lowerer {
         let mut hoisted: Vec<(String, Vec<PyExpr>, String)> = Vec::new();
         // (condition, binder assigns, body) per arm; `None` = catch-all.
         let mut chain: Vec<(Option<PyExpr>, Vec<PyStmt>, Vec<PyStmt>)> = Vec::new();
-        for arm in arms {
+        for (i, arm) in arms.iter().enumerate() {
+            let scope = self.enter_arm(arms, i, locals);
             let (cond, binds) =
                 self.ap_arm_test(&arm.pattern, &subject, locals, &mut hoisted, &mut stmts)?;
-            let bindings = pattern_bindings(&arm.pattern);
-            let arm_locals = extend(locals, &bindings);
-            // Pattern binders shadow same-named local folders (fold pass).
-            let shadowed = self.shadow_local_fns(&bindings);
             let body = match assign_to {
-                None => self.lower_return(&arm.body, &arm_locals)?,
+                None => self.lower_return(&arm.body, &scope.locals)?,
                 Some(tmp) => {
-                    let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                    let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
                     with_assign(s, tmp, v)
                 }
             };
-            self.unshadow_local_fns(shadowed);
+            self.exit_arm(scope);
             let catch_all = cond.is_none();
             chain.push((cond, binds, body));
             if catch_all {
@@ -3446,21 +3687,19 @@ impl Lowerer {
             }
             None => None,
         };
-        for arm in arms {
+        for (i, arm) in arms.iter().enumerate() {
             // A structural arm (constructor/tuple/record/list pattern) is a
             // one-armed native `match`: the pattern tests and binds Python-side,
             // a failing case (or guard) falls out of the `match` and on to the
             // next arm. No recognizer is involved.
             if !self.ap_chain_supported(&arm.pattern) {
-                let bindings = pattern_bindings(&arm.pattern);
-                let arm_locals = extend(locals, &bindings);
-                // Pattern binders shadow same-named local folders (fold pass).
-                let shadowed = self.shadow_local_fns(&bindings);
-                let guard = self.lower_guard(&arm.guard, &arm_locals)?;
+                let scope = self.enter_arm(arms, i, locals);
+                let pattern = self.lower_pattern(&arm.pattern);
+                let guard = self.lower_guard(&arm.guard, &scope.locals)?;
                 let body: Vec<PyStmt> = match (assign_to, &done) {
-                    (None, _) => self.lower_return(&arm.body, &arm_locals)?,
+                    (None, _) => self.lower_return(&arm.body, &scope.locals)?,
                     (Some(tmp), Some(d)) => {
-                        let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                        let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
                         let mut b = with_assign(s, tmp, v);
                         b.push(PyStmt::Assign {
                             target: d.clone(),
@@ -3472,11 +3711,11 @@ impl Lowerer {
                         unreachable!("value position always allocates a sentinel")
                     }
                 };
-                self.unshadow_local_fns(shadowed);
+                self.exit_arm(scope);
                 let stmt = PyStmt::Match {
                     subject: PyExpr::Name(subject.to_string()),
                     cases: vec![PyCase {
-                        pattern: self.lower_pattern(&arm.pattern),
+                        pattern,
                         guard,
                         body,
                     }],
@@ -3494,18 +3733,15 @@ impl Lowerer {
             // The recognizer application is hoisted into this arm's own block, so
             // it runs only when the arm is reached (lazy).
             let mut arm_block: Vec<PyStmt> = Vec::new();
+            let scope = self.enter_arm(arms, i, locals);
             let (cond, binds) =
                 self.ap_arm_test(&arm.pattern, subject, locals, &mut hoisted, &mut arm_block)?;
-            let bindings = pattern_bindings(&arm.pattern);
-            let arm_locals = extend(locals, &bindings);
-            // Pattern binders shadow same-named local folders (fold pass).
-            let shadowed = self.shadow_local_fns(&bindings);
-            let guard = self.lower_guard(&arm.guard, &arm_locals)?;
+            let guard = self.lower_guard(&arm.guard, &scope.locals)?;
             // The arm body: return it, or assign the temp and mark the sentinel.
             let body: Vec<PyStmt> = match (assign_to, &done) {
-                (None, _) => self.lower_return(&arm.body, &arm_locals)?,
+                (None, _) => self.lower_return(&arm.body, &scope.locals)?,
                 (Some(tmp), Some(d)) => {
-                    let (s, v) = self.lower_value(&arm.body, &arm_locals)?;
+                    let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
                     let mut b = with_assign(s, tmp, v);
                     b.push(PyStmt::Assign {
                         target: d.clone(),
@@ -3515,7 +3751,7 @@ impl Lowerer {
                 }
                 (Some(_), None) => unreachable!("value position always allocates a sentinel"),
             };
-            self.unshadow_local_fns(shadowed);
+            self.exit_arm(scope);
             // binds, then the (optionally guarded) body.
             let mut inner = binds;
             match guard {
@@ -3584,7 +3820,7 @@ impl Lowerer {
             Pattern::Var { name, .. } => Ok((
                 None,
                 vec![PyStmt::Assign {
-                    target: py_value_name(name),
+                    target: self.py_binder_name(name),
                     value: subj(),
                 }],
             )),
@@ -3636,7 +3872,9 @@ impl Lowerer {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, p)| match p {
-                            Pattern::Var { name, .. } => Some(bind_attr(name, format!("_{i}"))),
+                            Pattern::Var { name, .. } => {
+                                Some(bind_attr(&self.py_binder_name(name), format!("_{i}")))
+                            }
                             _ => None,
                         })
                         .collect();
@@ -3645,7 +3883,9 @@ impl Lowerer {
                     // Option-flavored partial: test `Some`, bind the payload.
                     self.needs_option = true;
                     let binds = match &binders[0] {
-                        Pattern::Var { name, .. } => vec![bind_attr(name, "_0".to_string())],
+                        Pattern::Var { name, .. } => {
+                            vec![bind_attr(&self.py_binder_name(name), "_0".to_string())]
+                        }
                         _ => vec![],
                     };
                     Ok((Some(isinstance("Some".to_string())), binds))
@@ -3716,7 +3956,31 @@ impl Lowerer {
         // A CE body is its own Python function; a CE binder that rebinds a local
         // function's name (`bind_ce_target` evicts it) must not leak past the CE.
         let saved = self.save_local_scope();
+        // A built-in CE body is its own Python function, so its own frame for the
+        // capture-rename census. A user builder desugars to calls and lambdas
+        // evaluated in the enclosing frame, so that frame's census is kept and
+        // the CE body's occurrences added on top (an over-count is always safe).
+        let frame = match (builder, self.frames.last()) {
+            (CeBuilder::User(_), Some(enclosing)) => {
+                let mut frame = enclosing.clone();
+                for it in items {
+                    let e = match it {
+                        CeItem::LetBang { value, .. } | CeItem::Let { value, .. } => value,
+                        CeItem::DoBang(e)
+                        | CeItem::Return(e)
+                        | CeItem::ReturnBang(e)
+                        | CeItem::Yield(e)
+                        | CeItem::YieldBang(e) => e,
+                    };
+                    frame = frame.merged_with(e);
+                }
+                frame
+            }
+            _ => captures::Frame::of_ce(items),
+        };
+        self.frames.push(frame);
         let lowered = self.lower_ce_inner(builder, items, span, locals);
+        self.frames.pop();
         self.restore_local_scope(saved);
         lowered
     }
@@ -4212,33 +4476,41 @@ impl Lowerer {
         }
         let mut pieces = Vec::with_capacity(shaped.len());
         for a in &shaped {
-            let bindings = pattern_bindings(&a.arm.pattern);
-            let arm_locals = extend(locals, &bindings);
-            // Pattern binders shadow same-named local folders (fold pass).
-            let shadowed = self.shadow_local_fns(&bindings);
-            let guard = self.lower_guard(&a.arm.guard, &arm_locals)?;
+            let idx = arms
+                .iter()
+                .position(|x| std::ptr::eq(x, a.arm))
+                .expect("a shaped arm is one of the arms");
+            let scope = self.enter_arm(arms, idx, locals);
+            let guard = self.lower_guard(&a.arm.guard, &scope.locals)?;
             let body = match assign_to {
-                None => self.lower_return(&a.arm.body, &arm_locals)?,
+                None => self.lower_return(&a.arm.body, &scope.locals)?,
                 Some(tmp) => {
-                    let (arm_stmts, arm_val) = self.lower_value(&a.arm.body, &arm_locals)?;
+                    let (arm_stmts, arm_val) = self.lower_value(&a.arm.body, &scope.locals)?;
                     with_assign(arm_stmts, tmp, arm_val)
                 }
             };
-            self.unshadow_local_fns(shadowed);
             let mut inner = Vec::new();
             if let Some(payload) = a.payload {
                 let value = PyExpr::Attribute {
                     value: Box::new(PyExpr::Name(subject.clone())),
                     attr: "_0".to_string(),
                 };
-                bind_irrefutable(payload, value, &subject, &mut inner);
+                let rename = self.renames.clone();
+                bind_irrefutable(
+                    payload,
+                    value,
+                    &subject,
+                    &|n| rename.get(n).cloned().unwrap_or_else(|| py_value_name(n)),
+                    &mut inner,
+                );
             }
             if let Some(name) = a.whole {
                 inner.push(PyStmt::Assign {
-                    target: py_value_name(name),
+                    target: self.py_binder_name(name),
                     value: PyExpr::Name(subject.clone()),
                 });
             }
+            self.exit_arm(scope);
             match guard {
                 Some(test) => inner.push(PyStmt::If {
                     test,
@@ -4355,12 +4627,23 @@ fn block_let_arity(b: &LetBinding) -> Option<usize> {
 struct LocalScope {
     fn_defs: HashMap<String, (Vec<Param>, Expr)>,
     arities: HashMap<String, usize>,
+    renames: HashMap<String, String>,
 }
 
 /// Registry entries displaced by a shadowing binder ([`Lowerer::shadow_local_fns`]).
 struct Shadowed {
     fn_defs: Vec<(String, (Vec<Param>, Expr))>,
     arities: Vec<(String, usize)>,
+    renames: Vec<(String, String)>,
+}
+
+/// What [`Lowerer::enter_arm`] set up for one match arm, handed back to
+/// [`Lowerer::exit_arm`]: the arm's locals, the displaced registry entries, and
+/// the capture renames installed for this arm.
+struct ArmScope {
+    locals: HashSet<String>,
+    shadowed: Shadowed,
+    renamed: Vec<String>,
 }
 
 fn lower_binop(op: BinOp) -> PyBinOp {
@@ -8318,11 +8601,17 @@ fn simple_irrefutable(pattern: &Pattern) -> bool {
 /// Bind a [`simple_irrefutable`] pattern from `value`: `x = value`, nothing for
 /// `_`, or a tuple unpack `a, b = value` (nested tuples go through temps named
 /// off `base`, as [`unpack_into_as`] does for parameters).
-fn bind_irrefutable(pattern: &Pattern, value: PyExpr, base: &str, out: &mut Vec<PyStmt>) {
+fn bind_irrefutable(
+    pattern: &Pattern,
+    value: PyExpr,
+    base: &str,
+    rename: &dyn Fn(&str) -> String,
+    out: &mut Vec<PyStmt>,
+) {
     match pattern {
         Pattern::Wildcard => {}
         Pattern::Var { name, .. } => out.push(PyStmt::Assign {
-            target: py_value_name(name),
+            target: rename(name),
             value,
         }),
         Pattern::Tuple { elems } => {
@@ -8330,7 +8619,7 @@ fn bind_irrefutable(pattern: &Pattern, value: PyExpr, base: &str, out: &mut Vec<
             let mut nested = Vec::new();
             for (i, elem) in elems.iter().enumerate() {
                 match elem {
-                    Pattern::Var { name, .. } => targets.push(py_value_name(name)),
+                    Pattern::Var { name, .. } => targets.push(rename(name)),
                     Pattern::Wildcard => targets.push("_".to_string()),
                     _ => {
                         let temp = format!("{base}_{i}");
@@ -8341,7 +8630,7 @@ fn bind_irrefutable(pattern: &Pattern, value: PyExpr, base: &str, out: &mut Vec<
             }
             out.push(PyStmt::UnpackAssign { targets, value });
             for (elem, temp) in nested {
-                unpack_into_as(elem, &temp, &temp, &|n| py_value_name(n), out);
+                unpack_into_as(elem, &temp, &temp, rename, out);
             }
         }
         _ => unreachable!("ladder payloads are simple_irrefutable"),
