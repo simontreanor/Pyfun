@@ -191,18 +191,24 @@ rather than a fixed list, so an `import` shadowed by a binding is **aliased** in
 (`import math as _pf_math`), leaving the user's `math` binding untouched. Programs that claim none of
 these names — nearly all of them — emit byte-identical output either way.
 
-**Arm-scoped captures.** A match arm's capture (`case Some pair: …`) is scoped to its arm. The
-Python it lowers to (`case Some(pair):`, or `pair = o._0` in an `isinstance` ladder) is an
-assignment to a local of the enclosing function, and Python locals are function-wide: one slot per
-name per function. Left alone, a capture that reuses a name the function also uses for something
-else (a block-local `def`, a parameter, a global it reads later) would rebind that slot for the rest
-of the function, and a later read would see the captured value where the program meant the original
-binding. So the compiler guarantees that an arm-scoped capture never rebinds another binding of the
-same name in the emitted function: when the name is in use elsewhere in that function, the capture
-is emitted as `_name` (`case Some(_pair): return _pair`, bumped to `_name2` if that is taken) and
-every reference inside the arm follows it; otherwise the name is emitted as itself. Sibling arms that
-capture the same name are disjoint alternatives reading their own capture and do not force the
-rename, so the common `case Ok x: … case Error x: …` keeps its names. Mechanics in `INTERNALS.md`.
+**Arm-scoped captures and nested-block `let`s.** A match arm's capture (`case Some pair: …`) is
+scoped to its arm, and a `let` inside a nested block (an `if` branch, an arm body) is scoped to that
+block. The Python either lowers to (`case Some(pair):`, `pair = o._0` in an `isinstance` ladder, or
+a plain `x = 10` in the branch) is an assignment to a local of the enclosing function, and Python
+locals are function-wide: one slot per name per function. Left alone, a capture or nested `let` that
+reuses a name the function also uses for something else (a block-local `def`, a parameter, an outer
+`let`, a global it reads later) would rebind that slot for the rest of the function, and a later read
+would see the inner value where the program meant the original binding. So the compiler guarantees
+that neither ever rebinds another binding of the same name in the emitted function: when the name is
+in use elsewhere in that function outside the arm or block, the binder is emitted as `_name`
+(`case Some(_pair): return _pair`; `_x = 10`, bumped to `_name2` if that is taken) and every
+reference to it follows; otherwise the name is emitted as itself. Sibling arms that capture the same
+name are disjoint alternatives reading their own capture and do not force the rename, so the common
+`case Ok x: … case Error x: …` keeps its names; a `let` at the root of a function body is never
+renamed, since rebinding a name in sequence is exactly what Python does too; and a nested
+`let x = x + 1` reads the outer `x` in its value and binds the fresh name, as `_x = x + 1`. A
+renamed nested function is defined under its fresh name and recurses under it, and a renamed
+`let mut` is assigned under it, including from a closure's `nonlocal`. Mechanics in `INTERNALS.md`.
 
 ### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 

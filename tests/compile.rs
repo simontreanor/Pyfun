@@ -6908,3 +6908,234 @@ fn a_fold_loop_arm_capture_is_renamed_in_the_enclosing_frame() {
     assert!(py.contains("return bump(len(seen))"), "{py}");
     run_and_check(src, &[("r", "102")]);
 }
+
+// ---------- nested-block `let`s (issue #96, `DESIGN.md` §5) ----------
+
+#[test]
+fn e2e_a_let_in_an_if_branch_does_not_rebind_the_outer_binding() {
+    // The issue's program: Python's `x = 10` in the branch would rebind the
+    // function-wide `x`, and `x + y` would read 10.
+    let src = "
+        let f flag =
+          let x = 1
+          let y =
+            if flag then
+              let x = 10
+              x + 1
+            else 0
+          x + y
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        _x = 10\n"), "{py}");
+    assert!(py.contains("_pf_t0 = _x + 1"), "{py}");
+    assert!(py.contains("return x + y"), "{py}");
+    run_and_check(src, &[("r", "12")]);
+}
+
+#[test]
+fn e2e_a_let_in_a_match_arm_body_does_not_rebind_the_outer_binding() {
+    let src = "
+        let f o =
+          let n = 1
+          let y =
+            match o:
+              case Some k:
+                let n = k * 10
+                n + 1
+              case None: 0
+          n + y
+        let r = f (Some 2)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n = k * 10"), "{py}");
+    assert!(py.contains("return n + y"), "{py}");
+    run_and_check(src, &[("r", "22")]);
+}
+
+#[test]
+fn e2e_a_let_in_a_return_position_arm_block_is_renamed() {
+    // Return position (`lower_block_return`): the `None` arm reads the outer
+    // `n`, an occurrence outside the block, so the arm's `let n` is renamed. Its
+    // value reads the outer `n` too, and the emitted `_n = n * 10` says so.
+    let src = "
+        let f o =
+          let n = 1
+          match o:
+            case Some k:
+              let n = n * 10 + k
+              n + 1
+            case None: n
+        let r = f (Some 2)
+        let s = f None
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n = n * 10 + k"), "{py}");
+    assert!(py.contains("return _n + 1"), "{py}");
+    assert!(py.contains("        return n\n"), "{py}");
+    run_and_check(src, &[("r", "13"), ("s", "1")]);
+}
+
+#[test]
+fn e2e_a_nested_function_let_shadowing_an_outer_function_is_renamed() {
+    // `go` inside the branch shadows the outer `go`, recurses under its fresh
+    // name, and the outer `go` is called after.
+    let src = "
+        let f flag n =
+          let go k = k * 100
+          let y =
+            if flag then
+              let go k = if k == 0 then 0 else k + go (k - 1)
+              go n
+            else 0
+          y + go 1
+        let r = f true 3
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("def _go(k):"), "{py}");
+    assert!(py.contains("_go(k - 1)"), "{py}");
+    assert!(py.contains("_pf_t0 = _go(n)"), "{py}");
+    assert!(py.contains("return y + go(1)"), "{py}");
+    run_and_check(src, &[("r", "106")]);
+}
+
+#[test]
+fn e2e_a_nested_let_mut_with_assignment_keeps_the_outer_binding() {
+    let src = "
+        let f flag =
+          let total = 1
+          let y =
+            if flag then
+              let mut total = 0
+              total <- total + 5
+              total <- total + 5
+              total
+            else 0
+          total + y
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        _total = 0\n"), "{py}");
+    assert!(py.contains("_total = _total + 5"), "{py}");
+    assert!(py.contains("return total + y"), "{py}");
+    run_and_check(src, &[("r", "11")]);
+}
+
+#[test]
+fn e2e_a_closure_assigning_a_renamed_nested_mut_declares_the_fresh_name() {
+    // The closure is lowered while the nested rename is in force, so its
+    // `nonlocal` names the renamed slot.
+    let src = "
+        let f flag =
+          let count = 1
+          let y =
+            if flag then
+              let mut count = 0
+              let bump u = count <- count + u
+              bump 4
+              bump 5
+              count
+            else 0
+          count + y
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("nonlocal _count"), "{py}");
+    assert!(py.contains("_count = _count + u"), "{py}");
+    assert!(py.contains("return count + y"), "{py}");
+    run_and_check(src, &[("r", "10")]);
+}
+
+#[test]
+fn e2e_a_nested_let_shadowing_a_parameter_read_later_is_renamed() {
+    let src = "
+        let f x flag =
+          let y =
+            if flag then
+              let x = 10
+              x
+            else 0
+          x + y
+        let r = f 1 true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = 10"), "{py}");
+    assert!(py.contains("return x + y"), "{py}");
+    run_and_check(src, &[("r", "11")]);
+}
+
+#[test]
+fn a_root_level_let_rebinding_a_parameter_is_not_renamed() {
+    // Sequential rebinding at the root of the body is what Python does too.
+    let src = "
+        let f x =
+          let x = x + 1
+          let x = x * 2
+          x
+        let r = f 1
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("x = x + 1"), "{py}");
+    assert!(py.contains("x = x * 2"), "{py}");
+    assert!(!py.contains("_x"), "{py}");
+    run_and_check(src, &[("r", "4")]);
+}
+
+#[test]
+fn a_nested_let_with_no_occurrence_outside_its_block_is_not_renamed() {
+    let src = "
+        let f flag =
+          let y =
+            if flag then
+              let t = 10
+              t + 1
+            else 0
+          y
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        t = 10\n"), "{py}");
+    assert!(!py.contains("_t = 10"), "{py}");
+    run_and_check(src, &[("r", "11")]);
+}
+
+#[test]
+fn e2e_a_destructuring_nested_let_renames_each_colliding_name() {
+    // `a` is read after the block, `b` is not: only `a` is renamed.
+    let src = "
+        let f flag =
+          let a = 1
+          let y =
+            if flag then
+              let (a, b) = (10, 20)
+              a + b
+            else 0
+          a + y
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_a, b = (10, 20)"), "{py}");
+    assert!(py.contains("_pf_t0 = _a + b"), "{py}");
+    assert!(py.contains("return a + y"), "{py}");
+    run_and_check(src, &[("r", "31")]);
+}
+
+#[test]
+fn e2e_a_nested_let_fresh_name_bumps_past_a_name_in_use() {
+    let src = "
+        let f flag =
+          let x = 1
+          let _x = 100
+          let y =
+            if flag then
+              let x = 10
+              x + 1
+            else 0
+          x + y + _x
+        let r = f true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x2 = 10"), "{py}");
+    assert!(py.contains("return x + y + _x"), "{py}");
+    run_and_check(src, &[("r", "112")]);
+}

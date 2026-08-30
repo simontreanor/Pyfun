@@ -28,6 +28,12 @@ use crate::parser::ast::{BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, Le
 pub(super) struct Frame {
     pub occurrences: HashMap<String, usize>,
     pub fresh: HashSet<String>,
+    /// How many blocks deep the lowering currently is inside this frame.
+    pub depth: usize,
+    /// Whether the first block entered at depth 1 is the frame's own body (a
+    /// function whose body is a block). Its `let`s are root-level and never
+    /// renamed; any other block is nested.
+    pub root_is_body: bool,
 }
 
 impl Frame {
@@ -38,7 +44,8 @@ impl Frame {
         collect_occurrences(body, &HashSet::new(), &mut occurrences);
         Frame {
             occurrences,
-            fresh: HashSet::new(),
+            root_is_body: matches!(body.kind, ExprKind::Block { .. }),
+            ..Frame::default()
         }
     }
 
@@ -48,7 +55,7 @@ impl Frame {
         collect_ce_occurrences(items, &HashSet::new(), &mut occurrences);
         Frame {
             occurrences,
-            fresh: HashSet::new(),
+            ..Frame::default()
         }
     }
 
@@ -58,9 +65,14 @@ impl Frame {
     pub fn of_items(items: &[Item]) -> Frame {
         let mut occurrences = HashMap::new();
         collect_item_occurrences(items, &mut occurrences);
+        // A block-valued top-level binding evaluates at module scope; its `let`s
+        // are module globals, and a collision with a module-level binding is
+        // already isolated by `lower_module`'s frame wrap, so such a block counts
+        // as root here.
         Frame {
             occurrences,
-            fresh: HashSet::new(),
+            root_is_body: true,
+            ..Frame::default()
         }
     }
 
@@ -72,7 +84,14 @@ impl Frame {
         Frame {
             occurrences,
             fresh: self.fresh.clone(),
+            ..Frame::default()
         }
+    }
+
+    /// Whether a block entered at the current depth is nested (its `let`s may
+    /// need renaming) rather than the frame's root block.
+    pub fn block_is_nested(&self) -> bool {
+        self.depth > 1 || !self.root_is_body
     }
 
     /// Whether `name` (a Python-side spelling) is already in use in this frame.
@@ -282,6 +301,21 @@ fn collect_item_occurrences(items: &[Item], out: &mut HashMap<String, usize>) {
             _ => {}
         }
     }
+}
+
+/// The occurrence census of one block's statements, counted the way the frame
+/// census counted them (a parameterised `let` is a nested scope), so a nested
+/// block's `let` can compare its name's count inside the block with the frame's.
+pub(super) fn block_occurrences(stmts: &[BlockStmt]) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    let none = HashSet::new();
+    for st in stmts {
+        match st {
+            BlockStmt::Let(b) => collect_let_occurrences(b, &none, &mut out),
+            BlockStmt::Expr(e) => collect_occurrences(e, &none, &mut out),
+        }
+    }
+    out
 }
 
 /// Occurrences of `name` within one arm (its guard and body), counted the way

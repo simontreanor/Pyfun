@@ -214,18 +214,21 @@ A third pass over the Scrabble program was about runtime cost rather than missin
 program was complete and correct, and the question was how far the emitted Python sat from what a
 person would write in the hot paths. Six issues came out of it (#84 to #89), each measured by
 hand-editing the emitted module and timing the result, and all shipped the same day in PRs #90, #91,
-#93 and #94; a seventh (#92), found while fixing #84, shipped in the PR that adds this entry.
+#93 and #94; a seventh (#92), found while fixing #84, and its sibling #96 shipped in the PR that adds
+this entry.
 
-10. ~~**Two miscompiles the checker could not see**~~ **CLOSED 2026-08-30** (#84 in #91, #92 in the
-    PR carrying this entry). A block-local `let pair a b` applied to one argument was emitted as a
+10. ~~**Two miscompiles the checker could not see**~~ **CLOSED 2026-08-30** (#84 in #91, #92 and #96
+    in the PR carrying this entry). A block-local `let pair a b` applied to one argument was emitted as a
     full call with one argument, because lowering took arity from a top-level table only; the
     checker had typed it as a partial application. Now a block-scoped arity table sits beside the
     fold pass's local-folder registry with the same save/restore/shadow discipline, so `List.map
     (pair 10)` with a block-local `pair` prints `[11, 12]`, and two lambda workarounds in the
     program came out. The second was the mirror image: a match-arm capture named like a block-local
     `def` (`case Some pair: pair`, then `pair r 1`) is arm-scoped in Pyfun but a function-wide local
-    in Python, so the later call found an integer. A capture that reuses a name the function uses
-    elsewhere is now emitted as `_name` (`DESIGN.md` §5, "Arm-scoped captures").
+    in Python, so the later call found an integer, and a `let` in a nested block (#96, an `if`
+    branch rebinding `x`) had the same shape. A capture or nested `let` that reuses a name the
+    function uses elsewhere is now emitted as `_name` (`DESIGN.md` §5, "Arm-scoped captures and
+    nested-block `let`s").
 
 11. ~~**A destructuring folder went quadratic**~~ **CLOSED 2026-08-30** (#85 in #90). The in-place
     fold pass rejected `fun m (p, l) -> Map.add p l m` because the element parameter had no single

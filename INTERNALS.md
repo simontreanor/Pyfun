@@ -231,12 +231,15 @@ driver computes each module's singleton set with the same two functions and pass
 defines it and `palette.Red()` otherwise; a project module that needs `Option` imports `_None_` from
 the runtime alongside `Some`/`None_` unless it binds that name itself.
 
-### Arm-scoped captures — implements DESIGN §5 ("Arm-scoped captures")
+### Arm-scoped captures and nested-block `let`s — implements DESIGN §5
 
-A match arm's capture becomes a function-wide Python local, so a capture that reuses a name the
-enclosing Python frame uses elsewhere is renamed (issue #92). The rule, in `src/lowering/captures.rs`:
-a capture `n` of arm `A` is freshened when `n` occurs in the frame outside `A`, not counting sibling
-arms of the same match that also capture `n`. An occurrence is a `Var` reference or an `<-` assignment
+A match arm's capture, and a `let` in a nested block, both become function-wide Python locals, so one
+that reuses a name the enclosing Python frame uses elsewhere is renamed (issues #92 and #96). The
+rule, in `src/lowering/captures.rs`: a capture `n` of arm `A` is freshened when `n` occurs in the
+frame outside `A`, not counting sibling arms of the same match that also capture `n`; a `let n` in a
+nested block `B` is freshened when `n` occurs in the frame outside `B` (occurrences inside `B`
+include the `let`'s own value, so `let x = x + 1` there reads the outer `x` and Python's
+`_x = x + 1` is right either way). An occurrence is a `Var` reference or an `<-` assignment
 target, never a binder. The census (`collect_occurrences`) walks the frame's whole body, nested
 closures included (a closure's free reference resolves to the frame's slot), but on entering a nested
 Python scope (an `ExprKind::Fn`, a parameterised block `let`, a computation expression) it hides every
@@ -270,10 +273,28 @@ reference is spelled consults it: `lower_var` (first thing, before any routing),
 lookup peephole's `bind_arm_payload`, the ladder's whole-value binding and the active-pattern chain's
 binder assignments.
 
+**Nested-block `let`s.** Each `Frame` carries a block `depth`, bumped by `enter_block`/`exit_block`
+around the three block lowerings (`lower_block_return`, `lower_block_value`, the fold pass's inlined
+block) and reset by each frame push, plus `root_is_body`: whether the first block entered is the
+frame's own body (`lower_fn_body` sets it when the body is a block; a computation expression's items
+are not a block, so any block inside a CE is nested; the module frame treats a block-valued top-level
+binding as root, since a collision with a module-level binding is already isolated by
+`lower_module`'s frame wrap). A block that is not the root (`Frame::block_is_nested`) gets its own
+census (`block_occurrences`) on entry, and `lower_block_let` decides each bound name by
+`frame[n] - block[n] > 0`. A root-level `let` never renames: rebinding in sequence is what Python does
+too. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
+installs `n → _n` in `renames` for the rest of the block, where it dies with the block's
+`restore_local_scope`; a parameterised `let` installs it before its body so a recursive call resolves
+to the renamed def, and the def is emitted under the fresh name. The emitted target is passed down
+explicitly (`lower_let`'s `targets` map, through `lower_binding_as` and `unpack_binding`'s rename
+hook for a destructuring `let`), never read from `renames`, since the rename is not yet active while
+the value lowers. A `let mut` is covered: an `<-` target spells through `py_binder_name`, and the
+`global`/`nonlocal` declarations `lower_fn_body` computes from `scan_scope` (Pyfun names) map
+through the renames active when the nested function is lowered, which is while the outer rename is
+in force.
+
 Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), and a CE
 `let!`/`let` target, which is block-scoped in Pyfun exactly as in Python and so needs no freshening.
-Also out of scope: a block-local `let` inside an arm that shadows an outer block-local of the same
-name has the same function-wide-slot shape and is not renamed by this pass.
 
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 

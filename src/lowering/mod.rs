@@ -825,11 +825,17 @@ impl Lowerer {
                             }),
                             target => {
                                 let target = target.clone();
-                                self.unpack_binding(&target, None, value, &mut code);
+                                self.unpack_binding(
+                                    &target,
+                                    None,
+                                    value,
+                                    &mut code,
+                                    &HashMap::new(),
+                                );
                             }
                         }
                     } else {
-                        self.lower_let(binding, &HashSet::new(), &mut code)?;
+                        self.lower_let(binding, &HashSet::new(), &mut code, &HashMap::new())?;
                     }
                 }
                 // The active-pattern recognizer lowers to a plain Python def
@@ -877,6 +883,7 @@ impl Lowerer {
                                 Some(name),
                                 &HashSet::new(),
                                 &mut code,
+                                &HashMap::new(),
                             )?,
                         }
                     }
@@ -965,13 +972,20 @@ impl Lowerer {
         binding: &LetBinding,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) -> Result<(), LowerError> {
         match &binding.target {
-            Pattern::Var { name, .. } => self.lower_binding_as(name, binding, locals, out),
+            Pattern::Var { name, .. } => {
+                let py_name = targets
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| py_value_name(name));
+                self.lower_binding_as(&py_name, binding, locals, out)
+            }
             // A discard keeps Python's own throwaway name, which reads as the
             // deliberate "evaluated for its effect" that it is.
             Pattern::Wildcard => self.lower_binding_as("_", binding, locals, out),
-            _ => self.lower_destructuring(binding, None, locals, out),
+            _ => self.lower_destructuring(binding, None, locals, out, targets),
         }
     }
 
@@ -985,11 +999,12 @@ impl Lowerer {
         prefix: Option<&str>,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) -> Result<(), LowerError> {
         let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
         out.append(&mut stmts);
         let target = binding.target.clone();
-        self.unpack_binding(&target, prefix, value, out);
+        self.unpack_binding(&target, prefix, value, out, targets);
         Ok(())
     }
 
@@ -1016,7 +1031,7 @@ impl Lowerer {
             }),
             target => {
                 let target = target.clone();
-                self.unpack_binding(&target, None, value, out);
+                self.unpack_binding(&target, None, value, out, &HashMap::new());
             }
         }
     }
@@ -1054,10 +1069,11 @@ impl Lowerer {
         prefix: Option<&str>,
         value: PyExpr,
         out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
     ) {
         let rename = |n: &str| match prefix {
             Some(p) => format!("{p}_{}", py_value_name(n)),
-            None => py_value_name(n),
+            None => targets.get(n).cloned().unwrap_or_else(|| py_value_name(n)),
         };
         // The common shape, and the one worth emitting directly: `r, c = e`.
         if let Pattern::Tuple { elems } = target
@@ -1285,6 +1301,70 @@ impl Lowerer {
         self.unshadow_local_fns(scope.shadowed);
     }
 
+    /// Enter a block: bump the frame's block depth and, when the block is nested
+    /// (not the frame's root body), return its occurrence census so its `let`s
+    /// can be renamed (`captures.rs`). Paired with [`Lowerer::exit_block`].
+    fn enter_block(&mut self, stmts: &[BlockStmt]) -> Option<HashMap<String, usize>> {
+        let frame = self.frames.last_mut()?;
+        frame.depth += 1;
+        frame
+            .block_is_nested()
+            .then(|| captures::block_occurrences(stmts))
+    }
+
+    fn exit_block(&mut self) {
+        if let Some(frame) = self.frames.last_mut() {
+            frame.depth = frame.depth.saturating_sub(1);
+        }
+    }
+
+    /// Lower one `let` of a block. In a nested block, a name the enclosing Python
+    /// frame uses outside this block is renamed to `_name` for the rest of the
+    /// block (it would otherwise rebind the function-wide slot, issue #96): a
+    /// value `let` lowers its value first (references there mean the outer
+    /// binding) and installs the rename after; a parameterised `let` installs it
+    /// before its body so a recursive call resolves to the renamed def. The
+    /// rename dies with the block (`restore_local_scope`).
+    fn lower_block_let(
+        &mut self,
+        b: &LetBinding,
+        locals: &HashSet<String>,
+        out: &mut Vec<PyStmt>,
+        block_occ: Option<&HashMap<String, usize>>,
+    ) -> Result<(), LowerError> {
+        let mut targets = HashMap::new();
+        if let Some(occ) = block_occ {
+            for name in b.bound_names() {
+                if targets.contains_key(&name) {
+                    continue;
+                }
+                let Some(frame) = self.frames.last() else {
+                    break;
+                };
+                let total = frame.occurrences.get(&name).copied().unwrap_or(0);
+                let inside = occ.get(&name).copied().unwrap_or(0);
+                if total.saturating_sub(inside) == 0 {
+                    continue;
+                }
+                let fresh = self.fresh_capture_name(&name);
+                self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+                targets.insert(name, fresh);
+            }
+        }
+        self.enter_block_let(b);
+        if !b.params.is_empty() {
+            for (n, f) in &targets {
+                self.renames.insert(n.clone(), f.clone());
+            }
+        }
+        self.lower_let(b, locals, out, &targets)?;
+        self.note_block_let(b);
+        for (n, f) in targets {
+            self.renames.insert(n, f);
+        }
+        Ok(())
+    }
+
     /// The fresh Python name for a renamed capture: `_` + the name, bumped with a
     /// counter while it is already in use in the frame, already handed out, bound
     /// anywhere in the module, or would land in the reserved `_pf_` space.
@@ -1313,14 +1393,15 @@ impl Lowerer {
     /// its mangled `Module_member` name instead of `binding.name`).
     fn lower_binding_as(
         &mut self,
-        name: &str,
+        py_name: &str,
         binding: &LetBinding,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
-        // The emitted spelling of the binding (a `Module_member` name arrives here
-        // already composed, and is never itself reserved).
-        let py_name = py_value_name(name);
+        // `py_name` is the emitted spelling of the binding: the keyword/builtin
+        // dodge of the name, a composed `Module_member` name, or a nested-block
+        // rename (`lower_block_let`).
+        let py_name = py_name.to_string();
         if binding.params.is_empty() {
             let (mut stmts, value) = self.lower_value(&binding.value, locals)?;
             // A binding whose value already *is* the (already-assigned) target — an
@@ -1405,12 +1486,18 @@ impl Lowerer {
         self.unshadow_local_fns(shadowed);
         let mut stmts = lowered?;
 
+        // A captured `mut` bound in an enclosing nested block may have been
+        // renamed there; the declaration names the slot the closure assigns.
         let mut decls = Vec::new();
         if !globals.is_empty() {
-            decls.push(PyStmt::Global(py_param_names(&globals)));
+            decls.push(PyStmt::Global(
+                globals.iter().map(|n| self.py_binder_name(n)).collect(),
+            ));
         }
         if !nonlocals.is_empty() {
-            decls.push(PyStmt::Nonlocal(py_param_names(&nonlocals)));
+            decls.push(PyStmt::Nonlocal(
+                nonlocals.iter().map(|n| self.py_binder_name(n)).collect(),
+            ));
         }
         // Destructuring parameters unpack first, after the `global`/`nonlocal`
         // declarations Python requires at the top of the block.
@@ -1494,12 +1581,11 @@ impl Lowerer {
         // Block scope for the local registries: entries this block adds (or
         // evicts) must not outlive it.
         let saved = self.save_local_scope();
+        let nested = self.enter_block(stmts);
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.enter_block_let(b);
-                    self.lower_let(b, &locals, &mut out)?;
-                    self.note_block_let(b);
+                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
@@ -1512,6 +1598,7 @@ impl Lowerer {
                 }
             }
         }
+        self.exit_block();
         self.restore_local_scope(saved);
         Ok(out)
     }
@@ -1836,7 +1923,7 @@ impl Lowerer {
             ExprKind::Assign { target, value } => {
                 let (mut stmts, v) = self.lower_value(value, locals)?;
                 stmts.push(PyStmt::Assign {
-                    target: py_value_name(target),
+                    target: self.py_binder_name(target),
                     value: v,
                 });
                 // An assignment is a Python statement; its value is unit.
@@ -1854,12 +1941,11 @@ impl Lowerer {
         let mut value = PyExpr::NoneLit;
         // Block scope for the local registries (see `lower_block_return`).
         let saved = self.save_local_scope();
+        let nested = self.enter_block(stmts);
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.enter_block_let(b);
-                    self.lower_let(b, &locals, &mut out)?;
-                    self.note_block_let(b);
+                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) => {
@@ -1873,6 +1959,7 @@ impl Lowerer {
                 }
             }
         }
+        self.exit_block();
         self.restore_local_scope(saved);
         Ok((out, value))
     }
