@@ -7139,3 +7139,160 @@ fn e2e_a_nested_let_fresh_name_bumps_past_a_name_in_use() {
     assert!(py.contains("return x + y + _x"), "{py}");
     run_and_check(src, &[("r", "112")]);
 }
+
+// ---------- capture renaming is decided by liveness (issue #97) ----------
+
+#[test]
+fn e2e_a_capture_reused_across_sequential_matches_keeps_its_name() {
+    // The issue's program: `v` and `why` in two sequential matches are disjoint
+    // bindings that are never live at the same time, so both keep the plain
+    // name a person would write.
+    let src = "
+        let step a b =
+          let x =
+            match a:
+              case Ok v: v
+              case Error why: String.len why
+          let y =
+            match b:
+              case Ok v: v
+              case Error why: String.len why
+          x + y
+        let r = step (Ok 1) (Error \"no\")
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        v = a._0\n"), "{py}");
+    assert!(py.contains("        why = a._0\n"), "{py}");
+    assert!(py.contains("        v = b._0\n"), "{py}");
+    assert!(py.contains("        why = b._0\n"), "{py}");
+    assert!(!py.contains("_v"), "{py}");
+    assert!(!py.contains("_why"), "{py}");
+    run_and_check(src, &[("r", "3")]);
+}
+
+#[test]
+fn a_let_reused_across_sequential_branches_keeps_its_name() {
+    // Two `if` branches each binding `t`, no outer `t`: disjoint blocks.
+    let src = "
+        let f a b =
+          let x =
+            if a then
+              let t = 1
+              t + 1
+            else 0
+          let y =
+            if b then
+              let t = 10
+              t + 1
+            else 0
+          x + y
+        let r = f true true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        t = 1\n"), "{py}");
+    assert!(py.contains("        t = 10\n"), "{py}");
+    assert!(!py.contains("_t = "), "{py}");
+    run_and_check(src, &[("r", "13")]);
+}
+
+#[test]
+fn e2e_an_outer_binding_read_after_both_matches_renames_both_captures() {
+    // The root-level `why` is live across both matches (it is read at the end),
+    // so each capture is renamed, to distinct names.
+    let src = "
+        let step a b =
+          let why = \"x\"
+          let x =
+            match a:
+              case Ok v: v
+              case Error why: String.len why
+          let y =
+            match b:
+              case Ok v: v
+              case Error why: String.len why
+          String.len why + x + y
+        let r = step (Ok 1) (Error \"no\")
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_why = a._0"), "{py}");
+    assert!(py.contains("_why2 = b._0"), "{py}");
+    assert!(py.contains("return len(why) + x + y"), "{py}");
+    run_and_check(src, &[("r", "4")]);
+}
+
+#[test]
+fn e2e_a_nested_let_reading_the_parameter_it_shadows_is_renamed() {
+    // `let x = x + 1` in a nested block reads the parameter `x` in its value.
+    // That reference is outside the `let`'s scope and resolves to a root
+    // binding, so the rule renames even though nothing reads `x` afterwards;
+    // Python's `x = x + 1` would also have been right here, but the rule is
+    // about what the reference resolves to, not where it sits.
+    let src = "
+        let f x flag =
+          let y =
+            if flag then
+              let x = x + 1
+              x * 2
+            else 0
+          y
+        let r = f 5 true
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = x + 1"), "{py}");
+    assert!(py.contains("_pf_t0 = _x * 2"), "{py}");
+    run_and_check(src, &[("r", "12")]);
+}
+
+#[test]
+fn e2e_three_sequential_error_arms_emit_the_plain_name() {
+    // The downstream shape: `case Error why:` in three matches of one function,
+    // byte-identical to the hand-written spelling.
+    let src = "
+        let describe a b c =
+          let s1 =
+            match a:
+              case Ok n: n
+              case Error why: String.len why
+          let s2 =
+            match b:
+              case Ok n: n
+              case Error why: String.len why
+          let s3 =
+            match c:
+              case Ok n: n
+              case Error why: String.len why
+          s1 + s2 + s3
+        let r = describe (Error \"a\") (Ok 2) (Error \"ccc\")
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert_eq!(py.matches("        why = ").count(), 3, "{py}");
+    assert_eq!(py.matches("        n = ").count(), 3, "{py}");
+    assert!(!py.contains("_why"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    run_and_check(src, &[("r", "6")]);
+}
+
+#[test]
+fn e2e_a_closure_escaping_an_earlier_arm_forces_the_later_capture_to_rename() {
+    // Arm 1's lambda reads its `why` after arm 2 of a later match would have
+    // assigned the shared slot: a closure read always counts, so arm 2 renames
+    // while arm 1 keeps the plain name.
+    let src = "
+        let f a b =
+          let g =
+            match a:
+              case Error why: fun u -> why
+              case Ok n: fun u -> \"ok\"
+          let m =
+            match b:
+              case Error why: String.len why
+              case Ok n: n
+          String.len (g 0) + m
+        let r = f (Error \"first\") (Error \"second\")
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        why = a._0\n"), "{py}");
+    assert!(py.contains("lambda u: why"), "{py}");
+    assert!(py.contains("_why = b._0"), "{py}");
+    run_and_check(src, &[("r", "11")]);
+}
