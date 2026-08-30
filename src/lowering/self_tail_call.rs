@@ -191,7 +191,7 @@ fn binds(stmts: &[PyStmt], name: &str) -> bool {
     stmts.iter().any(|s| match s {
         PyStmt::Assign { target, .. } => target == name,
         PyStmt::UnpackAssign { targets, .. } => targets.iter().any(|t| t == name),
-        PyStmt::For { target, body, .. } => target == name || binds(body, name),
+        PyStmt::For { target, body, .. } => target.binds(name) || binds(body, name),
         PyStmt::FuncDef { name: n, .. } => n == name,
         PyStmt::ClassDef { name: n, .. } => n == name,
         PyStmt::If { body, orelse, .. } => binds(body, name) || binds(orelse, name),
@@ -252,7 +252,7 @@ fn collect_bound(stmts: &[PyStmt], out: &mut HashSet<String>) {
             }
             PyStmt::UnpackAssign { targets, .. } => out.extend(targets.iter().cloned()),
             PyStmt::For { target, body, .. } => {
-                out.insert(target.clone());
+                out.extend(target.names());
                 collect_bound(body, out);
             }
             PyStmt::If { body, orelse, .. } => {

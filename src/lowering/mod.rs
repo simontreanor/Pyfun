@@ -4795,7 +4795,7 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
         value,
     };
     let for_ = |target: &str, iter: PyExpr, body: Vec<PyStmt>| PyStmt::For {
-        target: target.to_string(),
+        target: target.into(),
         iter,
         body,
     };
@@ -4894,7 +4894,7 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: PyExpr::List(vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![PyStmt::Expr(PyExpr::Call {
                             func: Box::new(PyExpr::Attribute {
@@ -5742,7 +5742,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: PyExpr::List(vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![
                             PyStmt::Assign {
@@ -6024,7 +6024,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "xs"],
                 vec![
                     PyStmt::For {
-                        target: "p".to_string(),
+                        target: "p".into(),
                         iter: call("enumerate", vec![name("xs")]),
                         body: vec![PyStmt::If {
                             test: PyExpr::Call {
@@ -6241,7 +6241,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("set", vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![PyStmt::If {
                             test: PyExpr::Not(Box::new(binop(
@@ -6373,7 +6373,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "xs"],
                 vec![
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![PyStmt::Expr(PyExpr::Call {
                             func: Box::new(name("f")),
@@ -6426,7 +6426,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("set", vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("s"),
                         body: vec![PyStmt::If {
                             test: PyExpr::Call {
@@ -6489,7 +6489,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("dict", vec![]),
                     },
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::SubscriptAssign {
                             obj: name("out"),
@@ -6525,7 +6525,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("dict", vec![]),
                     },
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::If {
                             test: PyExpr::Call {
@@ -6564,7 +6564,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "acc", "m"],
                 vec![
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::Assign {
                             target: "acc".to_string(),
@@ -6593,7 +6593,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "m"],
                 vec![
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::If {
                             test: PyExpr::Call {
@@ -6621,7 +6621,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "m"],
                 vec![
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::If {
                             test: PyExpr::Not(Box::new(PyExpr::Call {
@@ -6658,7 +6658,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("dict", vec![]),
                     },
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::If {
                             test: PyExpr::Call {
@@ -6937,7 +6937,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("set", vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![
                             PyStmt::Assign {
@@ -7013,7 +7013,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         value: call("None_", vec![]),
                     },
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("xs"),
                         body: vec![PyStmt::Assign {
                             target: "out".to_string(),
@@ -7082,7 +7082,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "s"],
                 vec![
                     PyStmt::For {
-                        target: "x".to_string(),
+                        target: "x".into(),
                         iter: name("s"),
                         body: vec![PyStmt::Expr(PyExpr::Call {
                             func: Box::new(name("f")),
@@ -7097,7 +7097,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["f", "m"],
                 vec![
                     PyStmt::For {
-                        target: "kv".to_string(),
+                        target: "kv".into(),
                         iter: method(name("m"), "items", vec![]),
                         body: vec![PyStmt::Expr(PyExpr::Call {
                             func: Box::new(name("f")),
