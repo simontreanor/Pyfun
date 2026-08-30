@@ -734,7 +734,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "Async.race",
-        "Await the first value to finish and cancel the rest. `asyncio.wait(FIRST_COMPLETED)`.",
+        "Await the first value to finish and cancel the rest; the list must be non-empty (an empty race raises `ValueError` at the await). `asyncio.wait(FIRST_COMPLETED)`.",
     ),
     (
         "Decode.auto",

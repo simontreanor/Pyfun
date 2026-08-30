@@ -61,9 +61,11 @@ pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Outco
     let (decls, mut rest) = (decls.to_vec(), rest.to_vec());
 
     // Nothing to say (and nothing to do) about a function that never calls itself
-    // in tail position, which is almost all of them.
+    // in tail position, which is almost all of them. A function whose body is an
+    // async block keeps its tail calls inside the nested `async def`, so that
+    // wrapper shape gets its own pass.
     if !has_self_tail_call(&rest, name, params) {
-        return Outcome::kept(join(decls, rest));
+        return rewrite_async_wrapper(name, params, decls, rest);
     }
     let rejected = |reason: String, decls: Vec<PyStmt>, rest: Vec<PyStmt>| Outcome {
         body: join(decls, rest),
@@ -78,9 +80,10 @@ pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Outco
     if binds(&rest, name) {
         return rejected(format!("the body rebinds `{name}`"), decls, rest);
     }
-    // P2: a generator or coroutine body is not a plain call/return discipline —
-    // `return` in a generator raises StopIteration with a value, and an async tail
-    // call is an `await`. Neither is what this rewrite assumes.
+    // P2: a generator body is not a plain call/return discipline — `return` in a
+    // generator raises StopIteration with a value. (An async tail call is an
+    // `await` inside the nested `async def`, which [`rewrite_async_wrapper`]
+    // handles on its own path.)
     if has_yield(&rest) {
         return rejected("it is a generator".to_string(), decls, rest);
     }
@@ -101,6 +104,167 @@ pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Outco
     let mut found = false;
     rewrite_stmts(&mut rest, name, params, &mut found);
     Outcome::kept(join(decls, vec![PyStmt::WhileTrue { body: rest }]))
+}
+
+/// The async form of the rewrite (`DESIGN.md` §5.4). A `let f a = async { … }`
+/// lowers to `def f(a): async def g(): …; return g()`, and its self tail call is
+/// `return await f(…)` inside `g` — each message of an agent loop then awaits a
+/// fresh coroutine on the same stack, and CPython's ~1000-frame limit is the
+/// lifetime cap the loop was written to escape. When the body ends in exactly
+/// that wrapper shape, the awaited tail calls in `g` rebind the *outer*
+/// parameters (they are `g`'s closure, so a `nonlocal` declaration makes them
+/// writable) and go round a `while True:` inside the one coroutine. The
+/// preconditions are the sync pass's, applied to `g`'s body.
+fn rewrite_async_wrapper(
+    name: &str,
+    params: &[String],
+    decls: Vec<PyStmt>,
+    mut rest: Vec<PyStmt>,
+) -> Outcome {
+    let n = rest.len();
+    let is_shape = n >= 2
+        && !params.is_empty()
+        && match (&rest[n - 2], &rest[n - 1]) {
+            (
+                PyStmt::FuncDef {
+                    name: g,
+                    params: g_params,
+                    is_async: true,
+                    ..
+                },
+                PyStmt::Return(PyExpr::Call { func, args }),
+            ) => {
+                g_params.is_empty()
+                    && args.is_empty()
+                    && matches!(func.as_ref(), PyExpr::Name(f) if f == g)
+            }
+            _ => false,
+        };
+    if !is_shape {
+        return Outcome::kept(join(decls, rest));
+    }
+    // The wrapper must be the only mention of `g`: anything before it that
+    // refers to `g` could observe the coroutine another way.
+    let PyStmt::FuncDef { name: g_name, .. } = &rest[n - 2] else {
+        unreachable!("shape-checked above");
+    };
+    let g_name = g_name.clone();
+    let mut earlier = HashSet::new();
+    free_stmts(&rest[..n - 2], &HashSet::new(), &mut earlier);
+    if earlier.contains(&g_name) {
+        return Outcome::kept(join(decls, rest));
+    }
+    let reason = {
+        let PyStmt::FuncDef { body: g_body, .. } = &rest[n - 2] else {
+            unreachable!("shape-checked above");
+        };
+        if !has_await_self_tail_call(g_body, name, params) {
+            return Outcome::kept(join(decls, rest));
+        }
+        if binds(g_body, name) {
+            Some(format!("the body rebinds `{name}`"))
+        } else if has_yield(g_body) {
+            Some("it is a generator".to_string())
+        } else {
+            let frame = frame_names(g_body, params);
+            let mut captured = HashSet::new();
+            for stmt in g_body {
+                nested_refs_stmt(stmt, &mut captured);
+            }
+            frame
+                .iter()
+                .find(|n| captured.contains(*n))
+                .map(|shared| format!("a closure in it captures `{shared}`"))
+        }
+    };
+    if let Some(reason) = reason {
+        return Outcome {
+            body: join(decls, rest),
+            note: Some(format!(
+                "`{name}` calls itself in tail position but keeps its recursive form: {reason}"
+            )),
+        };
+    }
+    let PyStmt::FuncDef { body: g_body, .. } = &mut rest[n - 2] else {
+        unreachable!("shape-checked above");
+    };
+    let full = std::mem::take(g_body);
+    let split = full
+        .iter()
+        .position(|s| !matches!(s, PyStmt::Global(_) | PyStmt::Nonlocal(_)))
+        .unwrap_or(full.len());
+    let (g_decls, mut g_rest) = (full[..split].to_vec(), full[split..].to_vec());
+    let mut found = false;
+    rewrite_await_stmts(&mut g_rest, name, params, &mut found);
+    debug_assert!(found, "has_await_self_tail_call said there was one");
+    // The parameters are the enclosing def's; rebinding them from inside `g`
+    // needs a `nonlocal` for each one not already declared (a `mut` capture the
+    // block reassigns may have declared its own).
+    let declared: HashSet<&String> = g_decls
+        .iter()
+        .flat_map(|s| match s {
+            PyStmt::Global(names) | PyStmt::Nonlocal(names) => names.iter().collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let fresh: Vec<String> = params
+        .iter()
+        .filter(|p| !declared.contains(p))
+        .cloned()
+        .collect();
+    let mut new_body = g_decls;
+    if !fresh.is_empty() {
+        new_body.push(PyStmt::Nonlocal(fresh));
+    }
+    new_body.push(PyStmt::WhileTrue { body: g_rest });
+    *g_body = new_body;
+    Outcome::kept(join(decls, rest))
+}
+
+/// Whether any tail position holds an awaited, saturated call to this function
+/// (`return await f(…)` — the async-wrapper counterpart of the sync scan).
+fn has_await_self_tail_call(stmts: &[PyStmt], name: &str, params: &[String]) -> bool {
+    stmts.iter().any(|s| match s {
+        PyStmt::Return(PyExpr::Await(inner)) => self_call_args(inner, name, params).is_some(),
+        PyStmt::If { body, orelse, .. } => {
+            has_await_self_tail_call(body, name, params)
+                || has_await_self_tail_call(orelse, name, params)
+        }
+        PyStmt::Match { cases, .. } => cases
+            .iter()
+            .any(|c| has_await_self_tail_call(&c.body, name, params)),
+        _ => false,
+    })
+}
+
+/// Replace each awaited self tail call with parameter rebinding plus `continue`;
+/// the descent rules are [`rewrite_stmts`]'s.
+fn rewrite_await_stmts(stmts: &mut Vec<PyStmt>, name: &str, params: &[String], found: &mut bool) {
+    let mut out = Vec::with_capacity(stmts.len());
+    for mut stmt in stmts.drain(..) {
+        match &mut stmt {
+            PyStmt::Return(PyExpr::Await(inner)) => {
+                let rebound = self_call_args(inner, name, params).map(|args| rebind(params, args));
+                if let Some(mut stmts) = rebound {
+                    out.append(&mut stmts);
+                    *found = true;
+                    continue;
+                }
+            }
+            PyStmt::If { body, orelse, .. } => {
+                rewrite_await_stmts(body, name, params, found);
+                rewrite_await_stmts(orelse, name, params, found);
+            }
+            PyStmt::Match { cases, .. } => {
+                for PyCase { body, .. } in cases.iter_mut() {
+                    rewrite_await_stmts(body, name, params, found);
+                }
+            }
+            _ => {}
+        }
+        out.push(stmt);
+    }
+    *stmts = out;
 }
 
 /// Whether any tail position holds a saturated call to this function.

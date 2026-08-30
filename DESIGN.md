@@ -310,6 +310,20 @@ readable output lowering exists to protect; both stay non-goals (`ROADMAP.md`). 
 language changes — this is a property of the emitted code, and the recursive definition remains the
 only way to write it.
 
+The **async form** is the same rewrite one wrapper in. `let f a = async { … }` lowers to
+`def f(a): async def g(): …; return g()`, and its self tail call is `return await f(…)` inside `g` —
+each message of an agent loop then awaits a fresh coroutine *on the same stack*, so CPython's limit
+is the loop's lifetime cap (measured: ~1,000 messages), which is fatal for exactly the thing an
+agent is written to be: long-lived. When a body ends in that wrapper shape, the awaited tail calls
+rebind the outer parameters (they are `g`'s closure, so a `nonlocal` declaration makes them
+writable) and go round a `while True:` inside the one coroutine. For the tail call to be *visible*,
+`return!` of a `match`/`if` in an `async { }` block lowers with a return per arm (`return await
+loop(inbox, n)` in the arm) rather than assigning a temp and awaiting it once — the same descent a
+sync function's tail `match` gets. The preconditions below apply to `g`'s body unchanged; the
+`heard`-style helper that *computes* the next state stays sync (`case Said s: loop inbox (heard
+count s)`), because a helper that returns the next `Async` instead would be mutual recursion, which
+stays out of scope.
+
 Four preconditions, each of which leaves the ordinary recursive def when it fails (always correct,
 merely stack-bound): the body must not **rebind the function's own name** (a shadowing `let` would
 make the loop jump somewhere the program meant to call); it must not be a **generator or coroutine**
@@ -740,7 +754,9 @@ builds one; the module is the rest of what F#'s `Async` offers that `asyncio` ca
 `Async.timeout secs c : Async (Option a)` (`asyncio.wait_for`, `None` on the deadline),
 `Async.toThread thunk` (a blocking call off the event loop, `asyncio.to_thread`), `Async.parallel
 xs : Async (List a)` (`gather`, results in order), `Async.race xs : Async a` (`wait(FIRST_COMPLETED)`,
-the losers cancelled) and `Async.catch c : Async (Result a Exception)`, the await-time `try`: `try e`
+the losers cancelled; the list must be non-empty — racing nothing would wait forever, so the empty
+list raises `ValueError("Async.race needs at least one value")` at the await, the module's one
+partial member) and `Async.catch c : Async (Result a Exception)`, the await-time `try`: `try e`
 catches at *call* time, and an async extern does not throw when called, it returns a coroutine that
 throws when awaited, so `try` would wrap the coroutine and the `TimeoutError` would escape at the
 `let!`. `catch` catches `Exception`, not `BaseException`, so `asyncio.CancelledError` passes through

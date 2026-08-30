@@ -24,20 +24,25 @@ extern take: Queue -> Async a = .get()
 # constructors, not new plumbing.
 type Msg = Said string | Tick | Quit
 
-# The agent: one loop that is a `match` over the message, with the loop's state
-# threaded through the recursion. `return!` hands the next step back to the
-# event loop, so each message is one await.
-let heard inbox count s =
+# One step of the agent's state: an effect and the next count. Sync, so the
+# recursive call below stays a *direct* tail call.
+let heard count s =
   print f"agent heard {s}"
-  agentLoop inbox (count + 1)
+  count + 1
 
+let finished count = async { return count }
+
+# The agent: one loop that is a `match` over the message, the loop's state
+# threaded through the recursion. The self tail call compiles to a `while True:`
+# inside the one coroutine (`DESIGN.md` §5.4), so an agent that handles a
+# message a second for a year is still on its first stack frame.
 let agentLoop inbox count =
   async {
     let! msg = take inbox
     return! (match msg:
-      case Said s: heard inbox count s
+      case Said s: agentLoop inbox (heard count s)
       case Tick: agentLoop inbox count
-      case Quit: async { return count })
+      case Quit: finished count)
   }
 
 # A producer posts from its own task. The block ends in a plain call, which is
