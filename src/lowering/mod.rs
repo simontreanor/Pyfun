@@ -1327,21 +1327,26 @@ impl Lowerer {
         nested: bool,
     ) -> Result<(), LowerError> {
         let mut targets = HashMap::new();
-        if nested {
-            for name in b.bound_names() {
-                if targets.contains_key(&name) {
-                    continue;
-                }
-                let Some(frame) = self.frames.last() else {
-                    break;
-                };
-                if !frame.must_rename(&name, captures::binder_key(b)) {
-                    continue;
-                }
-                let fresh = self.fresh_capture_name(&name);
-                self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
-                targets.insert(name, fresh);
+        for name in b.bound_names() {
+            if targets.contains_key(&name) {
+                continue;
             }
+            let Some(frame) = self.frames.last() else {
+                break;
+            };
+            // A nested `let` renames under the liveness rule; a root-level one
+            // only when a read in the frame means a binding outside it (#99).
+            let rename = if nested {
+                frame.must_rename(&name, captures::binder_key(b))
+            } else {
+                frame.must_rename_root(&name)
+            };
+            if !rename {
+                continue;
+            }
+            let fresh = self.fresh_capture_name(&name);
+            self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+            targets.insert(name, fresh);
         }
         self.enter_block_let(b);
         if !b.params.is_empty() {
@@ -1471,7 +1476,8 @@ impl Lowerer {
         let shadowed = self.shadow_local_fns(params);
         self.fn_local_stack.push(bound);
         // The body is its own Python frame for the capture-rename census.
-        self.frames.push(captures::Frame::of_body(body));
+        self.frames
+            .push(captures::Frame::of_body(prelude_params, body));
         let lowered = self.lower_return(body, inner);
         self.frames.pop();
         self.fn_local_stack.pop();

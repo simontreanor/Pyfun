@@ -231,7 +231,10 @@ this entry.
     nested-block `let`s"). Downstream review found the first rule too eager (#97, closed the same
     day): it renamed a name reused across sequential matches, where nothing is live across the
     rename, so the rule was tightened to liveness and `case Error why:` in three matches of one
-    function keeps its plain name.
+    function keeps its plain name. The same review turned up the last member of the family (#99,
+    closed the same day): a root-level `let x` in a function that had already read an enclosing
+    `x` made `x` local to the whole `def` and the earlier read raised `UnboundLocalError`; such a
+    `let` now renames exactly when a read in the function means a binding outside it.
 
 11. ~~**A destructuring folder went quadratic**~~ **CLOSED 2026-08-30** (#85 in #90). The in-place
     fold pass rejected `fun m (p, l) -> Map.add p l m` because the element parameter had no single

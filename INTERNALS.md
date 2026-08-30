@@ -234,7 +234,7 @@ the runtime alongside `Some`/`None_` unless it binds that name itself.
 ### Arm-scoped captures and nested-block `let`s — implements DESIGN §5
 
 A match arm's capture, and a `let` in a nested block, both become function-wide Python locals, so one
-that another binding of the same name is live across is renamed (issues #92, #96 and #97). The
+that another binding of the same name is live across is renamed (issues #92, #96, #97 and #99). The
 rule, in `src/lowering/captures.rs`, is liveness: binder `B` of name `n` (an arm capture or a
 nested-block `let`) is freshened when some reference to `n` outside `B` resolves, under Pyfun
 scoping, to a binding that is live across `B`: the frame root (a parameter, a root-level `let`, a
@@ -247,8 +247,10 @@ three arms under a root-level `why` read at the end all rename, and a lambda mad
 reads `why` forces a later arm capturing `why` to rename.
 
 The census is one walk of the frame's body (`Census`) that resolves every `Var` reference and `<-`
-target to what it reads at that point, recorded as an `Occurrence { binder, in_closure }`: `binder`
-is `None` for the frame root, or the identity of a registered arm/nested-block binder. Identity is
+target to what it reads at that point, recorded as an `Occurrence { target, in_closure }`: the
+`target` is `Outside` (a binding outside the frame: an enclosing function's, a module-level one, a
+builtin), `Root` (a parameter or a root-level `let` of this frame), or `Binder` (a registered
+arm/nested-block binder); `must_rename` counts the first two alike. Identity is
 the address of the AST node (`binder_key`, the `MatchArm` or the `LetBinding`), which is what the
 lowering holds when it decides that binder, so no spans are involved and a desugared or cloned tree
 can never be mistaken for the original. Each registered binder also records its `ancestors`, the
@@ -298,7 +300,14 @@ are not a block, so any block inside a CE is nested; the module frame treats a b
 binding as root, since a collision with a module-level binding is already isolated by
 `lower_module`'s frame wrap). In a block that is not the root (`Frame::block_is_nested`, reported by
 `enter_block`), `lower_block_let` decides each bound name by `Frame::must_rename(n, key(let))`. A
-root-level `let` never renames: rebinding in sequence is what Python does too. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
+root-level `let` asks `Frame::must_rename_root(n)` instead (issue #99): rename iff any occurrence of
+`n` in the frame is `Outside`. Python makes `n` local to the whole `def` as soon as anything in it
+assigns `n`, so a read of an outer `n` before the `let` (or in its value, or in a closure made
+before it) would raise `UnboundLocalError`; a read after the `let` resolves to `Root(let)` and a
+read of a parameter or an earlier root-level `let` resolves to `Root(that)`, neither of which is
+`Outside`, so rebinding in sequence stays as Python does it. Parameters are bound as `Root` when
+the frame is built (`Frame::of_body` takes them), and the module frame never renames a root-level
+`let` (`Frame::module`), since those are globals. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
 installs `n → _n` in `renames` for the rest of the block, where it dies with the block's
 `restore_local_scope`; a parameterised `let` installs it before its body so a recursive call resolves
 to the renamed def, and the def is emitted under the fresh name. The emitted target is passed down

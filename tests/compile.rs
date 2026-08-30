@@ -7296,3 +7296,165 @@ fn e2e_a_closure_escaping_an_earlier_arm_forces_the_later_capture_to_rename() {
     assert!(py.contains("_why = b._0"), "{py}");
     run_and_check(src, &[("r", "11")]);
 }
+
+// ---------- root-level `let`s that shadow an enclosing-scope name (issue #99) ----------
+
+#[test]
+fn e2e_a_root_let_shadowing_an_enclosing_name_read_earlier_is_renamed() {
+    // The issue's program: Python's `x = 2` makes `x` local to the whole `def g`,
+    // so the earlier `y = x + 1` raises UnboundLocalError.
+    let src = "
+        let f x =
+          let g o =
+            let y = x + 1
+            let x = 2
+            x + y + o
+          g 10
+        let r = f 5
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        y = x + 1\n        _x = 2\n"), "{py}");
+    assert!(py.contains("return _x + y + o"), "{py}");
+    run_and_check(src, &[("r", "18")]);
+}
+
+#[test]
+fn e2e_a_root_let_shadowing_a_module_binding_read_earlier_is_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          let m = n + 1
+          let n = 2
+          m + n + u
+        let r = f 10
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    m = n + 1\n    _n = 2\n"), "{py}");
+    run_and_check(src, &[("r", "18")]);
+}
+
+#[test]
+fn e2e_a_root_let_reading_the_module_binding_it_shadows_is_renamed() {
+    // `n = n + 1` at the root of a def reads a local that is not yet assigned.
+    let src = "
+        let n = 5
+        let f u =
+          let n = n + 1
+          n + u
+        let r = f 10
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    _n = n + 1\n    return _n + u"), "{py}");
+    run_and_check(src, &[("r", "16")]);
+}
+
+#[test]
+fn e2e_a_closure_made_before_a_root_let_reads_the_enclosing_binding() {
+    // The nested def reads the enclosing `x`; without the rename it would read
+    // `g`'s own `x`, assigned only after the def is called.
+    let src = "
+        let f x =
+          let g o =
+            let peek u = x + u
+            let before = peek 0
+            let x = 100
+            before + x + o
+          g 1
+        let r = f 5
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = 100"), "{py}");
+    assert!(py.contains("return x + u"), "{py}");
+    run_and_check(src, &[("r", "106")]);
+}
+
+#[test]
+fn a_root_let_rebinding_a_parameter_is_not_renamed() {
+    // Rebinding a name of the same frame in sequence is what Python does too.
+    let src = "
+        let f x =
+          let x = x + 1
+          x * 2
+        let r = f 3
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    x = x + 1\n    return x * 2"), "{py}");
+    assert!(!py.contains("_x"), "{py}");
+    run_and_check(src, &[("r", "8")]);
+}
+
+#[test]
+fn a_root_let_referenced_only_after_it_is_not_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          let n = 2
+          n + u
+        let g u =
+          let k = 1
+          k + u
+        let r = f 10 + g 1
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    n = 2\n    return n + u"), "{py}");
+    assert!(py.contains("    k = 1\n    return k + u"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "14")]);
+}
+
+#[test]
+fn a_top_level_let_is_never_renamed() {
+    // Module-level bindings are globals; a later top-level `let` of the same name
+    // is a plain reassignment.
+    let src = "
+        let n = 5
+        let m = n + 1
+        let n = 7
+        let r = n + m
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("n = 5\nm = n + 1\nn = 7\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    run_and_check(src, &[("r", "13")]);
+}
+
+#[test]
+fn e2e_a_root_let_mut_shadowing_an_enclosing_name_declares_the_fresh_name() {
+    // The inner `x` is a renamed root-level mut; the closure that assigns it must
+    // declare `nonlocal _x`, and the earlier read still means the parameter.
+    let src = "
+        let f x =
+          let g o =
+            let before = x
+            let mut x = 0
+            let bump u = x <- x + u
+            bump 5
+            bump 6
+            before + x + o
+          g 1
+        let r = f 100
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("nonlocal _x"), "{py}");
+    assert!(py.contains("_x = _x + u"), "{py}");
+    assert!(py.contains("before = x\n"), "{py}");
+    run_and_check(src, &[("r", "112")]);
+}
+
+#[test]
+fn e2e_a_destructuring_root_let_renames_only_the_colliding_name() {
+    let src = "
+        let f a =
+          let g o =
+            let before = a
+            let (a, b) = (10, 20)
+            before + a + b + o
+          g 1
+        let r = f 100
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_a, b = (10, 20)"), "{py}");
+    assert!(!py.contains("_b"), "{py}");
+    run_and_check(src, &[("r", "131")]);
+}

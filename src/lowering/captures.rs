@@ -32,19 +32,30 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding};
+use crate::parser::ast::{BlockStmt, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, Param};
 
 /// The identity of an arm or nested-block binder: the address of its AST node.
 pub(super) fn binder_key<T>(node: &T) -> usize {
     node as *const T as usize
 }
 
-/// One occurrence of a name: the binder it resolves to (`None` for the frame
-/// root or anything outside the frame) and whether it sits inside a nested
-/// closure of the frame.
+/// What an occurrence of a name reads, under Pyfun scoping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// A binding outside the frame: an enclosing function's, a module-level
+    /// binding, a builtin or prelude name.
+    Outside,
+    /// A root binding of the frame: a parameter or a root-level `let`.
+    Root(usize),
+    /// A registered arm or nested-block binder of the frame.
+    Binder(usize),
+}
+
+/// One occurrence of a name: what it resolves to and whether it sits inside a
+/// nested closure of the frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Occurrence {
-    binder: Option<usize>,
+    target: Target,
     in_closure: bool,
 }
 
@@ -64,14 +75,21 @@ pub(super) struct Frame {
     /// function whose body is a block). Its `let`s are root-level and never
     /// renamed; any other block is nested.
     pub root_is_body: bool,
+    /// Whether this is the module frame, whose root-level `let`s are globals and
+    /// never rename.
+    pub module: bool,
 }
 
 impl Frame {
-    /// The frame for a function whose body is `body` (parameters are root
-    /// bindings of the frame).
-    pub fn of_body(body: &Expr) -> Frame {
+    /// The frame for a function whose body is `body`; `params` are its
+    /// parameters, root bindings of the frame.
+    pub fn of_body(params: &[Param], body: &Expr) -> Frame {
         let root_is_body = matches!(body.kind, ExprKind::Block { .. });
         let mut census = Census::new(root_is_body);
+        for p in params {
+            let names = super::pattern_bindings(&p.pattern);
+            census.bind_root(binder_key(p), &names);
+        }
         census.expr(body);
         census.finish(root_is_body)
     }
@@ -93,7 +111,9 @@ impl Frame {
         // as root here.
         let mut census = Census::new(true);
         census.items(items);
-        census.finish(true)
+        let mut frame = census.finish(true);
+        frame.module = true;
+        frame
     }
 
     /// This frame's census with `body`'s occurrences added on top, `body` being
@@ -108,6 +128,7 @@ impl Frame {
         census.expr(body);
         let mut frame = census.finish(false);
         frame.fresh = self.fresh.clone();
+        frame.module = self.module;
         frame
     }
 
@@ -132,17 +153,37 @@ impl Frame {
             return false;
         };
         let ancestors = self.ancestors.get(&key);
-        occurrences.iter().any(|o| match o.binder {
-            Some(b) if b == key => false,
-            None => true,
-            Some(b) => o.in_closure || ancestors.is_none_or(|a| a.contains(&b)),
+        occurrences.iter().any(|o| match o.target {
+            Target::Binder(b) if b == key => false,
+            Target::Outside | Target::Root(_) => true,
+            Target::Binder(b) => o.in_closure || ancestors.is_none_or(|a| a.contains(&b)),
         })
+    }
+
+    /// The root-level rule (issue #99): a root-level `let` of `name` must be
+    /// renamed when any occurrence of `name` in the frame reads a binding
+    /// *outside* it. Python makes a name local to the whole `def` as soon as
+    /// anything in the `def` assigns it, so such a read (before the `let`, in
+    /// its own value, or in a closure made before it) would fail or read the
+    /// wrong slot. A reference after the `let` resolves to the `let` itself and
+    /// never counts; one that reads a parameter or an earlier root-level `let`
+    /// is a same-frame rebinding, which is what Python does too. The module
+    /// frame's root-level `let`s are globals and never rename.
+    pub fn must_rename_root(&self, name: &str) -> bool {
+        if self.module {
+            return false;
+        }
+        self.occurrences
+            .get(name)
+            .is_some_and(|os| os.iter().any(|o| o.target == Target::Outside))
     }
 }
 
 /// What a name resolves to at a point of the walk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Resolution {
+    /// A root binding of this frame: a parameter or a root-level `let`.
+    Root(usize),
     /// A registered arm/nested-block binder of this frame.
     Binder(usize),
     /// A binder belonging to a nested Python scope: its own slot, never an
@@ -183,22 +224,37 @@ impl Census {
             fresh: HashSet::new(),
             depth: 0,
             root_is_body,
+            module: false,
         }
     }
 
     fn occurrence(&mut self, name: &str) {
-        let binder = match self.env.get(name) {
+        let target = match self.env.get(name) {
             Some(Resolution::Inner) => return,
-            Some(Resolution::Binder(b)) => Some(*b),
-            None => None,
+            Some(Resolution::Binder(b)) => Target::Binder(*b),
+            Some(Resolution::Root(r)) => Target::Root(*r),
+            None => Target::Outside,
         };
         self.out
             .entry(name.to_string())
             .or_default()
             .push(Occurrence {
-                binder,
+                target,
                 in_closure: self.in_closure,
             });
+    }
+
+    /// Bind `names` as root bindings of the frame from here on (a parameter, a
+    /// root-level `let`): a reference after this point reads the frame's own slot.
+    fn bind_root(&mut self, key: usize, names: &[String]) {
+        for n in names {
+            let r = if self.in_closure {
+                Resolution::Inner
+            } else {
+                Resolution::Root(key)
+            };
+            self.env.insert(n.clone(), r);
+        }
     }
 
     /// Bind `names` for the extent of `f`: to a registered frame binder in the
@@ -220,8 +276,8 @@ impl Census {
         self.env = saved;
     }
 
-    /// Bind `names` from here on (no restore): a block `let` for the rest of its
-    /// block. `key` is `None` for a root-level `let` (a root binding).
+    /// Bind `names` from here on (no restore): a nested-block `let` for the rest
+    /// of its block, or an arm capture for the arm's extent.
     fn bind(&mut self, key: Option<usize>, names: &[String]) {
         for n in names {
             match (self.in_closure, key) {
@@ -366,13 +422,20 @@ impl Census {
     /// and binds after; a parameterised `let` is a nested def whose own name is
     /// bound before its body, so a recursive reference resolves to it.
     fn block_let(&mut self, b: &LetBinding, nested: bool) {
-        let key = nested.then(|| binder_key(b));
+        let key = binder_key(b);
         let names = b.bound_names();
+        let bind = |c: &mut Census| {
+            if nested {
+                c.bind(Some(key), &names);
+            } else {
+                c.bind_root(key, &names);
+            }
+        };
         if b.params.is_empty() {
             self.expr(&b.value);
-            self.bind(key, &names);
+            bind(self);
         } else {
-            self.bind(key, &names);
+            bind(self);
             self.closure_let(b);
         }
     }
@@ -396,7 +459,7 @@ impl Census {
                 CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
                     self.expr(value);
                     let names = target.bound_names();
-                    self.bind(None, &names);
+                    self.bind_root(binder_key(it), &names);
                 }
                 CeItem::DoBang(e)
                 | CeItem::Return(e)
@@ -440,5 +503,6 @@ impl Census {
         } else {
             self.closure_let(b);
         }
+        self.bind_root(binder_key(b), &b.bound_names());
     }
 }
