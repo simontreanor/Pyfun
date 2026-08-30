@@ -7895,8 +7895,16 @@ impl Infer {
                 CeItem::DoBang(e) => {
                     let t = self.infer_expr(e, &env)?;
                     let inner = self.fresh();
-                    let expected = monad(inner, self);
+                    let expected = monad(inner.clone(), self);
                     self.unify(&expected, &t, e.span())?;
+                    // A trailing `do! e` is the block's value, as in F# and the
+                    // user-builder table: the last step of a fire-and-forget
+                    // `async { … do! drain w }` needs no `return ()` after it. It
+                    // pins the step to `M unit`, so the block is `M unit` too.
+                    if is_last {
+                        self.unify(&inner, &Ty::Unit, e.span())?;
+                        result_val = Some(Ty::Unit);
+                    }
                 }
                 CeItem::Return(e) => {
                     if !is_last {

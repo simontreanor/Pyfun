@@ -4116,6 +4116,46 @@ fn e2e_async_ce_produces_a_coroutine() {
 }
 
 #[test]
+fn e2e_expression_items_and_a_trailing_do_bang_in_an_async_block() {
+    // #105: `print`, a unit `match` and an `if` stand as items, and the block
+    // ends in `do!` (an `await` as the last statement, value `None`).
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern sleep: float -> Async unit = asyncio.sleep\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let nap = async {\n  \
+                 let! _ = sleep 0.001\n  \
+                 print \"napped\"\n  \
+                 match 1:\n    case 1: print \"one\"\n    case _: print \"other\"\n  \
+                 if true then print \"yes\" else ()\n  \
+                 do! sleep 0.001\n\
+               }\n\
+               print (runAsync nap)";
+    let program = pyfun::compile(src).unwrap();
+    assert!(
+        program.contains("    await asyncio.sleep(0.001)\n"),
+        "{program}"
+    );
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(out.trim(), "napped\none\nyes\nNone");
+}
+
+#[test]
+fn e2e_a_trailing_do_bang_in_a_result_block_is_forwarded() {
+    let Some(python) = python_cmd() else { return };
+    let src = "let check x = if x > 0 then Ok () else Error \"neg\"\n\
+               let v = result { do! check 1 }\n\
+               let w = result {\n  let! a = Ok 2\n  print a\n  do! check (0 - a)\n}\n\
+               print v\nprint w";
+    let program = pyfun::compile(src).unwrap();
+    // No isinstance ladder around a trailing `do!`: the step is returned as it is.
+    assert!(program.contains("    return check(1)\n"), "{program}");
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    // `w`'s block runs at its definition, so its `print a` comes first.
+    assert_eq!(out.trim(), "2\nOk(None)\nError('neg')");
+}
+
+#[test]
 fn e2e_format_module_formats_numbers_and_strings() {
     // The `Format` members run and produce the expected strings. Uses an ASCII `$`
     // (not `£`) so the assertion doesn't depend on the console's output encoding.

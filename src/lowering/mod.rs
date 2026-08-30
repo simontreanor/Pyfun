@@ -4165,6 +4165,12 @@ impl Lowerer {
             }
             CeItem::DoBang(e) => {
                 let (mut s, v) = self.lower_value(e, locals)?;
+                if rest.is_empty() {
+                    // A trailing `do! e` is the block's value (`M unit`): forward
+                    // it as it is rather than test it and rebuild it.
+                    s.push(PyStmt::Return(v));
+                    return Ok(s);
+                }
                 let rest_stmts = self.lower_short_circuit_items(rest, locals, sc)?;
                 s.extend(self.short_circuit_bind(v, None, rest_stmts, sc));
                 Ok(s)

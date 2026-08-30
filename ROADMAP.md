@@ -267,6 +267,114 @@ this entry.
     and one to name in the next release notes; and nullary singletons are spelled `_Ctor`, with a
     fallback to `Ctor()` when a program binds that name.
 
+## Dogfooding findings (2026-08-30, fourth session: network play and the browser)
+
+A fourth pass over the Scrabble program scoped its two remaining features, network play (its roadmap
+item 4) and a browser interface (item 3), against Pyfun 0.7.0 and filed nine issues (#103 to #111).
+Nothing here is a miscompile of code the program already runs; every item is a place the language
+ran out when the program reached for concurrency, a wire format, or a page. The decisions below were
+made on 2026-08-30 and each entry records what was chosen and what was turned down with it. Network
+play comes first; the browser target is last because it depends on the async decisions.
+
+13. **An `->{async}` extern is checked but never awaited** (#104, S, decided). The lowering has no
+    hook for the `async` effect label: an extern typed `float ->{async} unit` is emitted as a plain
+    call, the coroutine is dropped with a `RuntimeWarning`, and lesson 18 plus
+    `examples/interop/http_fetch.pyfun` teach exactly that spelling. **Decided:** the `Async` *type*
+    stays the only thing the lowering awaits, and an `->{async}` extern whose result is not `Async _`
+    is rejected at the declaration with the working spelling (`-> Async a`, bound with `let!`) named;
+    the lesson and the example move to it. Effect-directed lowering (emit `await` wherever the label
+    says so) was turned down: an `async`-effect function handed to `List.map` or any effect-polymorphic
+    higher-order function would propagate the label onto a call that cannot await, so the result is
+    silently a list of coroutines, and the rule needed to forbid that is a new checker concept for the
+    gain of one `let!`. F# chose a type for the same reason.
+
+14. ~~**CE bodies reject expression and `match` items, and `async` rejects a trailing `do!`**~~
+    **CLOSED 2026-08-30** (#105, in the PR carrying this section). A unit-typed expression on its own
+    line (`print reply`) was a parse error inside any CE, so was a `match` or `if`, and an `async`
+    block had to end with `return`. The parser now reads a bare expression item as `let _ = e` (what
+    the checker requires of it and what the canonical pretty-print spells), which admits `match` and
+    `if` as items; a trailing `do! e` ends a `result`/`option`/`async` block as its value (`M unit`,
+    an `await` as the last statement of the `async def`; a `result` forwards the step as it is, no
+    ladder), as the user-builder table already did. `DESIGN.md` §8.1. Still open: CE items *inside*
+    match arms (F# allows `let!` in an arm), a separate desugaring change that waits for a program
+    to need it.
+
+15. **`for` inside computation expressions** (#103, S–M, spelling decided). `seq { }` has no `for`,
+    so "one per element" is `yield! (List.map f xs)`, which allocates a list to feed a generator; a
+    user builder has no `for_` row either, and `DESIGN.md` §8.1 lists `For` as part of the protocol
+    being followed. **Decided:** the Python spelling, `for x in xs:` with an offside block, consistent
+    with `match e:` / `case`; `for` is a contextual keyword inside CE braces only. Native `seq` lowers
+    to Python's `for` statement; a user builder desugars to `B.for_ e (fun x -> ...)`. Its two small
+    siblings shipped with item 14: the first-item near-miss (`Html { for ...`, `Html { class_ …`)
+    is now diagnosed as "not a computation-expression item", naming what the position takes, instead
+    of as a record literal missing `=`; and `docs/src/internals/03-desugaring.md` now quotes the whole
+    protocol table (`yield!` and `zero` were missing, the two a list-shaped DSL needs).
+    **Turned down:** custom operations (F#'s `[<CustomOperation>]`, `class' "board"` as a bare item);
+    they need a per-builder name table, and a list-shaped markup DSL (`div [attrs] [kids]`) is where
+    F#'s own community settled.
+
+16. **A `unit -> a` thunk handed to Python is miscalled** (#107, S, decided). `fun _ -> 41` lowers to
+    `lambda _: 41` and `asyncio.to_thread` calls it with no arguments. **Decided:** an argument to an
+    extern whose static type is `unit -> a` is wrapped as `lambda: f(None)` at the call site. The
+    issue's second rule, spreading a tuple parameter (`(a, b) -> c` wrapped as `lambda a, b:
+    f((a, b))`), was turned down: Python callbacks that receive one tuple are everywhere
+    (`sorted(pairs, key=f)`, `map(f, d.items())`) and the boundary cannot tell the two conventions
+    apart from the Pyfun type. The rule is "curry your callbacks", and lesson 12 gets a
+    `start_server`-shaped higher-order extern showing it, with the callback's effects written on the
+    parameter arrow. To check while there: a partially applied function (`serve (handler cfg)`)
+    crossing the same boundary.
+
+17. **An `Async` module, `Async.catch`, and structured concurrency** (#106, #108, #109, M). `Async`
+    is a type with `async { }` and nothing else: no `sleep`, `timeout`, `toThread`, `parallel`,
+    `race`, and no way to catch an exception at the await (`try e` catches at call time, so it wraps
+    the coroutine and the `TimeoutError` or `ConnectionResetError` escapes at the `let!`). The first
+    three are prelude externs; `parallel` (`gather(*xs)`) and `race` (`wait(FIRST_COMPLETED)`, losers
+    cancelled) are runtime helpers because the extern syntax has no spread; `Async.catch : Async a ->
+    Async (Result a Exception)` is a helper that builds the same `Exception` record `try` does and lets
+    `CancelledError` through. Structured concurrency ships as a library first, `Task.scope : (Scope ->
+    Async a) -> Async a` over `asyncio.TaskGroup` and `Task.start : Scope -> Async unit -> unit`, so a
+    start outside a scope is a missing argument. A `task { }` spelling is wanted; **decided:** try it
+    as a *user builder* over those helpers first (the §8.1 mechanism, no fifth built-in) and, if the
+    result is ugly, amend the §8.1 rule in `DESIGN.md` with the argument written down rather than
+    admit `async with` as "a control-flow form the rule did not count" (by that reading `with`, `for`
+    and `try` qualify too and the set reopens). Open inside this item: whether a scope types as `Async
+    (Result a (List Exception))` so an `ExceptionGroup` is a value. **Deliberately absent:**
+    `Async.start` and `Async.cancel` (a free start is the leak). The `spawn` effect label that only a
+    scope discharges, Pyfun's first effect handler, is an aspiration and goes in Deferred. No new
+    Python floor: `TaskGroup` and `asyncio.timeout` are 3.11, Pyfun targets 3.12.
+
+18. **A mailbox `Agent`** (#108, M, decided). F#'s `MailboxProcessor` types the game exactly (a
+    keyboard task and a socket task post to one loop that is a `match` over a `Msg` ADT). **Decided:**
+    it lives in `examples/interop/` first, built from `asyncio.Queue` externs and the `Async` module,
+    with the game as its consumer; it is promoted to the prelude once its signature stops moving (#109
+    already says `Agent.start` may need to take a scope, which is the kind of change a prelude module
+    must not make after the fact).
+
+19. **`Encode` to mirror `Decode`, with derived codecs** (#110, M–L, shape decided). A program that
+    speaks to itself over a wire writes values out with f-strings and reads them back with
+    `Decode.field` by hand, and the two drift; `Decode.map2` scales to two fields and a hand-written
+    decoder for a record holding a `Map (int, int) Placed` is forty lines. Two mechanisms: `Encode.auto
+    : a -> Json` is a runtime helper (the emitted classes carry their fields and case names, the same
+    knowledge `__repr__` uses); `Decode.auto : Decoder a` needs `a` known statically at the use site,
+    so it is type-directed lowering after inference (precedent: Decode specialization, `DESIGN.md`
+    §5.3) with a rejection when `a` is still a variable. Both ship together so both ends are one line,
+    and the property the tests state once is `Decode.auto (Encode.auto v) == Ok v`. **Decided shape:**
+    internally tagged objects, the convention serde (`tag = "type"`), Pydantic discriminated unions
+    and System.Text.Json share: a case with a record payload is `{"type": "Move", "square": "K11"}`,
+    positional payloads are `{"type": "Move", "fields": [...]}`, `Option` is `null` or the value,
+    tuples are arrays, a `Map` with string keys is an object and any other key type is a list of
+    `[k, v]` pairs. F#'s `{"Case", "Fields"}` is the outlier and was not copied. The game's `.replay`
+    files are free to adopt the same encoding.
+
+20. **A browser target** (#111, L, last). Three pieces once the async items are in: `pyfun bundle`
+    (a static page: the compiled Python, the program's data files, and the Pyodide loader the
+    playground already has, so a program is a shareable link with no server); a typed `Dom` façade in
+    the interop cookbook (the first real consumer of the "publish a façade, import many" axis; it hits
+    item 16's calling convention and Pyodide's `create_proxy` lifetime, which the façade should hide);
+    and a `Promise` to `Async` bridge, which Pyodide already performs and the types only need to say
+    (`-> Async a` on an extern over a JS async API). Signalling for a peer-to-peer transport is the
+    game's problem, not Pyfun's.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
@@ -280,6 +388,11 @@ this entry.
   the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs
   behind an `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain
   **non-goals** (below). What runs the output is a separate axis — see **Performance beyond CPython**.
+- **A `spawn` effect label discharged only by a concurrency scope** (fourth dogfooding session,
+  item 17): `Task.start` would perform `spawn` and only a `Task.scope` handles it, so a start outside
+  a scope is "performs `spawn`" with nothing to discharge it. Pyfun's first effect *handler*, and the
+  reason structured concurrency belongs in the language rather than a library; the value form
+  (`Scope` as a capability argument) ships first and covers the use.
 - **Larger prelude / package manager** — the *prelude* half is superseded by Dogfooding findings #5
   (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a

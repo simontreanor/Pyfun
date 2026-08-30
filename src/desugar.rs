@@ -12,6 +12,7 @@
 //! | `let! x = e` …  | `B.bind e (fun x -> …)`                              |
 //! | `do! e` …       | `B.bind e (fun _ -> …)`   (trailing `do! e` → `e`)   |
 //! | `let x = e` …   | `(fun x -> …) e`                                     |
+//! | `e` …           | the `let` row: the parser reads `e` as `let _ = e`   |
 //! | `return e`      | `B.return_ e`        (must be last)                  |
 //! | `return! e`     | `B.returnFrom e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |

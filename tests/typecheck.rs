@@ -4275,6 +4275,26 @@ fn rejects_yield_in_option_block() {
 }
 
 #[test]
+fn a_trailing_do_bang_ends_a_monad_block_as_unit() {
+    // #105: a fire-and-forget block ends in `do! e` with no `return ()`.
+    let src = "let check x = if x > 0 then Ok () else Error \"neg\"\n\
+               let v = result { do! check 1 }\n\
+               let w = result {\n  let! a = Ok 2\n  do! check a\n}\n\
+               let o = option { do! Some () }";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    // The trailing step must be `M unit`; `M int` is a type error, not a value.
+    assert_error_contains("let v = result { do! Ok 1 }", "mismatch");
+}
+
+#[test]
+fn an_expression_item_checks_as_a_wildcard_let() {
+    // A bare expression item is `let _ = e`: the line parses and checks, and
+    // its value is discarded exactly as `let _ = e` discards it.
+    let src = "let a = option {\n  let! x = Some 1\n  print x\n  return x\n}";
+    assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+}
+
+#[test]
 fn rejects_option_without_return() {
     assert_error_contains(
         "let a = option { let! x = Some 1 }",

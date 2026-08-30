@@ -242,6 +242,8 @@ const PROGRAMS: &[&str] = &[
     "let a = result { let! x = m return x }",
     "let a = option { let! x = m return x }",
     "let a = async { let! x = m do! n return! r }",
+    "let a = async { let! x = m do! n }",
+    "let a = result { let! x = m let _ = print x return x }",
     // User-defined CE builders (an uppercase module name before `{`). The CE-item
     // lookahead keeps `Some { x = 1 }` (a record argument) parsing as application.
     "let a = Maybe { let! x = m return x }",

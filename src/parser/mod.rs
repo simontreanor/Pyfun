@@ -249,8 +249,8 @@ impl Parser {
             message: format!(
                 "{} is indented as a continuation of the `{}` item on line {}, where it \
                  can only be an argument to that item's expression; to make it a new \
-                 item, align it with that item and bind its value (`let _ = ...`), or \
-                 indent it past the start of the expression to continue it",
+                 item, align it with that item, or indent it past the start of the \
+                 expression to continue it",
                 describe(self.peek()),
                 frame.kind,
                 frame.line
@@ -1653,6 +1653,32 @@ impl Parser {
                     self.bump(); // builder name
                     return self.parse_ce(CeBuilder::User(name), start);
                 }
+                // The near-miss the lookahead cannot take the CE path on: an
+                // uppercase name, `{`, then an identifier that is not followed by
+                // `=`. As a record literal it would fail with "expected `=`" on the
+                // token after the identifier, which is the wrong complaint when the
+                // line was meant as a CE item (`Html { for r in rows: …` or a
+                // builder custom operation, `Html { class_ "board"`, neither of
+                // which the item protocol has). Name what the position takes.
+                if is_upper(&name)
+                    && *self.peek2() == Tok::LBrace
+                    && matches!(self.peek3(), Tok::Ident(_))
+                    && !matches!(self.peek4(), Tok::Eq | Tok::RBrace | Tok::Comma)
+                {
+                    let Tok::Ident(head) = self.peek3().clone() else {
+                        unreachable!("peek3 checked to be an identifier")
+                    };
+                    let head_span = self.tokens[self.pos + 2].span;
+                    return Err(ParseError {
+                        message: format!(
+                            "`{head}` is not a computation-expression item: a `{name} {{ … }}` \
+                             block takes `let!`, `let`, `do!`, `return`, `yield`, or an \
+                             expression, and a `{name} {{ … }}` record literal takes \
+                             `field = value` pairs"
+                        ),
+                        span: head_span,
+                    });
+                }
                 // `Point { x = 1, y = 2 }` — a constructor-tagged record literal
                 // (`DESIGN.md` §8.3): an uppercase name before a `{` whose body is
                 // not a CE item (that case was handled just above).
@@ -1930,8 +1956,9 @@ impl Parser {
             (Tok::Return, _) => "return",
             (Tok::Yield, Tok::Bang) => "yield!",
             (Tok::Yield, _) => "yield",
-            // Anything else fails the match below before the frame is read.
-            _ => "item",
+            // A bare expression item; anything that is not one fails the match
+            // below before the frame is read.
+            _ => "expression",
         };
         self.ce_items.push(CeFrame {
             col,
@@ -1991,7 +2018,25 @@ impl Parser {
                 self.expect(&Tok::Bang, "`!`")?;
                 Ok(CeItem::DoBang(self.parse_expr()?))
             }
-            _ => Err(self.error("expected `let!`, `let`, `do!`, `return`, or `yield`")),
+            // A bare expression on its own line (`print reply`, a unit-typed
+            // `match`/`if`) is an item too, as in F#: it is `let _ = e`, which is
+            // what the checker requires of it (`unit`) and what the canonical
+            // pretty-print spells. Anything that cannot start an expression
+            // (a closing bracket, an operator) still gets the item list.
+            _ if starts_expr(self.peek()) => {
+                let start = self.cur_start();
+                let value = self.parse_expr()?;
+                let target_span = NodeSpan::new(Span::new(start, start));
+                Ok(CeItem::Let {
+                    target: Pattern::Wildcard,
+                    target_span,
+                    value,
+                })
+            }
+            _ => {
+                Err(self
+                    .error("expected `let!`, `let`, `do!`, `return`, `yield`, or an expression"))
+            }
         }
     }
 
@@ -2325,6 +2370,13 @@ fn starts_atom(tok: &Tok) -> bool {
     )
 }
 
+/// Whether `tok` can begin an expression: an atom, a prefix form (`fun`, `if`,
+/// `match`, `not`), or a leading unary minus. Used to admit a bare expression as
+/// a CE item without turning a stray closing bracket into one.
+fn starts_expr(tok: &Tok) -> bool {
+    starts_atom(tok) || matches!(tok, Tok::Fun | Tok::If | Tok::Match | Tok::Not | Tok::Minus)
+}
+
 fn starts_atom_pattern(tok: &Tok) -> bool {
     // A `{` no longer starts a pattern on its own: record patterns are
     // constructor-tagged (`Point { … }`), so they begin with an `Ident`
@@ -2540,57 +2592,114 @@ mod tests {
         assert!(errors.is_empty());
     }
 
-    /// Assert that `src` fails to parse at its `print` line with the CE item
-    /// message (issue #64: the line after a binding must be examined as a CE
-    /// item, not swallowed as application arguments of the binding's value).
-    fn assert_rejects_statement_line(src: &str) {
-        let (_, errors) = parse_recover(lex(src).unwrap());
-        let err = errors
-            .first()
-            .unwrap_or_else(|| panic!("expected a parse error in {src:?}"));
+    /// Assert that `src` parses with its `print` line as a CE item of its own
+    /// (issue #64: the line after a binding must be examined as a CE item, not
+    /// swallowed as application arguments of the binding's value; since #105 a
+    /// bare expression *is* an item, `let _ = e`, so the line parses). The
+    /// binding's value is the CE itself (a one-expression block unwraps).
+    fn assert_statement_line_is_an_item(src: &str, expected_items: usize) {
+        let (module, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "{src:?} reported: {errors:?}");
+        let Some(Item::Let(b)) = module.items.first() else {
+            panic!("{src:?}: expected a `let` item");
+        };
+        let ExprKind::Ce { items, .. } = &b.value.kind else {
+            panic!(
+                "{src:?}: the binding's value is not a CE: {:?}",
+                b.value.kind
+            );
+        };
+        assert_eq!(items.len(), expected_items, "{src:?}: items {items:?}");
+        let expr_item = items.iter().find(|it| {
+            matches!(it, CeItem::Let { target: Pattern::Wildcard, value, .. }
+                if matches!(&value.kind, ExprKind::App { .. }))
+        });
         assert!(
-            err.message
-                .contains("expected `let!`, `let`, `do!`, `return`, or `yield`"),
-            "{src:?} reported: {}",
-            err.message
-        );
-        assert!(
-            err.message.contains("identifier `print`"),
-            "{src:?} reported: {}",
-            err.message
-        );
-        assert_eq!(
-            err.span.start,
-            src.find("print").unwrap(),
-            "{src:?} reported at the wrong position: {err:?}"
+            expr_item.is_some(),
+            "{src:?}: no expression item (`let _ = print …`) among {items:?}"
         );
     }
 
     #[test]
-    fn a_statement_line_after_a_ce_binding_is_rejected_as_an_item() {
+    fn a_statement_line_after_a_ce_binding_is_an_item() {
         // The issue #64 repro: without the item-offside rule, `print …` was
         // parsed as extra arguments to `x * 2` and surfaced as a type error on
-        // the line above.
-        assert_rejects_statement_line(
+        // the line above. It is now the third item, `let _ = print …`.
+        assert_statement_line_is_an_item(
             "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n    print f\"y is {y}\"\n    return y\n  }",
+            4,
         );
     }
 
     #[test]
-    fn every_builder_rejects_a_statement_line_after_any_item() {
-        for src in [
+    fn every_builder_takes_a_statement_line_after_any_item() {
+        for (src, n) in [
             // after a plain `let` in `seq`
-            "let s =\n  seq {\n    let y = 1 * 2\n    print y\n    yield y\n  }",
+            (
+                "let s =\n  seq {\n    let y = 1 * 2\n    print y\n    yield y\n  }",
+                3,
+            ),
             // after a `do!` in `async`
-            "let a =\n  async {\n    do! pause 1\n    print \"done\"\n    return 0\n  }",
+            (
+                "let a =\n  async {\n    do! pause 1\n    print \"done\"\n    return 0\n  }",
+                3,
+            ),
             // after a `let!` in `option`
-            "let o =\n  option {\n    let! x = Some 1\n    print x\n    return x\n  }",
+            (
+                "let o =\n  option {\n    let! x = Some 1\n    print x\n    return x\n  }",
+                3,
+            ),
             // after a `yield` in `seq`
-            "let q =\n  seq {\n    yield f 1\n    print 2\n  }",
+            ("let q =\n  seq {\n    yield f 1\n    print 2\n  }", 2),
             // a user-defined builder goes through the same item loop
-            "let m =\n  Maybe {\n    let! x = lookup 1\n    print x\n    return x\n  }",
+            (
+                "let m =\n  Maybe {\n    let! x = lookup 1\n    print x\n    return x\n  }",
+                3,
+            ),
         ] {
-            assert_rejects_statement_line(src);
+            assert_statement_line_is_an_item(src, n);
+        }
+    }
+
+    #[test]
+    fn a_ce_item_position_that_cannot_start_an_expression_lists_the_items() {
+        let src = "let m =\n  async {\n    let! x = m\n    )\n  }";
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        let err = errors.first().expect("a parse error");
+        assert!(
+            err.message
+                .contains("expected `let!`, `let`, `do!`, `return`, `yield`, or an expression"),
+            "reported: {}",
+            err.message
+        );
+        assert_eq!(err.span.start, src.find(')').unwrap());
+    }
+
+    #[test]
+    fn a_first_item_that_is_not_a_ce_item_is_named_rather_than_read_as_a_record() {
+        // `Html { for …` and `Html { class_ "board"` fail the CE lookahead and
+        // used to be diagnosed as a record literal missing its `=`.
+        for (src, head) in [
+            ("let p = Html {\n  for r in rows: yield r\n}", "for"),
+            ("let q = Html { class_ \"board\" }", "class_"),
+        ] {
+            let (_, errors) = parse_recover(lex(src).unwrap());
+            let err = errors.first().expect("a parse error");
+            assert!(
+                err.message
+                    .contains(&format!("`{head}` is not a computation-expression item")),
+                "{src:?} reported: {}",
+                err.message
+            );
+            assert_eq!(err.span.start, src.find(head).unwrap(), "{err:?}");
+        }
+        // The record spellings the lookahead exists for still parse as records.
+        for src in [
+            "let p = Point { x = 1, y = 2 }",
+            "let p = Some (Cell { x = 1 })",
+        ] {
+            let (_, errors) = parse_recover(lex(src).unwrap());
+            assert!(errors.is_empty(), "{src:?} reported: {errors:?}");
         }
     }
 
@@ -2615,7 +2724,7 @@ mod tests {
             err.message
         );
         assert!(
-            err.message.contains("`let _ = ...`"),
+            err.message.contains("align it with that item"),
             "reported: {}",
             err.message
         );
