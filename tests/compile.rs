@@ -3797,6 +3797,68 @@ fn e2e_an_empty_race_raises_the_named_error() {
 }
 
 #[test]
+fn a_mut_assigned_in_an_async_block_declares_global() {
+    // #122: a CE body is its own coroutine frame, so without the declaration
+    // the assignment silently bound a local and the flag never flipped.
+    let py = pyfun::compile(
+        "let mut flag = false\n\
+         let raiseFlag _ =\n  async {\n    flag <- true\n    return ()\n  }",
+    )
+    .unwrap();
+    assert!(py.contains("global flag"), "{py}");
+}
+
+#[test]
+fn a_mut_assigned_in_a_result_block_declares_global() {
+    let py = pyfun::compile(
+        "let mut attempts = 0\n\
+         let step x = result {\n  attempts <- attempts + 1\n  return x + 1\n}",
+    )
+    .unwrap();
+    assert!(py.contains("global attempts"), "{py}");
+}
+
+#[test]
+fn a_function_mut_assigned_in_an_async_block_declares_nonlocal() {
+    // The enclosing-function case: the coroutine frame sits one level in, so
+    // the capture is `nonlocal`, exactly as a closure's would be.
+    let py = pyfun::compile(
+        "extern import asyncio\n\
+         extern runAsync: Async a -> a = asyncio.run\n\
+         let bump _ =\n  let mut n = 0\n  let work = async {\n    n <- n + 1\n    return ()\n  }\n  runAsync work\n  n",
+    )
+    .unwrap();
+    assert!(py.contains("nonlocal n"), "{py}");
+}
+
+#[test]
+fn e2e_a_mut_assigned_in_an_async_block_reaches_the_module_binding() {
+    // The filed repro: must print True, not the silent False.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let mut flag = false\n\
+               let raiseFlag _ =\n  async {\n    flag <- true\n    return ()\n  }\n\
+               runAsync (raiseFlag ())\n\
+               print flag";
+    let program = pyfun::compile(src).unwrap();
+    assert_eq!(run_python(&python, &program).trim(), "True");
+}
+
+#[test]
+fn e2e_a_mut_assigned_in_a_seq_block_reaches_the_module_binding() {
+    // The generator frame has the same rule; the `for` body is that same frame.
+    let Some(python) = python_cmd() else { return };
+    let src = "let mut hits = 0\n\
+               let track xs = seq {\n  for x in xs:\n    hits <- hits + 1\n    yield x\n}\n\
+               [10, 20] |> track |> Seq.toList |> print\n\
+               print hits";
+    let program = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(out.trim(), "[10, 20]\n2");
+}
+
+#[test]
 fn e2e_a_self_tail_call_recurses_past_the_stack_limit() {
     // 50k frames is far past CPython's ~1000 limit: this only completes as a loop.
     run_and_check(
