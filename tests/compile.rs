@@ -4156,6 +4156,69 @@ fn e2e_a_trailing_do_bang_in_a_result_block_is_forwarded() {
 }
 
 #[test]
+fn e2e_async_module_members_run_over_asyncio() {
+    // #106/#108: parallel keeps order, race takes the first and cancels the rest,
+    // timeout yields None on the deadline and Some otherwise, toThread awaits a
+    // blocking thunk, and catch turns an exception raised at the await into an
+    // `Error` carrying the same `Exception` record `try` builds.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               extern failing: string -> Async unit = asyncio.sleep\n\
+               let slow n = async { do! Async.sleep 0.01  return n }\n\
+               let main = async {\n  \
+                 let! xs = Async.parallel [slow 1, slow 2, slow 3]\n  \
+                 print xs\n  \
+                 let! first = Async.race [slow 7, async { do! Async.sleep 0.5  return 8 }]\n  \
+                 print first\n  \
+                 let! t = Async.timeout 0.001 (Async.sleep 0.5)\n  \
+                 print t\n  \
+                 let! u = Async.timeout 1.0 (slow 9)\n  \
+                 print u\n  \
+                 let! v = Async.toThread (fun _ -> 41)\n  \
+                 print v\n  \
+                 let! r = Async.catch (failing \"oops\")\n  \
+                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"caught {e.errorKind}\"\n  \
+                 let! ok = Async.catch (slow 5)\n  \
+                 print ok\n  \
+                 return ()\n\
+               }\n\
+               runAsync main";
+    let program = pyfun::compile(src).unwrap();
+    assert!(
+        program.contains("return list(await asyncio.gather(*xs))"),
+        "{program}"
+    );
+    assert!(program.contains("except TimeoutError:"), "{program}");
+    let out = run_python(&python, &program).replace("\r\n", "\n");
+    assert_eq!(
+        out.trim(),
+        "[1, 2, 3]\n7\nNone_\nSome(9)\n41\ncaught TypeError\nOk(5)"
+    );
+}
+
+#[test]
+fn e2e_a_thunk_argument_to_an_extern_is_wrapped_for_python() {
+    // #107: `asyncio.to_thread` calls its function with no arguments, and the
+    // Pyfun thunk takes the unit value, so the call site hands over `lambda: f(None)`.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               extern toThread: (unit -> a) -> Async a = asyncio.to_thread\n\
+               let answer n = n * 7\n\
+               let main = async {\n  \
+                 let! v = toThread (fun _ -> 6 * 7)\n  \
+                 let! w = toThread (fun _ -> answer 7)\n  \
+                 return v + w\n\
+               }\n\
+               print (runAsync main)";
+    let program = pyfun::compile(src).unwrap();
+    assert!(program.contains("asyncio.to_thread(lambda: "), "{program}");
+    assert!(!program.contains("to_thread(lambda _:"), "{program}");
+    assert_eq!(run_python(&python, &program).trim(), "91");
+}
+
+#[test]
 fn e2e_format_module_formats_numbers_and_strings() {
     // The `Format` members run and produce the expected strings. Uses an ASCII `$`
     // (not `£`) so the assertion doesn't depend on the console's output encoding.

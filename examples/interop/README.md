@@ -69,7 +69,9 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   every Python programmer has imported.
 - **Effects for free.** A plain `extern` is `io`; the checker infers and propagates it, so
   any function touching the boundary is `io` with no annotation, and `let pure` over it is
-  a compile error. Override the boundary default with `->{async}` for async libraries. For a
+  a compile error. An async library's result is the `Async` type (`-> Async a`), awaited with
+  `let!` inside an `async { }` block, and the `Async` module (`sleep`, `timeout`, `parallel`,
+  `race`, `catch`, `toThread`) covers the combinators that are awkward to type as externs. For a
   call that is genuinely deterministic and effect-free, `extern pure` asserts it — and then
   `let pure` can *prove* whole pipelines over the boundary effect-free (`datetime.pyfun`).
   A callback-taking extern uses an effect *variable* so both pure and effectful callbacks

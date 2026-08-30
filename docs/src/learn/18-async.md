@@ -58,36 +58,103 @@ drives the coroutine to completion and returns the `a`. So `fetchScore |> runAsy
 ## Async is an inferred effect
 
 Lesson 11 showed the compiler inferring effects and checking `let pure` assertions. `async` is one
-of those effect labels. Effects are still inferred everywhere, and an `extern` arrow may state the
-`async` label explicitly with `->{async}`, overriding the default `io`:
+of those effect labels, and an `async { }` block performs it. So a `let pure` body that builds an
+async block is a compile error, the same way a `let pure` that prints is:
 
 ```pyfun
-extern fetchAsync: string ->{async} string = httpx.get
-```
-
-A caller of `fetchAsync` then performs `async`, and that propagates outward. So a `let pure` body
-that performs async is a compile error, the same way a `let pure` that prints is:
-
-```pyfun
-extern fetchAsync: string ->{async} string = httpx.get
-
-let pure grab url = fetchAsync url
-
-print (grab "http://example.com")
+let pure grab x = async { return x + 1 }
 ```
 
 ```console
 error: `grab` is declared `pure` but performs `async`
- --> 3:21
+ --> 1:19
   |
-3 | let pure grab url = fetchAsync url
-  |                     ^^^^^^^^^^^^^^
+1 | let pure grab x = async { return x + 1 }
+  |                   ^^^^^^^^^^^^^^^^^^^^^^
 
 1 error
 ```
 
 The effect is impossible to lie about. If a function awaits real async work, its type says so, and
 purity cannot be claimed over it.
+
+## Binding an async Python function
+
+An async Python function returns a coroutine when you call it, and nothing happens until that
+coroutine is awaited. The Pyfun type says exactly that: the result is `Async a`, and `let!` (or
+`do!` when there is no value) inside an `async { }` block is where the await happens.
+
+```pyfun
+extern runAsync: Async a -> a = asyncio.run
+extern sleep: float -> Async unit = asyncio.sleep
+
+let nap =
+  async {
+    do! sleep 0.01
+    return "rested"
+  }
+
+print (runAsync nap)
+```
+
+```console
+rested
+```
+
+`do! sleep 0.01` is the await, and `return "rested"` sets the value, so `nap` has type `Async
+string`. Emitted, the `do!` is `await asyncio.sleep(0.01)` inside the `async def`.
+
+The tempting spelling is `float ->{async} unit`, marking the arrow with the `async` label instead of
+giving the result the `Async` type. The checker rejects it and names the working spelling, because a
+coroutine that nothing awaits would sleep for zero seconds and print a warning:
+
+```console
+error: `sleep` is declared `->{async}` but returns `unit`, which cannot be awaited: an async Python function returns a coroutine, so declare the result as `Async unit` (`… -> Async unit`) and bind it with `let!` inside an `async { }` block
+```
+
+## The `Async` module
+
+`Async` is also a module, with the combinators that are awkward to write as externs yourself.
+`Async.parallel` awaits a whole list at once and keeps the results in order; `Async.timeout` gives an
+await a deadline and hands back an `Option`; `Async.catch` turns an exception raised *at the await*
+into a `Result` (a `try` around the call would only wrap the coroutine, because the call itself does
+not fail); `Async.race` takes the first to finish and cancels the rest; and `Async.toThread` runs a
+blocking function, `input` say, on a worker thread so the event loop stays free.
+
+```pyfun
+extern runAsync: Async a -> a = asyncio.run
+
+let slow n =
+  async {
+    do! Async.sleep 0.01
+    return n
+  }
+
+let main =
+  async {
+    let! xs = Async.parallel [slow 1, slow 2, slow 3]
+    print xs
+    let! quick = Async.timeout 0.001 (Async.sleep 1.0)
+    print quick
+    let! r = Async.catch (slow 4)
+    match r:
+      case Ok n: print f"finished with {n}"
+      case Error e: print f"failed: {e.errorKind}"
+    return ()
+  }
+
+runAsync main
+```
+
+```console
+[1, 2, 3]
+None
+finished with 4
+```
+
+`Async.sleep` is `asyncio.sleep` itself; the others compile to small `async def` helpers over
+`asyncio.gather`, `asyncio.wait_for`, `asyncio.wait` and `asyncio.to_thread`, so the emitted Python is
+still the code you would have written.
 
 ## Where async pays off, and where it does not
 

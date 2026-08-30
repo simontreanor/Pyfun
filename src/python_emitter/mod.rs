@@ -292,6 +292,8 @@ pub enum PyExpr {
     Not(Box<PyExpr>),
     /// `-value` — arithmetic negation.
     Neg(Box<PyExpr>),
+    /// `*value` — an iterable spread into a call's arguments (`gather(*xs)`).
+    Starred(Box<PyExpr>),
     /// A list display `[a, b, c]`.
     List(Vec<PyExpr>),
     /// A tuple display `(a, b, c)` (always two or more elements in Pyfun).
@@ -713,6 +715,7 @@ fn prec(e: &PyExpr) -> u8 {
         PyExpr::Not(_) => 4,
         // Unary minus binds tighter than `*`/`/` (20), as in Python.
         PyExpr::Neg(_) => 30,
+        PyExpr::Starred(_) => 30,
         PyExpr::BinOp { op, .. } => op.precedence(),
         // A chained comparison sits at comparison precedence (5), like its links.
         PyExpr::Compare { .. } => 5,
@@ -795,7 +798,11 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             )
         }
         PyExpr::Lambda { params, body } => {
-            format!("lambda {}: {}", params.join(", "), emit_expr(body, 2))
+            if params.is_empty() {
+                format!("lambda: {}", emit_expr(body, 2))
+            } else {
+                format!("lambda {}: {}", params.join(", "), emit_expr(body, 2))
+            }
         }
         PyExpr::Attribute { value, attr } => format!("{}.{attr}", emit_expr(value, 100)),
         PyExpr::Subscript { value, index } => {
@@ -819,6 +826,7 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         // atom stays bare (`-x`, `-f(a)`) while a looser binop is parenthesized
         // (`-(a + b)`).
         PyExpr::Neg(inner) => format!("-{}", emit_expr(inner, 30)),
+        PyExpr::Starred(inner) => format!("*{}", emit_expr(inner, 30)),
         PyExpr::List(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();
             format!("[{}]", elems.join(", "))

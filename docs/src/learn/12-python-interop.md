@@ -88,6 +88,38 @@ missingField |> Decode.decodeString bookDecoder |> describe |> print
 
 The well-formed object decodes to a typed `Book`. The object missing `pages` short-circuits to an `Error` carrying the Python exception, which `match` forces you to handle. The output is `Dune, 412 pages` then `failed (KeyError)`.
 
+## Handing Python a function
+
+A callback crosses the boundary the other way, and two rules keep it honest. Write a callback of
+several parameters *curried*, never over a tuple: a curried Pyfun function is a plain
+multi-parameter `def`, which is what Python calls as `cb(reader, writer)`, while a function over a
+pair is one parameter that Python would have to know to bundle. And a thunk, a parameter typed
+`unit -> a`, is called by Python with no arguments at all, so Pyfun wraps it for you at the call:
+
+```pyfun
+extern runAsync: Async a -> a = asyncio.run
+extern toThread: (unit -> a) -> Async a = asyncio.to_thread
+
+let answer =
+  async {
+    let! v = toThread (fun _ -> 6 * 7)
+    return v
+  }
+
+print (runAsync answer)
+```
+
+```console
+42
+```
+
+`asyncio.to_thread` calls the function it is given with no arguments, on a worker thread; the
+Pyfun thunk takes the unit value, so the call site hands Python `lambda: f(None)`. The callback's
+effects go on the extern's parameter arrow, because declared effects are exact: `(unit -> a)`
+accepts only a pure thunk, `(unit ->{io} a)` one that prints, and an effect variable
+`(unit ->{e} a)` either, with `e` flowing to the result arrow (`->{io, e}`) so the caller inherits
+whatever the callback performs.
+
 ## Exercise
 
 Complete the decoder by filling both holes with the strict field decoders. `pyfun check` reports each hole's type and suggests the fit. The first report is:

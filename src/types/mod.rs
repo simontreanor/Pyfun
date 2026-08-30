@@ -634,6 +634,21 @@ pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
     ("padRight", 3),
 ];
 
+/// The `Async` module (`DESIGN.md` §8.1): the members F#'s `Async` has that `asyncio`
+/// can supply, typed once over the built-in `Async a`. Building a value is pure (it
+/// is a coroutine object); the `async` effect is attributed where it is awaited
+/// (`let!`/`do!` in an `async { }` block). `race` cancels the losers; `catch` is
+/// the await-time `try` (a `try e` catches at call time and would wrap the
+/// coroutine); `toThread` runs a blocking thunk off the event loop.
+pub const ASYNC_PRELUDE: &[(&str, usize)] = &[
+    ("sleep", 1),
+    ("timeout", 2),
+    ("toThread", 1),
+    ("parallel", 1),
+    ("race", 1),
+    ("catch", 1),
+];
+
 /// The `Decode` module (`DESIGN.md` §6): Elm-style JSON decoder combinators over the
 /// opaque built-in `Decoder a`. A `Decoder a` is a pure, total recipe that turns
 /// untrusted JSON into your own typed data — "parse, don't validate" for the one
@@ -671,7 +686,7 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
 pub const MODULES: &[&str] = &[
-    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode",
+    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode", "Async",
 ];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
@@ -688,6 +703,30 @@ pub const MODULES: &[&str] = &[
 /// [`PRELUDE`] + [`MODULE_PRELUDES`] in both directions, so a new member cannot
 /// ship undocumented and a renamed one cannot leave a stale entry behind.
 pub const MEMBER_DOCS: &[(&str, &str)] = &[
+    (
+        "Async.sleep",
+        "Pause for the given seconds. `asyncio.sleep`.",
+    ),
+    (
+        "Async.timeout",
+        "Await a value with a deadline in seconds: `Some` the result, or `None` if it ran out. `asyncio.wait_for`.",
+    ),
+    (
+        "Async.toThread",
+        "Run a blocking thunk on a worker thread and await its result, keeping the event loop free. `asyncio.to_thread`.",
+    ),
+    (
+        "Async.parallel",
+        "Await every value at once and collect the results in order. `asyncio.gather`.",
+    ),
+    (
+        "Async.race",
+        "Await the first value to finish and cancel the rest. `asyncio.wait(FIRST_COMPLETED)`.",
+    ),
+    (
+        "Async.catch",
+        "Await a value, turning an exception raised at the await into `Error` with the same `Exception` record `try` builds. Cancellation passes through.",
+    ),
     (
         "print",
         "Write a value and a newline to stdout. Performs `io`.",
@@ -1454,6 +1493,7 @@ pub fn prelude_signatures() -> &'static HashMap<String, String> {
         seed_string_prelude(&mut env);
         seed_format_prelude(&mut env);
         seed_decode_prelude(&mut env);
+        seed_async_prelude(&mut env);
         seed_option_prelude(&mut env);
         seed_result_prelude(&mut env);
         seed_seq_prelude(&mut env);
@@ -1473,6 +1513,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("String", STRING_PRELUDE),
     ("Format", FORMAT_PRELUDE),
     ("Decode", DECODE_PRELUDE),
+    ("Async", ASYNC_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -2768,6 +2809,7 @@ fn build_decls(
     seed_string_prelude(&mut env);
     seed_format_prelude(&mut env);
     seed_decode_prelude(&mut env);
+    seed_async_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
     seed_seq_prelude(&mut env);
@@ -3094,6 +3136,28 @@ fn build_decls(
             // Fall through: the extern still registers, so a real import problem
             // does not also report every use of the name as unbound.
         }
+        // An `->{async}` extern whose result is not `Async _` is a call the
+        // lowering cannot make correct: the label is checked and propagated, but
+        // only an `Async` value bound with `let!` is awaited, so the coroutine
+        // would be created and dropped (issue #104). Name the working spelling.
+        if let Some(ret) = async_label_without_async_result(&decl.ty) {
+            let ret = crate::ast::print_type(ret);
+            let wrapped = if ret.contains(' ') {
+                format!("({ret})")
+            } else {
+                ret.clone()
+            };
+            errors.push(TypeError {
+                message: format!(
+                    "`{}` is declared `->{{async}}` but returns `{ret}`, which cannot be \
+                     awaited: an async Python function returns a coroutine, so declare the \
+                     result as `Async {wrapped}` (`… -> Async {wrapped}`) and bind it with \
+                     `let!` inside an `async {{ }}` block",
+                    decl.name
+                ),
+                span,
+            });
+        }
         let mut var_map = HashMap::new();
         collect_type_vars(&decl.ty, &mut var_map);
         // Effect variables (`->{e}`) are an extern-only privilege: collected here
@@ -3129,6 +3193,60 @@ fn build_decls(
     }
 
     (decls, env, imported)
+}
+
+/// Seed the `Async` module ([`ASYNC_PRELUDE`]). Every arrow is pure except
+/// `toThread`, which performs the thunk's effect when the value is built.
+fn seed_async_prelude(env: &mut Env) {
+    let asy = |t: Ty| Ty::Con("Async".to_string(), vec![t]);
+    let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
+    let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
+    let result = |a: Ty, e: Ty| Ty::Con("Result".to_string(), vec![a, e]);
+    let exception = || Ty::Con("Exception".to_string(), vec![]);
+    let float = || Ty::Float(Unit::dimensionless());
+    let pf = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let a = || Ty::Var(0);
+    let e = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
+    let scheme = |vars: Vec<u32>, eff_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars,
+        mutable: false,
+        ty,
+    };
+    let mut put = |member: &str, s: Scheme| {
+        env.insert(format!("Async.{member}"), s);
+    };
+    // Async.sleep : float -> Async unit
+    put("sleep", scheme(vec![], vec![], pf(float(), asy(Ty::Unit))));
+    // Async.timeout : float -> Async a -> Async (Option a)
+    put(
+        "timeout",
+        scheme(vec![0], vec![], pf(float(), pf(asy(a()), asy(opt(a()))))),
+    );
+    // Async.toThread : (unit ->{e} a) ->{e} Async a
+    put(
+        "toThread",
+        scheme(vec![0], vec![e], arrow_e(arrow_e(Ty::Unit, a()), asy(a()))),
+    );
+    // Async.parallel : List (Async a) -> Async (List a)
+    put(
+        "parallel",
+        scheme(vec![0], vec![], pf(list(asy(a())), asy(list(a())))),
+    );
+    // Async.race : List (Async a) -> Async a
+    put(
+        "race",
+        scheme(vec![0], vec![], pf(list(asy(a())), asy(a()))),
+    );
+    // Async.catch : Async a -> Async (Result a Exception)
+    put(
+        "catch",
+        scheme(vec![0], vec![], pf(asy(a()), asy(result(a(), exception())))),
+    );
 }
 
 /// Collect the type variables of a declared type — bare lowercase names that are
@@ -3201,6 +3319,26 @@ fn collect_effect_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
 /// `->{...}` effect annotation. Such an `extern` is trusted as written and skips
 /// the `io`-by-default rule (`DESIGN.md` §4/§6) — a lone effect *variable*
 /// (`->{e}`) counts: it asserts "exactly the callback's effect".
+/// The result type of a declared arrow whose innermost arrow carries the `async`
+/// label but does not return `Async _` (issue #104); `None` when the type is
+/// fine (unannotated, another label, or `-> Async T`).
+fn async_label_without_async_result(ty: &TypeExpr) -> Option<&TypeExpr> {
+    match ty {
+        TypeExpr::Fun(_, ret, effects) => {
+            if matches!(**ret, TypeExpr::Fun(..)) {
+                async_label_without_async_result(ret)
+            } else if effects.iter().any(|l| l == "async")
+                && !matches!(&**ret, TypeExpr::Con(name, _, _) if name == "Async")
+            {
+                Some(ret)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn innermost_arrow_annotated(ty: &TypeExpr) -> bool {
     match ty {
         TypeExpr::Fun(_, ret, effects) => {

@@ -182,7 +182,8 @@ Notice what the compiler does:
   Python the immutability Pyfun promises. There is no runtime, no VM, no marshalling.
 - **Effects tracked across the boundary.** A bare `extern` is `io` at full application, so it
   can't be called from a `let pure`. Mark it `pure` (like `statistics.mean`) and it composes into
-  pure code. You can even annotate other effect labels: `extern fetch: string ->{async} string = httpx.get`.
+  pure code. An async client returns a coroutine, so its result is the `Async` type, awaited
+  by `let!` in an `async { }` block: `extern fetch: string -> Async string = client.get`.
 - **Exceptions become values.** `try (parseInt s) : Result int Exception` catches whatever the
   Python side raises and hands you a `Result` to `match` on. The imperative FFI edge becomes the
   FP error type, with `errorKind` and `errorMessage` fields.

@@ -37,6 +37,13 @@ extern path: Url -> string = .path
 let u = urlparse "https://example.com/data.json"
 print (f"{scheme u} {path u}")                             # https /data.json
 
-# Async is a distinct effect: an `->{async}` extern arrow (overriding the `io`
-# default) marks an async client, and a caller inherits `async`. Uncalled here.
-extern getAsync: string ->{async} Response = httpx.get
+# Async is a distinct effect. An async client returns a coroutine, so its extern
+# result is the `Async` type, awaited by `let!` inside an `async { }` block; the
+# `->{async}` label (overriding the `io` default) marks the arrow, and a caller
+# inherits `async`. An `->{async}` arrow returning a bare `Response` would be a
+# coroutine nobody awaits, and the checker rejects it. The client is an
+# instance (`httpx.AsyncClient()`), so `get` binds as an instance-access extern
+# on it. Uncalled here.
+extern type AsyncClient
+extern newAsyncClient: unit -> AsyncClient = httpx.AsyncClient
+extern getAsync: AsyncClient -> string ->{async} Async Response = .get
