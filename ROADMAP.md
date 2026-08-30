@@ -352,21 +352,25 @@ play comes first; the browser target is last because it depends on the async dec
     dies with the session. It is promoted to the prelude once its signature stops moving; the game
     is its first consumer.
 
-19. **`Encode` to mirror `Decode`, with derived codecs** (#110, M–L, shape decided). A program that
-    speaks to itself over a wire writes values out with f-strings and reads them back with
-    `Decode.field` by hand, and the two drift; `Decode.map2` scales to two fields and a hand-written
-    decoder for a record holding a `Map (int, int) Placed` is forty lines. Two mechanisms: `Encode.auto
-    : a -> Json` is a runtime helper (the emitted classes carry their fields and case names, the same
-    knowledge `__repr__` uses); `Decode.auto : Decoder a` needs `a` known statically at the use site,
-    so it is type-directed lowering after inference (precedent: Decode specialization, `DESIGN.md`
-    §5.3) with a rejection when `a` is still a variable. Both ship together so both ends are one line,
-    and the property the tests state once is `Decode.auto (Encode.auto v) == Ok v`. **Decided shape:**
+19. ~~**`Encode` to mirror `Decode`, with derived codecs**~~ **CLOSED 2026-08-30** (#110, in the PR
+    carrying this entry). A program that speaks to itself over a wire wrote its values out with
+    f-strings and read them back with `Decode.field` by hand, and the two drifted. Now `Encode.auto :
+    a -> string` and `Decode.auto : Decoder a` are derived from the type (`DESIGN.md` §6, "Derived
+    codecs"): `Encode.auto` is a run-time helper reading the value's shape from the emitted classes;
+    `Decode.auto` is type-directed lowering after inference, the checker resolving each site's
+    `Decoder a` into a `Codec` (records, sum types, tuples, `List`/`Set`/`Map`/`Option`/`Result`,
+    newtypes read through, recursion via a per-module table) that lowering turns into a descriptor
+    the emitted `_pf_dec_auto` interprets. A site whose type is still open is an error naming the ways
+    to pin it, and its variable stays weak at `let`-generalization so a later use pins it. The
+    round-trip property holds on a record holding a `Map (int, int) Placed`, a recursive `Tree`, a
+    `Set`, a tuple and nested cases, in one file and across a project import. **Decided shape:**
     internally tagged objects, the convention serde (`tag = "type"`), Pydantic discriminated unions
-    and System.Text.Json share: a case with a record payload is `{"type": "Move", "square": "K11"}`,
-    positional payloads are `{"type": "Move", "fields": [...]}`, `Option` is `null` or the value,
-    tuples are arrays, a `Map` with string keys is an object and any other key type is a list of
-    `[k, v]` pairs. F#'s `{"Case", "Fields"}` is the outlier and was not copied. The game's `.replay`
-    files are free to adopt the same encoding.
+    and System.Text.Json share: `{"type": "Move", "fields": ["K11 a QUIZ"]}`, `{"type": "Resign"}`,
+    `Option` as `null` or the value, tuples as arrays, a `Map` with string keys as an object and any
+    other key type as a list of `[k, v]` pairs. F#'s `{"Case", "Fields"}` is the outlier and was not
+    copied. The game's `.replay` files are free to adopt the same encoding. **Not done:** a
+    composable `Encode` (`Encode.object`, `Encode.list`, a `Json` value type) for shapes that are not
+    a Pyfun type's own; a hand-written decoder remains the tool at a boundary you do not control.
 
 20. **A browser target** (#111, L, last). Three pieces once the async items are in: `pyfun bundle`
     (a static page: the compiled Python, the program's data files, and the Pyodide loader the

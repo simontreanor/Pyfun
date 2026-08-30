@@ -684,7 +684,12 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
     ("andThen", 2),
     ("oneOf", 1),
     ("decodeString", 2),
+    ("auto", 0),
 ];
+
+/// The `Encode` module (`DESIGN.md` §6, "Derived codecs"): the mirror of
+/// `Decode.auto`, one derived encoder for any value whose type has a JSON form.
+pub const ENCODE_PRELUDE: &[(&str, usize)] = &[("auto", 1)];
 
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
 /// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
@@ -694,6 +699,7 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
 /// `lower.x` is record-field access.
 pub const MODULES: &[&str] = &[
     "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode", "Async", "Task",
+    "Encode",
 ];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
@@ -729,6 +735,14 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     (
         "Async.race",
         "Await the first value to finish and cancel the rest. `asyncio.wait(FIRST_COMPLETED)`.",
+    ),
+    (
+        "Decode.auto",
+        "A decoder derived from the type it is used at: records, sum types (`{\"type\": …, \"fields\": […]}`), tuples, `List`, `Set`, `Map`, `Option` (`null` or the value) and the primitives, recursively. Round-trips `Encode.auto`.",
+    ),
+    (
+        "Encode.auto",
+        "Encode any value with a JSON form to a JSON string: records as objects, sum-type cases as `{\"type\": …, \"fields\": […]}`, `Option` as `null` or the value, a `Map` with string keys as an object and any other as a list of pairs. Round-trips `Decode.auto`.",
     ),
     (
         "Task.scope",
@@ -1531,6 +1545,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Decode", DECODE_PRELUDE),
     ("Async", ASYNC_PRELUDE),
     ("Task", TASK_PRELUDE),
+    ("Encode", ENCODE_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -1751,6 +1766,48 @@ impl Hole {
 /// (e.g. `string ->{io} unit`), since `show` prints them on arrows; `effect`
 /// additionally summarizes the concrete effect the value performs when fully applied,
 /// for a dedicated hover line ([`effect_summary`]).
+/// A derived JSON codec shape for one type (`DESIGN.md` §6, "Derived codecs"):
+/// what `Decode.auto` at a use site decodes into, computed from the resolved type
+/// once inference is complete and handed to lowering, which turns it into a
+/// descriptor the emitted `_pf_dec_auto` interprets. User-declared records and
+/// sum types live in a per-module table under their displayed type (so a
+/// recursive type is a `Ref` back into the table); everything else is inline.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Codec {
+    Int,
+    Float,
+    Bool,
+    Str,
+    Unit,
+    List(Box<Codec>),
+    Set(Box<Codec>),
+    Option(Box<Codec>),
+    Tuple(Vec<Codec>),
+    Map(Box<Codec>, Box<Codec>),
+    /// A record: its surface tag (bare for a local record, `Module.Name` for an
+    /// imported one, which lowering resolves to the class) and its fields in
+    /// declared order, keyed by their Pyfun names.
+    Record {
+        tag: String,
+        fields: Vec<(String, Codec)>,
+    },
+    /// A sum type: each constructor's surface name (`Module.Ctor` when imported)
+    /// with its payload codecs; a nullary case has none.
+    Adt {
+        ctors: Vec<(String, Vec<Codec>)>,
+    },
+    /// A named entry of the module's codec table.
+    Ref(String),
+}
+
+/// The derived codecs a module needs: one per `Decode.auto` site (keyed by the
+/// site's span), plus the named table the sites' `Ref`s point into.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Codecs {
+    pub sites: HashMap<Span, Codec>,
+    pub table: std::collections::BTreeMap<String, Codec>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeSpan {
     pub span: Span,
@@ -1885,11 +1942,14 @@ struct Decls {
     /// (declare-before-use, like every binding); total cases *also* join
     /// `ctors`/`type_ctors` under a hidden type named by [`ap_fn_key`].
     active_patterns: HashMap<String, ApInfo>,
+    /// Newtypes in scope (`opaque type UserId = string`), local and imported:
+    /// erased at lowering, so a derived codec reads through to the underlying type.
+    newtypes: HashSet<String>,
 }
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _exports, _holes, _ordered) = run(module, false, &HashMap::new());
+    let (errors, _types, _exports, _holes, _ordered, _codecs) = run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -1958,6 +2018,9 @@ pub struct ModuleExports {
     /// referenced — so an importing module can write the type's name in a
     /// record field, an `extern` signature, or an ADT payload.
     opaques: Vec<ExportedOpaque>,
+    /// The module's newtype names (`opaque type UserId = string`), so a dependent
+    /// deriving a codec over one reads through to the underlying type.
+    pub newtypes: HashSet<String>,
     /// Public **base measure** names (`measure m`). Merged **unqualified** into a
     /// consumer's decls — there is no qualified unit syntax (`<m>` is bare), so
     /// measures cross by name and erase at lowering (`DESIGN.md` §6.1).
@@ -2002,7 +2065,7 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, exports, _holes, _ordered) = run(module, false, imports);
+    let (errors, _types, exports, _holes, _ordered, _codecs) = run(module, false, imports);
     (errors, exports)
 }
 
@@ -2013,9 +2076,9 @@ pub fn check_module(
 pub fn check_module_collecting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
-) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports) {
-    let (errors, types, exports, _holes, _ordered) = run(module, true, imports);
-    (errors, types, exports)
+) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports, Codecs) {
+    let (errors, types, exports, _holes, _ordered, codecs) = run(module, true, imports);
+    (errors, types, exports, codecs)
 }
 
 /// Like [`check_collecting`] but with imported modules' exports seeded
@@ -2025,7 +2088,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
-    let (errors, types, _exports, holes, _ordered) = run(module, true, imports);
+    let (errors, types, _exports, holes, _ordered, _codecs) = run(module, true, imports);
     (errors, types, holes)
 }
 
@@ -2036,9 +2099,15 @@ pub fn check_collecting_with_imports(
 /// even for a module that has type errors elsewhere.
 pub fn check_collecting(
     module: &Module,
-) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>, HashSet<String>) {
-    let (errors, types, _exports, holes, ordered) = run(module, true, &HashMap::new());
-    (errors, types, holes, ordered)
+) -> (
+    Vec<TypeError>,
+    Vec<TypeSpan>,
+    Vec<Hole>,
+    HashSet<String>,
+    Codecs,
+) {
+    let (errors, types, _exports, holes, ordered, codecs) = run(module, true, &HashMap::new());
+    (errors, types, holes, ordered, codecs)
 }
 
 /// Shared core of [`check`] / [`check_collecting`] / [`check_module`]. When
@@ -2056,6 +2125,8 @@ type RunResult = (
     Vec<Hole>,
     // User type names the program compares (need ordering methods emitted).
     HashSet<String>,
+    // The derived codecs the module's `Decode.auto` sites need.
+    Codecs,
 );
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
@@ -2346,6 +2417,25 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         })
         .collect();
 
+    // Derived codecs (`Decode.auto`): each site's `Decoder a` is resolved now, and
+    // an `a` that is still open is an error at the site, since there is nothing
+    // to derive from.
+    let mut codecs = Codecs::default();
+    let auto_sites = std::mem::take(&mut inf.auto_sites);
+    for (span, ty) in auto_sites {
+        let ty = inf.apply(&ty);
+        let inner = match &ty {
+            Ty::Con(name, args) if name == "Decoder" && args.len() == 1 => args[0].clone(),
+            other => other.clone(),
+        };
+        match inf.codec_of(&inner, span, &mut codecs.table, &mut Vec::new()) {
+            Ok(codec) => {
+                codecs.sites.insert(span, codec);
+            }
+            Err(message) => errors.push(TypeError { message, span }),
+        }
+    }
+
     let ordered = std::mem::take(&mut inf.ordered);
     let (exported_records, exported_opaques) = close_over_references(
         &exports,
@@ -2364,9 +2454,20 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
             opaques: exported_opaques,
             measures: exported_measures,
             measure_aliases: exported_measure_aliases,
+            newtypes: module
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Type(decl) if matches!(decl.kind, TypeDeclKind::Newtype(_)) => {
+                        Some(decl.name.clone())
+                    }
+                    _ => None,
+                })
+                .collect(),
         },
         holes,
         ordered,
+        codecs,
     )
 }
 
@@ -2722,6 +2823,9 @@ fn merge_imported_types(
                 ctor_names.push(qualified);
             }
             decls.type_ctors.insert(ty.name.clone(), ctor_names);
+            if imports[*module_name].newtypes.contains(&ty.name) {
+                decls.newtypes.insert(ty.name.clone());
+            }
         }
     }
     // Directly imported records first, then transitively carried ones, so the
@@ -2989,6 +3093,7 @@ fn build_decls(
             // (`UserId : string -> UserId`), so pattern checking and
             // exhaustiveness need nothing new; only lowering differs (erasure).
             TypeDeclKind::Newtype(underlying) => {
+                decls.newtypes.insert(decl.name.clone());
                 if decls.ctors.contains_key(&decl.name) {
                     errors.push(TypeError {
                         message: format!("constructor `{}` is already defined", decl.name),
@@ -3299,6 +3404,12 @@ fn seed_task_prelude(env: &mut Env) {
     env.insert(
         "Task.start".to_string(),
         scheme(vec![], vec![], pf(scope(), io_fn(asy(Ty::Unit), Ty::Unit))),
+    );
+    // Encode.auto : a -> string  (pure; the shape is read from the value at run
+    // time, `DESIGN.md` §6 "Derived codecs")
+    env.insert(
+        "Encode.auto".to_string(),
+        scheme(vec![0], vec![], pf(a(), Ty::Str)),
     );
 }
 
@@ -5106,6 +5217,9 @@ fn seed_decode_prelude(env: &mut Env) {
             ),
         ),
     );
+    // Decode.auto : a decoder derived from the type it is used at (resolved after
+    // inference into a `Codec`, `DESIGN.md` §6 "Derived codecs").
+    put("auto", scheme(vec![0], dec(v(0))));
     // Decode.succeed x : a decoder that ignores its input and yields `x`.
     put("succeed", scheme(vec![0], pf(v(0), dec(v(0)))));
     // Decode.fail msg : a decoder that always fails with `msg`.
@@ -6140,6 +6254,9 @@ struct Infer {
     /// Collected `(span, ty)` pairs (unresolved — resolved in [`run`] once the
     /// substitution is final). Empty unless `record_types` is set.
     recorded: Vec<(Span, Ty)>,
+    /// Every `Decode.auto` reference with its instantiated `Decoder a`, resolved
+    /// after inference into a [`Codec`] (or an error when `a` is still open).
+    auto_sites: Vec<(Span, Ty)>,
     /// Typed holes (`?` / `?name`) seen while inferring: each hole's span, name,
     /// fresh type variable, and a snapshot of the environment in scope at it (for
     /// **valid hole fits**). Resolved against the final substitution in [`run`] and
@@ -7449,7 +7566,13 @@ impl Infer {
                 // qualified env; otherwise it is ordinary record-field access.
                 if let Some(q) = qualified_name(expr) {
                     return match env.get(&q) {
-                        Some(scheme) => Ok(self.instantiate(scheme)),
+                        Some(scheme) => {
+                            let ty = self.instantiate(scheme);
+                            if q == "Decode.auto" {
+                                self.auto_sites.push((span, ty.clone()));
+                            }
+                            Ok(ty)
+                        }
                         None => {
                             let module = q.split('.').next().unwrap_or("");
                             let hint = match closest_member(module, name, env) {
@@ -7780,6 +7903,193 @@ impl Infer {
 
     /// Instantiate a record type's parameters with fresh variables, returning the
     /// record type itself and its field types (under the same instantiation).
+    /// The derived codec of a resolved type (`DESIGN.md` §6, "Derived codecs").
+    /// Records and sum types go into `table` under their displayed type and come
+    /// back as a `Ref`, which is what makes a recursive type finite; `visiting`
+    /// is the stack of table keys being built, so a type that mentions itself
+    /// stops at the reference. Errors name what cannot be derived and why.
+    fn codec_of(
+        &mut self,
+        ty: &Ty,
+        span: Span,
+        table: &mut std::collections::BTreeMap<String, Codec>,
+        visiting: &mut Vec<String>,
+    ) -> Result<Codec, String> {
+        let ty = self.apply(ty);
+        Ok(match &ty {
+            Ty::Int(_) | Ty::Num(_, _) => Codec::Int,
+            Ty::Float(_) => Codec::Float,
+            Ty::Bool => Codec::Bool,
+            Ty::Str => Codec::Str,
+            Ty::Unit => Codec::Unit,
+            Ty::Var(_) => {
+                return Err(
+                    "cannot tell what `Decode.auto` decodes into here: its type is still open \
+                     (`Decoder 'a`); use it where the decoded value's type is fixed, such as a \
+                     `match` over the decoded record, a field access, or an argument to a \
+                     function whose parameter type names it"
+                        .to_string(),
+                );
+            }
+            Ty::Fun(..) => {
+                return Err(format!(
+                    "cannot derive a decoder for `{}`: a function has no JSON form",
+                    show(&ty)
+                ));
+            }
+            Ty::Tuple(elems) => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    out.push(self.codec_of(e, span, table, visiting)?);
+                }
+                Codec::Tuple(out)
+            }
+            Ty::Con(name, args) => match (name.as_str(), args.len()) {
+                ("List", 1) => {
+                    Codec::List(Box::new(self.codec_of(&args[0], span, table, visiting)?))
+                }
+                ("Set", 1) => Codec::Set(Box::new(self.codec_of(&args[0], span, table, visiting)?)),
+                ("Option", 1) => {
+                    Codec::Option(Box::new(self.codec_of(&args[0], span, table, visiting)?))
+                }
+                ("Map", 2) => Codec::Map(
+                    Box::new(self.codec_of(&args[0], span, table, visiting)?),
+                    Box::new(self.codec_of(&args[1], span, table, visiting)?),
+                ),
+                ("Result", 2) => Codec::Adt {
+                    ctors: vec![
+                        (
+                            "Ok".to_string(),
+                            vec![self.codec_of(&args[0], span, table, visiting)?],
+                        ),
+                        (
+                            "Error".to_string(),
+                            vec![self.codec_of(&args[1], span, table, visiting)?],
+                        ),
+                    ],
+                },
+                ("Seq", 1) => {
+                    return Err(
+                        "cannot derive a decoder for a lazy `Seq`: decode a `List` and convert \
+                         with `Seq.ofList`"
+                            .to_string(),
+                    );
+                }
+                ("Async" | "Decoder" | "Scope", _) => {
+                    return Err(format!(
+                        "cannot derive a decoder for `{}`: it has no JSON form",
+                        show(&ty)
+                    ));
+                }
+                _ if self.decls.newtypes.contains(name) => {
+                    // Erased at lowering, so the wire carries the underlying value.
+                    let ctor = self
+                        .decls
+                        .type_ctors
+                        .get(name)
+                        .and_then(|cs| cs.first())
+                        .cloned()
+                        .ok_or_else(|| format!("newtype `{name}` has no constructor"))?;
+                    let payload = self.ctor_payloads(&ctor, &ty, span)?;
+                    match payload.first() {
+                        Some(inner) => self.codec_of(inner, span, table, visiting)?,
+                        None => Codec::Unit,
+                    }
+                }
+                _ if self.decls.records.contains_key(name) => {
+                    let key = show(&ty);
+                    if visiting.contains(&key) || table.contains_key(&key) {
+                        return Ok(Codec::Ref(key));
+                    }
+                    let tag = self.record_surface_tag(name)?;
+                    let info = self.decls.records[name].clone();
+                    let tmap: HashMap<u32, Ty> = (0..info.params_count as u32)
+                        .zip(args.iter().cloned())
+                        .collect();
+                    let (eu, en, ee) = (HashMap::new(), HashMap::new(), HashMap::new());
+                    visiting.push(key.clone());
+                    let mut fields = Vec::with_capacity(info.fields.len());
+                    for (field, fty) in &info.fields {
+                        let fty = subst_all(fty, &tmap, &eu, &en, &ee);
+                        fields.push((field.clone(), self.codec_of(&fty, span, table, visiting)?));
+                    }
+                    visiting.pop();
+                    table.insert(key.clone(), Codec::Record { tag, fields });
+                    Codec::Ref(key)
+                }
+                _ if self.decls.type_ctors.contains_key(name) => {
+                    let key = show(&ty);
+                    if visiting.contains(&key) || table.contains_key(&key) {
+                        return Ok(Codec::Ref(key));
+                    }
+                    let ctor_names = self.decls.type_ctors[name].clone();
+                    visiting.push(key.clone());
+                    let mut ctors = Vec::with_capacity(ctor_names.len());
+                    for ctor in &ctor_names {
+                        let payloads = self.ctor_payloads(ctor, &ty, span)?;
+                        let mut codecs = Vec::with_capacity(payloads.len());
+                        for p in &payloads {
+                            codecs.push(self.codec_of(p, span, table, visiting)?);
+                        }
+                        ctors.push((ctor.clone(), codecs));
+                    }
+                    visiting.pop();
+                    table.insert(key.clone(), Codec::Adt { ctors });
+                    Codec::Ref(key)
+                }
+                _ => {
+                    return Err(format!(
+                        "cannot derive a decoder for `{}`: it is an extern type, so only Python \
+                         knows its shape; decode into a Pyfun record or sum type instead",
+                        show(&ty)
+                    ));
+                }
+            },
+        })
+    }
+
+    /// The payload types of constructor `ctor` at the instantiated sum type `ty`
+    /// (`Node (Tree a) a` at `Tree int` gives `[Tree int, int]`).
+    fn ctor_payloads(&mut self, ctor: &str, ty: &Ty, span: Span) -> Result<Vec<Ty>, String> {
+        let info = self
+            .decls
+            .ctors
+            .get(ctor)
+            .cloned()
+            .ok_or_else(|| format!("constructor `{ctor}` is not registered"))?;
+        let mut cur = self.instantiate(&info.scheme);
+        let mut payloads = Vec::with_capacity(info.arity);
+        while let Ty::Fun(a, b, _) = cur {
+            payloads.push(*a);
+            cur = *b;
+        }
+        self.unify(&cur, ty, span).map_err(|e| e.message)?;
+        Ok(payloads.iter().map(|p| self.apply(p)).collect())
+    }
+
+    /// The surface tag lowering resolves to a record's class: the bare name for
+    /// a local record, the `Module.Name` alias for a directly imported one.
+    fn record_surface_tag(&self, name: &str) -> Result<String, String> {
+        if self.decls.local_records.contains(name) {
+            return Ok(name.to_string());
+        }
+        if let Some((alias, _)) = self
+            .decls
+            .record_aliases
+            .iter()
+            .find(|(_, bare)| *bare == name)
+        {
+            return Ok(alias.clone());
+        }
+        match self.decls.carried_record_home.get(name) {
+            Some(home) => Err(format!(
+                "cannot derive a codec for `{name}` here: it is declared in `{home}`, which this \
+                 module does not import directly (add `import {home}`)"
+            )),
+            None => Err(format!("record `{name}` has no construction tag here")),
+        }
+    }
+
     fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
         let info = self
             .decls
@@ -9306,6 +9616,15 @@ impl Infer {
                 deferred.insert(v);
             });
             free_type_vars(&self.apply(&p.result), &mut |v| {
+                deferred.insert(v);
+            });
+        }
+        // Likewise a variable a `Decode.auto` site still decodes into: the codec is
+        // derived from the resolved type after inference, so the site's variable
+        // stays weak (OCaml's `'_a`) and a later use pins it rather than each use
+        // getting a copy that pins nothing.
+        for (_, site) in &self.auto_sites {
+            free_type_vars(&self.apply(site), &mut |v| {
                 deferred.insert(v);
             });
         }

@@ -303,6 +303,8 @@ pub enum PyExpr {
     Starred(Box<PyExpr>),
     /// A list display `[a, b, c]`.
     List(Vec<PyExpr>),
+    /// A dict display `{k: v, …}`.
+    Dict(Vec<(PyExpr, PyExpr)>),
     /// A tuple display `(a, b, c)` (always two or more elements in Pyfun).
     Tuple(Vec<PyExpr>),
     /// The `None` literal — the unit value (e.g. the result of an assignment).
@@ -846,13 +848,25 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         // (`-(a + b)`).
         PyExpr::Neg(inner) => format!("-{}", emit_expr(inner, 30)),
         PyExpr::Starred(inner) => format!("*{}", emit_expr(inner, 30)),
+        PyExpr::Dict(items) => {
+            let items: Vec<String> = items
+                .iter()
+                .map(|(k, v)| format!("{}: {}", expr(k), expr(v)))
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
         PyExpr::List(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();
             format!("[{}]", elems.join(", "))
         }
         PyExpr::Tuple(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();
-            format!("({})", elems.join(", "))
+            // A one-element tuple needs its trailing comma (`(x,)`); `(x)` is `x`.
+            if elems.len() == 1 {
+                format!("({},)", elems[0])
+            } else {
+                format!("({})", elems.join(", "))
+            }
         }
         PyExpr::NoneLit => "None".to_string(),
     };

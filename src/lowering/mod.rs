@@ -80,7 +80,13 @@ pub fn lower(
     float_literals: &HashSet<Span>,
     order: OrderPolicy,
 ) -> Result<PyModule, LowerError> {
-    lower_collecting(module, float_literals, order).map(|(py, _)| py)
+    lower_collecting(
+        module,
+        float_literals,
+        order,
+        &crate::types::Codecs::default(),
+    )
+    .map(|(py, _)| py)
 }
 
 /// [`lower`], also returning the lowering **notes**: things worth telling the
@@ -91,10 +97,12 @@ pub fn lower_collecting(
     module: &Module,
     float_literals: &HashSet<Span>,
     order: OrderPolicy,
+    codecs: &crate::types::Codecs,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.float_literals = float_literals.clone();
     lowerer.order = order;
+    lowerer.codecs = codecs.clone();
     let py = lowerer.lower_module(module)?;
     Ok((py, lowerer.notes))
 }
@@ -158,9 +166,11 @@ pub fn lower_in_project(
     module: &Module,
     ctx: &ImportContext,
     float_literals: &HashSet<Span>,
+    codecs: &crate::types::Codecs,
 ) -> Result<LoweredModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.float_literals = float_literals.clone();
+    lowerer.codecs = codecs.clone();
     lowerer.imported_modules = ctx.modules.clone();
     lowerer.record_class_modules = ctx.record_class_modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
@@ -332,6 +342,16 @@ struct Lowerer {
     needed_decode_helpers: BTreeSet<&'static str>,
     /// `Async`-module helpers referenced by the program (`_pf_async_*`).
     needed_async_helpers: BTreeSet<&'static str>,
+    /// The derived codecs the checker resolved for this module's `Decode.auto`
+    /// sites (`DESIGN.md` §6, "Derived codecs").
+    codecs: crate::types::Codecs,
+    /// The codec-table entries a lowered site referenced, as descriptors, in
+    /// key order: emitted once as the module-level `_pf_codecs` dict after the
+    /// classes they name.
+    codec_table_used: std::collections::BTreeMap<String, PyExpr>,
+    /// Whether the derived-codec helpers (`_pf_dec_auto`, `_pf_enc_auto`) are
+    /// needed, and which.
+    needed_codec_helpers: BTreeSet<&'static str>,
     /// Spans of value-position integer *literals* that inference resolved to
     /// `float` (e.g. the `7` in `let x = 7` used later as `x + 1.5`). Such a
     /// literal is emitted as a Python float (`7.0`) so the runtime value matches
@@ -655,6 +675,9 @@ impl Lowerer {
             needed_combinators: BTreeSet::new(),
             needed_decode_helpers: BTreeSet::new(),
             needed_async_helpers: BTreeSet::new(),
+            codecs: crate::types::Codecs::default(),
+            codec_table_used: std::collections::BTreeMap::new(),
+            needed_codec_helpers: BTreeSet::new(),
             float_literals: HashSet::new(),
             cur_module: None,
             imported_modules: HashSet::new(),
@@ -979,6 +1002,19 @@ impl Lowerer {
         // Async-module helpers referenced by the program.
         body.extend(async_prelude(&self.needed_async_helpers, none_singleton));
         body.extend(classes);
+        // Derived-codec helpers and the module's codec table, after the classes
+        // the descriptors name (`DESIGN.md` §6, "Derived codecs").
+        body.extend(codec_prelude(&self.needed_codec_helpers, none_singleton));
+        if !self.codec_table_used.is_empty() {
+            let items = std::mem::take(&mut self.codec_table_used)
+                .into_iter()
+                .map(|(key, desc)| (PyExpr::Str(key), desc))
+                .collect();
+            body.push(PyStmt::Assign {
+                target: "_pf_codecs".to_string(),
+                value: PyExpr::Dict(items),
+            });
+        }
         body.extend(code);
         Ok(PyModule { body })
     }
@@ -1965,6 +2001,9 @@ impl Lowerer {
                 // `Module.member` resolves to its builtin/helper; otherwise it is an
                 // ordinary record-field access.
                 if let Some(q) = crate::types::qualified_name(expr) {
+                    if q == "Decode.auto" {
+                        return Ok((vec![], self.lower_auto_decoder(expr.span())));
+                    }
                     return Ok((vec![], self.lower_module_member(&q)));
                 }
                 let (stmts, value) = self.lower_value(base, locals)?;
@@ -2896,6 +2935,141 @@ impl Lowerer {
         }
     }
 
+    /// A `Decode.auto` site: `_pf_dec_auto(<descriptor>)`, the descriptor built
+    /// from the codec the checker resolved for this span. A `Ref` pulls the named
+    /// table entry into the module's `_pf_codecs` dict (built on first use, so a
+    /// recursive type's own reference stops at the name).
+    fn lower_auto_decoder(&mut self, span: Span) -> PyExpr {
+        let codec = self
+            .codecs
+            .sites
+            .get(&span)
+            .cloned()
+            .expect("the checker resolved every Decode.auto site it accepted");
+        self.needed_imports.insert("json".to_string());
+        self.needs_option = true;
+        self.needed_codec_helpers.insert("_pf_dec_auto");
+        let desc = self.codec_desc(&codec);
+        PyExpr::Call {
+            func: Box::new(PyExpr::Name("_pf_dec_auto".to_string())),
+            args: vec![desc],
+        }
+    }
+
+    /// The run-time descriptor of a codec: a tagged tuple the emitted
+    /// `_pf_dec_auto_value` interprets (`("int",)`, `("list", d)`,
+    /// `("record", Class, [("x", d), …])`, `("adt", {"Ctor": (ctor, [d, …])})`,
+    /// `("ref", "Tree int")`).
+    fn codec_desc(&mut self, codec: &crate::types::Codec) -> PyExpr {
+        use crate::types::Codec;
+        let s = |t: &str| PyExpr::Str(t.to_string());
+        let tup = |items: Vec<PyExpr>| PyExpr::Tuple(items);
+        match codec {
+            Codec::Int => tup(vec![s("int")]),
+            Codec::Float => tup(vec![s("float")]),
+            Codec::Bool => tup(vec![s("bool")]),
+            Codec::Str => tup(vec![s("str")]),
+            Codec::Unit => tup(vec![s("unit")]),
+            Codec::List(inner) => {
+                let d = self.codec_desc(inner);
+                tup(vec![s("list"), d])
+            }
+            Codec::Set(inner) => {
+                let d = self.codec_desc(inner);
+                tup(vec![s("set"), d])
+            }
+            Codec::Option(inner) => {
+                let d = self.codec_desc(inner);
+                tup(vec![s("option"), d])
+            }
+            Codec::Tuple(elems) => {
+                let ds: Vec<PyExpr> = elems.iter().map(|e| self.codec_desc(e)).collect();
+                tup(vec![s("tuple"), PyExpr::List(ds)])
+            }
+            Codec::Map(k, v) => {
+                let kd = self.codec_desc(k);
+                let vd = self.codec_desc(v);
+                tup(vec![s("map"), kd, vd])
+            }
+            Codec::Record { tag, fields } => {
+                let class = self.record_class_name(tag);
+                let fds: Vec<PyExpr> = fields
+                    .iter()
+                    .map(|(name, c)| {
+                        let d = self.codec_desc(c);
+                        PyExpr::Tuple(vec![PyExpr::Str(name.clone()), d])
+                    })
+                    .collect();
+                tup(vec![s("record"), dotted_path(&[class]), PyExpr::List(fds)])
+            }
+            Codec::Adt { ctors } => {
+                let mut items = Vec::with_capacity(ctors.len());
+                for (ctor, payloads) in ctors {
+                    let value = self.ctor_reference(ctor, payloads.is_empty());
+                    let ds: Vec<PyExpr> = payloads.iter().map(|p| self.codec_desc(p)).collect();
+                    // The wire tag is the bare constructor name.
+                    let bare = ctor.rsplit('.').next().unwrap_or(ctor).to_string();
+                    items.push((
+                        PyExpr::Str(bare),
+                        PyExpr::Tuple(vec![value, PyExpr::List(ds)]),
+                    ));
+                }
+                tup(vec![s("adt"), PyExpr::Dict(items)])
+            }
+            Codec::Ref(key) => {
+                if !self.codec_table_used.contains_key(key) {
+                    // Reserve the key first so a recursive type's own reference
+                    // finds it and stops here.
+                    self.codec_table_used.insert(key.clone(), PyExpr::NoneLit);
+                    let entry = self
+                        .codecs
+                        .table
+                        .get(key)
+                        .cloned()
+                        .expect("the checker tabled every codec it referenced");
+                    let desc = self.codec_desc(&entry);
+                    self.codec_table_used.insert(key.clone(), desc);
+                }
+                tup(vec![s("ref"), PyExpr::Str(key.clone())])
+            }
+        }
+    }
+
+    /// The Python expression a constructor stands for in a descriptor: the
+    /// class for a case with a payload, the instance (singleton or fresh call)
+    /// for a nullary one; an imported constructor (`Geometry.Circle`) routes to
+    /// its module the way a qualified reference does.
+    fn ctor_reference(&mut self, ctor: &str, nullary: bool) -> PyExpr {
+        if let Some((base, member)) = ctor.split_once('.')
+            && self.imported_modules.contains(base)
+        {
+            let module = self.py_module_ref(base);
+            if nullary && self.imported_nullary_singletons.contains(ctor) {
+                return PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name(module)),
+                    attr: format!("_{}", py_value_name(member)),
+                };
+            }
+            let attr = PyExpr::Attribute {
+                value: Box::new(PyExpr::Name(module)),
+                attr: py_value_name(member),
+            };
+            return if nullary {
+                PyExpr::Call {
+                    func: Box::new(attr),
+                    args: vec![],
+                }
+            } else {
+                attr
+            };
+        }
+        if nullary {
+            self.nullary_value(ctor)
+        } else {
+            PyExpr::Name(py_ctor_name(ctor))
+        }
+    }
+
     /// Flag a `Decode`-module helper as needed and route a reference to it. The
     /// helper is an emitted `_pf_dec_*` function ([`decode_prelude`]).
     fn decode_helper(&mut self, helper: &'static str) -> PyExpr {
@@ -2956,6 +3130,16 @@ impl Lowerer {
             // Task — structured concurrency over `asyncio.TaskGroup`.
             "Task.scope" => asy(self, "_pf_task_scope"),
             "Task.start" => asy(self, "_pf_task_start"),
+            // Encode.auto: the derived encoder reads the value's shape at run time
+            // (a record's fields, a case's class name), so it needs no descriptor.
+            "Encode.auto" => {
+                self.needed_imports.insert("json".to_string());
+                self.needed_imports.insert("dataclasses".to_string());
+                self.needed_imports.insert("keyword".to_string());
+                self.needs_option = true;
+                self.needed_codec_helpers.insert("_pf_enc_auto");
+                PyExpr::Name("_pf_enc_auto".to_string())
+            }
             // List
             "List.len" => bare("len"),
             "List.sum" => bare("sum"),
@@ -5219,6 +5403,7 @@ fn subst_name(expr: &PyExpr, name: &str, value: &PyExpr) -> PyExpr {
         PyExpr::Starred(e) => PyExpr::Starred(boxed(e)),
         PyExpr::List(es) => PyExpr::List(es.iter().map(go).collect()),
         PyExpr::Tuple(es) => PyExpr::Tuple(es.iter().map(go).collect()),
+        PyExpr::Dict(items) => PyExpr::Dict(items.iter().map(|(k, v)| (go(k), go(v))).collect()),
         PyExpr::FStr(parts) => PyExpr::FStr(
             parts
                 .iter()
@@ -5704,6 +5889,554 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                 is_async: false,
             },
             other => unreachable!("unknown Async helper {other}"),
+        })
+        .collect()
+}
+
+/// The derived-codec runtime (`DESIGN.md` §6, "Derived codecs"): an interpreter
+/// over the descriptors [`Lowerer::codec_desc`] emits, and the encoder that reads
+/// a value's shape. Both are built from the IR like every other helper.
+fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyStmt> {
+    let name = |n: &str| PyExpr::Name(n.to_string());
+    let s = |t: &str| PyExpr::Str(t.to_string());
+    let call = |f: PyExpr, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(f),
+        args,
+    };
+    let calln = |f: &str, args: Vec<PyExpr>| PyExpr::Call {
+        func: Box::new(PyExpr::Name(f.to_string())),
+        args,
+    };
+    let attr = |v: PyExpr, a: &str| PyExpr::Attribute {
+        value: Box::new(v),
+        attr: a.to_string(),
+    };
+    let sub = |v: PyExpr, i: PyExpr| PyExpr::Subscript {
+        value: Box::new(v),
+        index: Box::new(i),
+    };
+    let idx = |v: PyExpr, i: i64| PyExpr::Subscript {
+        value: Box::new(v),
+        index: Box::new(PyExpr::Int(i)),
+    };
+    let cmp = |op: PyBinOp, l: PyExpr, r: PyExpr| PyExpr::Compare {
+        left: Box::new(l),
+        ops: vec![op],
+        comparators: vec![r],
+    };
+    let eq = |l: PyExpr, r: PyExpr| cmp(PyBinOp::Eq, l, r);
+    let ne = |l: PyExpr, r: PyExpr| cmp(PyBinOp::Ne, l, r);
+    let is_none = |v: PyExpr| cmp(PyBinOp::Is, v, PyExpr::NoneLit);
+    let and = |l: PyExpr, r: PyExpr| PyExpr::BinOp {
+        op: PyBinOp::And,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let or = |l: PyExpr, r: PyExpr| PyExpr::BinOp {
+        op: PyBinOp::Or,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let add = |l: PyExpr, r: PyExpr| PyExpr::BinOp {
+        op: PyBinOp::Add,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let not = |e: PyExpr| PyExpr::Not(Box::new(e));
+    let isinst = |v: PyExpr, ty: PyExpr| calln("isinstance", vec![v, ty]);
+    let ret = |e: PyExpr| PyStmt::Return(e);
+    let assign = |t: &str, v: PyExpr| PyStmt::Assign {
+        target: t.to_string(),
+        value: v,
+    };
+    let if_ = |test: PyExpr, body: Vec<PyStmt>| PyStmt::If {
+        test,
+        body,
+        orelse: vec![],
+    };
+    let for_ = |var: &str, iter: PyExpr, body: Vec<PyStmt>| PyStmt::For {
+        target: crate::python_emitter::PyForTarget::Name(var.to_string()),
+        iter,
+        body,
+    };
+    let raise = |msg: PyExpr| PyStmt::Raise(calln("ValueError", vec![msg]));
+    let def = |fn_name: &str, params: &[&str], body: Vec<PyStmt>| PyStmt::FuncDef {
+        name: fn_name.to_string(),
+        params: params.iter().map(|p| p.to_string()).collect(),
+        body,
+        is_async: false,
+    };
+    // `raise ValueError("expected <what>, got " + type(v).__name__)`
+    let expected = |what: &str| {
+        raise(add(
+            s(&format!("expected {what}, got ")),
+            attr(calln("type", vec![name("v")]), "__name__"),
+        ))
+    };
+    // `_pf_dec_auto_value(d, v)` for a sub-descriptor `d` and value `v`.
+    let rec = |d: PyExpr, v: PyExpr| calln("_pf_dec_auto_value", vec![d, v]);
+    // `k == "<kind>"` on the descriptor's tag.
+    let kind = |k: &str| eq(name("k"), s(k));
+    used.iter()
+        .flat_map(|&helper| match helper {
+            "_pf_dec_auto" => vec![
+                // A decoder is a callable `parsed -> value` that raises on a
+                // mismatch, like every `Decode` combinator.
+                def(
+                    "_pf_dec_auto",
+                    &["d"],
+                    vec![ret(PyExpr::Lambda {
+                        params: vec!["v".to_string()],
+                        body: Box::new(rec(name("d"), name("v"))),
+                    })],
+                ),
+                def(
+                    "_pf_dec_auto_value",
+                    &["d", "v"],
+                    vec![
+                        assign("k", idx(name("d"), 0)),
+                        if_(
+                            kind("ref"),
+                            vec![ret(rec(
+                                sub(name("_pf_codecs"), idx(name("d"), 1)),
+                                name("v"),
+                            ))],
+                        ),
+                        if_(
+                            kind("int"),
+                            vec![
+                                if_(
+                                    or(
+                                        isinst(name("v"), name("bool")),
+                                        not(isinst(name("v"), name("int"))),
+                                    ),
+                                    vec![expected("an int")],
+                                ),
+                                ret(name("v")),
+                            ],
+                        ),
+                        if_(
+                            kind("float"),
+                            vec![
+                                if_(
+                                    or(
+                                        isinst(name("v"), name("bool")),
+                                        not(isinst(
+                                            name("v"),
+                                            PyExpr::Tuple(vec![name("int"), name("float")]),
+                                        )),
+                                    ),
+                                    vec![expected("a float")],
+                                ),
+                                ret(calln("float", vec![name("v")])),
+                            ],
+                        ),
+                        if_(
+                            kind("bool"),
+                            vec![
+                                if_(
+                                    not(isinst(name("v"), name("bool"))),
+                                    vec![expected("a bool")],
+                                ),
+                                ret(name("v")),
+                            ],
+                        ),
+                        if_(
+                            kind("str"),
+                            vec![
+                                if_(
+                                    not(isinst(name("v"), name("str"))),
+                                    vec![expected("a string")],
+                                ),
+                                ret(name("v")),
+                            ],
+                        ),
+                        if_(
+                            kind("unit"),
+                            vec![
+                                if_(not(is_none(name("v"))), vec![expected("null")]),
+                                ret(PyExpr::NoneLit),
+                            ],
+                        ),
+                        if_(
+                            kind("option"),
+                            vec![
+                                if_(is_none(name("v")), vec![ret(none_value(none_singleton))]),
+                                ret(calln("Some", vec![rec(idx(name("d"), 1), name("v"))])),
+                            ],
+                        ),
+                        if_(
+                            or(kind("list"), kind("set")),
+                            vec![
+                                if_(
+                                    not(isinst(name("v"), name("list"))),
+                                    vec![expected("a list")],
+                                ),
+                                assign("out", PyExpr::List(vec![])),
+                                for_(
+                                    "x",
+                                    name("v"),
+                                    vec![PyStmt::Expr(call(
+                                        attr(name("out"), "append"),
+                                        vec![rec(idx(name("d"), 1), name("x"))],
+                                    ))],
+                                ),
+                                ret(PyExpr::IfExp {
+                                    body: Box::new(name("out")),
+                                    test: Box::new(kind("list")),
+                                    orelse: Box::new(calln("set", vec![name("out")])),
+                                }),
+                            ],
+                        ),
+                        if_(
+                            kind("tuple"),
+                            vec![
+                                if_(
+                                    or(
+                                        not(isinst(name("v"), name("list"))),
+                                        ne(
+                                            calln("len", vec![name("v")]),
+                                            calln("len", vec![idx(name("d"), 1)]),
+                                        ),
+                                    ),
+                                    vec![raise(add(
+                                        add(
+                                            s("expected a list of "),
+                                            calln(
+                                                "str",
+                                                vec![calln("len", vec![idx(name("d"), 1)])],
+                                            ),
+                                        ),
+                                        s(" items"),
+                                    ))],
+                                ),
+                                ret(calln(
+                                    "tuple",
+                                    vec![calln(
+                                        "map",
+                                        vec![
+                                            name("_pf_dec_auto_value"),
+                                            idx(name("d"), 1),
+                                            name("v"),
+                                        ],
+                                    )],
+                                )),
+                            ],
+                        ),
+                        if_(
+                            kind("map"),
+                            vec![
+                                assign("out", PyExpr::Dict(vec![])),
+                                // String keys travel as an object; any other key type
+                                // as a list of `[key, value]` pairs.
+                                if_(
+                                    eq(idx(idx(name("d"), 1), 0), s("str")),
+                                    vec![
+                                        if_(
+                                            not(isinst(name("v"), name("dict"))),
+                                            vec![expected("an object")],
+                                        ),
+                                        for_(
+                                            "key",
+                                            name("v"),
+                                            vec![PyStmt::SubscriptAssign {
+                                                obj: name("out"),
+                                                index: name("key"),
+                                                value: rec(
+                                                    idx(name("d"), 2),
+                                                    sub(name("v"), name("key")),
+                                                ),
+                                            }],
+                                        ),
+                                        ret(name("out")),
+                                    ],
+                                ),
+                                if_(
+                                    not(isinst(name("v"), name("list"))),
+                                    vec![expected("a list of pairs")],
+                                ),
+                                for_(
+                                    "pair",
+                                    name("v"),
+                                    vec![PyStmt::SubscriptAssign {
+                                        obj: name("out"),
+                                        index: rec(idx(name("d"), 1), idx(name("pair"), 0)),
+                                        value: rec(idx(name("d"), 2), idx(name("pair"), 1)),
+                                    }],
+                                ),
+                                ret(name("out")),
+                            ],
+                        ),
+                        if_(
+                            kind("record"),
+                            vec![
+                                if_(
+                                    not(isinst(name("v"), name("dict"))),
+                                    vec![expected("an object")],
+                                ),
+                                assign("args", PyExpr::List(vec![])),
+                                for_(
+                                    "field",
+                                    idx(name("d"), 2),
+                                    vec![PyStmt::Expr(call(
+                                        attr(name("args"), "append"),
+                                        vec![rec(
+                                            idx(name("field"), 1),
+                                            sub(name("v"), idx(name("field"), 0)),
+                                        )],
+                                    ))],
+                                ),
+                                ret(call(
+                                    idx(name("d"), 1),
+                                    vec![PyExpr::Starred(Box::new(name("args")))],
+                                )),
+                            ],
+                        ),
+                        if_(
+                            kind("adt"),
+                            vec![
+                                if_(
+                                    not(isinst(name("v"), name("dict"))),
+                                    vec![expected("an object")],
+                                ),
+                                assign("tag", sub(name("v"), s("type"))),
+                                if_(
+                                    not(cmp(PyBinOp::In, name("tag"), idx(name("d"), 1))),
+                                    vec![raise(add(
+                                        s("unknown case "),
+                                        calln("str", vec![name("tag")]),
+                                    ))],
+                                ),
+                                PyStmt::UnpackAssign {
+                                    targets: vec!["ctor".to_string(), "descs".to_string()],
+                                    value: sub(idx(name("d"), 1), name("tag")),
+                                },
+                                assign(
+                                    "fields",
+                                    call(
+                                        attr(name("v"), "get"),
+                                        vec![s("fields"), PyExpr::List(vec![])],
+                                    ),
+                                ),
+                                if_(
+                                    ne(
+                                        calln("len", vec![name("fields")]),
+                                        calln("len", vec![name("descs")]),
+                                    ),
+                                    vec![raise(add(
+                                        add(s("case "), name("tag")),
+                                        add(
+                                            s(" takes "),
+                                            add(
+                                                calln(
+                                                    "str",
+                                                    vec![calln("len", vec![name("descs")])],
+                                                ),
+                                                s(" fields"),
+                                            ),
+                                        ),
+                                    ))],
+                                ),
+                                if_(not(name("descs")), vec![ret(name("ctor"))]),
+                                ret(call(
+                                    name("ctor"),
+                                    vec![PyExpr::Starred(Box::new(calln(
+                                        "map",
+                                        vec![
+                                            name("_pf_dec_auto_value"),
+                                            name("descs"),
+                                            name("fields"),
+                                        ],
+                                    )))],
+                                )),
+                            ],
+                        ),
+                        raise(add(s("unknown codec "), calln("str", vec![name("k")]))),
+                    ],
+                ),
+            ],
+            "_pf_enc_auto" => vec![
+                def(
+                    "_pf_enc_auto",
+                    &["v"],
+                    vec![ret(call(
+                        attr(name("json"), "dumps"),
+                        vec![calln("_pf_enc_value", vec![name("v")])],
+                    ))],
+                ),
+                def(
+                    "_pf_enc_value",
+                    &["v"],
+                    vec![
+                        if_(
+                            or(
+                                is_none(name("v")),
+                                isinst(
+                                    name("v"),
+                                    PyExpr::Tuple(vec![
+                                        name("bool"),
+                                        name("int"),
+                                        name("float"),
+                                        name("str"),
+                                    ]),
+                                ),
+                            ),
+                            vec![ret(name("v"))],
+                        ),
+                        if_(
+                            isinst(
+                                name("v"),
+                                PyExpr::Tuple(vec![
+                                    name("list"),
+                                    name("tuple"),
+                                    name("set"),
+                                    name("frozenset"),
+                                ]),
+                            ),
+                            vec![ret(calln(
+                                "list",
+                                vec![calln("map", vec![name("_pf_enc_value"), name("v")])],
+                            ))],
+                        ),
+                        if_(
+                            isinst(name("v"), name("dict")),
+                            vec![
+                                assign("pairs", PyExpr::List(vec![])),
+                                assign("strings", PyExpr::Bool(true)),
+                                for_(
+                                    "key",
+                                    name("v"),
+                                    vec![
+                                        if_(
+                                            not(isinst(name("key"), name("str"))),
+                                            vec![assign("strings", PyExpr::Bool(false))],
+                                        ),
+                                        PyStmt::Expr(call(
+                                            attr(name("pairs"), "append"),
+                                            vec![PyExpr::List(vec![
+                                                calln("_pf_enc_value", vec![name("key")]),
+                                                calln(
+                                                    "_pf_enc_value",
+                                                    vec![sub(name("v"), name("key"))],
+                                                ),
+                                            ])],
+                                        )),
+                                    ],
+                                ),
+                                ret(PyExpr::IfExp {
+                                    body: Box::new(calln("dict", vec![name("pairs")])),
+                                    test: Box::new(name("strings")),
+                                    orelse: Box::new(name("pairs")),
+                                }),
+                            ],
+                        ),
+                        if_(
+                            isinst(name("v"), name("Some")),
+                            vec![ret(calln("_pf_enc_value", vec![attr(name("v"), "_0")]))],
+                        ),
+                        if_(isinst(name("v"), name("None_")), vec![ret(PyExpr::NoneLit)]),
+                        // A dataclass: a sum-type case has positional `_0`… fields,
+                        // a record has named ones (a keyword-mangled `class_`
+                        // travels as `class`).
+                        assign("names", PyExpr::List(vec![])),
+                        for_(
+                            "f",
+                            call(attr(name("dataclasses"), "fields"), vec![name("v")]),
+                            vec![PyStmt::Expr(call(
+                                attr(name("names"), "append"),
+                                vec![attr(name("f"), "name")],
+                            ))],
+                        ),
+                        assign("positional", PyExpr::Bool(true)),
+                        for_(
+                            "n",
+                            name("names"),
+                            vec![if_(
+                                not(call(attr(name("n"), "startswith"), vec![s("_")])),
+                                vec![assign("positional", PyExpr::Bool(false))],
+                            )],
+                        ),
+                        if_(
+                            name("positional"),
+                            vec![
+                                assign(
+                                    "out",
+                                    PyExpr::Dict(vec![(
+                                        s("type"),
+                                        attr(calln("type", vec![name("v")]), "__name__"),
+                                    )]),
+                                ),
+                                if_(
+                                    name("names"),
+                                    vec![
+                                        PyStmt::SubscriptAssign {
+                                            obj: name("out"),
+                                            index: s("fields"),
+                                            value: PyExpr::List(vec![]),
+                                        },
+                                        for_(
+                                            "n",
+                                            name("names"),
+                                            vec![PyStmt::Expr(call(
+                                                attr(sub(name("out"), s("fields")), "append"),
+                                                vec![calln(
+                                                    "_pf_enc_value",
+                                                    vec![calln(
+                                                        "getattr",
+                                                        vec![name("v"), name("n")],
+                                                    )],
+                                                )],
+                                            ))],
+                                        ),
+                                    ],
+                                ),
+                                ret(name("out")),
+                            ],
+                        ),
+                        assign("out", PyExpr::Dict(vec![])),
+                        for_(
+                            "n",
+                            name("names"),
+                            vec![
+                                assign(
+                                    "key",
+                                    PyExpr::IfExp {
+                                        body: Box::new(PyExpr::Slice {
+                                            value: Box::new(name("n")),
+                                            lower: Box::new(PyExpr::Int(0)),
+                                            upper: Box::new(PyExpr::Neg(Box::new(PyExpr::Int(1)))),
+                                        }),
+                                        test: Box::new(and(
+                                            call(attr(name("n"), "endswith"), vec![s("_")]),
+                                            call(
+                                                attr(name("keyword"), "iskeyword"),
+                                                vec![PyExpr::Slice {
+                                                    value: Box::new(name("n")),
+                                                    lower: Box::new(PyExpr::Int(0)),
+                                                    upper: Box::new(PyExpr::Neg(Box::new(
+                                                        PyExpr::Int(1),
+                                                    ))),
+                                                }],
+                                            ),
+                                        )),
+                                        orelse: Box::new(name("n")),
+                                    },
+                                ),
+                                PyStmt::SubscriptAssign {
+                                    obj: name("out"),
+                                    index: name("key"),
+                                    value: calln(
+                                        "_pf_enc_value",
+                                        vec![calln("getattr", vec![name("v"), name("n")])],
+                                    ),
+                                },
+                            ],
+                        ),
+                        ret(name("out")),
+                    ],
+                ),
+            ],
+            other => unreachable!("unknown codec helper {other}"),
         })
         .collect()
 }

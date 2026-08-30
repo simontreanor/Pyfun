@@ -167,7 +167,7 @@ pub fn compile_collecting(
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
     // them as `7.0` (matching their inferred type — see `float_literal_spans`).
-    let (mut errors, types, holes, ordered) = types::check_collecting(&module);
+    let (mut errors, types, holes, ordered, codecs) = types::check_collecting(&module);
     if !errors.is_empty() {
         return Err(CompileError::Type(errors.remove(0)));
     }
@@ -182,9 +182,13 @@ pub fn compile_collecting(
     let floats = float_literal_spans(&types);
     // Single file: the whole program is visible, so emit ordering methods only for the
     // types actually compared (`DESIGN.md` §7.1).
-    let (py, notes) =
-        lowering::lower_collecting(&module, &floats, lowering::OrderPolicy::OnDemand(ordered))
-            .map_err(CompileError::Lower)?;
+    let (py, notes) = lowering::lower_collecting(
+        &module,
+        &floats,
+        lowering::OrderPolicy::OnDemand(ordered),
+        &codecs,
+    )
+    .map_err(CompileError::Lower)?;
     Ok((python_emitter::emit_for(&py, target), notes))
 }
 
