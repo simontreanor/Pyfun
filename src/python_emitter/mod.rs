@@ -35,6 +35,45 @@ pub fn emit_for(module: &PyModule, target: PyTarget) -> String {
     }
 }
 
+/// A `for`-loop target: a plain name, or a tuple of targets (`(p, l)`,
+/// `(a, (b, c))`), which Python unpacks itself on every iteration. A wildcard is
+/// the name `_`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PyForTarget {
+    Name(String),
+    Tuple(Vec<PyForTarget>),
+}
+
+impl PyForTarget {
+    /// Every name the target binds, in source order.
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            PyForTarget::Name(n) => vec![n.clone()],
+            PyForTarget::Tuple(elems) => elems.iter().flat_map(PyForTarget::names).collect(),
+        }
+    }
+
+    /// Whether the target binds `name`.
+    pub fn binds(&self, name: &str) -> bool {
+        match self {
+            PyForTarget::Name(n) => n == name,
+            PyForTarget::Tuple(elems) => elems.iter().any(|t| t.binds(name)),
+        }
+    }
+}
+
+impl From<String> for PyForTarget {
+    fn from(name: String) -> Self {
+        PyForTarget::Name(name)
+    }
+}
+
+impl From<&str> for PyForTarget {
+    fn from(name: &str) -> Self {
+        PyForTarget::Name(name.to_string())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PyStmt {
     /// `import <module>`
@@ -71,10 +110,11 @@ pub enum PyStmt {
     /// `continue` — ends a `while True:` iteration, emitted where a self tail call
     /// has just rebound the parameters.
     Continue,
-    /// `for target in iter: body` — a `for`-loop over a single iteration variable.
+    /// `for target in iter: body` — a `for`-loop whose target is a name or a
+    /// (nested) tuple of names, the way Python spells `for (p, l) in steps:`.
     /// Emitted by the in-place linear-fold optimization (`DESIGN.md` §5).
     For {
-        target: String,
+        target: PyForTarget,
         iter: PyExpr,
         body: Vec<PyStmt>,
     },
@@ -420,7 +460,11 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             );
         }
         PyStmt::For { target, iter, body } => {
-            line(out, depth, &format!("for {target} in {}:", expr(iter)));
+            line(
+                out,
+                depth,
+                &format!("for {} in {}:", for_target(target), expr(iter)),
+            );
             emit_block(body, depth + 1, out);
         }
         PyStmt::WhileTrue { body } => {
@@ -589,6 +633,17 @@ fn emit_class(
         let trailing = if fields.is_empty() { "," } else { "" };
         line(out, depth + 1, "def _pf_order_key(self):");
         line(out, depth + 2, &format!("return ({key}{trailing})"));
+    }
+}
+
+/// Render a `for`-loop target: a bare name, or a parenthesized tuple.
+fn for_target(target: &PyForTarget) -> String {
+    match target {
+        PyForTarget::Name(n) => n.clone(),
+        PyForTarget::Tuple(elems) => {
+            let inner: Vec<String> = elems.iter().map(for_target).collect();
+            format!("({})", inner.join(", "))
+        }
     }
 }
 

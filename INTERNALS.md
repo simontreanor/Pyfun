@@ -77,15 +77,21 @@ accumulator). The pass (`src/lowering/fold_loop.rs`, hooked in `lower_applicatio
 `PYFUN_NO_FOLD_OPT` is the kill switch) recognizes the common case and rewrites
 `functools.reduce(f, xs, acc)` into a `for`-loop over a **mutable** accumulator, turning the
 copy-returning ops into in-place mutations (`Map.add`→`m[k]=v`, `List.concat`→`.append`/`.extend`,
-`Set.add`→`.add`), collapsing the build to linear. This adds two Python-IR nodes: `PyStmt::For` and
-`PyStmt::SubscriptAssign`.
+`Set.add`→`.add`), collapsing the build to linear. This adds two Python-IR nodes: `PyStmt::For`
+(whose target is a `PyForTarget`: a name or a nested tuple of names) and `PyStmt::SubscriptAssign`.
 
 **Soundness is what the pass must protect.** The rewrite is observable only through a *retained reference* to a
 mutated container, so the pass is a set of conservative **syntactic** proof obligations on the AST,
 checked with no side effects on the lowerer (a rejected fold falls through to the byte-identical
 `_pf_fold` lowering). A fold qualifies only when: it is a fully-applied `Seq.fold`/`List.fold`
 (exactly 3 args); the folder is a 2-ary lambda literal or a **top-level** named `let` (an inlinable
-body, not a `mut`/extern/imported member/parameter); the accumulator is a fresh literal collection or
+body, not a `mut`/extern/imported member/parameter); the accumulator parameter is a plain name (the
+pass substitutes it by name), while the element parameter may be any irrefutable pattern, since it is
+only ever the loop target: a name, a wildcard, or a tuple of those becomes Python's own
+`for (p, l) in steps:` header (`PyForTarget`), and any other shape binds a temp and unpacks on the
+first line of the body, so `fun m (p, l) -> Map.add p l m` stays linear like its `fst`/`snd`
+spelling and the pattern's bound names count as body binders for the P8 collision check; the
+accumulator is a fresh literal collection or
 a flat tuple of them (a `Var` init is rejected — it may be read after the fold); every slot is
 threaded **position-preservingly** (no swap, no duplication, no cross-slot storage, no closure
 capture, no escape to a user function — retention is unknowable, so reject); reads of a slot use a

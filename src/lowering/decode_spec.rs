@@ -392,7 +392,7 @@ impl Lowerer {
                     args: vec![decoded],
                 }));
                 out.push(PyStmt::For {
-                    target: item,
+                    target: item.into(),
                     iter: in_name(),
                     body,
                 });

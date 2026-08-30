@@ -27,9 +27,9 @@
 use std::collections::HashSet;
 
 use crate::parser::ast::{BlockStmt, CeItem, Expr, ExprKind, InterpPart, Param, Pattern};
-use crate::python_emitter::{PyCase, PyExpr, PyStmt};
+use crate::python_emitter::{PyCase, PyExpr, PyForTarget, PyStmt};
 
-use super::{LowerError, Lowered, Lowerer, py_value_name};
+use super::{LowerError, Lowered, Lowerer, py_value_name, unpack_into_as};
 
 /// One recognized in-place update at a fold tail leaf, with the (still-unlowered)
 /// argument expressions the mutation needs.
@@ -80,8 +80,9 @@ enum InitKind {
 pub(super) struct FoldPlan<'a> {
     /// A single-slot accumulator (vs a flat tuple of slots).
     single: bool,
-    /// The folder's element parameter — becomes the loop variable.
-    elem_param: String,
+    /// The folder's element parameter (an irrefutable pattern) — becomes the
+    /// loop target: a name, or a tuple Python unpacks itself (`for (p, l) in …`).
+    elem: &'a Pattern,
     /// The accumulator slot local names (length 1 for a single accumulator).
     slots: Vec<String>,
     /// The folder's accumulator parameter (the destructure scrutinee / single slot).
@@ -167,7 +168,7 @@ impl Lowerer {
     #[allow(clippy::too_many_arguments)]
     fn plan_fold<'a>(
         &self,
-        params: &[Param],
+        params: &'a [Param],
         body: &'a Expr,
         init: &'a Expr,
         xs: &'a Expr,
@@ -175,11 +176,15 @@ impl Lowerer {
         locals: &HashSet<String>,
         enclosing: &HashSet<String>,
     ) -> Option<FoldPlan<'a>> {
-        // A destructuring folder parameter (`fun (a, b) c -> …`) has no single
-        // name to substitute, and the pass rewrites by name — reject and fall
-        // through to the byte-identical `_pf_fold` lowering.
+        // A destructuring ACCUMULATOR parameter (`fun (a, b) c -> …`) has no
+        // single name to substitute, and the pass rewrites the accumulator by
+        // name — reject and fall through to the byte-identical `_pf_fold`
+        // lowering. The ELEMENT parameter is only ever the loop target, so any
+        // irrefutable pattern is fine there: its bound names are body binders
+        // for the P8 check, exactly where the non-loop lowering puts them.
         let acc_param = params[0].name()?.to_string();
-        let elem_param = params[1].name()?.to_string();
+        let elem = &params[1].pattern;
+        let elem_names: Vec<String> = elem.bound_names();
 
         // P3 + P4: classify the accumulator shape. Each slot's init must be a
         // fresh literal (`Map.empty`/`Set.empty`/a list literal) or a bare `Var`
@@ -218,7 +223,7 @@ impl Lowerer {
         // enclosing local (inlining would clobber it).
         let mut introduced = binders;
         introduced.extend(slots.iter().cloned());
-        introduced.insert(elem_param.clone());
+        introduced.extend(elem_names.iter().cloned());
         if !introduced.is_disjoint(enclosing) {
             return None;
         }
@@ -229,7 +234,7 @@ impl Lowerer {
         // the call site's own frame by construction, so the check is skipped.
         if !same_frame {
             let mut bound: HashSet<String> = sensitive.clone();
-            bound.insert(elem_param.clone());
+            bound.extend(elem_names.iter().cloned());
             let mut free = HashSet::new();
             collect_free(body, &bound, &mut free);
             if !free.is_disjoint(enclosing) {
@@ -271,14 +276,14 @@ impl Lowerer {
         // `def`, so `lower_var` rerouting is identical); a lambda or local folder
         // additionally sees the call site's locals (where its free vars resolve).
         let mut base_locals: HashSet<String> = sensitive.clone();
-        base_locals.insert(elem_param.clone());
+        base_locals.extend(elem_names.iter().cloned());
         if same_frame {
             base_locals.extend(locals.iter().cloned());
         }
 
         Some(FoldPlan {
             single,
-            elem_param,
+            elem,
             slots,
             acc_param,
             inits,
@@ -371,19 +376,27 @@ impl Lowerer {
         // The collection, evaluated once after the inits (P10), under site locals.
         let (xs_stmts, iter) = self.lower_value(plan.xs, &plan.site_locals)?;
         stmts.extend(xs_stmts);
+        // The loop target: a name or a tuple of names Python unpacks itself;
+        // any other irrefutable shape binds a temp and unpacks on the first
+        // line of the body, as a destructuring parameter does in a `def`.
+        let (target, mut body) = match loop_target(plan.elem) {
+            Some(target) => (target, Vec::new()),
+            None => {
+                let tmp = self.fresh_tmp();
+                let mut unpack = Vec::new();
+                unpack_into_as(plan.elem, &tmp, &tmp, &|n| py_value_name(n), &mut unpack);
+                (PyForTarget::Name(tmp), unpack)
+            }
+        };
         // The inlined folder body as the loop body.
-        let body = self.lower_fold_step(
+        body.extend(self.lower_fold_step(
             plan.step_body,
             &plan.base_locals,
             &plan.slots,
             &plan.acc_param,
             plan.single,
-        )?;
-        stmts.push(PyStmt::For {
-            target: py_value_name(&plan.elem_param),
-            iter,
-            body,
-        });
+        )?);
+        stmts.push(PyStmt::For { target, iter, body });
         // The result: the mutated accumulator(s) — a fresh container graph (P11).
         let value = if plan.single {
             PyExpr::Name(py_value_name(&plan.slots[0]))
@@ -1296,5 +1309,71 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
         | ExprKind::Unit
         | ExprKind::Hole { .. }
         | ExprKind::OpFunc(_) => {}
+    }
+}
+
+/// The `for`-loop target for an element pattern, when Python can unpack it
+/// itself: a name, a wildcard (`_`), or a tuple of those, nested. Anything
+/// else needs a temp and an explicit unpack.
+fn loop_target(pattern: &Pattern) -> Option<PyForTarget> {
+    match pattern {
+        Pattern::Var { name, .. } => Some(PyForTarget::Name(py_value_name(name))),
+        Pattern::Wildcard => Some(PyForTarget::Name("_".to_string())),
+        Pattern::Tuple { elems } => elems
+            .iter()
+            .map(loop_target)
+            .collect::<Option<Vec<_>>>()
+            .map(PyForTarget::Tuple),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::NodeSpan;
+
+    fn var(name: &str) -> Pattern {
+        Pattern::Var {
+            name: name.to_string(),
+            span: NodeSpan::new(crate::lexer::Span::new(0, 0)),
+        }
+    }
+
+    #[test]
+    fn loop_target_covers_names_wildcards_and_nested_tuples() {
+        assert_eq!(loop_target(&var("x")), Some(PyForTarget::Name("x".into())));
+        assert_eq!(
+            loop_target(&Pattern::Wildcard),
+            Some(PyForTarget::Name("_".into()))
+        );
+        let nested = Pattern::Tuple {
+            elems: vec![
+                var("a"),
+                Pattern::Tuple {
+                    elems: vec![var("b"), Pattern::Wildcard],
+                },
+            ],
+        };
+        assert_eq!(
+            loop_target(&nested),
+            Some(PyForTarget::Tuple(vec![
+                PyForTarget::Name("a".into()),
+                PyForTarget::Tuple(vec![
+                    PyForTarget::Name("b".into()),
+                    PyForTarget::Name("_".into()),
+                ]),
+            ]))
+        );
+    }
+
+    #[test]
+    fn loop_target_refuses_a_shape_python_cannot_unpack_in_the_header() {
+        // A literal element (not a parameter shape the parser admits today, but
+        // the emit path must still fall back to a temp + explicit unpack).
+        let shape = Pattern::Tuple {
+            elems: vec![var("a"), Pattern::Int(0)],
+        };
+        assert_eq!(loop_target(&shape), None);
     }
 }

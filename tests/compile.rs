@@ -5549,6 +5549,122 @@ fn fold_reject_parameterized_local_let_closure() {
     assert_fold_fallback(src, &[("out", "[(1, 0), (2, 1), (3, 2)]")]);
 }
 
+// ----- Tier B: a folder that destructures its element (#85) -----
+//
+// The element parameter is only ever the loop target, so any irrefutable
+// pattern qualifies: a flat or nested tuple of names becomes Python's own
+// `for (p, l) in xs:` target. Only the ACCUMULATOR parameter must be a name.
+
+#[test]
+fn fold_destructuring_elem_lambda_lowers_to_tuple_target() {
+    let src = "let steps = [(\"a\", 1), (\"b\", 2), (\"a\", 3)]\n\
+               let m = List.fold (fun m (p, l) -> Map.add p l m) Map.empty steps";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for (p, l) in steps:"), "{py}");
+    assert!(py.contains("m[p] = l"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+}
+
+#[test]
+fn e2e_fold_destructuring_elem_matches_fst_snd_spelling() {
+    // The issue's two spellings: destructuring vs `fst`/`snd`. Both must take the
+    // loop path and agree on the value.
+    let src = "let steps = [(\"a\", 1), (\"b\", 2), (\"a\", 3)]\n\
+               let slow = List.fold (fun m (p, l) -> Map.add p l m) Map.empty steps\n\
+               let fast = List.fold (fun m s -> Map.add (fst s) (snd s) m) Map.empty steps\n\
+               let out = (Map.toList slow, Map.toList fast, slow == fast)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(
+        src,
+        &[("out", "([('a', 3), ('b', 2)], [('a', 3), ('b', 2)], True)")],
+    );
+}
+
+#[test]
+fn fold_destructuring_elem_top_level_named_folder() {
+    let src = "let add m (p, l) = Map.add p l m\n\
+               let out = Map.toList (List.fold add Map.empty [(1, \"x\"), (2, \"y\")])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(
+        py.contains("for (p, l) in [(1, \"x\"), (2, \"y\")]:"),
+        "{py}"
+    );
+    assert!(py.contains("m[p] = l"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[(1, 'x'), (2, 'y')]")]);
+}
+
+#[test]
+fn fold_destructuring_elem_block_local_named_folder() {
+    let src = "let build steps =\n  \
+                 let add m (p, l) = Map.add p l m\n  \
+                 List.fold add Map.empty steps\n\
+               let out = Map.toList (build [(1, \"x\"), (2, \"y\")])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for (p, l) in steps:"), "{py}");
+    assert!(py.contains("m[p] = l"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[(1, 'x'), (2, 'y')]")]);
+}
+
+#[test]
+fn fold_destructuring_elem_nested_tuple() {
+    let src = "let out = Map.toList (List.fold (fun m (a, (b, c)) -> Map.add a (b + c) m) \
+               Map.empty [(\"x\", (1, 2)), (\"y\", (3, 4))])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for (a, (b, c)) in"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[('x', 3), ('y', 7)]")]);
+}
+
+#[test]
+fn fold_destructuring_elem_wildcard() {
+    let src = "let out = Set.toList (List.fold (fun s (p, _) -> Set.add p s) Set.empty \
+               [(1, \"a\"), (2, \"b\"), (1, \"c\")])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for (p, _) in"), "{py}");
+    assert!(py.contains("s.add(p)"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "[1, 2]")]);
+}
+
+#[test]
+fn fold_destructuring_elem_tuple_accumulator() {
+    // Element destructuring composes with the multi-slot (tuple) accumulator.
+    let src = "let step acc (k, v) =\n  \
+                 match acc:\n    \
+                   case (m, ks): (Map.add k v m, List.concat ks [k])\n\
+               let out = match List.fold step (Map.empty, []) [(1, \"a\"), (2, \"b\")]: \
+               case (m, ks): (Map.toList m, ks)";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for (k, v) in"), "{py}");
+    assert!(py.contains("m[k] = v"), "{py}");
+    assert!(py.contains("ks.append(k)"), "{py}");
+    assert!(!py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("out", "([(1, 'a'), (2, 'b')], [1, 2])")]);
+}
+
+#[test]
+fn fold_reject_destructured_elem_name_clashes_with_enclosing_local() {
+    // P8: a name the element pattern binds (`p`) is also the enclosing
+    // function's parameter, so inlining would clobber it. Fall back.
+    let src = "let clash p =\n  \
+                 let inner = List.fold (fun m (p, l) -> Map.add p l m) Map.empty [(1, 2)]\n  \
+                 (p, Map.toList inner)\n\
+               let out = clash 9";
+    assert_fold_fallback(src, &[("out", "(9, [(1, 2)])")]);
+}
+
+#[test]
+fn fold_reject_destructuring_accumulator_param_still_falls_back() {
+    // The accumulator parameter is substituted by name, so destructuring it
+    // (rather than matching on it in the body) still takes the safe path.
+    let src = "let out = match List.fold (fun (m, n) x -> (Map.add x n m, n + 1)) \
+               (Map.empty, 0) [5, 6]: case (m, n): (Map.toList m, n)";
+    assert_fold_fallback(src, &[("out", "([(5, 0), (6, 1)], 2)")]);
+}
+
 #[test]
 fn e2e_an_effectful_recursive_loop_runs() {
     // Recursion is the only way to write a loop (no `while`), so "recursive,
