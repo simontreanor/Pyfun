@@ -5989,3 +5989,137 @@ fn e2e_option_block_return_bang_and_do_bang() {
         &[("a", "6"), ("b", "0"), ("c", "0")],
     );
 }
+
+// ---------- block-local function arity (issue #84) ----------
+
+#[test]
+fn local_let_partial_application_uses_functools_partial() {
+    // The issue's program: a block-local 2-ary `let` applied to one argument is a
+    // partial application, not a full call with one argument.
+    let py = pyfun::compile(
+        "
+        let addAll xs ys =
+          let pair a b = a + b
+          List.map (pair 10) ys
+        ",
+    )
+    .unwrap();
+    assert!(
+        py.contains("_pf_map(functools.partial(pair, 10), ys)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn e2e_local_let_partial_application_runs() {
+    run_and_check(
+        "
+        let addAll xs ys =
+          let pair a b = a + b
+          List.map (pair 10) ys
+        let r = addAll [] [1, 2]
+        ",
+        &[("r", "[11, 12]")],
+    );
+}
+
+#[test]
+fn local_lambda_let_partial_application_uses_functools_partial() {
+    // `let pair = fun a b -> …` registers the lambda's parameter count.
+    let src = "
+        let addAll ys =
+          let pair = fun a b -> a + b
+          List.map (pair 10) ys
+        let r = addAll [1, 2]
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("functools.partial(pair, 10)"), "{py}");
+    run_and_check(src, &[("r", "[11, 12]")]);
+}
+
+#[test]
+fn local_let_over_application_applies_the_remainder() {
+    // A 2-ary local function returning a function, applied to three arguments,
+    // is a full call followed by one more application.
+    let src = "
+        let f x =
+          let k a b = fun c -> a + b + c
+          k 1 2 x
+        let r = f 3
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("return k(1, 2)(x)"), "{py}");
+    run_and_check(src, &[("r", "6")]);
+}
+
+#[test]
+fn parameter_shadowing_a_local_function_stays_n_ary() {
+    // Inside `g`, `pair` is a parameter of unknown arity: applying it to one
+    // argument is an ordinary call, not a synthesized partial application.
+    let src = "
+        let f ys =
+          let pair a b = a + b
+          let g pair = pair 10
+          g (fun x -> x + 1)
+        let r = f []
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("return pair(10)"), "{py}");
+    assert!(!py.contains("functools.partial(pair, 10)"), "{py}");
+    run_and_check(src, &[("r", "11")]);
+}
+
+#[test]
+fn match_binder_shadowing_a_local_function_stays_n_ary() {
+    // A match-arm binder named like the local function displaces its arity for
+    // the arm's duration: `pair 10` is a plain call on the bound lambda.
+    let src = "
+        let f o =
+          let pair a b = a + b
+          let outer = pair 1
+          let inner =
+            match o:
+              case Some pair: pair 10
+              case None: 0
+          inner + outer 2
+        let r = f (Some (fun x -> x + 1))
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pf_t0 = pair(10)"), "{py}");
+    assert!(py.contains("outer = functools.partial(pair, 1)"), "{py}");
+    run_and_check(src, &[("r", "14")]);
+}
+
+#[test]
+fn recursive_local_function_sees_its_own_arity() {
+    // A partial self-application inside a recursive local function curries: the
+    // arity is registered before the body is lowered.
+    let src = "
+        let f n =
+          let go acc k =
+            if k == 0 then [acc]
+            else List.collect (go (acc + 1)) [k - 1]
+          go 0 n
+        let r = f 3
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("functools.partial(go, acc + 1)"), "{py}");
+    run_and_check(src, &[("r", "[3]")]);
+}
+
+#[test]
+fn non_function_rebinding_evicts_the_local_arity() {
+    // `let pair = pair 1` reads the 2-ary `pair` (a partial application), and
+    // afterwards `pair` is a value of unknown arity, so `pair 2` is a plain call.
+    let src = "
+        let f x =
+          let pair a b = a + b
+          let pair = pair 1
+          pair x
+        let r = f 2
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("pair = functools.partial(pair, 1)"), "{py}");
+    assert!(py.contains("return pair(x)"), "{py}");
+    run_and_check(src, &[("r", "3")]);
+}

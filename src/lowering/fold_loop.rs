@@ -456,11 +456,12 @@ impl Lowerer {
                 let mut out = Vec::new();
                 let mut locals = locals.clone();
                 let last = stmts.len().saturating_sub(1);
-                // Block scope for the local-folder registry (see `lower_block_return`).
-                let saved_local_fns = self.local_fn_defs.clone();
+                // Block scope for the local registries (see `lower_block_return`).
+                let saved = self.save_local_scope();
                 for (i, st) in stmts.iter().enumerate() {
                     match st {
                         BlockStmt::Let(b) => {
+                            self.enter_block_let(b);
                             self.lower_let(b, &locals, &mut out)?;
                             self.note_block_let(b);
                             locals.extend(b.bound_names());
@@ -477,7 +478,7 @@ impl Lowerer {
                         }
                     }
                 }
-                self.local_fn_defs = saved_local_fns;
+                self.restore_local_scope(saved);
                 Ok(out)
             }
             _ => self.lower_fold_leaf(body, locals, slots, acc_param, single),
