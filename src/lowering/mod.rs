@@ -1554,20 +1554,7 @@ impl Lowerer {
         let mut bound: HashSet<String> = params.iter().cloned().collect();
         scan_scope(body, &mut assigned, &mut bound);
         // Captured = reassigned here but not bound here.
-        let mut nonlocals: Vec<String> = Vec::new();
-        let mut globals: Vec<String> = Vec::new();
-        for name in &assigned {
-            if bound.contains(name) {
-                continue;
-            }
-            if self.fn_local_stack.iter().any(|f| f.contains(name)) {
-                nonlocals.push(name.clone());
-            } else {
-                globals.push(name.clone());
-            }
-        }
-        nonlocals.sort();
-        globals.sort();
+        let (globals, nonlocals) = self.classify_captured(&assigned, &bound);
 
         // Parameters shadow any same-named local folder for the body's duration.
         let shadowed = self.shadow_local_fns(params);
@@ -1583,6 +1570,47 @@ impl Lowerer {
 
         // A captured `mut` bound in an enclosing nested block may have been
         // renamed there; the declaration names the slot the closure assigns.
+        let mut decls = self.capture_decls(&globals, &nonlocals);
+        // Destructuring parameters unpack first, after the `global`/`nonlocal`
+        // declarations Python requires at the top of the block.
+        decls.append(&mut destructure_params(
+            prelude_params,
+            &param_names(prelude_params),
+        ));
+        decls.append(&mut stmts);
+        Ok(decls)
+    }
+
+    /// Split the names a new Python frame reassigns (`<-`) but does not bind
+    /// into (`global`s, `nonlocal`s): a captured name found in an enclosing
+    /// *function* scope is `nonlocal`; otherwise it is module-level, so `global`
+    /// (Python's rule: assigning a name makes it local unless declared).
+    fn classify_captured(
+        &self,
+        assigned: &HashSet<String>,
+        bound: &HashSet<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut globals: Vec<String> = Vec::new();
+        let mut nonlocals: Vec<String> = Vec::new();
+        for name in assigned {
+            if bound.contains(name) {
+                continue;
+            }
+            if self.fn_local_stack.iter().any(|f| f.contains(name)) {
+                nonlocals.push(name.clone());
+            } else {
+                globals.push(name.clone());
+            }
+        }
+        globals.sort();
+        nonlocals.sort();
+        (globals, nonlocals)
+    }
+
+    /// The declarations themselves, built *after* the frame's body lowered so a
+    /// captured `mut` renamed in an enclosing nested block is declared under the
+    /// slot the closure assigns.
+    fn capture_decls(&self, globals: &[String], nonlocals: &[String]) -> Vec<PyStmt> {
         let mut decls = Vec::new();
         if !globals.is_empty() {
             decls.push(PyStmt::Global(
@@ -1594,14 +1622,21 @@ impl Lowerer {
                 nonlocals.iter().map(|n| self.py_binder_name(n)).collect(),
             ));
         }
-        // Destructuring parameters unpack first, after the `global`/`nonlocal`
-        // declarations Python requires at the top of the block.
-        decls.append(&mut destructure_params(
-            prelude_params,
-            &param_names(prelude_params),
-        ));
-        decls.append(&mut stmts);
-        Ok(decls)
+        decls
+    }
+
+    /// The capture split for a built-in CE body, which lowers to its own nested
+    /// `def`/`async def` — so a `mut` it reassigns is captured exactly as a
+    /// function body's is (#122: without the declaration, the assignment bound a
+    /// silent local in the coroutine). Also returns the CE's own binders, which
+    /// belong on `fn_local_stack` while the items lower: they are frame-wide
+    /// locals to any lambda nested inside the block.
+    fn ce_captures(&self, items: &[CeItem]) -> (Vec<String>, Vec<String>, HashSet<String>) {
+        let mut assigned = HashSet::new();
+        let mut bound = HashSet::new();
+        scan_ce_scope(items, &mut assigned, &mut bound);
+        let (globals, nonlocals) = self.classify_captured(&assigned, &bound);
+        (globals, nonlocals, bound)
     }
 
     /// Lower `expr` in tail position, producing statements that end by returning
@@ -4297,7 +4332,11 @@ impl Lowerer {
         let mut body = Vec::new();
         let mut locals = locals.clone();
         let mut has_yield = false;
-        self.lower_seq_items(items, &mut locals, &mut body, &mut has_yield)?;
+        let (globals, nonlocals, ce_bound) = self.ce_captures(items);
+        self.fn_local_stack.push(ce_bound);
+        let lowered = self.lower_seq_items(items, &mut locals, &mut body, &mut has_yield);
+        self.fn_local_stack.pop();
+        lowered?;
         // A function with no `yield` isn't a generator, so an element-free `seq`
         // returns an empty iterator instead.
         if !has_yield {
@@ -4309,11 +4348,13 @@ impl Lowerer {
                 }],
             }));
         }
+        let mut full = self.capture_decls(&globals, &nonlocals);
+        full.append(&mut body);
         let name = self.fresh_fn();
         let def = PyStmt::FuncDef {
             name: name.clone(),
             params: vec![],
-            body,
+            body: full,
             is_async: false,
         };
         Ok((vec![def], call0(&name)))
@@ -4396,7 +4437,12 @@ impl Lowerer {
         locals: &HashSet<String>,
         sc: ShortCircuit,
     ) -> Lowered {
-        let body = self.lower_short_circuit_items(items, locals, sc)?;
+        let (globals, nonlocals, ce_bound) = self.ce_captures(items);
+        self.fn_local_stack.push(ce_bound);
+        let lowered = self.lower_short_circuit_items(items, locals, sc);
+        self.fn_local_stack.pop();
+        let mut body = self.capture_decls(&globals, &nonlocals);
+        body.append(&mut lowered?);
         let name = self.fresh_fn();
         let def = PyStmt::FuncDef {
             name: name.clone(),
@@ -4544,12 +4590,18 @@ impl Lowerer {
     fn lower_async(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
         let mut body = Vec::new();
         let mut locals = locals.clone();
-        self.lower_async_items(items, &mut locals, &mut body)?;
+        let (globals, nonlocals, ce_bound) = self.ce_captures(items);
+        self.fn_local_stack.push(ce_bound);
+        let lowered = self.lower_async_items(items, &mut locals, &mut body);
+        self.fn_local_stack.pop();
+        lowered?;
+        let mut full = self.capture_decls(&globals, &nonlocals);
+        full.append(&mut body);
         let name = self.fresh_fn();
         let def = PyStmt::FuncDef {
             name: name.clone(),
             params: vec![],
-            body,
+            body: full,
             is_async: true,
         };
         Ok((vec![def], call0(&name)))
@@ -9478,6 +9530,36 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
         | ExprKind::OpFunc(_)
         | ExprKind::Hole { .. }
         | ExprKind::Var(_) => {}
+    }
+}
+
+/// [`scan_scope`] for a CE body: the items' own scope is the nested
+/// `def`/`async def` the CE lowers to. `let`/`let!`/`for` targets are its
+/// binders; a `for` body is the same Python frame (a `for` statement opens no
+/// scope), so it is entered, while nested functions and CEs still are not.
+fn scan_ce_scope(items: &[CeItem], assigned: &mut HashSet<String>, bound: &mut HashSet<String>) {
+    for item in items {
+        match item {
+            CeItem::Let { target, value, .. } | CeItem::LetBang { target, value, .. } => {
+                bound.extend(target.bound_names());
+                scan_scope(value, assigned, bound);
+            }
+            CeItem::DoBang(e)
+            | CeItem::Return(e)
+            | CeItem::ReturnBang(e)
+            | CeItem::Yield(e)
+            | CeItem::YieldBang(e) => scan_scope(e, assigned, bound),
+            CeItem::For {
+                target,
+                source,
+                body,
+                ..
+            } => {
+                bound.extend(target.bound_names());
+                scan_scope(source, assigned, bound);
+                scan_ce_scope(body, assigned, bound);
+            }
+        }
     }
 }
 

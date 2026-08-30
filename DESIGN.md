@@ -65,7 +65,9 @@ What the compiler enforces, mirroring (and exceeding) F#:
   indentation **blocks** (an indented `let … =` body); see §7's offside note. A closure that
   reassigns a `mut` captured from an enclosing scope lowers with a `nonlocal` (enclosing function) or
   `global` (module-level) declaration — Python otherwise treats the assigned name as a fresh local and
-  the closure would miscompile. This mirrors F# 4.0, which auto-boxes a captured mutable into a
+  the closure would miscompile. A CE body (`async { }`, `seq { }`, `result { }`, `option { }`) lowers
+  to its own nested function, so a reassignment inside one gets the same declaration — the coroutine
+  is a closure over the flag it flips. This mirrors F# 4.0, which auto-boxes a captured mutable into a
   reference cell (Python's `nonlocal`/cell mechanism is the same idea).
 - **Effect discipline** — first-class (see §4).
 

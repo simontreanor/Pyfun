@@ -406,6 +406,18 @@ play comes first; the browser target is last because it depends on the async dec
     member, documented on hover and in `DESIGN.md` §6 — instead of `asyncio.wait`'s message about
     an empty set. `Async.catch` reports it like any await-time failure.
 
+### After 0.8.0 (the game agent builds spectator mode)
+
+23. ~~**Assigning a module `mut` from an `async { }` block silently bound a local**~~ **CLOSED
+    2026-08-31** (#122, found when a spectator acceptor polling on a module `mut acceptDone` flag
+    never saw it flip and a finished host idled forever): a built-in CE body lowers to its own
+    nested `def`/`async def`, and the closure-capture declarations (`DESIGN.md` §3) were only
+    computed for function bodies — so `flag <- true` inside a coroutine bound a fresh local and the
+    module binding never changed (`result { }`'s read-modify-write form hit the louder
+    `UnboundLocalError` instead). All four built-in CE frames now get the same `global`/`nonlocal`
+    prelude a function body gets, and the CE's own binders join the frame stack, so a lambda nested
+    in the block classifies its captures against them too.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
