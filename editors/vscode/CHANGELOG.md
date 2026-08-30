@@ -3,6 +3,15 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.7.0
+
+- Version aligned to the compiler's 0.7.0 release. No client changes; the compiler it drives emits
+  faster Python for `Option`/`Result` matches, nullary constructors, lookups consumed by a match and
+  equality searches, folds over destructured elements are linear, every emitted class uses
+  `__slots__`, and four cases where a program passed checking and failed at runtime (a block-local
+  partial application, and three shadowing shapes that rebound a Python function-wide local) are
+  fixed.
+
 ## 0.6.0
 
 - Version aligned to the compiler's 0.6.0 release. No client changes; the language server it drives
