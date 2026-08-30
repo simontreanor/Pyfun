@@ -28,7 +28,7 @@ students see records become frozen dataclasses.
 2. Explain the copy-and-update line `{ opened with balance = 100 }`. It builds a fresh `Account` and
    leaves `opened` alone, which is why the original balance is unchanged. Connect this back to the
    immutability from Session 1.
-3. Show the Python panel: `Account` compiled to a `@dataclass(frozen=True)`, and the update compiled
+3. Show the Python panel: `Account` compiled to a `@dataclass(frozen=True, slots=True)`, and the update compiled
    to a new `Account(...)` call. The immutability is literal in the output.
 4. Break it live: change `Account { name = "Ada", balance = 0 }` to drop the `balance` field. The
    compiler reports the missing field. Restore it. This shows records require all their fields.

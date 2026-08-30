@@ -192,6 +192,44 @@ each operand bound to a fresh temp unless `is_atomic`, `v` bound from the payloa
 `shadow_local_fns` discipline around the `Some` arm. No `Option` is constructed, so a program whose
 only `Option` was this one emits no `Some`/`None_` classes at all. Anything else falls through to the
 `match`, unchanged.
+### `Option`/`Result` matches as `isinstance` ladders — implements DESIGN §5.5
+
+`Lowerer::try_lower_ladder_match` runs ahead of the generic `match` lowering in both positions
+(`lower_return` and `lower_value`). `ladder_shape` is the gate, and it is purely syntactic: every arm
+must be a constructor of one built-in family (`LadderFamily::of_ctor` — `Some`/`None` or `Ok`/`Error`)
+whose payload pattern is `simple_irrefutable` (a variable, `_`, or a tuple of those, nested), or a
+catch-all (`_`/a variable, which binds the whole scrutinee); arms after an unguarded catch-all are
+dropped as dead. Anything else returns `None` and the arms lower to `match`/`case` as before. The
+scrutinee is lowered once and bound to a temp unless it is already a name. Each arm becomes a
+`Piece` (its `isinstance` test, the payload binding via `bind_irrefutable`, then the body under its
+guard if any), and the chain is assembled back to front: an unguarded arm nests the rest as its
+`orelse` (the emitter renders that as `elif`/`else`), a **guarded** arm cannot (its guard failing
+must reach the later arms), so the rest follows it as statements, which is only sound in return
+position where every body returns, hence a guarded value-position match is rejected before any
+lowering happens. Exhaustiveness is the ladder's own rule (both constructors unguarded, or an
+unguarded catch-all, judged on the source arms): then the last arm is emitted with no test and no
+defensive raise follows. In value position the result temp is allocated before the shape check so the
+ladder can name it, and handed back (`tmp_counter` restored) on rejection, so the `match` path
+numbers its temps exactly as it did. `short_circuit_bind` gives `result {}`/`option {}` the same
+shape for each `let!`/`do!` (`bind_ce_target` unpacks the payload; the failure is `return <subject>`).
+
+Two things the pass deliberately does not do: it does not test with `is` against the singleton
+(a hand-built `Some`/`None_` from Python must still match), and it does not extend to user ADTs.
+
+### Nullary constructor singletons — implements DESIGN §5.5
+
+`Lowerer::new` computes `nullary_singletons`: every zero-field constructor in `ctor_arity` (user
+variants plus the prelude's `None`, minus hidden active-pattern cases) whose singleton name
+(`nullary_singleton_name`: `_` + the emitted class name) is not in `binder_names`, the whole-module
+binder set (`module_binder_names`, shared with the module-alias shadow check). `lower_module` emits
+`_Red = Red()` (`singleton_assign`) right after each such class; `option_prelude` does the same for
+`None_` (always, in `_pyfun_rt.py`). `nullary_value` is the one place a constructor-as-value is
+spelled (`lower_var`, the decode specializer's `None`), and the prelude helpers reach it through
+`none_value`/`none()` (only `collection_prelude` constructs `None` values). Cross-module: the project
+driver computes each module's singleton set with the same two functions and passes it as
+`ImportContext::nullary_singletons`, so an importer emits `palette._Red` exactly when `palette.py`
+defines it and `palette.Red()` otherwise; a project module that needs `Option` imports `_None_` from
+the runtime alongside `Some`/`None_` unless it binds that name itself.
 
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 

@@ -34,7 +34,7 @@ update hands you a fresh value and the original stays put. The emitted Python ma
 
 ```python
 from dataclasses import dataclass
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Point:
     x: int
     y: int

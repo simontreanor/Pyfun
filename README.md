@@ -154,7 +154,7 @@ print (report [1.0, 2.0, 3.0, 4.0])
 from dataclasses import dataclass
 import statistics
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Summary:
     n: int
     mean: float

@@ -86,16 +86,17 @@ The built-ins lower directly rather than through this pass, so it is worth seein
 ```python
 def safeDiv(a, b):
     def _pf_fn0():
-        match Error("div by zero") if b == 0 else Ok(a):
-            case Ok(x):
-                return Ok(x / b)
-            case Error(_pf_t0):
-                return Error(_pf_t0)
+        _pf_t0 = Error("div by zero") if b == 0 else Ok(a)
+        if isinstance(_pf_t0, Ok):
+            x = _pf_t0._0
+            return Ok(x / b)
+        else:
+            return _pf_t0
     return _pf_fn0()
 ```
 
-That is railway-oriented short-circuiting written as a real `match`: on `Ok` it continues, on
-`Error` it returns the error unchanged. A generic bind/return desugaring would produce a chain of
+That is railway-oriented short-circuiting written as a plain test: on `Ok` it unwraps and continues,
+on `Error` it returns the value unchanged. A generic bind/return desugaring would produce a chain of
 closure calls instead, which is why the built-ins keep their own lowering while user builders take
 the desugaring path. The two mechanisms sit side by side: the same protocol shape, but the built-ins
 earn idiomatic Python by not being desugared.
