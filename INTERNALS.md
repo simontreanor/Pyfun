@@ -62,6 +62,27 @@ truncate at the first unconditional **lowered** case, else append the defensive 
 rejects any `case` after an irrefutable one as a SyntaxError, so this is judged on `PyPattern`, not
 the source arm.
 
+## Arity for the currying lowering — implements DESIGN §5
+
+Lowering does not yet consume inferred types, so the arity that `build_call` uses to collapse a
+full application, wrap a partial one in `functools.partial`, or apply an over-application's
+remainder one argument at a time comes from syntax. Three sources, consulted in `lower_application`
+in this order: the block-scoped `local_arities` table (a `let pair a b = …` or `let pair = fun a b
+-> …` in an enclosing block, issue #84), the module-level `arities`/`ctor_arity` tables (top-level
+functions, imported members, data constructors), and a `fun` literal's own parameter count when it
+is applied in place. A parameter has no entry anywhere and stays arity-unknown, so its application
+is emitted n-ary as written.
+
+`local_arities` is kept in step with the fold pass's `local_fn_defs` registry so an entry can only
+mean "this name resolves to that local function here": both are snapshotted and restored per block
+(`save_local_scope`/`restore_local_scope`, also around a computation expression, whose body is its
+own Python function), both are displaced by parameters and match-arm binders for the binder's
+extent (`shadow_local_fns`/`unshadow_local_fns`), and both are evicted when a non-function `let` or
+a CE binder rebinds the name (`note_block_let`/`bind_ce_target`). One ordering detail: a function
+`let` registers its arity in `enter_block_let` **before** its value is lowered, so a recursive local
+function can partially apply itself, while a non-function `let` evicts **after** its value is
+lowered, since `let pair = pair 1` reads the previous binding.
+
 ## Lowering passes
 
 The lowering strategy and its observable contracts are in `DESIGN.md` §5. The performance-directed

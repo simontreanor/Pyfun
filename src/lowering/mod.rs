@@ -15,12 +15,14 @@
 //!    the remainder one argument at a time.
 //!
 //! Lowering runs after type-checking but doesn't yet consume inferred types, so
-//! arity is taken from a syntactic module-level table of top-level functions and
-//! data constructors (plus `fun` literals applied in place). When the callee's
-//! arity is unknown (a parameter, or an imported Python name) the call is emitted
-//! n-ary as-is — correct for full application and for Python interop, but it can't
-//! synthesize a partial application for an unknown callee. Feeding the type
-//! checker's results in here would make arity fully precise.
+//! arity is taken syntactically: a module-level table of top-level functions and
+//! data constructors, a block-scoped table of local function `let`s
+//! (`local_arities`, kept shadow-coherent with the fold pass's `local_fn_defs`),
+//! plus `fun` literals applied in place. When the callee's arity is unknown (a
+//! parameter, or an imported Python name) the call is emitted n-ary as-is —
+//! correct for full application and for Python interop, but it can't synthesize
+//! a partial application for an unknown callee. Feeding the type checker's
+//! results in here would make arity fully precise.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -289,6 +291,14 @@ struct Lowerer {
     /// (`shadow_local_fns`) — a stale entry must never be consulted, since the
     /// pass would inline the *wrong* body.
     local_fn_defs: HashMap<String, (Vec<Param>, Expr)>,
+    /// Arity of each **block-local** function binding in scope (`let pair a b =
+    /// …`, or `let pair = fun a b -> …`), so a partial or over-application of a
+    /// local function curries exactly like a top-level one (issue #84). Scoped
+    /// and shadow-coherent exactly like `local_fn_defs`: saved/restored per block
+    /// ([`LocalScope`]), displaced by parameters and pattern binders
+    /// (`shadow_local_fns`), evicted by a non-function rebinding. A parameter is
+    /// never here, so its arity stays unknown (n-ary).
+    local_arities: HashMap<String, usize>,
     /// Whether the in-place linear-fold optimization is enabled. Defaults to on;
     /// the `PYFUN_NO_FOLD_OPT` environment variable turns it off (a kill switch for
     /// differential testing — the rejected path is byte-identical to no-opt).
@@ -610,6 +620,7 @@ impl Lowerer {
             top_fn_defs,
             top_val_defs,
             local_fn_defs: HashMap::new(),
+            local_arities: HashMap::new(),
             // Default the optimization on; `PYFUN_NO_FOLD_OPT` (any value) disables
             // it. Read once per module lowering — cheap, and covers every entry
             // point (`compile`/`run`/project/tests) for differential testing.
@@ -949,6 +960,12 @@ impl Lowerer {
     /// destructuring target. The native CE lowerings emit statements, so a
     /// destructuring binder costs nothing here beyond the unpacking itself.
     fn bind_ce_target(&mut self, target: &Pattern, value: PyExpr, out: &mut Vec<PyStmt>) {
+        // The binder rebinds its names for the rest of the CE: a same-named local
+        // function no longer means that function (nor carries its arity).
+        for name in target.bound_names() {
+            self.local_fn_defs.remove(&name);
+            self.local_arities.remove(&name);
+        }
         match target {
             Pattern::Var { name, .. } => out.push(PyStmt::Assign {
                 target: py_value_name(name),
@@ -1039,6 +1056,13 @@ impl Lowerer {
     /// candidate named folder for the fold-loop pass; anything else *rebinding*
     /// the name evicts a previous entry (the name no longer means that folder).
     fn note_block_let(&mut self, b: &LetBinding) {
+        // A non-function rebinding evicts the name's local arity (the function
+        // form registered its arity up front in `enter_block_let`).
+        if block_let_arity(b).is_none() {
+            for name in b.bound_names() {
+                self.local_arities.remove(&name);
+            }
+        }
         let folder = if b.mutable {
             None
         } else if b.params.len() == 2 {
@@ -1065,20 +1089,57 @@ impl Lowerer {
         }
     }
 
+    /// Register a block-level function `let`'s arity **before** its value is
+    /// lowered, so a partial self-application inside a recursive local function
+    /// already curries. A non-function `let` registers nothing here; its eviction
+    /// happens in [`Lowerer::note_block_let`], after the value is lowered, since
+    /// the value may still refer to the previous binding (`let pair = pair 1`).
+    fn enter_block_let(&mut self, b: &LetBinding) {
+        if let (Some(arity), Some(name)) = (block_let_arity(b), b.name()) {
+            self.local_arities.insert(name.to_string(), arity);
+        }
+    }
+
+    /// Snapshot the block-scoped registries (`local_fn_defs`, `local_arities`) so
+    /// a block can restore them on exit: entries it adds or evicts must not
+    /// outlive it.
+    fn save_local_scope(&self) -> LocalScope {
+        LocalScope {
+            fn_defs: self.local_fn_defs.clone(),
+            arities: self.local_arities.clone(),
+        }
+    }
+
+    fn restore_local_scope(&mut self, saved: LocalScope) {
+        self.local_fn_defs = saved.fn_defs;
+        self.local_arities = saved.arities;
+    }
+
     /// Temporarily displace registry entries shadowed by newly-introduced binders
     /// (function parameters / match-arm pattern bindings), returning them for
     /// [`Lowerer::unshadow_local_fns`]. Under a shadow, the name must not resolve
-    /// to the outer folder — the fold pass would inline the wrong body.
-    fn shadow_local_fns(&mut self, names: &[String]) -> Vec<(String, (Vec<Param>, Expr))> {
-        names
-            .iter()
-            .filter_map(|n| self.local_fn_defs.remove(n).map(|e| (n.clone(), e)))
-            .collect()
+    /// to the outer folder (the fold pass would inline the wrong body) nor carry
+    /// the outer function's arity (a partial application would be synthesized for
+    /// a parameter whose arity is unknown).
+    fn shadow_local_fns(&mut self, names: &[String]) -> Shadowed {
+        Shadowed {
+            fn_defs: names
+                .iter()
+                .filter_map(|n| self.local_fn_defs.remove(n).map(|e| (n.clone(), e)))
+                .collect(),
+            arities: names
+                .iter()
+                .filter_map(|n| self.local_arities.remove(n).map(|a| (n.clone(), a)))
+                .collect(),
+        }
     }
 
-    fn unshadow_local_fns(&mut self, saved: Vec<(String, (Vec<Param>, Expr))>) {
-        for (n, e) in saved {
+    fn unshadow_local_fns(&mut self, saved: Shadowed) {
+        for (n, e) in saved.fn_defs {
             self.local_fn_defs.insert(n, e);
+        }
+        for (n, a) in saved.arities {
+            self.local_arities.insert(n, a);
         }
     }
 
@@ -1253,12 +1314,13 @@ impl Lowerer {
         let mut out = Vec::new();
         let mut locals = locals.clone();
         let last = stmts.len().saturating_sub(1);
-        // Block scope for the local-folder registry: entries this block adds
-        // (or evicts) must not outlive it.
-        let saved_local_fns = self.local_fn_defs.clone();
+        // Block scope for the local registries: entries this block adds (or
+        // evicts) must not outlive it.
+        let saved = self.save_local_scope();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
+                    self.enter_block_let(b);
                     self.lower_let(b, &locals, &mut out)?;
                     self.note_block_let(b);
                     locals.extend(b.bound_names());
@@ -1273,7 +1335,7 @@ impl Lowerer {
                 }
             }
         }
-        self.local_fn_defs = saved_local_fns;
+        self.restore_local_scope(saved);
         Ok(out)
     }
 
@@ -1594,11 +1656,12 @@ impl Lowerer {
         let mut locals = locals.clone();
         let last = stmts.len().saturating_sub(1);
         let mut value = PyExpr::NoneLit;
-        // Block scope for the local-folder registry (see `lower_block_return`).
-        let saved_local_fns = self.local_fn_defs.clone();
+        // Block scope for the local registries (see `lower_block_return`).
+        let saved = self.save_local_scope();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
+                    self.enter_block_let(b);
                     self.lower_let(b, &locals, &mut out)?;
                     self.note_block_let(b);
                     locals.extend(b.bound_names());
@@ -1614,7 +1677,7 @@ impl Lowerer {
                 }
             }
         }
-        self.local_fn_defs = saved_local_fns;
+        self.restore_local_scope(saved);
         Ok((out, value))
     }
 
@@ -2050,6 +2113,11 @@ impl Lowerer {
         }
 
         let arity = match &head.kind {
+            // A block-local function (`let pair a b = …` in an enclosing block):
+            // its arity is in `local_arities`, which is shadow-coherent, so an
+            // entry means the name resolves to that function here. A parameter has
+            // no entry and stays arity-unknown (n-ary).
+            ExprKind::Var(name) if let Some(k) = self.local_arities.get(name) => Some(*k),
             // A bare reference to a sibling member inside a module — its arity is
             // registered under the qualified name (`Geometry.area`).
             ExprKind::Var(name)
@@ -3407,6 +3475,21 @@ impl Lowerer {
         span: crate::lexer::Span,
         locals: &HashSet<String>,
     ) -> Lowered {
+        // A CE body is its own Python function; a CE binder that rebinds a local
+        // function's name (`bind_ce_target` evicts it) must not leak past the CE.
+        let saved = self.save_local_scope();
+        let lowered = self.lower_ce_inner(builder, items, span, locals);
+        self.restore_local_scope(saved);
+        lowered
+    }
+
+    fn lower_ce_inner(
+        &mut self,
+        builder: &CeBuilder,
+        items: &[CeItem],
+        span: crate::lexer::Span,
+        locals: &HashSet<String>,
+    ) -> Lowered {
         match builder {
             CeBuilder::Seq => self.lower_seq(items, locals),
             CeBuilder::Result => {
@@ -3836,6 +3919,34 @@ fn flatten_app<'a>(expr: &'a Expr, args: &mut Vec<&'a Expr>) -> &'a Expr {
         }
         _ => expr,
     }
+}
+
+/// The arity a block-level `let` gives its name when it binds a function: the
+/// parameter count of `let f a b = …`, or of the lambda in `let f = fun a b -> …`.
+/// `None` for anything else (a value, a `mut`, a destructuring target).
+fn block_let_arity(b: &LetBinding) -> Option<usize> {
+    if b.mutable || b.name().is_none() {
+        return None;
+    }
+    if !b.params.is_empty() {
+        return Some(b.params.len());
+    }
+    match &b.value.kind {
+        ExprKind::Fn { params, .. } => Some(params.len()),
+        _ => None,
+    }
+}
+
+/// A snapshot of the block-scoped registries ([`Lowerer::save_local_scope`]).
+struct LocalScope {
+    fn_defs: HashMap<String, (Vec<Param>, Expr)>,
+    arities: HashMap<String, usize>,
+}
+
+/// Registry entries displaced by a shadowing binder ([`Lowerer::shadow_local_fns`]).
+struct Shadowed {
+    fn_defs: Vec<(String, (Vec<Param>, Expr))>,
+    arities: Vec<(String, usize)>,
 }
 
 fn lower_binop(op: BinOp) -> PyBinOp {
