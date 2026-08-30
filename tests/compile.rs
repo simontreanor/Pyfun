@@ -7296,3 +7296,306 @@ fn e2e_a_closure_escaping_an_earlier_arm_forces_the_later_capture_to_rename() {
     assert!(py.contains("_why = b._0"), "{py}");
     run_and_check(src, &[("r", "11")]);
 }
+
+// ---------- root-level `let`s that shadow an enclosing-scope name (issue #99) ----------
+
+#[test]
+fn e2e_a_root_let_shadowing_an_enclosing_name_read_earlier_is_renamed() {
+    // The issue's program: Python's `x = 2` makes `x` local to the whole `def g`,
+    // so the earlier `y = x + 1` raises UnboundLocalError.
+    let src = "
+        let f x =
+          let g o =
+            let y = x + 1
+            let x = 2
+            x + y + o
+          g 10
+        let r = f 5
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        y = x + 1\n        _x = 2\n"), "{py}");
+    assert!(py.contains("return _x + y + o"), "{py}");
+    run_and_check(src, &[("r", "18")]);
+}
+
+#[test]
+fn e2e_a_root_let_shadowing_a_module_binding_read_earlier_is_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          let m = n + 1
+          let n = 2
+          m + n + u
+        let r = f 10
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    m = n + 1\n    _n = 2\n"), "{py}");
+    run_and_check(src, &[("r", "18")]);
+}
+
+#[test]
+fn e2e_a_root_let_reading_the_module_binding_it_shadows_is_renamed() {
+    // `n = n + 1` at the root of a def reads a local that is not yet assigned.
+    let src = "
+        let n = 5
+        let f u =
+          let n = n + 1
+          n + u
+        let r = f 10
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    _n = n + 1\n    return _n + u"), "{py}");
+    run_and_check(src, &[("r", "16")]);
+}
+
+#[test]
+fn e2e_a_closure_made_before_a_root_let_reads_the_enclosing_binding() {
+    // The nested def reads the enclosing `x`; without the rename it would read
+    // `g`'s own `x`, assigned only after the def is called.
+    let src = "
+        let f x =
+          let g o =
+            let peek u = x + u
+            let before = peek 0
+            let x = 100
+            before + x + o
+          g 1
+        let r = f 5
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = 100"), "{py}");
+    assert!(py.contains("return x + u"), "{py}");
+    run_and_check(src, &[("r", "106")]);
+}
+
+#[test]
+fn a_root_let_rebinding_a_parameter_is_not_renamed() {
+    // Rebinding a name of the same frame in sequence is what Python does too.
+    let src = "
+        let f x =
+          let x = x + 1
+          x * 2
+        let r = f 3
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    x = x + 1\n    return x * 2"), "{py}");
+    assert!(!py.contains("_x"), "{py}");
+    run_and_check(src, &[("r", "8")]);
+}
+
+#[test]
+fn a_root_let_referenced_only_after_it_is_not_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          let n = 2
+          n + u
+        let g u =
+          let k = 1
+          k + u
+        let r = f 10 + g 1
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("    n = 2\n    return n + u"), "{py}");
+    assert!(py.contains("    k = 1\n    return k + u"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "14")]);
+}
+
+#[test]
+fn a_top_level_let_is_never_renamed() {
+    // Module-level bindings are globals; a later top-level `let` of the same name
+    // is a plain reassignment.
+    let src = "
+        let n = 5
+        let m = n + 1
+        let n = 7
+        let r = n + m
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("n = 5\nm = n + 1\nn = 7\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    run_and_check(src, &[("r", "13")]);
+}
+
+#[test]
+fn e2e_a_root_let_mut_shadowing_an_enclosing_name_declares_the_fresh_name() {
+    // The inner `x` is a renamed root-level mut; the closure that assigns it must
+    // declare `nonlocal _x`, and the earlier read still means the parameter.
+    let src = "
+        let f x =
+          let g o =
+            let before = x
+            let mut x = 0
+            let bump u = x <- x + u
+            bump 5
+            bump 6
+            before + x + o
+          g 1
+        let r = f 100
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("nonlocal _x"), "{py}");
+    assert!(py.contains("_x = _x + u"), "{py}");
+    assert!(py.contains("before = x\n"), "{py}");
+    run_and_check(src, &[("r", "112")]);
+}
+
+#[test]
+fn e2e_a_destructuring_root_let_renames_only_the_colliding_name() {
+    let src = "
+        let f a =
+          let g o =
+            let before = a
+            let (a, b) = (10, 20)
+            before + a + b + o
+          g 1
+        let r = f 100
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_a, b = (10, 20)"), "{py}");
+    assert!(!py.contains("_b"), "{py}");
+    run_and_check(src, &[("r", "131")]);
+}
+
+// A computation expression's body is its own def, so its `let`/`let!` targets are
+// root-level binders of that frame and take the same rule.
+
+#[test]
+fn e2e_a_ce_bind_shadowing_a_module_binding_read_earlier_is_renamed() {
+    // `m = n + 1` reads the module `n`; the later `n = _pf_t0._0` would make `n`
+    // local to the whole def and the read would raise UnboundLocalError.
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let m = n + 1
+            let! n = Some 2
+            return n + m
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        m = n + 1\n"), "{py}");
+    assert!(py.contains("_n = _pf_t0._0"), "{py}");
+    assert!(py.contains("return Some(_n + m)"), "{py}");
+    run_and_check(src, &[("r", "Some(8)")]);
+}
+
+#[test]
+fn e2e_a_result_bind_shadowing_an_outer_name_keeps_its_failure_return() {
+    let src = "
+        let n = 5
+        let f u =
+          result {
+            let m = n + 1
+            let! n = if u > 0 then Ok 2 else Error \"no\"
+            return n + m
+          }
+        let a = f 1
+        let b = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n = _pf_t0._0"), "{py}");
+    assert!(py.contains("return Ok(_n + m)"), "{py}");
+    // The failure branch still forwards the subject untouched.
+    assert!(
+        py.contains("        else:\n            return _pf_t0\n"),
+        "{py}"
+    );
+    run_and_check(src, &[("a", "Ok(8)"), ("b", "Error('no')")]);
+}
+
+#[test]
+fn e2e_an_async_bind_shadowing_an_outer_name_is_renamed() {
+    let Some(python) = python_cmd() else { return };
+    let src = "
+        let n = 5
+        let f u =
+          async {
+            let m = n + 1
+            let! n = async { return 2 }
+            return n + m
+          }
+        let r = f 0
+        ";
+    let mut program = pyfun::compile(src).unwrap();
+    assert!(program.contains("_n = await "), "{program}");
+    assert!(program.contains("return _n + m"), "{program}");
+    program.push_str("\nimport asyncio\nprint(asyncio.run(r))\n");
+    assert_eq!(run_python(&python, &program).trim(), "8");
+}
+
+#[test]
+fn e2e_a_seq_let_shadowing_an_outer_name_is_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          seq {
+            let m = n + 1
+            let n = 2
+            yield n + m
+          }
+        let r = f 0 |> Seq.toList
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        m = n + 1\n        _n = 2\n"), "{py}");
+    run_and_check(src, &[("r", "[8]")]);
+}
+
+#[test]
+fn a_ce_bind_read_only_after_it_is_not_renamed() {
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let! n = Some 2
+            let k = 1
+            return n + k
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("            n = _pf_t0._0\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "Some(3)")]);
+}
+
+#[test]
+fn a_ce_bind_rebinding_an_earlier_ce_binder_is_not_renamed() {
+    // Both `n`s are the CE's own; rebinding in sequence is what Python does too.
+    let src = "
+        let f u =
+          option {
+            let n = 1
+            let! n = Some (n + 1)
+            return n
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("        n = 1\n"), "{py}");
+    assert!(py.contains("            n = _pf_t0._0\n"), "{py}");
+    assert!(!py.contains("_n"), "{py}");
+    run_and_check(src, &[("r", "Some(2)")]);
+}
+
+#[test]
+fn e2e_a_destructuring_ce_bind_renames_only_the_colliding_name() {
+    let src = "
+        let n = 5
+        let f u =
+          option {
+            let m = n + 1
+            let! (n, k) = Some (2, 3)
+            return n + k + m
+          }
+        let r = f 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n, k = _pf_t0._0"), "{py}");
+    assert!(!py.contains("_k"), "{py}");
+    run_and_check(src, &[("r", "Some(11)")]);
+}

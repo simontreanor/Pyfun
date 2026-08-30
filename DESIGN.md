@@ -210,9 +210,16 @@ sibling arms of one match or arms of two matches in sequence, so the common `cas
 Error why: …` keeps its names however many matches in a function spell it. The one exception is a
 reference inside a nested closure, which always counts, since a closure can outlive its arm: a
 lambda made in one arm that reads `why` forces a later arm capturing `why` to rename. A `let` at
-the root of a function body is never renamed, since rebinding a name in sequence is exactly what
-Python does too; a nested `let x = x + 1` reads the outer `x` in its value and binds the fresh
-name, as `_x = x + 1`. A renamed nested function is defined under its fresh name and recurses under
+the root of a function body has its own rule, because Python makes a name local to the whole `def`
+the moment anything in the `def` assigns it: such a `let` is renamed only when some read of the
+name in that function means a binding *outside* it (an enclosing function's, a module-level one, a
+builtin) and sits before the `let` or in its own value or in a closure made before it, where Python
+would raise `UnboundLocalError` or read the wrong slot. Rebinding a parameter or an earlier `let` of
+the same function in sequence is exactly what Python does too, so that is emitted as itself, and a
+top-level `let` is a global and never renames. A computation expression's body is its own Python
+function, and its `let`/`let!` targets are root-level binders of it under the same rule: a
+`let! n = …` in an `option { }` that had already read an outer `n` is emitted as `_n`. A nested `let x = x + 1` reads the outer `x` in its
+value and binds the fresh name, as `_x = x + 1`. A renamed nested function is defined under its fresh name and recurses under
 it, and a renamed `let mut` is assigned under it, including from a closure's `nonlocal`. Mechanics
 in `INTERNALS.md`.
 

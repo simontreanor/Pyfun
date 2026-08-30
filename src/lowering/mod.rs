@@ -1013,16 +1013,61 @@ impl Lowerer {
     /// destructuring target. The native CE lowerings emit statements, so a
     /// destructuring binder costs nothing here beyond the unpacking itself.
     fn bind_ce_target(&mut self, target: &Pattern, value: PyExpr, out: &mut Vec<PyStmt>) {
-        // The binder rebinds its names for the rest of the CE: a same-named local
-        // function no longer means that function (nor carries its arity).
+        let targets = self.enter_ce_binder(target);
+        self.bind_ce_target_as(target, value, out, &targets);
+    }
+
+    /// Register a CE binder for the rest of the CE body, returning the emitted
+    /// spelling of any renamed name. The binder rebinds its names: a same-named
+    /// local function no longer means that function (nor carries its arity), and
+    /// an outer rename of the name is displaced. A CE binder is a root-level
+    /// binder of the CE's own def, so a name the body had already read from
+    /// outside the CE would become local to the whole def and that read would
+    /// fail: the root-level rule (issue #99) renames it, and the rename is
+    /// installed here, before whatever follows the binder is lowered (its value
+    /// is already lowered by then, so its references mean the outer binding).
+    fn enter_ce_binder(&mut self, target: &Pattern) -> HashMap<String, String> {
         for name in target.bound_names() {
             self.local_fn_defs.remove(&name);
             self.local_arities.remove(&name);
             self.renames.remove(&name);
         }
+        let mut targets = HashMap::new();
+        for name in target.bound_names() {
+            if targets.contains_key(&name) {
+                continue;
+            }
+            let Some(frame) = self.frames.last() else {
+                break;
+            };
+            if !frame.must_rename_root(&name) {
+                continue;
+            }
+            let fresh = self.fresh_capture_name(&name);
+            self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+            targets.insert(name, fresh);
+        }
+        for (n, f) in &targets {
+            self.renames.insert(n.clone(), f.clone());
+        }
+        targets
+    }
+
+    /// Emit the assignment for a CE binder registered by
+    /// [`Lowerer::enter_ce_binder`], spelling renamed names as `targets` says.
+    fn bind_ce_target_as(
+        &mut self,
+        target: &Pattern,
+        value: PyExpr,
+        out: &mut Vec<PyStmt>,
+        targets: &HashMap<String, String>,
+    ) {
         match target {
             Pattern::Var { name, .. } => out.push(PyStmt::Assign {
-                target: py_value_name(name),
+                target: targets
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| py_value_name(name)),
                 value,
             }),
             Pattern::Wildcard => out.push(PyStmt::Assign {
@@ -1031,7 +1076,7 @@ impl Lowerer {
             }),
             target => {
                 let target = target.clone();
-                self.unpack_binding(&target, None, value, out, &HashMap::new());
+                self.unpack_binding(&target, None, value, out, targets);
             }
         }
     }
@@ -1327,21 +1372,26 @@ impl Lowerer {
         nested: bool,
     ) -> Result<(), LowerError> {
         let mut targets = HashMap::new();
-        if nested {
-            for name in b.bound_names() {
-                if targets.contains_key(&name) {
-                    continue;
-                }
-                let Some(frame) = self.frames.last() else {
-                    break;
-                };
-                if !frame.must_rename(&name, captures::binder_key(b)) {
-                    continue;
-                }
-                let fresh = self.fresh_capture_name(&name);
-                self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
-                targets.insert(name, fresh);
+        for name in b.bound_names() {
+            if targets.contains_key(&name) {
+                continue;
             }
+            let Some(frame) = self.frames.last() else {
+                break;
+            };
+            // A nested `let` renames under the liveness rule; a root-level one
+            // only when a read in the frame means a binding outside it (#99).
+            let rename = if nested {
+                frame.must_rename(&name, captures::binder_key(b))
+            } else {
+                frame.must_rename_root(&name)
+            };
+            if !rename {
+                continue;
+            }
+            let fresh = self.fresh_capture_name(&name);
+            self.frames.last_mut().unwrap().fresh.insert(fresh.clone());
+            targets.insert(name, fresh);
         }
         self.enter_block_let(b);
         if !b.params.is_empty() {
@@ -1471,7 +1521,8 @@ impl Lowerer {
         let shadowed = self.shadow_local_fns(params);
         self.fn_local_stack.push(bound);
         // The body is its own Python frame for the capture-rename census.
-        self.frames.push(captures::Frame::of_body(body));
+        self.frames
+            .push(captures::Frame::of_body(prelude_params, body));
         let lowered = self.lower_return(body, inner);
         self.frames.pop();
         self.fn_local_stack.pop();
@@ -4105,8 +4156,11 @@ impl Lowerer {
                 let (mut s, v) = self.lower_value(value, locals)?;
                 let mut inner_locals = locals.clone();
                 inner_locals.extend(target.bound_names());
+                // The binder registers (and installs any rename) before the rest
+                // lowers, since the rest is what reads it.
+                let targets = self.enter_ce_binder(target);
                 let rest_stmts = self.lower_short_circuit_items(rest, &inner_locals, sc)?;
-                s.extend(self.short_circuit_bind(v, Some(target), rest_stmts, sc));
+                s.extend(self.short_circuit_bind(v, Some((target, &targets)), rest_stmts, sc));
                 Ok(s)
             }
             CeItem::DoBang(e) => {
@@ -4125,11 +4179,12 @@ impl Lowerer {
     /// The failure is forwarded as the value it already is: an `Error e` rebuilt
     /// as `Error(e)` would be structurally equal to `r`, and Pyfun exposes no
     /// object identity to tell them apart. A `do!` (`target == None`) binds
-    /// nothing.
+    /// nothing; a `let!` passes its target with the spelling
+    /// [`Lowerer::enter_ce_binder`] chose for it.
     fn short_circuit_bind(
         &mut self,
         subject: PyExpr,
-        target: Option<&Pattern>,
+        target: Option<(&Pattern, &HashMap<String, String>)>,
         rest: Vec<PyStmt>,
         sc: ShortCircuit,
     ) -> Vec<PyStmt> {
@@ -4146,12 +4201,12 @@ impl Lowerer {
             }
         };
         let mut body = Vec::new();
-        if let Some(target) = target {
+        if let Some((target, targets)) = target {
             let payload = PyExpr::Attribute {
                 value: Box::new(PyExpr::Name(subject.clone())),
                 attr: "_0".to_string(),
             };
-            self.bind_ce_target(target, payload, &mut body);
+            self.bind_ce_target_as(target, payload, &mut body, targets);
         }
         body.extend(rest);
         out.push(PyStmt::If {
