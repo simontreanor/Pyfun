@@ -47,6 +47,94 @@ impl Drop for Project {
 const GEOMETRY: (&str, &str) = ("geometry.pyfun", "let area w h = w * h");
 
 #[test]
+fn bundle_writes_a_page_a_loader_the_modules_and_the_assets() {
+    // #111: a project entry, one asset and a page fragment become a static site.
+    let project = Project::new(
+        "bundle",
+        &[
+            ("main.pyfun", "import Geometry\nprint (Geometry.area 2 3)"),
+            GEOMETRY,
+            ("words.txt", "alpha\nbeta\n"),
+            ("page.html", "<h1>Area</h1>"),
+        ],
+    );
+    let site = project.path("site");
+    let out = Command::new(pyfun_bin())
+        .args(["bundle"])
+        .arg(project.path("main.pyfun"))
+        .arg("-o")
+        .arg(&site)
+        .arg("--asset")
+        .arg(project.path("words.txt"))
+        .arg("--page")
+        .arg(project.path("page.html"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for name in [
+        "index.html",
+        "pyfun-bundle.js",
+        "main.py",
+        "geometry.py",
+        "words.txt",
+    ] {
+        assert!(site.join(name).is_file(), "missing {name}");
+    }
+    let index = fs::read_to_string(site.join("index.html")).unwrap();
+    assert!(index.contains("<h1>Area</h1>"), "{index}");
+    assert!(index.contains("pyfun-bundle.js"), "{index}");
+    assert!(index.contains("<title>main</title>"), "{index}");
+    let loader = fs::read_to_string(site.join("pyfun-bundle.js")).unwrap();
+    assert!(
+        loader.contains("const FILES = [\"geometry.py\", \"main.py\"];"),
+        "{loader}"
+    );
+    assert!(
+        loader.contains("const ASSETS = [\"words.txt\"];"),
+        "{loader}"
+    );
+    assert!(loader.contains("const ENTRY = \"main.py\";"), "{loader}");
+    assert!(loader.contains("cdn.jsdelivr.net/pyodide/"), "{loader}");
+    // A single file bundles as `main.py` with no page fragment.
+    let single = Project::new("bundle_single", &[("hello.pyfun", "print 42")]);
+    let site = single.path("site");
+    let out = Command::new(pyfun_bin())
+        .args(["bundle"])
+        .arg(single.path("hello.pyfun"))
+        .arg("-o")
+        .arg(&site)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        fs::read_to_string(site.join("main.py"))
+            .unwrap()
+            .contains("print(42)")
+    );
+    let loader = fs::read_to_string(site.join("pyfun-bundle.js")).unwrap();
+    assert!(loader.contains("const FILES = [\"main.py\"];"), "{loader}");
+    // A type error stops the bundle before anything is written.
+    let bad = Project::new("bundle_bad", &[("bad.pyfun", "let x = 1 + \"s\"")]);
+    let out = Command::new(pyfun_bin())
+        .args(["bundle"])
+        .arg(bad.path("bad.pyfun"))
+        .arg("-o")
+        .arg(bad.path("site"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(!bad.path("site").exists());
+}
+
+#[test]
 fn version_flag_prints_the_crate_version() {
     // The first command a cautious newcomer runs; all three spellings work.
     for flag in ["--version", "-V", "version"] {

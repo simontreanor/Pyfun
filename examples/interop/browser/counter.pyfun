@@ -1,0 +1,26 @@
+# A page that takes input: a counter with a button, running on Pyodide.
+#
+#   pyfun bundle examples/interop/browser/counter.pyfun -o site --page examples/interop/browser/counter.html
+#   python -m http.server -d site     # then open http://localhost:8000/
+#
+# `Dom` is the typed façade in dom.pyfun; this program is what a consumer of it
+# looks like. The state is a top-level `let mut` that the click handler
+# reassigns (a `global` in the emitted Python); the handler is an ordinary Pyfun
+# function whose one parameter is the event, handed to the page through
+# `Dom.proxy`. No callback convention to remember: Python calls `bump(event)` with
+# one argument, and that is the one parameter `bump` has.
+
+import Dom
+
+let mut count = 0
+
+let render _ =
+  Dom.setText (Dom.byId "count") f"{count}"
+
+let bump _ =
+  count <- count + 1
+  render ()
+
+Dom.on (Dom.byId "plus") "click" (Dom.proxy bump)
+render ()
+print "counter ready"
