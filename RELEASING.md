@@ -41,6 +41,12 @@ that is fine or a broken install. Version numbers are cheap; that doubt is not.
 4. Verify: `pip install "pyfun-lang[jupyter]==X.Y.Z"` in a clean venv, then
    `pip install -U "pyfun-lang[jupyter]"` in the day-to-day Python env so the
    Jupyter kernel is not stranded on the previous compiler.
+5. Record it: update the *Distribution* ledger in `ROADMAP.md` with each
+   registry's verified version and date (check the APIs, not the previous
+   line), in one follow-up PR. It cannot ride the release PR because the
+   ledger records what the tag published, which does not exist until after it.
+   One ledger PR per release; anything a registry does later (moderation
+   clearing, a manual upload) waits for the next substantive change.
 
 **Follows automatically — no action:** Mason registry (Renovate bumps the pinned
 PyPI version), MELPA (builds `pyfun-mode.el` from `main` HEAD), nvim-lspconfig
