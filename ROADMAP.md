@@ -328,34 +328,29 @@ play comes first; the browser target is last because it depends on the async dec
     function, with the callback's effects on the parameter arrow (`DESIGN.md` §6). Still to check:
     a partially applied function (`serve (handler cfg)`) crossing the same boundary.
 
-17. **An `Async` module, `Async.catch`, and structured concurrency** (#106, #108, #109, M; the
-    module and `catch` **shipped 2026-08-30** in the PR carrying this entry, the scope is what
-    remains). `Async` was a type with `async { }` and nothing else: no `sleep`, `timeout`,
-    `toThread`, `parallel`, `race`, and no way to catch an exception at the await (`try e` catches
-    at call time, so it wraps the coroutine and the `TimeoutError` or `ConnectionResetError` escapes
-    at the `let!`). Now `Async.sleep`/`timeout`/`toThread`/`parallel`/`race`/`catch` are prelude
-    members (`DESIGN.md` §6, "Async combinators"): `sleep` is `asyncio.sleep` itself, the rest are
-    emitted `_pf_async_*` helpers because the extern syntax has no spread for `gather(*xs)`, `wait`
-    returns task sets, and `timeout`/`catch` build `Option`/`Result` values; `catch` builds the same
-    `Exception` record `try` does and lets `CancelledError` through. Structured concurrency ships as
-    a library next, `Task.scope : (Scope -> Async a) -> Async a` over `asyncio.TaskGroup` and
-    `Task.start : Scope -> Async unit -> unit`, so a start outside a scope is a missing argument
-    (needs an `async with` node in the Python IR). A `task { }` spelling is wanted; **decided:** try it
-    as a *user builder* over those helpers first (the §8.1 mechanism, no fifth built-in) and, if the
-    result is ugly, amend the §8.1 rule in `DESIGN.md` with the argument written down rather than
-    admit `async with` as "a control-flow form the rule did not count" (by that reading `with`, `for`
-    and `try` qualify too and the set reopens). Open inside this item: whether a scope types as `Async
-    (Result a (List Exception))` so an `ExceptionGroup` is a value. **Deliberately absent:**
-    `Async.start` and `Async.cancel` (a free start is the leak). The `spawn` effect label that only a
-    scope discharges, Pyfun's first effect handler, is an aspiration and goes in Deferred. No new
-    Python floor: `TaskGroup` and `asyncio.timeout` are 3.11, Pyfun targets 3.12.
+17. ~~**An `Async` module, `Async.catch`, and structured concurrency**~~ **CLOSED 2026-08-30**
+    (#106, #108, #109; the module and `catch` in #113, the scope in the PR carrying this entry).
+    `Async` was a type with `async { }` and nothing else. Now `Async.sleep`/`timeout`/`toThread`/
+    `parallel`/`race`/`catch` are prelude members (`DESIGN.md` §6, "Async combinators"), and
+    structured concurrency is the library form: `Task.scope : (Scope ->{e} Async a) ->{e} Async a`
+    over `asyncio.TaskGroup` (a new `PyStmt::AsyncWith` IR node) and `Task.start : Scope -> Async
+    unit ->{io} unit`, so a start outside a scope is a missing argument at compile time. **Decided:**
+    no `task { }` spelling. As a user builder it cannot open the scope around the whole block (the
+    protocol has no `run` member), and `Task.scope (fun scope -> async { … })` reads well enough that
+    a `run` member waits for demand; the §8.1 rule stays at four built-ins untouched. A failed child's
+    `ExceptionGroup` reaches `Async.catch` as one `Exception` (kind `ExceptionGroup`); typing the
+    scope as `Async (Result a (List Exception))` stays open until a program needs the members.
+    **Deliberately absent:** `Async.start` and `Async.cancel`. The `spawn` effect label that only a
+    scope discharges, Pyfun's first effect handler, is in Deferred. A trailing unit expression now
+    ends a `result`/`option`/`async` block (F#'s implicit `Zero`), which the fire-and-forget
+    producer in the cookbook example needed.
 
-18. **A mailbox `Agent`** (#108, M, decided). F#'s `MailboxProcessor` types the game exactly (a
-    keyboard task and a socket task post to one loop that is a `match` over a `Msg` ADT). **Decided:**
-    it lives in `examples/interop/` first, built from `asyncio.Queue` externs and the `Async` module,
-    with the game as its consumer; it is promoted to the prelude once its signature stops moving (#109
-    already says `Agent.start` may need to take a scope, which is the kind of change a prelude module
-    must not make after the fact).
+18. ~~**A mailbox `Agent`**~~ **CLOSED 2026-08-30** (#108, in the PR carrying this entry) as a
+    cookbook example, `examples/interop/structured_concurrency.pyfun`: an `asyncio.Queue` behind two
+    externs (`post` = `.put_nowait`, `take` = `.get()` returning `Async a`) and a recursive `async`
+    loop that is a `match` over a `Msg` ADT, started with `Task.start` inside a `Task.scope` so it
+    dies with the session. It is promoted to the prelude once its signature stops moving; the game
+    is its first consumer.
 
 19. **`Encode` to mirror `Decode`, with derived codecs** (#110, M–L, shape decided). A program that
     speaks to itself over a wire writes values out with f-strings and reads them back with

@@ -118,6 +118,13 @@ pub enum PyStmt {
         iter: PyExpr,
         body: Vec<PyStmt>,
     },
+    /// `async with context as binding:` — a scoped resource inside an `async def`
+    /// (the `asyncio.TaskGroup` behind `Task.scope`).
+    AsyncWith {
+        context: PyExpr,
+        binding: String,
+        body: Vec<PyStmt>,
+    },
     /// `return value`
     Return(PyExpr),
     /// A bare expression evaluated for its (side) effect.
@@ -471,6 +478,18 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         }
         PyStmt::WhileTrue { body } => {
             line(out, depth, "while True:");
+            emit_block(body, depth + 1, out);
+        }
+        PyStmt::AsyncWith {
+            context,
+            binding,
+            body,
+        } => {
+            line(
+                out,
+                depth,
+                &format!("async with {} as {binding}:", expr(context)),
+            );
             emit_block(body, depth + 1, out);
         }
         PyStmt::Continue => line(out, depth, "continue"),

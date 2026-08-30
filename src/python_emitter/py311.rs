@@ -36,6 +36,12 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
                 rewrite_stmt(s);
             }
         }
+        PyStmt::AsyncWith { context, body, .. } => {
+            rewrite_expr(context);
+            for s in body {
+                rewrite_stmt(s);
+            }
+        }
         PyStmt::Assign { value, .. } | PyStmt::UnpackAssign { value, .. } => rewrite_expr(value),
         PyStmt::SubscriptAssign { obj, index, value } => {
             rewrite_expr(obj);

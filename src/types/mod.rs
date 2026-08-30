@@ -351,7 +351,7 @@ const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 /// and **`List`** (lexicographic, handled explicitly in [`Infer::require_ord_rec`],
 /// matching the Python list it lowers to). `Set`/`Map` have no natural order, and
 /// `Async`/`Seq`/`Exception` aren't comparable.
-const RESERVED_UNORDERED: [&str; 5] = ["Set", "Map", "Async", "Seq", "Exception"];
+const RESERVED_UNORDERED: [&str; 6] = ["Set", "Map", "Async", "Seq", "Exception", "Scope"];
 
 /// A depth cap on the structural-ordering check, so a pathological *non-regular*
 /// recursive type (whose expansion never repeats a `(name, args)` key) can't loop
@@ -649,6 +649,13 @@ pub const ASYNC_PRELUDE: &[(&str, usize)] = &[
     ("catch", 1),
 ];
 
+/// The `Task` module (`DESIGN.md` §6, structured concurrency): every task is owned
+/// by a scope, the scope does not exit until its children finish, one failure
+/// cancels the siblings, and leaving the scope cancels everything. `scope` opens
+/// one (`asyncio.TaskGroup`) around an async body that receives the `Scope`;
+/// `start` needs that `Scope`, so a task cannot be started outside one.
+pub const TASK_PRELUDE: &[(&str, usize)] = &[("scope", 1), ("start", 2)];
+
 /// The `Decode` module (`DESIGN.md` §6): Elm-style JSON decoder combinators over the
 /// opaque built-in `Decoder a`. A `Decoder a` is a pure, total recipe that turns
 /// untrusted JSON into your own typed data — "parse, don't validate" for the one
@@ -686,7 +693,7 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
 /// as a record-field access. Casing disambiguates: `Upper.x` is a module member,
 /// `lower.x` is record-field access.
 pub const MODULES: &[&str] = &[
-    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode", "Async",
+    "List", "Set", "Map", "Option", "Result", "Seq", "String", "Format", "Decode", "Async", "Task",
 ];
 
 /// Pairs each module with its members (`(member, arity)`), the single source of
@@ -722,6 +729,14 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     (
         "Async.race",
         "Await the first value to finish and cancel the rest. `asyncio.wait(FIRST_COMPLETED)`.",
+    ),
+    (
+        "Task.scope",
+        "Run an async body inside a scope: every task started in it is joined or cancelled when the body ends, and one failure cancels the rest. `asyncio.TaskGroup`.",
+    ),
+    (
+        "Task.start",
+        "Start a task inside a scope; it is owned by that scope. Performs `io`.",
     ),
     (
         "Async.catch",
@@ -1494,6 +1509,7 @@ pub fn prelude_signatures() -> &'static HashMap<String, String> {
         seed_format_prelude(&mut env);
         seed_decode_prelude(&mut env);
         seed_async_prelude(&mut env);
+        seed_task_prelude(&mut env);
         seed_option_prelude(&mut env);
         seed_result_prelude(&mut env);
         seed_seq_prelude(&mut env);
@@ -1514,6 +1530,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Format", FORMAT_PRELUDE),
     ("Decode", DECODE_PRELUDE),
     ("Async", ASYNC_PRELUDE),
+    ("Task", TASK_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -2810,6 +2827,7 @@ fn build_decls(
     seed_format_prelude(&mut env);
     seed_decode_prelude(&mut env);
     seed_async_prelude(&mut env);
+    seed_task_prelude(&mut env);
     seed_option_prelude(&mut env);
     seed_result_prelude(&mut env);
     seed_seq_prelude(&mut env);
@@ -3246,6 +3264,41 @@ fn seed_async_prelude(env: &mut Env) {
     put(
         "catch",
         scheme(vec![0], vec![], pf(asy(a()), asy(result(a(), exception())))),
+    );
+}
+
+/// Seed the `Task` module ([`TASK_PRELUDE`]). `scope` performs its body's
+/// effect when the value is built; `start` performs `io`.
+fn seed_task_prelude(env: &mut Env) {
+    let asy = |t: Ty| Ty::Con("Async".to_string(), vec![t]);
+    let scope = || Ty::Con("Scope".to_string(), vec![]);
+    let pf = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
+    let io_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::label(EffLabel::Io));
+    let a = || Ty::Var(0);
+    let e = 0u32;
+    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
+    let scheme = |vars: Vec<u32>, eff_vars: Vec<u32>, ty: Ty| Scheme {
+        vars,
+        uvars: vec![],
+        num_vars: vec![],
+        ord_vars: vec![],
+        eff_vars,
+        mutable: false,
+        ty,
+    };
+    // Task.scope : (Scope ->{e} Async a) ->{e} Async a
+    env.insert(
+        "Task.scope".to_string(),
+        scheme(
+            vec![0],
+            vec![e],
+            arrow_e(arrow_e(scope(), asy(a())), asy(a())),
+        ),
+    );
+    // Task.start : Scope -> Async unit ->{io} unit
+    env.insert(
+        "Task.start".to_string(),
+        scheme(vec![], vec![], pf(scope(), io_fn(asy(Ty::Unit), Ty::Unit))),
     );
 }
 
@@ -5773,6 +5826,10 @@ fn seed_seq_prelude(env: &mut Env) {
 /// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
 fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     decls.type_arity.insert("Async".to_string(), 1);
+    // `Scope` — the capability a `Task.scope` body receives and `Task.start`
+    // needs (`DESIGN.md` §6, structured concurrency): an opaque handle over
+    // the `asyncio.TaskGroup`, so a start outside a scope is a missing argument.
+    decls.type_arity.insert("Scope".to_string(), 0);
     decls.type_arity.insert("Seq".to_string(), 1);
     decls.type_arity.insert("Result".to_string(), 2);
     // `List a` — the eager collection (lowers to a Python list). It has no
@@ -5791,6 +5848,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     // purely from `Decode.*`. Reserved, so a user `type Decoder` is an error.
     decls.type_arity.insert("Decoder".to_string(), 1);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
+    decls.type_ctors.insert("Scope".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(
         "Result".to_string(),
@@ -8142,7 +8200,17 @@ impl Infer {
                     target,
                     target_span,
                     value,
-                } => self.bind_ce_let(target, *target_span, value, env)?,
+                } => {
+                    self.bind_ce_let(target, *target_span, value, env)?;
+                    // A trailing unit expression (parsed as `let _ = e`) ends the
+                    // block with `()`, as in F#: a fire-and-forget block whose last
+                    // step is a plain call (`post inbox Quit`) needs no `return ()`.
+                    if is_last && !in_loop && matches!(target, Pattern::Wildcard) {
+                        let t = self.infer_expr(value, env)?;
+                        self.unify(&Ty::Unit, &t, value.span())?;
+                        result_val = Some(Ty::Unit);
+                    }
+                }
                 CeItem::DoBang(e) => {
                     let t = self.infer_expr(e, env)?;
                     let inner = self.fresh();
