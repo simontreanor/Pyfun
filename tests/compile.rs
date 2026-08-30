@@ -3706,6 +3706,97 @@ fn an_ordinary_function_says_nothing() {
 }
 
 #[test]
+fn an_async_self_tail_call_becomes_a_loop_in_the_coroutine() {
+    // §5.4's async form: the awaited tail call rebinds the outer parameters
+    // through a `nonlocal` and loops inside the one coroutine.
+    let py = pyfun::compile(
+        "let finished acc = async { return acc }\n\
+         let loop n acc =\n  async {\n    return! (if n == 0 then finished acc else loop (n - 1) (acc + n))\n  }",
+    )
+    .unwrap();
+    assert!(py.contains("nonlocal n, acc"), "{py}");
+    assert!(py.contains("while True:"), "{py}");
+    assert!(py.contains("n, acc = (n - 1, acc + n)"), "{py}");
+    assert!(!py.contains("return await loop("), "{py}");
+}
+
+#[test]
+fn a_return_bang_match_returns_per_arm() {
+    // The tail call is visible only if `return! (match …)` returns per arm
+    // rather than assigning a temp and awaiting it once.
+    let py = pyfun::compile(
+        "type Msg = Go int | Stop\n\
+         let finished n = async { return n }\n\
+         let loop n =\n  async {\n    return! (match n:\n      case Go k: loop Stop\n      case Stop: finished 0)\n  }",
+    )
+    .unwrap();
+    assert!(!py.contains("_pf_t0"), "{py}");
+    assert!(py.contains("return await finished(0)"), "{py}");
+}
+
+#[test]
+fn a_rejected_async_self_tail_call_says_why() {
+    // The same closure-capture guard, on the wrapper path, with the same note.
+    let (py, notes) = pyfun::compile_collecting(
+        "let finished acc = async { return acc }\n\
+         let collect n acc =\n  async {\n    return! (if n == 0 then finished acc else collect (n - 1) (List.concat acc [fun k -> n]))\n  }",
+        pyfun::python_emitter::PyTarget::default(),
+    )
+    .unwrap();
+    assert!(py.contains("return await collect("), "{py}");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains("`collect` calls itself in tail position"),
+        "{notes:?}"
+    );
+    assert!(notes[0].contains("captures `n`"), "{notes:?}");
+}
+
+#[test]
+fn the_cookbook_agent_loops_instead_of_recursing() {
+    // The finding that forced the async form: the agent must outlive the stack.
+    let path = format!(
+        "{}/examples/interop/structured_concurrency.pyfun",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let source = std::fs::read_to_string(&path).unwrap();
+    let py = pyfun::compile(&source).unwrap();
+    assert!(py.contains("nonlocal inbox, count"), "{py}");
+    assert!(py.contains("while True:"), "{py}");
+    assert!(!py.contains("return await agentLoop("), "{py}");
+}
+
+#[test]
+fn e2e_an_async_self_tail_call_recurses_past_the_stack_limit() {
+    // 100k awaited tail calls only complete inside the one coroutine.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let finished acc = async { return acc }\n\
+               let loop n acc =\n  async {\n    return! (if n == 0 then finished acc else loop (n - 1) (acc + n))\n  }\n\
+               print (runAsync (loop 100000 0))";
+    let program = pyfun::compile(src).unwrap();
+    assert_eq!(run_python(&python, &program).trim(), "5000050000");
+}
+
+#[test]
+fn e2e_an_empty_race_raises_the_named_error() {
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let main = async {\n  \
+                 let! r = Async.catch (Async.race [])\n  \
+                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"{e.errorKind}: {e.errorMessage}\"\n  \
+                 return ()\n}\n\
+               runAsync main";
+    let program = pyfun::compile(src).unwrap();
+    assert_eq!(
+        run_python(&python, &program).trim(),
+        "ValueError: Async.race needs at least one value"
+    );
+}
+
+#[test]
 fn e2e_a_self_tail_call_recurses_past_the_stack_limit() {
     // 50k frames is far past CPython's ~1000 limit: this only completes as a loop.
     run_and_check(

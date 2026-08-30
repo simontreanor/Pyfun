@@ -385,6 +385,27 @@ play comes first; the browser target is last because it depends on the async dec
     cookbook harness is a `js` module, so the example is compile-checked, not run, in the tests.
     Signalling for a peer-to-peer transport is the game's problem, not Pyfun's.
 
+### Feedback round (2026-08-30, the game agent reviews the nine)
+
+21. ~~**An async self tail call walked the stack**~~ **CLOSED 2026-08-30** (found by the game agent
+    in the cookbook's agent loop: `return! agentLoop inbox (count + 1)` awaited a fresh coroutine
+    per message on the same stack, so ~1,000 messages was a `RecursionError` — a clock posting
+    `Tick` every second died in under twenty minutes, and an agent is precisely the thing written
+    to live indefinitely). The §5.4 rewrite now has an async form: when a body is the
+    `def f(a): async def g(): …; return g()` wrapper, the awaited tail calls in `g` rebind the
+    outer parameters through a `nonlocal` and loop a `while True:` inside the one coroutine, under
+    the sync pass's preconditions (same rejection notes). To make the tail call visible, `return!`
+    of a `match`/`if` in an `async { }` block now returns per arm instead of assigning a temp and
+    awaiting it once. The cookbook agent is reworked to the loop-safe shape (a sync `heard` helper
+    computes the next state, so the recursive call stays direct); 100,000 messages complete in the
+    e2e test. Mutual recursion stays out of scope, as in the sync pass.
+
+22. ~~**`Async.race []` raised asyncio's error**~~ **CLOSED 2026-08-30** (same review): racing
+    nothing would wait forever, so the empty list now raises
+    `ValueError("Async.race needs at least one value")` at the await — the module's one partial
+    member, documented on hover and in `DESIGN.md` §6 — instead of `asyncio.wait`'s message about
+    an empty set. `Async.catch` reports it like any await-time failure.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named

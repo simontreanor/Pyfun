@@ -4583,14 +4583,13 @@ impl Lowerer {
                     body.push(PyStmt::Expr(PyExpr::Await(Box::new(v))));
                 }
                 CeItem::Return(e) => {
-                    let (mut s, v) = self.lower_value(e, locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Return(v));
+                    // Tail position: a `match`/`if` value returns per arm (the
+                    // same descent `lower_return` gives a sync function), so a
+                    // tail call is visible to the self-tail-call rewrite.
+                    body.extend(self.lower_return(e, locals)?);
                 }
                 CeItem::ReturnBang(e) => {
-                    let (mut s, v) = self.lower_value(e, locals)?;
-                    body.append(&mut s);
-                    body.push(PyStmt::Return(PyExpr::Await(Box::new(v))));
+                    body.extend(self.lower_async_bang_return(e, locals)?);
                 }
                 CeItem::For {
                     target,
@@ -4614,6 +4613,51 @@ impl Lowerer {
             }
         }
         Ok(())
+    }
+
+    /// `return! e` in an `async { }` block, in tail position: a `match` or `if`
+    /// returns `await <arm>` per arm rather than assigning a temp and awaiting it
+    /// once, so `return! (match msg: … case Tick: loop inbox n)` puts the self
+    /// tail call where the loop rewrite (`DESIGN.md` §5.4) can see it. Anything
+    /// else lowers as before: `return await <value>`.
+    fn lower_async_bang_return(
+        &mut self,
+        expr: &Expr,
+        locals: &HashSet<String>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        match &expr.kind {
+            ExprKind::If { cond, then, else_ } => {
+                let (mut stmts, test) = self.lower_value(cond, locals)?;
+                let body = self.lower_async_bang_return(then, locals)?;
+                let orelse = self.lower_async_bang_return(else_, locals)?;
+                stmts.push(PyStmt::If { test, body, orelse });
+                Ok(stmts)
+            }
+            ExprKind::Match { scrutinee, arms } if !self.match_uses_ap(arms) => {
+                let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
+                let mut cases = Vec::new();
+                for (i, arm) in arms.iter().enumerate() {
+                    let scope = self.enter_arm(arms, i, locals);
+                    let pattern = self.lower_pattern(&arm.pattern);
+                    let guard = self.lower_guard(&arm.guard, &scope.locals)?;
+                    let body = self.lower_async_bang_return(&arm.body, &scope.locals)?;
+                    self.exit_arm(scope);
+                    cases.push(PyCase {
+                        pattern,
+                        guard,
+                        body,
+                    });
+                }
+                seal_cases(arms, &mut cases);
+                stmts.push(PyStmt::Match { subject, cases });
+                Ok(stmts)
+            }
+            _ => {
+                let (mut stmts, value) = self.lower_value(expr, locals)?;
+                stmts.push(PyStmt::Return(PyExpr::Await(Box::new(value))));
+                Ok(stmts)
+            }
+        }
     }
 
     /// Apply currying policy (`DESIGN.md` §5) given the callee's known arity.
@@ -5795,10 +5839,22 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                 ))],
             ),
             // Async.race(xs): the first to finish wins and the rest are cancelled.
+            // Racing nothing would wait forever, so an empty list raises a clear
+            // error rather than asyncio's ValueError about an empty set.
             "_pf_async_race" => adef(
                 helper,
                 &["xs"],
                 vec![
+                    PyStmt::If {
+                        test: PyExpr::Not(Box::new(name("xs"))),
+                        body: vec![PyStmt::Raise(call(
+                            name("ValueError"),
+                            vec![PyExpr::Str(
+                                "Async.race needs at least one value".to_string(),
+                            )],
+                        ))],
+                        orelse: vec![],
+                    },
                     PyStmt::Assign {
                         target: "tasks".to_string(),
                         value: call(
