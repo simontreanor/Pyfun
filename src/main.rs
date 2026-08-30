@@ -24,6 +24,7 @@ use pyfun::project::{self, ProjectError};
 use pyfun::python_emitter::PyTarget;
 use pyfun::syntax::{Item, Module};
 
+mod bundle;
 mod kernel;
 mod repl;
 
@@ -64,6 +65,10 @@ fn main() -> ExitCode {
             Some(path) => parse_only(path),
             None => fail("`parse` needs a file path"),
         },
+        Some("bundle") => match bundle::parse_args(&args[1..]) {
+            Ok(parsed) => bundle::run(parsed),
+            Err(msg) => fail(&msg),
+        },
         Some("lsp") => lsp_server(),
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
@@ -92,6 +97,10 @@ fn help() {
         "                                            (args after the path go to the program's sys.argv)"
     );
     eprintln!("  pyfun parse   <file.pyfun>                canonical pretty-print");
+    eprintln!("  pyfun bundle  <file.pyfun> -o <dir>       a static web page running the program");
+    eprintln!(
+        "                [--asset <file>]... [--page <fragment.html>]   on Pyodide (CPython in WebAssembly)"
+    );
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
     eprintln!(

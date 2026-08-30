@@ -381,6 +381,7 @@ Then run it, type-check it, or see the Python it becomes:
 pyfun run     hello.pyfun            # 12.56636
 pyfun check   hello.pyfun            # type-check, rustc-style diagnostics
 pyfun compile hello.pyfun            # emit readable Python to stdout
+pyfun bundle  hello.pyfun -o site    # a static web page that runs it (Pyodide)
 pyfun repl                           # interactive REPL
 ```
 

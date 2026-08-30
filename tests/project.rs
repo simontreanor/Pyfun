@@ -229,6 +229,40 @@ fn e2e_runs_a_cross_module_program() {
 }
 
 #[test]
+fn the_browser_cookbook_example_type_checks_and_lowers() {
+    // #111: the `Dom` façade and its counter page compile as a project; running
+    // them needs a browser (Pyodide's `js` module), so the test stops at lowering.
+    let entry = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples/interop/browser/counter.pyfun");
+    let project = project::build_from_path(&entry).expect("the browser example resolves");
+    let errors = project::check(&project);
+    assert!(
+        errors.iter().all(|m| m.errors.is_empty()),
+        "type errors: {errors:?}"
+    );
+    let compiled = project::compile(&project).expect("the browser example lowers");
+    let main = compiled
+        .files
+        .iter()
+        .find(|(n, _)| n == "counter.py")
+        .map(|(_, s)| s.as_str())
+        .expect("counter.py");
+    assert!(main.contains("global count"), "{main}");
+    assert!(
+        main.contains("dom.on(dom.byId(\"plus\"), \"click\", dom.proxy(bump))"),
+        "{main}"
+    );
+    let dom = compiled
+        .files
+        .iter()
+        .find(|(n, _)| n == "dom.py")
+        .map(|(_, s)| s.as_str())
+        .expect("dom.py");
+    assert!(dom.contains("import js"), "{dom}");
+    assert!(dom.contains("import pyodide.ffi"), "{dom}");
+}
+
+#[test]
 fn e2e_derived_codecs_cross_a_module_import() {
     // #110: the descriptor names the exporting module's classes (`rules.View`).
     let files = compile(

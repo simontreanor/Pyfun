@@ -800,6 +800,23 @@ the new general `PyStmt::Raise` node and the `is` comparison for `null`). The ge
 (user-registered combinators, a `Value` type for already-parsed data) is deferred; the shipped set already
 covers records, lists, options, and unions.
 
+**Browser target — `pyfun bundle`.** The playground already runs the compiler under WASM and
+CPython under Pyodide; `pyfun bundle <entry> -o <dir>` ships a *program* the same way: a static
+page (`index.html`), the compiled Python (one `main.py`, or a project's whole `.py` tree), any
+`--asset` files, and a loader that boots Pyodide from its CDN (the release the playground pins),
+stages the files into the in-browser file system, and runs the entry with stdout and stderr in two
+`<pre>` panes; `--page <fragment.html>` puts the program's own markup above them. A shareable link
+with no server, which is how two players get a game whose interface is the browser. The page is
+reachable through Pyodide's `js` module like any Python library: `extern import js`, then
+`extern byId: string -> Element = js.document.getElementById`, instance-access externs for methods
+(`.replaceChildren`, `.addEventListener`), and `pyodide.ffi.create_proxy` for a callback the page
+holds (a lifetime detail a façade hides). The cookbook's `browser/` entry is that façade, a
+`Dom` module a program imports, with a counter page as its consumer. Two things fall out of work
+already done: a click handler is an ordinary one-parameter Pyfun function (Python calls it with the
+event, §6's calling convention), and a JS `Promise` is awaitable under Pyodide, so an extern over a
+JS async API is typed `-> Async a` and awaited with `let!` like any other, no bridge to build.
+Signalling for a peer-to-peer transport is the program's problem, not the language's.
+
 **Derived codecs — `Decode.auto` and `Encode.auto`.** A program that speaks to itself over a wire
 (or a save file) has the same Pyfun type on both ends, and writing the two halves by hand is where
 they drift. `Encode.auto : a -> string` and `Decode.auto : Decoder a` are derived from the type, so

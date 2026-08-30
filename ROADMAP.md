@@ -372,14 +372,18 @@ play comes first; the browser target is last because it depends on the async dec
     composable `Encode` (`Encode.object`, `Encode.list`, a `Json` value type) for shapes that are not
     a Pyfun type's own; a hand-written decoder remains the tool at a boundary you do not control.
 
-20. **A browser target** (#111, L, last). Three pieces once the async items are in: `pyfun bundle`
-    (a static page: the compiled Python, the program's data files, and the Pyodide loader the
-    playground already has, so a program is a shareable link with no server); a typed `Dom` façade in
-    the interop cookbook (the first real consumer of the "publish a façade, import many" axis; it hits
-    item 16's calling convention and Pyodide's `create_proxy` lifetime, which the façade should hide);
-    and a `Promise` to `Async` bridge, which Pyodide already performs and the types only need to say
-    (`-> Async a` on an extern over a JS async API). Signalling for a peer-to-peer transport is the
-    game's problem, not Pyfun's.
+20. ~~**A browser target**~~ **CLOSED 2026-08-30** (#111, in the PR carrying this entry). Three
+    pieces, all landed: `pyfun bundle <entry> -o <dir> [--asset f]... [--page fragment.html]` emits
+    a static page (the compiled Python, one file or a project's tree, the assets, a loader that boots
+    Pyodide from the CDN the playground pins and runs the entry with stdout/stderr on the page), so
+    a program is a shareable link with no server; a typed `Dom` façade in the interop cookbook
+    (`examples/interop/browser/dom.pyfun`, the first real consumer of the "publish a façade, import
+    many" axis: `extern import js`, opaque `Element`/`Event`/`Callback`, `create_proxy` behind
+    `Dom.proxy`) with a counter page as its consumer; and the `Promise` to `Async` bridge, which
+    needed nothing built, since a JS promise is awaitable under Pyodide and an extern over a JS async
+    API is typed `-> Async a` (`DESIGN.md` §6, "Browser target"). What a browser cannot give the
+    cookbook harness is a `js` module, so the example is compile-checked, not run, in the tests.
+    Signalling for a peer-to-peer transport is the game's problem, not Pyfun's.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 

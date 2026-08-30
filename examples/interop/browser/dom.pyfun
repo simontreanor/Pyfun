@@ -1,0 +1,31 @@
+# A typed façade over the page, for a program that runs in the browser under
+# Pyodide (`pyfun bundle`). Pyodide exposes the page as the `js` module, so the
+# DOM is a set of externs like any other Python library; this module writes them
+# once so a program imports them (`import Dom`) rather than repeating them.
+#
+# Every handle is opaque: the compiler follows an `Element` through the program
+# without looking inside it. A callback handed to the page must be wrapped with
+# `proxy` (Pyodide's `create_proxy`), which keeps it alive for as long as the page
+# holds it; the façade is where that detail lives, not the program.
+
+extern import js
+extern import pyodide.ffi
+
+extern type Element
+extern type Event
+extern type Callback
+
+# The document, by id; a missing id raises at the boundary like any extern.
+extern byId: string -> Element = js.document.getElementById
+
+# Replace an element's children with one text node (`el.replaceChildren(text)`).
+extern setText: Element -> string -> unit = .replaceChildren()
+
+# `el.setAttribute(name, value)` and `el.append(child)`.
+extern setAttr: Element -> string -> string -> unit = .setAttribute()
+extern append: Element -> Element -> unit = .append()
+extern create: string -> Element = js.document.createElement
+
+# `el.addEventListener(event, callback)`; the callback performs `io` (it will).
+extern on: Element -> string -> Callback -> unit = .addEventListener()
+extern proxy: (Event ->{io} unit) -> Callback = pyodide.ffi.create_proxy
