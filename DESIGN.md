@@ -1686,15 +1686,28 @@ The protocol (F#'s, lowercased and keyword-safe); a builder need only define wha
 | `let! x = e` …  | `B.bind e (fun x -> …)`                              |
 | `do! e` …       | `B.bind e (fun _ -> …)`   (trailing `do! e` → `e`)   |
 | `let x = e` …   | `(fun x -> …) e`                                     |
+| `e` …           | `let _ = e` (a bare expression item; `e : unit`)     |
 | `return e`      | `B.return_ e`        (must be last)                  |
 | `return! e`     | `B.returnFrom e`     (must be last)                  |
 | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
 | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
 | (empty)         | `B.zero`                                             |
 
+A bare expression on its own line is an item in every builder, built-in or user (F# admits a unit
+expression as `let () = e`): the parser reads it as `let _ = e`, which is what the checker requires
+of it (`unit`) and what the canonical pretty-print spells, so a `print`, a unit-typed `match` or
+`if` needs no `let _ =` in front of it. A trailing `do! e` ends a `result`/`option`/`async` block
+as its value (`M unit`), as the table's user-builder row already did, so a fire-and-forget
+`async { … do! drain w }` needs no `return ()` after it. The item boundary is the offside rule (an
+item owns its line and any line indented past it), so an expression item never swallows the line
+below it as arguments.
+
 `Builder { let! … }` is told from `Some { x = 1 }` (a constructor applied to a record) by one-token
-lookahead: a CE body starts with a CE keyword, a record with `ident =`. `delay` receives a thunk
-`unit -> m a` (force it with the unit value: `let delay f = f ()`).
+lookahead: a CE body starts with a CE keyword, a record with `ident =`. A first line that is neither
+(`Html { for …`, or a would-be custom operation `Html { class_ "board"`) is diagnosed as "not a
+computation-expression item", naming what the position takes, rather than as a record literal
+missing its `=`. `delay` receives a thunk `unit -> m a` (force it with the unit value:
+`let delay f = f ()`).
 
 The four built-ins and how they lower to Python:
 

@@ -57,7 +57,14 @@ the module documentation:
 //! | `return e`      | `B.return_ e`        (must be last)                  |
 //! | `return! e`     | `B.returnFrom e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
+//! | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+//! | (empty)         | `B.zero`                                             |
 ```
+
+A bare expression on its own line is also an item (the parser reads it as `let _ = e`, so it takes
+the `let` row), and `yield!` with `zero` are the two rows a list-shaped DSL leans on: `yield!` splices
+a whole list of children, and `zero` is an empty element. The table is quoted from the source, so
+keep the two in step.
 
 The driver, `desugar_ce`, is a recursion over the CE items. Each item is rewritten into a call on
 the builder module, threading the rest of the block through as a continuation lambda:
