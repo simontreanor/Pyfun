@@ -113,6 +113,10 @@ pub struct ImportContext {
     /// Qualified names of imported **nullary** constructors (`Palette.Red`), which
     /// must lower to a call (`palette.Red()`) when referenced as a value.
     pub nullary_ctors: HashSet<String>,
+    /// The subset of `nullary_ctors` whose defining module emits a module-level
+    /// singleton (`_Red = Red()`), so a value reference lowers to the name load
+    /// `palette._Red` instead of a call (`DESIGN.md` §5.5).
+    pub nullary_singletons: HashSet<String>,
     /// Qualified names of imported newtype constructors (`Ids.UserId`), erased at
     /// every use site exactly like the defining module's bare name.
     pub newtype_ctors: HashSet<String>,
@@ -159,6 +163,7 @@ pub fn lower_in_project(
     lowerer.imported_modules = ctx.modules.clone();
     lowerer.record_class_modules = ctx.record_class_modules.clone();
     lowerer.imported_nullary_ctors = ctx.nullary_ctors.clone();
+    lowerer.imported_nullary_singletons = ctx.nullary_singletons.clone();
     lowerer
         .newtype_ctors
         .extend(ctx.newtype_ctors.iter().cloned());
@@ -197,7 +202,7 @@ pub fn runtime_module() -> PyModule {
     // The shared runtime is a project artifact (multi-file), so it always carries the
     // comparison methods — a `Result`/`Option` may be compared in any importing module.
     let mut body = result_prelude(true);
-    body.extend(option_prelude(true));
+    body.extend(option_prelude(true, true));
     body.extend(exception_prelude());
     PyModule { body }
 }
@@ -343,6 +348,16 @@ struct Lowerer {
     /// Qualified names of imported nullary constructors (`Palette.Red`), referenced
     /// as values, which must lower to a call (`palette.Red()`) not the bare class.
     imported_nullary_ctors: HashSet<String>,
+    /// The subset of `imported_nullary_ctors` the exporting module backs with a
+    /// module-level singleton (`palette._Red`).
+    imported_nullary_singletons: HashSet<String>,
+    /// Nullary constructors (bare Pyfun names, including the prelude's `None`)
+    /// that get a module-level singleton instance `_<Class>` emitted right after
+    /// their class, and whose value references load it instead of calling the
+    /// class (`DESIGN.md` §5.5). A constructor is left out when the program binds
+    /// the singleton's name itself (`binder_names`), in which case every use
+    /// stays the call `Ctor()`.
+    nullary_singletons: HashSet<String>,
     /// Whether to import the nominal `Option`/`Result` classes from the shared
     /// `_pyfun_rt.py` (multi-file projects) instead of inlining them (single file).
     use_runtime: bool,
@@ -407,35 +422,8 @@ impl Lowerer {
         let mut top_val_defs: HashMap<String, Expr> = HashMap::new();
         let mut ap_uses = std::collections::HashMap::new();
         let mut newtype_ctors = HashSet::new();
-        // Every binder name in the module, for the module-alias shadow check
-        // (`py_module_ref`) — see `collect_binders`.
-        let mut binder_names = HashSet::new();
-        for item in &module.items {
-            match item {
-                Item::Let(binding) => {
-                    binder_names.extend(binding.bound_names());
-                    binder_names.extend(param_names(&binding.params));
-                    collect_binders(&binding.value, &mut binder_names);
-                }
-                Item::Expr(e) => collect_binders(e, &mut binder_names),
-                Item::Module { items, .. } => {
-                    for member in items {
-                        binder_names.extend(member.bound_names());
-                        binder_names.extend(param_names(&member.params));
-                        collect_binders(&member.value, &mut binder_names);
-                    }
-                }
-                Item::ActivePattern(decl) => {
-                    binder_names.extend(param_names(&decl.params));
-                    collect_binders(&decl.value, &mut binder_names);
-                }
-                Item::Type(_)
-                | Item::Measure { .. }
-                | Item::Import { .. }
-                | Item::ExternImport { .. }
-                | Item::Extern(_) => {}
-            }
-        }
+        // Every binder name in the module (`module_binder_names`).
+        let binder_names = module_binder_names(module);
         for item in &module.items {
             match item {
                 Item::Extern(decl) => {
@@ -601,6 +589,16 @@ impl Lowerer {
                 arities.entry(format!("{module}.{name}")).or_insert(*arity);
             }
         }
+        // Which nullary constructors get a singleton: every user variant without
+        // fields plus the prelude's `None`, unless the program binds `_<Class>`.
+        // Hidden active-pattern cases are excluded (constructed once per
+        // recognizer call and matched on the spot).
+        let nullary_singletons: HashSet<String> = ctor_arity
+            .iter()
+            .filter(|(name, arity)| **arity == 0 && !ap_uses.contains_key(name.as_str()))
+            .map(|(name, _)| name.clone())
+            .filter(|name| !binder_names.contains(&nullary_singleton_name(name)))
+            .collect();
         Lowerer {
             notes: Vec::new(),
             arities,
@@ -635,6 +633,8 @@ impl Lowerer {
             imported_modules: HashSet::new(),
             record_class_modules: HashSet::new(),
             imported_nullary_ctors: HashSet::new(),
+            imported_nullary_singletons: HashSet::new(),
+            nullary_singletons,
             use_runtime: false,
             project_mode: false,
             // Default to the sound multi-file policy; single-file `lower` overrides it.
@@ -682,13 +682,19 @@ impl Lowerer {
                         for (index, variant) in variants.iter().enumerate() {
                             let fields =
                                 (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
+                            let class = py_ctor_name(&variant.name);
                             classes.push(PyStmt::ClassDef {
-                                name: py_ctor_name(&variant.name),
+                                name: class.clone(),
                                 fields,
                                 field_types: variant.fields.iter().map(py_annotation).collect(),
                                 order: ordered.then_some(index),
                                 record: false,
                             });
+                            // A field-less variant has one possible value, so it is
+                            // built once (`_Red = Red()`) and every use loads it.
+                            if self.nullary_singletons.contains(&variant.name) {
+                                classes.push(singleton_assign(&class));
+                            }
                         }
                     }
                     // Records lower to a single class (ordering rank 0).
@@ -889,14 +895,19 @@ impl Lowerer {
                 body.extend(result_prelude(self.order.needs("Result")));
             }
         }
+        let none_singleton = self.nullary_singletons.contains("None");
         if self.needs_option {
             if self.use_runtime {
+                let mut names = vec!["Some".to_string(), "None_".to_string()];
+                if none_singleton {
+                    names.push("_None_".to_string());
+                }
                 body.push(PyStmt::ImportFrom {
                     module: "_pyfun_rt".to_string(),
-                    names: vec!["Some".to_string(), "None_".to_string()],
+                    names,
                 });
             } else {
-                body.extend(option_prelude(self.order.needs("Option")));
+                body.extend(option_prelude(self.order.needs("Option"), none_singleton));
             }
         }
         if self.needs_exception {
@@ -912,7 +923,10 @@ impl Lowerer {
         // List-prelude helpers referenced by the program (deterministic order).
         body.extend(list_prelude(&self.needed_list_helpers));
         // Set/Map-prelude helpers referenced by the program.
-        body.extend(collection_prelude(&self.needed_collection_helpers));
+        body.extend(collection_prelude(
+            &self.needed_collection_helpers,
+            none_singleton,
+        ));
         // Standard-combinator helpers referenced by the program.
         body.extend(combinator_prelude(&self.needed_combinators));
         // Decode-module helpers referenced by the program.
@@ -1279,6 +1293,10 @@ impl Lowerer {
                 if let Some(stmts) = self.try_lower_lookup_match(scrutinee, arms, locals, None)? {
                     return Ok(stmts);
                 }
+                // An Option/Result match is an `isinstance` ladder (§5.5).
+                if let Some(stmts) = self.try_lower_ladder_match(scrutinee, arms, locals, None)? {
+                    return Ok(stmts);
+                }
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for arm in arms {
@@ -1472,6 +1490,18 @@ impl Lowerer {
                     }
                 }
                 // Python `match` is a statement, so always hoist into a temp.
+                // An Option/Result match is an `isinstance` ladder (§5.5); the
+                // ladder decides on shape alone before lowering anything, so a
+                // rejection hands its temp back and the `match` path numbers its
+                // temps exactly as before.
+                let counter = self.tmp_counter;
+                let tmp = self.fresh_tmp();
+                if let Some(stmts) =
+                    self.try_lower_ladder_match(scrutinee, arms, locals, Some(&tmp))?
+                {
+                    return Ok((stmts, PyExpr::Name(tmp)));
+                }
+                self.tmp_counter = counter;
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let tmp = self.fresh_tmp();
                 let mut cases = Vec::new();
@@ -2549,10 +2579,7 @@ impl Lowerer {
             return PyExpr::Name("_pf_id".to_string());
         }
         match self.ctor_arity.get(name) {
-            Some(0) => PyExpr::Call {
-                func: Box::new(PyExpr::Name(py_ctor_name(name))),
-                args: vec![],
-            },
+            Some(0) => self.nullary_value(name),
             Some(_) => PyExpr::Name(py_ctor_name(name)),
             None => PyExpr::Name(py_value_name(name)),
         }
@@ -3085,7 +3112,7 @@ impl Lowerer {
                 if self.imported_modules.contains(base) {
                     let module = self.py_module_ref(base);
                     let attr = PyExpr::Attribute {
-                        value: Box::new(PyExpr::Name(module)),
+                        value: Box::new(PyExpr::Name(module.clone())),
                         // A member may be a constructor (`Geometry.Circle`) or a
                         // value (`Geometry.set`), so mangle it exactly as its
                         // defining module did. `py_value_name` covers both: it
@@ -3093,9 +3120,16 @@ impl Lowerer {
                         // leaves every other (capitalized) constructor alone.
                         attr: py_value_name(member),
                     };
-                    // A nullary constructor used as a value is an instance, so call
-                    // it (`palette.Red()`), matching the single-module behavior.
-                    if self.imported_nullary_ctors.contains(other) {
+                    // A nullary constructor used as a value is an instance: the
+                    // exporting module's singleton (`palette._Red`) where it
+                    // emitted one, else a call (`palette.Red()`), matching the
+                    // single-module behavior either way.
+                    if self.imported_nullary_singletons.contains(other) {
+                        PyExpr::Attribute {
+                            value: Box::new(PyExpr::Name(module)),
+                            attr: format!("_{}", py_value_name(member)),
+                        }
+                    } else if self.imported_nullary_ctors.contains(other) {
                         PyExpr::Call {
                             func: Box::new(attr),
                             args: vec![],
@@ -3816,63 +3850,66 @@ impl Lowerer {
                 let mut inner_locals = locals.clone();
                 inner_locals.extend(target.bound_names());
                 let rest_stmts = self.lower_short_circuit_items(rest, &inner_locals, sc)?;
-                // The target rides inside the success pattern, so a destructuring
-                // `let!` costs no extra statement: `case Ok((r, c)):`.
-                let py_pattern = self.lower_pattern(target);
-                s.push(self.short_circuit_bind_match(v, py_pattern, rest_stmts, sc));
+                s.extend(self.short_circuit_bind(v, Some(target), rest_stmts, sc));
                 Ok(s)
             }
             CeItem::DoBang(e) => {
                 let (mut s, v) = self.lower_value(e, locals)?;
                 let rest_stmts = self.lower_short_circuit_items(rest, locals, sc)?;
-                s.push(self.short_circuit_bind_match(v, PyPattern::Wildcard, rest_stmts, sc));
+                s.extend(self.short_circuit_bind(v, None, rest_stmts, sc));
                 Ok(s)
             }
             _ => Err(ce_item_error(sc.name)),
         }
     }
 
-    /// `match <subject>: case Ok(<ok_pat>): <rest>  case Error(e): return Error(e)`,
-    /// or the `Some`/`None_` spelling of the same shape. A payload-free failure
-    /// (`None`) forwards a fresh one rather than binding and re-wrapping, which is
-    /// both shorter and what a person would write: `case None_(): return None_()`.
-    fn short_circuit_bind_match(
+    /// One `let!`/`do!` step of a `result {}`/`option {}` block: the same
+    /// `isinstance` ladder an Option/Result `match` lowers to (`DESIGN.md` §5.5),
+    /// `if isinstance(r, Ok): <bind target from r._0> <rest> else: return r`.
+    /// The failure is forwarded as the value it already is: an `Error e` rebuilt
+    /// as `Error(e)` would be structurally equal to `r`, and Pyfun exposes no
+    /// object identity to tell them apart. A `do!` (`target == None`) binds
+    /// nothing.
+    fn short_circuit_bind(
         &mut self,
         subject: PyExpr,
-        ok_pat: PyPattern,
+        target: Option<&Pattern>,
         rest: Vec<PyStmt>,
         sc: ShortCircuit,
-    ) -> PyStmt {
-        let (failure_pat, failure_body) = if sc.failure_payload {
-            let e_tmp = self.fresh_tmp();
-            (
-                vec![PyPattern::Capture(e_tmp.clone())],
-                PyStmt::Return(call1(sc.failure, PyExpr::Name(e_tmp))),
-            )
-        } else {
-            (vec![], PyStmt::Return(call0(sc.failure)))
+    ) -> Vec<PyStmt> {
+        let mut out = Vec::new();
+        let subject = match subject {
+            PyExpr::Name(n) => n,
+            other => {
+                let tmp = self.fresh_tmp();
+                out.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value: other,
+                });
+                tmp
+            }
         };
-        PyStmt::Match {
-            subject,
-            cases: vec![
-                PyCase {
-                    pattern: PyPattern::Class {
-                        name: sc.success.to_string(),
-                        args: vec![ok_pat],
-                    },
-                    guard: None,
-                    body: rest,
-                },
-                PyCase {
-                    pattern: PyPattern::Class {
-                        name: sc.failure.to_string(),
-                        args: failure_pat,
-                    },
-                    guard: None,
-                    body: vec![failure_body],
-                },
-            ],
+        let mut body = Vec::new();
+        if let Some(target) = target {
+            let payload = PyExpr::Attribute {
+                value: Box::new(PyExpr::Name(subject.clone())),
+                attr: "_0".to_string(),
+            };
+            self.bind_ce_target(target, payload, &mut body);
         }
+        body.extend(rest);
+        out.push(PyStmt::If {
+            test: PyExpr::Call {
+                func: Box::new(PyExpr::Name("isinstance".to_string())),
+                args: vec![
+                    PyExpr::Name(subject.clone()),
+                    PyExpr::Name(sc.success.to_string()),
+                ],
+            },
+            body,
+            orelse: vec![PyStmt::Return(PyExpr::Name(subject))],
+        });
+        out
     }
 
     /// `async { ... }` → an `async def` returning a coroutine.
@@ -4089,6 +4126,179 @@ impl Lowerer {
             value,
         });
         PyExpr::Name(tmp)
+    }
+
+    /// The value of a nullary constructor used as an expression: its module-level
+    /// singleton (`_Red`, `_None_`) where one is emitted, else a fresh instance
+    /// (`Red()`) — `DESIGN.md` §5.5.
+    fn nullary_value(&mut self, name: &str) -> PyExpr {
+        if name == "None" {
+            self.needs_option = true;
+        }
+        if self.nullary_singletons.contains(name) {
+            PyExpr::Name(nullary_singleton_name(name))
+        } else {
+            PyExpr::Call {
+                func: Box::new(PyExpr::Name(py_ctor_name(name))),
+                args: vec![],
+            }
+        }
+    }
+
+    // ----- Option/Result matches as `isinstance` ladders (`DESIGN.md` §5.5) -----
+
+    /// Lower a `match` on an `Option`/`Result` to an `if isinstance(o, Some): …`
+    /// ladder instead of a Python `match` statement, when every arm is one of the
+    /// family's constructors with an irrefutable payload pattern, or a catch-all.
+    /// Python's class-pattern dispatch is the expensive part of a two-case match
+    /// the checker already resolved, and the ladder is what a person writes.
+    ///
+    /// Return position (`assign_to == None`): every arm body returns, so a guarded
+    /// arm whose guard fails simply falls through to the statements after it. In
+    /// value position the arms assign `assign_to`, and a guard would need a
+    /// matched-flag to fall through, so any guard keeps the `match` lowering.
+    /// Exhaustiveness is syntactic here (both constructors unguarded, or an
+    /// unguarded catch-all): then the last arm is a plain `else` and no
+    /// `raise RuntimeError("non-exhaustive match")` is emitted.
+    ///
+    /// Returns `None` for any other shape, leaving the ordinary lowering to it.
+    fn try_lower_ladder_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[crate::parser::ast::MatchArm],
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+    ) -> Result<Option<Vec<PyStmt>>, LowerError> {
+        let Some((family, shaped)) = ladder_shape(arms) else {
+            return Ok(None);
+        };
+        if assign_to.is_some() && shaped.iter().any(|a| a.arm.guard.is_some()) {
+            return Ok(None);
+        }
+        match family {
+            LadderFamily::Option => self.needs_option = true,
+            LadderFamily::Result => self.needs_result = true,
+        }
+        // The scrutinee is read once per arm test, so anything but a plain name
+        // is bound to a temp first.
+        let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
+        let subject = match subject {
+            PyExpr::Name(n) => n,
+            other => {
+                let tmp = self.fresh_tmp();
+                stmts.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value: other,
+                });
+                tmp
+            }
+        };
+        let unguarded = |class: &str| {
+            shaped
+                .iter()
+                .any(|a| a.arm.guard.is_none() && a.class == Some(class))
+        };
+        let exhaustive = shaped
+            .iter()
+            .any(|a| a.arm.guard.is_none() && a.class.is_none())
+            || (unguarded(family.classes().0) && unguarded(family.classes().1));
+
+        // Each arm: its `isinstance` test (none for a catch-all) and the block that
+        // runs when it matches: payload binding, then the (guarded) body.
+        struct Piece {
+            cond: Option<PyExpr>,
+            inner: Vec<PyStmt>,
+            guarded: bool,
+        }
+        let mut pieces = Vec::with_capacity(shaped.len());
+        for a in &shaped {
+            let bindings = pattern_bindings(&a.arm.pattern);
+            let arm_locals = extend(locals, &bindings);
+            // Pattern binders shadow same-named local folders (fold pass).
+            let shadowed = self.shadow_local_fns(&bindings);
+            let guard = self.lower_guard(&a.arm.guard, &arm_locals)?;
+            let body = match assign_to {
+                None => self.lower_return(&a.arm.body, &arm_locals)?,
+                Some(tmp) => {
+                    let (arm_stmts, arm_val) = self.lower_value(&a.arm.body, &arm_locals)?;
+                    with_assign(arm_stmts, tmp, arm_val)
+                }
+            };
+            self.unshadow_local_fns(shadowed);
+            let mut inner = Vec::new();
+            if let Some(payload) = a.payload {
+                let value = PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name(subject.clone())),
+                    attr: "_0".to_string(),
+                };
+                bind_irrefutable(payload, value, &subject, &mut inner);
+            }
+            if let Some(name) = a.whole {
+                inner.push(PyStmt::Assign {
+                    target: py_value_name(name),
+                    value: PyExpr::Name(subject.clone()),
+                });
+            }
+            match guard {
+                Some(test) => inner.push(PyStmt::If {
+                    test,
+                    body,
+                    orelse: vec![],
+                }),
+                None => inner.extend(body),
+            }
+            let cond = a.class.map(|class| PyExpr::Call {
+                func: Box::new(PyExpr::Name("isinstance".to_string())),
+                args: vec![
+                    PyExpr::Name(subject.clone()),
+                    PyExpr::Name(class.to_string()),
+                ],
+            });
+            pieces.push(Piece {
+                cond,
+                inner,
+                guarded: a.arm.guard.is_some(),
+            });
+        }
+
+        // Assemble back to front: an unguarded arm chains the rest as its `else`
+        // (`elif` in the output); a guarded arm cannot, since its guard failing must
+        // reach the later arms, so those follow it as statements (return position
+        // only). The last arm of an exhaustive match needs no test at all.
+        let last = pieces.len() - 1;
+        let mut tail: Vec<PyStmt> = if exhaustive {
+            vec![]
+        } else {
+            vec![PyStmt::RaiseRuntimeError(
+                "non-exhaustive match".to_string(),
+            )]
+        };
+        for (i, piece) in pieces.into_iter().enumerate().rev() {
+            tail = match (piece.cond, piece.guarded) {
+                (None, false) => piece.inner,
+                (Some(_), false) if i == last && exhaustive => piece.inner,
+                (Some(test), false) => vec![PyStmt::If {
+                    test,
+                    body: piece.inner,
+                    orelse: tail,
+                }],
+                // Guarded: the arm's block, then whatever follows it.
+                (cond, true) => {
+                    let mut out = match cond {
+                        Some(test) => vec![PyStmt::If {
+                            test,
+                            body: piece.inner,
+                            orelse: vec![],
+                        }],
+                        None => piece.inner,
+                    };
+                    out.extend(tail);
+                    out
+                }
+            };
+        }
+        stmts.extend(tail);
+        Ok(Some(stmts))
     }
 
     fn fresh_tmp(&mut self) -> String {
@@ -4693,10 +4903,12 @@ fn exception_prelude() -> Vec<PyStmt> {
 /// The `Some`/`None_` classes backing the built-in `Option` type (`None` is mangled
 /// to dodge the Python keyword). Structural `__eq__`/`__repr__`/`__match_args__` come
 /// from `emit_class`, like any data constructor.
-fn option_prelude(ordered: bool) -> Vec<PyStmt> {
+fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
     // Ordered `None < Some` (None is variant 0) when the program compares `Option`
-    // values (§7.1); otherwise the comparison methods are omitted.
-    vec![
+    // values (§7.1); otherwise the comparison methods are omitted. `None_` has one
+    // possible value, so it is built once as `_None_` (unless the program claimed
+    // that name) and every miss in the helpers returns it.
+    let mut out = vec![
         PyStmt::ClassDef {
             name: "Some".to_string(),
             fields: vec!["_0".to_string()],
@@ -4711,7 +4923,11 @@ fn option_prelude(ordered: bool) -> Vec<PyStmt> {
             order: ordered.then_some(0),
             record: false,
         },
-    ]
+    ];
+    if singleton {
+        out.push(singleton_assign("None_"));
+    }
+    out
 }
 
 /// The list-prelude helper definitions actually referenced (`DESIGN.md` §6). Each
@@ -5693,7 +5909,9 @@ fn list_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
 /// (partial application still works). The collections are immutable-style: every
 /// operation returns a fresh container. Built from the IR (no string splicing);
 /// emitted in sorted helper-name order for deterministic output.
-fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyStmt> {
+    // A miss returns the `None` value (`_None_` singleton, or a fresh `None_()`).
+    let none = || none_value(none_singleton);
     let name = |n: &str| PyExpr::Name(n.to_string());
     let call = |func: &str, args: Vec<PyExpr>| PyExpr::Call {
         func: Box::new(PyExpr::Name(func.to_string())),
@@ -5821,7 +6039,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         ))],
                         orelse: vec![],
                     },
-                    PyStmt::Return(call0("None_")),
+                    PyStmt::Return(none()),
                 ],
             ),
             // Map.keys(m) -> list(m.keys())
@@ -5858,7 +6076,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         ))],
                         orelse: vec![],
                     },
-                    PyStmt::Return(call0("None_")),
+                    PyStmt::Return(none()),
                 ],
             ),
             // Option.bind(f, o) -> f(o._0) if isinstance(o, Some) else None_()
@@ -5872,7 +6090,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         body: vec![PyStmt::Return(call("f", vec![attr(name("o"), "_0")]))],
                         orelse: vec![],
                     },
-                    PyStmt::Return(call0("None_")),
+                    PyStmt::Return(none()),
                 ],
             ),
             // Option.filter(f, o) -> o if isinstance(o, Some) and f(o._0) else None_()
@@ -5887,7 +6105,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         is_some("o"),
                         call("f", vec![attr(name("o"), "_0")]),
                     )),
-                    orelse: Box::new(call0("None_")),
+                    orelse: Box::new(none()),
                 },
             ),
             // Option.toResult(err, o) -> Ok(o._0) if isinstance(o, Some) else Error(err)
@@ -6001,7 +6219,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         body: vec![PyStmt::Return(call1("Some", attr(name("r"), "_0")))],
                         orelse: vec![],
                     },
-                    PyStmt::Return(call0("None_")),
+                    PyStmt::Return(none()),
                 ],
             ),
             // List.get(i, xs) -> Some(xs[i]) if 0 <= i < len(xs) else None_()
@@ -6022,7 +6240,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         ops: vec![PyBinOp::Le, PyBinOp::Lt],
                         comparators: vec![name("i"), call("len", vec![name("xs")])],
                     }),
-                    orelse: Box::new(call0("None_")),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.find(f, xs) -> next(map(Some, filter(f, xs)), None_())
@@ -6037,7 +6255,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                             "map",
                             vec![name("Some"), call("filter", vec![name("f"), name("xs")])],
                         ),
-                        call0("None_"),
+                        none(),
                     ],
                 ),
             ),
@@ -6165,7 +6383,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                             ops: vec![PyBinOp::Ge],
                             comparators: vec![PyExpr::Int(0)],
                         }),
-                        orelse: Box::new(call0("None_")),
+                        orelse: Box::new(none()),
                     }),
                 ],
             ),
@@ -6177,7 +6395,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     body: vec![PyStmt::Return(call1("Some", call("int", vec![name("s")])))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
-                    handler: vec![PyStmt::Return(call0("None_"))],
+                    handler: vec![PyStmt::Return(none())],
                 }],
             ),
             // String.toFloat(s) -> total parse: Some(float(s)) or None_ on ValueError
@@ -6191,7 +6409,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     ))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
-                    handler: vec![PyStmt::Return(call0("None_"))],
+                    handler: vec![PyStmt::Return(none())],
                 }],
             ),
             // Format helpers — the format spec is assembled from the checked `int`
@@ -6297,7 +6515,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.last(xs) -> Some(xs[-1]) if xs else None_()
@@ -6313,7 +6531,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.tail(xs) -> Some(xs[1:len(xs)]) if xs else None_()
@@ -6330,7 +6548,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.findIndex(f, xs): the first index whose element passes, if any
@@ -6359,7 +6577,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                             orelse: vec![],
                         }],
                     },
-                    PyStmt::Return(call("None_", vec![])),
+                    PyStmt::Return(none()),
                 ],
             ),
             // List.findIndex ((==) x) xs: the C-level scan (`DESIGN.md` §5.2)
@@ -6375,7 +6593,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     ))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
-                    handler: vec![PyStmt::Return(call("None_", vec![]))],
+                    handler: vec![PyStmt::Return(none())],
                 }],
             ),
             // List.find ((==) x) xs: the element found (not `x` itself: the two
@@ -6395,7 +6613,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     ))],
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
-                    handler: vec![PyStmt::Return(call("None_", vec![]))],
+                    handler: vec![PyStmt::Return(none())],
                 }],
             ),
             // List.max(xs) -> Some(max(xs)) if xs else None_()
@@ -6405,7 +6623,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 PyExpr::IfExp {
                     body: Box::new(call("Some", vec![call("max", vec![name("xs")])])),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.min(xs) -> Some(min(xs)) if xs else None_()
@@ -6415,7 +6633,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 PyExpr::IfExp {
                     body: Box::new(call("Some", vec![call("min", vec![name("xs")])])),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.maxBy(f, xs) -> Some(max(xs, key=f)) if xs else None_()
@@ -6432,7 +6650,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.minBy(f, xs) -> Some(min(xs, key=f)) if xs else None_()
@@ -6449,7 +6667,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.average(xs) -> Some(sum(xs) / len(xs)) if xs else None_()
@@ -6466,7 +6684,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         )],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // List.reduce(f, xs) -> Some(functools.reduce(f, xs)) if xs else None_()
@@ -6483,7 +6701,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         }],
                     )),
                     test: Box::new(name("xs")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // ---- Seq: the lazy half routes to Python's own lazy machinery ----
@@ -6659,10 +6877,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["xs"],
                 call(
                     "next",
-                    vec![
-                        call("map", vec![name("Some"), name("xs")]),
-                        call("None_", vec![]),
-                    ],
+                    vec![call("map", vec![name("Some"), name("xs")]), none()],
                 ),
             ),
             // Seq.find(f, xs) -> next(map(Some, filter(f, xs)), None_())
@@ -6676,7 +6891,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                             "map",
                             vec![name("Some"), call("filter", vec![name("f"), name("xs")])],
                         ),
-                        call("None_", vec![]),
+                        none(),
                     ],
                 ),
             ),
@@ -6691,10 +6906,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     vec![
                         call(
                             "next",
-                            vec![
-                                call("map", vec![name("Some"), name("xs")]),
-                                call("None_", vec![]),
-                            ],
+                            vec![call("map", vec![name("Some"), name("xs")]), none()],
                         ),
                         name("Some"),
                     ],
@@ -6810,7 +7022,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 PyExpr::IfExp {
                     body: Box::new(call("Some", vec![call("max", vec![name("s")])])),
                     test: Box::new(name("s")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // Set.min(s) -> Some(min(s)) if s else None_()
@@ -6820,7 +7032,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 PyExpr::IfExp {
                     body: Box::new(call("Some", vec![call("min", vec![name("s")])])),
                     test: Box::new(name("s")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // ---- Map: the traversal half (a Python `dict`) ----
@@ -7089,7 +7301,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         ops: vec![PyBinOp::Le, PyBinOp::Lt],
                         comparators: vec![name("i"), call("len", vec![name("s")])],
                     }),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // String.repeat(n, s) -> s * max(n, 0)
@@ -7153,7 +7365,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                         ))],
                         orelse: vec![],
                     },
-                    PyStmt::Return(call("None_", vec![])),
+                    PyStmt::Return(none()),
                 ],
             ),
             // Option.orElse(fallback, o) -> o if it has a payload, else fallback
@@ -7174,7 +7386,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 PyExpr::IfExp {
                     body: Box::new(attr(name("o"), "_0")),
                     test: Box::new(is_some("o")),
-                    orelse: Box::new(call("None_", vec![])),
+                    orelse: Box::new(none()),
                 },
             ),
             // Option.iter(f, o): run f on the payload, if there is one
@@ -7350,7 +7562,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                                 },
                             ],
                         ),
-                        call("None_", vec![]),
+                        none(),
                     ],
                 ),
             ),
@@ -7361,7 +7573,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 vec![
                     PyStmt::Assign {
                         target: "out".to_string(),
-                        value: call("None_", vec![]),
+                        value: none(),
                     },
                     PyStmt::For {
                         target: "x".into(),
@@ -7386,7 +7598,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     PyStmt::Return(PyExpr::IfExp {
                         body: Box::new(call("Some", vec![call("max", vec![name("items")])])),
                         test: Box::new(name("items")),
-                        orelse: Box::new(call("None_", vec![])),
+                        orelse: Box::new(none()),
                     }),
                 ],
             ),
@@ -7401,7 +7613,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     PyStmt::Return(PyExpr::IfExp {
                         body: Box::new(call("Some", vec![call("min", vec![name("items")])])),
                         test: Box::new(name("items")),
-                        orelse: Box::new(call("None_", vec![])),
+                        orelse: Box::new(none()),
                     }),
                 ],
             ),
@@ -7423,7 +7635,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                             }],
                         )),
                         test: Box::new(name("items")),
-                        orelse: Box::new(call("None_", vec![])),
+                        orelse: Box::new(none()),
                     }),
                 ],
             ),
@@ -7531,36 +7743,27 @@ fn collection_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
         .collect()
 }
 
-/// How a short-circuiting computation expression spells its two cases. `result`
-/// and `option` are the same lowering — a flat sequence of `match` statements with
-/// early returns — differing only here, so they share one code path rather than
-/// two that must be kept in step (`DESIGN.md` §8.1).
+/// How a short-circuiting computation expression spells its success case.
+/// `result` and `option` are the same lowering — a flat sequence of `isinstance`
+/// tests with early returns, the failure forwarded as the value it is — differing
+/// only here, so they share one code path rather than two that must be kept in
+/// step (`DESIGN.md` §8.1).
 #[derive(Clone, Copy)]
 struct ShortCircuit {
     /// The builder keyword, for the defensive item error.
     name: &'static str,
     /// The constructor a `return` wraps with, and the one a bind unwraps.
     success: &'static str,
-    /// The constructor the block returns unchanged when a bind fails.
-    failure: &'static str,
-    /// Whether the failure constructor carries a payload to forward. `Error e`
-    /// does; `None` does not, which is what makes `option`'s lowering the simpler
-    /// of the two.
-    failure_payload: bool,
 }
 
 const RESULT_CE: ShortCircuit = ShortCircuit {
     name: "result",
     success: "Ok",
-    failure: "Error",
-    failure_payload: true,
 };
 
 const OPTION_CE: ShortCircuit = ShortCircuit {
     name: "option",
     success: "Some",
-    failure: "None_",
-    failure_payload: false,
 };
 
 /// A defensive error for a CE item the type checker should already have rejected.
@@ -7944,6 +8147,207 @@ fn py_irrefutable(pattern: &PyPattern) -> bool {
 /// earlier unconditional case (Python would reject them), and append the
 /// defensive non-exhaustive raise only when neither the lowered cases nor the
 /// source arms already catch everything.
+/// Every binder name appearing anywhere in a module (top-level bindings,
+/// parameters, block `let`s, lambda parameters, match captures, CE binders):
+/// the overapproximation behind the module-alias shadow check
+/// ([`Lowerer::py_module_ref`]) and the nullary-singleton name check
+/// ([`nullary_singleton_name`]). Also consulted by the project driver, so an
+/// importing module agrees with the defining one on which singletons exist.
+pub fn module_binder_names(module: &Module) -> HashSet<String> {
+    let mut binder_names = HashSet::new();
+    for item in &module.items {
+        match item {
+            Item::Let(binding) => {
+                binder_names.extend(binding.bound_names());
+                binder_names.extend(param_names(&binding.params));
+                collect_binders(&binding.value, &mut binder_names);
+            }
+            Item::Expr(e) => collect_binders(e, &mut binder_names),
+            Item::Module { items, .. } => {
+                for member in items {
+                    binder_names.extend(member.bound_names());
+                    binder_names.extend(param_names(&member.params));
+                    collect_binders(&member.value, &mut binder_names);
+                }
+            }
+            Item::ActivePattern(decl) => {
+                binder_names.extend(param_names(&decl.params));
+                collect_binders(&decl.value, &mut binder_names);
+            }
+            Item::Type(_)
+            | Item::Measure { .. }
+            | Item::Import { .. }
+            | Item::ExternImport { .. }
+            | Item::Extern(_) => {}
+        }
+    }
+    binder_names
+}
+
+/// The module-level name of a nullary constructor's singleton instance:
+/// `_<Class>` (`_Red`, `_None_`), a leading underscore on the emitted class name.
+pub fn nullary_singleton_name(ctor: &str) -> String {
+    format!("_{}", py_ctor_name(ctor))
+}
+
+/// The value expression for the prelude's `None`: the `_None_` singleton, or a
+/// fresh `None_()` when the program claimed that name.
+fn none_value(singleton: bool) -> PyExpr {
+    if singleton {
+        PyExpr::Name("_None_".to_string())
+    } else {
+        PyExpr::Call {
+            func: Box::new(PyExpr::Name("None_".to_string())),
+            args: vec![],
+        }
+    }
+}
+
+/// `_Class = Class()`: the singleton assignment emitted right after a nullary
+/// constructor's class.
+fn singleton_assign(class: &str) -> PyStmt {
+    PyStmt::Assign {
+        target: format!("_{class}"),
+        value: PyExpr::Call {
+            func: Box::new(PyExpr::Name(class.to_string())),
+            args: vec![],
+        },
+    }
+}
+
+/// The two-constructor built-in families a `match` can lower to an `isinstance`
+/// ladder ([`Lowerer::try_lower_ladder_match`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LadderFamily {
+    Option,
+    Result,
+}
+
+impl LadderFamily {
+    /// The family's two Python class names.
+    fn classes(self) -> (&'static str, &'static str) {
+        match self {
+            LadderFamily::Option => ("Some", "None_"),
+            LadderFamily::Result => ("Ok", "Error"),
+        }
+    }
+
+    /// The family a built-in constructor belongs to, with its Python class and
+    /// whether it carries a payload.
+    fn of_ctor(name: &str) -> Option<(LadderFamily, &'static str, bool)> {
+        match name {
+            "Some" => Some((LadderFamily::Option, "Some", true)),
+            "None" => Some((LadderFamily::Option, "None_", false)),
+            "Ok" => Some((LadderFamily::Result, "Ok", true)),
+            "Error" => Some((LadderFamily::Result, "Error", true)),
+            _ => None,
+        }
+    }
+}
+
+/// One arm of a ladder-shaped match.
+struct LadderArm<'a> {
+    arm: &'a crate::parser::ast::MatchArm,
+    /// The class to test with `isinstance`; `None` for a catch-all arm.
+    class: Option<&'static str>,
+    /// The payload pattern to bind from `._0` (constructor arms with a payload).
+    payload: Option<&'a Pattern>,
+    /// A catch-all *variable* arm binds the whole scrutinee.
+    whole: Option<&'a str>,
+}
+
+/// Recognize a match whose arms are all constructors of one built-in family
+/// (`Some p`/`None`, or `Ok p`/`Error e`) with irrefutable payload patterns,
+/// optionally ending in a catch-all (`_` / a variable). Arms after a catch-all
+/// are dead and dropped. Anything else is `None`.
+fn ladder_shape(
+    arms: &[crate::parser::ast::MatchArm],
+) -> Option<(LadderFamily, Vec<LadderArm<'_>>)> {
+    let mut family = None;
+    let mut out = Vec::with_capacity(arms.len());
+    for arm in arms {
+        match &arm.pattern {
+            Pattern::Ctor { name, args, .. } => {
+                let (fam, class, has_payload) = LadderFamily::of_ctor(name)?;
+                if *family.get_or_insert(fam) != fam {
+                    return None;
+                }
+                let payload = match (has_payload, args.as_slice()) {
+                    (true, [p]) if simple_irrefutable(p) => Some(p),
+                    (false, []) => None,
+                    _ => return None,
+                };
+                out.push(LadderArm {
+                    arm,
+                    class: Some(class),
+                    payload,
+                    whole: None,
+                });
+            }
+            Pattern::Wildcard | Pattern::Var { .. } => {
+                let whole = match &arm.pattern {
+                    Pattern::Var { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                out.push(LadderArm {
+                    arm,
+                    class: None,
+                    payload: None,
+                    whole,
+                });
+                if arm.guard.is_none() {
+                    break;
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some((family?, out))
+}
+
+/// A pattern that binds without testing anything and unpacks in plain
+/// assignments: a variable, a wildcard, or a tuple of those (nested).
+fn simple_irrefutable(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard | Pattern::Var { .. } => true,
+        Pattern::Tuple { elems } => elems.iter().all(simple_irrefutable),
+        _ => false,
+    }
+}
+
+/// Bind a [`simple_irrefutable`] pattern from `value`: `x = value`, nothing for
+/// `_`, or a tuple unpack `a, b = value` (nested tuples go through temps named
+/// off `base`, as [`unpack_into_as`] does for parameters).
+fn bind_irrefutable(pattern: &Pattern, value: PyExpr, base: &str, out: &mut Vec<PyStmt>) {
+    match pattern {
+        Pattern::Wildcard => {}
+        Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+            target: py_value_name(name),
+            value,
+        }),
+        Pattern::Tuple { elems } => {
+            let mut targets = Vec::with_capacity(elems.len());
+            let mut nested = Vec::new();
+            for (i, elem) in elems.iter().enumerate() {
+                match elem {
+                    Pattern::Var { name, .. } => targets.push(py_value_name(name)),
+                    Pattern::Wildcard => targets.push("_".to_string()),
+                    _ => {
+                        let temp = format!("{base}_{i}");
+                        targets.push(temp.clone());
+                        nested.push((elem, temp));
+                    }
+                }
+            }
+            out.push(PyStmt::UnpackAssign { targets, value });
+            for (elem, temp) in nested {
+                unpack_into_as(elem, &temp, &temp, &|n| py_value_name(n), out);
+            }
+        }
+        _ => unreachable!("ladder payloads are simple_irrefutable"),
+    }
+}
+
 fn seal_cases(arms: &[crate::parser::ast::MatchArm], cases: &mut Vec<PyCase>) {
     if let Some(i) = cases.iter().position(py_catch_all) {
         cases.truncate(i + 1);

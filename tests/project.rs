@@ -269,9 +269,66 @@ fn a_cross_module_nullary_enum_constructs_as_a_call() {
         ],
     );
     let main = file(&files, "main.py");
-    // A nullary constructor used as a value is an instance: `color.Green()`.
-    assert!(main.contains("favourite = color.Green()"), "{main}");
+    // A nullary constructor used as a value is the exporting module's singleton
+    // instance (`color._Green`); the pattern still names the class.
+    assert!(main.contains("favourite = color._Green"), "{main}");
     assert!(main.contains("case color.Green():"), "{main}");
+    let color = file(&files, "color.py");
+    assert!(color.contains("_Green = Green()"), "{color}");
+}
+
+#[test]
+fn a_cross_module_nullary_enum_falls_back_to_a_call_when_the_singleton_name_is_taken() {
+    // The defining module binds `_Green` itself, so no singleton is emitted there
+    // and the importer calls the class instead, exactly as before.
+    let files = compile(
+        "Main",
+        &[
+            ("Color", "type Color = Red | Green | Blue\nlet _Green = 1"),
+            (
+                "Main",
+                "import Color\nlet favourite = Color.Green\nlet red = Color.Red",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(main.contains("favourite = color.Green()"), "{main}");
+    assert!(main.contains("red = color._Red"), "{main}");
+    let color = file(&files, "color.py");
+    assert!(!color.contains("_Green = Green()"), "{color}");
+    assert!(color.contains("_Red = Red()"), "{color}");
+}
+
+#[test]
+fn e2e_cross_module_nullary_singletons_and_option_ladder() {
+    let files = compile(
+        "Main",
+        &[
+            ("Color", "type Color = Red | Green | Blue"),
+            (
+                "Main",
+                "import Color\n\
+                 let name k =\n  match k:\n    case Color.Red: \"r\"\n    case Color.Green: \"g\"\n    case Color.Blue: \"b\"\n\
+                 let last xs =\n  match List.last xs:\n    case Some c: name c\n    case None: \"-\"\n\
+                 print (last [Color.Green, Color.Red])\n\
+                 print (last [])\n\
+                 print (Color.Red == Color.Red)\n\
+                 print (Set.len (Set.ofList [Color.Red, Color.Red, Color.Blue]))",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    // `List.last` (unlike `List.head`, which the lookup peephole takes, DESIGN
+    // §5.2) still goes through the `Option`, so the cross-module ladder runs.
+    assert!(main.contains("if isinstance(_pf_t0, Some):"), "{main}");
+    assert!(
+        main.contains("from _pyfun_rt import Some, None_, _None_"),
+        "{main}"
+    );
+    let dir = Scratch::new("e2e_nullary_singletons");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim().replace("\r\n", "\n"), "r\n-\nTrue\n2");
+    }
 }
 
 #[test]

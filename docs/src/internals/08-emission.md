@@ -63,6 +63,12 @@ like idiomatic structural Python. The checker has already proven the match exhau
 trailing `case _: raise RuntimeError(...)` is a belt-and-braces guard, not something the program
 should ever hit.
 
+The built-in `Option` and `Result` are the exception. A match on one of them is the commonest match
+in the language and the cheapest to answer, so it emits as an `isinstance` ladder instead
+(`if isinstance(o, Some): x = o._0 … else: …`), with no defensive arm, because the checker has
+already proved the two cases cover the type. Field-less constructors get one more shortcut: the
+class is built once (`_Dot = Dot()`) and every use of the constructor as a value loads that name.
+
 ## The running example, in full
 
 Here is the complete emitted Python for the running example, straight from `pyfun compile`:
@@ -73,12 +79,12 @@ import functools
 import math
 def _pf_fold(f, acc, xs):
     return functools.reduce(f, xs, acc)
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True, slots=True, repr=False)
 class Circle:
     _0: float
     def __repr__(self):
         return f"Circle({self._0!r})"
-@dataclass(frozen=True, repr=False)
+@dataclass(frozen=True, slots=True, repr=False)
 class Rect:
     _0: float
     _1: float

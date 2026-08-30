@@ -8,9 +8,9 @@ computation expression is just method calls, and any in-file `module` (lesson 15
 Here is a builder for the `Option` type, so `Maybe { }` chains steps that might be `None` and stops
 at the first one. Pyfun ships `option { }` as a built-in (lesson 13), so this is a rebuild of
 something you already have, which is exactly what makes it a good first builder: you can compare
-your version against one that works. The built-in earns its place by lowering to flat `match`
-statements with early returns, the way `result { }` does, where a builder written this way lowers
-to nested `bind` calls. Everything else about them is the same.
+your version against one that works. The built-in earns its place by lowering to flat `isinstance`
+tests with early returns, the way `result { }` does, where a builder written this way lowers to
+nested `bind` calls. Everything else about them is the same.
 
 ```pyfun
 module Maybe =
@@ -43,13 +43,11 @@ rule in the compiler. The emitted Python shows the desugaring exactly:
 
 ```python
 def Maybe_bind(m, f):
-    match m:
-        case Some(x):
-            return f(x)
-        case None_():
-            return None_()
-        case _:
-            raise RuntimeError("non-exhaustive match")
+    if isinstance(m, Some):
+        x = m._0
+        return f(x)
+    else:
+        return _None_
 def Maybe_return_(x):
     return Some(x)
 def addOpt(a, b):

@@ -226,6 +226,21 @@ pub fn compile_targeting(
         .iter()
         .map(|m| (m.name.clone(), export_nullary_ctors(&m.ast)))
         .collect();
+    // Which of those the defining module backs with a `_Red = Red()` singleton
+    // (all of them, unless the module itself binds the singleton's name).
+    let singletons: HashMap<String, HashSet<String>> = project
+        .modules
+        .iter()
+        .map(|m| {
+            let binders = lowering::module_binder_names(&m.ast);
+            let set = nullary[&m.name]
+                .iter()
+                .filter(|c| !binders.contains(&lowering::nullary_singleton_name(c)))
+                .cloned()
+                .collect();
+            (m.name.clone(), set)
+        })
+        .collect();
     let newtypes: HashMap<String, HashSet<String>> = project
         .modules
         .iter()
@@ -279,6 +294,11 @@ pub fn compile_targeting(
             if let Some(ctors) = nullary.get(import) {
                 for ctor in ctors {
                     ctx.nullary_ctors.insert(format!("{import}.{ctor}"));
+                }
+            }
+            if let Some(ctors) = singletons.get(import) {
+                for ctor in ctors {
+                    ctx.nullary_singletons.insert(format!("{import}.{ctor}"));
                 }
             }
             if let Some(names) = newtypes.get(import) {

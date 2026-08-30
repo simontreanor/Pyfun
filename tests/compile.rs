@@ -720,7 +720,7 @@ fn try_find_lowers_to_an_option_and_pulls_in_the_option_prelude() {
     assert!(py.contains("class None_:"), "{py}");
     assert!(py.contains("def _pf_map_try_find(k, m):"), "{py}");
     assert!(py.contains("return Some(m.get(k))"), "{py}");
-    assert!(py.contains("return None_()"), "{py}");
+    assert!(py.contains("return _None_"), "{py}");
 }
 
 #[test]
@@ -1266,14 +1266,31 @@ fn match_on_lookups_falls_through_for_other_shapes() {
     )
     .unwrap();
     // A refutable payload, a guard, and a non-lookup scrutinee all keep the
-    // ordinary `match` over the helper's `Option` (a partial application of the
-    // lookup cannot reach a match at all: the checker rejects it).
-    assert_eq!(
-        py.matches("match _pf_map_try_find(k, m):").count(),
-        2,
+    // helper's `Option` (a partial application of the lookup cannot reach a
+    // match at all: the checker rejects it). The refutable payload keeps the
+    // `match`; the other two take the `isinstance` ladder (`DESIGN.md` §5.5).
+    assert!(
+        py.contains(
+            "    match _pf_map_try_find(k, m):
+        case Some(0):"
+        ),
         "{py}"
     );
-    assert_eq!(py.matches("match ").count(), 3, "{py}");
+    assert!(
+        py.contains(
+            "    _pf_t0 = _pf_map_try_find(k, m)
+    if isinstance(_pf_t0, Some):"
+        ),
+        "{py}"
+    );
+    assert!(
+        py.contains(
+            "    _pf_t1 = f(1)
+    if isinstance(_pf_t1, Some):"
+        ),
+        "{py}"
+    );
+    assert_eq!(py.matches("match ").count(), 1, "{py}");
 }
 
 #[test]
@@ -1552,7 +1569,7 @@ fn list_completeness_ops_lower_to_helpers() {
     .unwrap();
     // get is total (bounds-checked, no raw IndexError) and yields Some/None.
     assert!(
-        py.contains("Some(xs[i]) if 0 <= i < len(xs) else None_()"),
+        py.contains("Some(xs[i]) if 0 <= i < len(xs) else _None_"),
         "{py}"
     );
     // isEmpty / contains are fully-applied pure predicates: they inline (Lever A)
@@ -2097,7 +2114,7 @@ fn string_to_int_lowers_to_a_try_except_and_pulls_in_the_option_prelude() {
     assert!(py.contains("try:"), "{py}");
     assert!(py.contains("return Some(int(s))"), "{py}");
     assert!(py.contains("except ValueError:"), "{py}");
-    assert!(py.contains("return None_()"), "{py}");
+    assert!(py.contains("return _None_"), "{py}");
 }
 
 #[test]
@@ -2200,7 +2217,7 @@ fn result_to_option_pulls_in_both_preludes() {
     assert!(py.contains("class Some:"), "Option prelude: {py}");
     assert!(py.contains("def _pf_result_to_option(r):"), "{py}");
     assert!(py.contains("return Some(r._0)"), "{py}");
-    assert!(py.contains("return None_()"), "{py}");
+    assert!(py.contains("return _None_"), "{py}");
 }
 
 #[test]
@@ -2428,7 +2445,10 @@ fn a_compared_record_gets_order_true() {
         "type Point = { x: int, y: int }\nlet a = Point { x = 1, y = 2 } < Point { x = 1, y = 3 }",
     )
     .unwrap();
-    assert!(py.contains("@dataclass(frozen=True, order=True"), "{py}");
+    assert!(
+        py.contains("@dataclass(frozen=True, slots=True, order=True"),
+        "{py}"
+    );
 }
 
 #[test]
@@ -6075,10 +6095,12 @@ fn a_record_target_reads_the_fields_it_names() {
 
 #[test]
 fn a_destructuring_result_bind_rides_inside_the_ok_pattern() {
-    // `result`'s bespoke lowering keeps its flat statements: the target costs no
-    // extra unpacking line, it just becomes the `Ok` pattern's argument.
+    // `result`'s bespoke lowering keeps its flat statements: the target unpacks
+    // straight from the payload under the `isinstance` test.
     let py = pyfun::compile("let f r = result {\n  let! (a, b) = r\n  return a + b\n}").unwrap();
-    assert!(py.contains("case Ok((a, b)):"), "{py}");
+    assert!(py.contains("if isinstance(r, Ok):"), "{py}");
+    assert!(py.contains("a, b = r._0"), "{py}");
+    assert!(py.contains("return r"), "{py}");
 }
 
 #[test]
@@ -6138,25 +6160,28 @@ fn e2e_a_destructuring_bind_in_a_result_block() {
 // ---------- the `option` computation expression (`DESIGN.md` §8.1) ----------
 
 #[test]
-fn option_block_lowers_to_flat_match_statements() {
+fn option_block_lowers_to_flat_isinstance_statements() {
     // The reason `option` is a built-in rather than a user builder: a bespoke
     // lowering emits early returns, not a chain of nested `bind` lambdas.
     let py = pyfun::compile("let f o = option {\n  let! x = o\n  return (x + 1)\n}").unwrap();
-    assert!(py.contains("case Some(x):"), "{py}");
-    assert!(py.contains("case None_():"), "{py}");
+    assert!(py.contains("if isinstance(o, Some):"), "{py}");
+    assert!(py.contains("x = o._0"), "{py}");
     assert!(py.contains("return Some(x + 1)"), "{py}");
     assert!(!py.contains("lambda"), "{py}");
+    assert!(!py.contains("match "), "{py}");
 }
 
 #[test]
-fn option_short_circuit_forwards_a_fresh_none() {
-    // `None` carries no payload, so the failure arm binds nothing and returns a
-    // fresh one, where `result`'s must capture its error value to forward it.
+fn option_short_circuit_forwards_the_failure_value_itself() {
+    // A failed bind returns the scrutinee as it is: for `option` that is the
+    // `None` in hand, and for `result` the `Error e` is forwarded without being
+    // taken apart and rebuilt (structurally equal, and no identity to observe).
     let py = pyfun::compile("let f o = option {\n  let! x = o\n  return x\n}").unwrap();
-    assert!(py.contains("case None_():"), "{py}");
-    assert!(py.contains("return None_()"), "{py}");
-    // Nothing is bound in the failure arm.
-    assert!(!py.contains("case None_(_pf_t"), "{py}");
+    assert!(py.contains("        else:\n            return o\n"), "{py}");
+    assert!(!py.contains("return _None_"), "{py}");
+    let py = pyfun::compile("let g r = result {\n  let! x = r\n  return x\n}").unwrap();
+    assert!(py.contains("        else:\n            return r\n"), "{py}");
+    assert!(!py.contains("return Error("), "{py}");
 }
 
 #[test]
@@ -6165,14 +6190,18 @@ fn option_block_chains_binds_without_nesting_lambdas() {
         "let f xs = option {\n  let! a = List.get 0 xs\n  let! b = List.get 1 xs\n  return (a + b)\n}",
     )
     .unwrap();
-    assert_eq!(py.matches("case Some(").count(), 2, "{py}");
+    assert_eq!(py.matches(", Some):").count(), 2, "{py}");
+    // A non-name scrutinee is bound to a temp once, then tested and unwrapped.
+    assert!(py.contains("_pf_t1 = _pf_list_get(0, xs)"), "{py}");
+    assert!(py.contains("a = _pf_t1._0"), "{py}");
     assert!(!py.contains("functools.partial"), "{py}");
 }
 
 #[test]
-fn a_destructuring_bind_rides_inside_the_some_pattern() {
+fn a_destructuring_bind_unpacks_from_the_some_payload() {
     let py = pyfun::compile("let f o = option {\n  let! (a, b) = o\n  return a + b\n}").unwrap();
-    assert!(py.contains("case Some((a, b)):"), "{py}");
+    assert!(py.contains("if isinstance(o, Some):"), "{py}");
+    assert!(py.contains("a, b = o._0"), "{py}");
 }
 
 #[test]
@@ -6222,6 +6251,241 @@ fn e2e_option_block_return_bang_and_do_bang() {
             case None: 0
         ",
         &[("a", "6"), ("b", "0"), ("c", "0")],
+    );
+}
+
+// ---------- Option/Result matches as `isinstance` ladders; nullary singletons (`DESIGN.md` §5.5) ----------
+
+#[test]
+fn option_match_in_return_position_is_an_isinstance_ladder() {
+    let py = pyfun::compile("let f o =\n  match o:\n    case None: 0\n    case Some x: x").unwrap();
+    assert!(
+        py.contains("    if isinstance(o, None_):\n        return 0\n    else:\n        x = o._0\n        return x\n"),
+        "{py}"
+    );
+    // No `match`, and no unreachable non-exhaustive raise.
+    assert!(!py.contains("match "), "{py}");
+    assert!(!py.contains("non-exhaustive"), "{py}");
+}
+
+#[test]
+fn option_match_in_value_position_assigns_a_temp() {
+    let py = pyfun::compile("let f o = 1 + (match o:\n  case Some x: x\n  case None: 0)").unwrap();
+    assert!(
+        py.contains("    if isinstance(o, Some):\n        x = o._0\n        _pf_t0 = x\n    else:\n        _pf_t0 = 0\n    return 1 + _pf_t0\n"),
+        "{py}"
+    );
+}
+
+#[test]
+fn a_non_name_option_scrutinee_is_bound_once() {
+    let py = pyfun::compile(
+        "let w xs =\n  match List.findIndex ((==) 2) xs:\n    case Some i: i\n    case other: -1",
+    )
+    .unwrap();
+    assert!(py.contains("_pf_t0 = _pf_index_of(2, xs)"), "{py}");
+    assert!(py.contains("if isinstance(_pf_t0, Some):"), "{py}");
+    assert!(py.contains("i = _pf_t0._0"), "{py}");
+    // A variable catch-all binds the whole scrutinee.
+    assert!(py.contains("    else:\n        other = _pf_t0\n"), "{py}");
+}
+
+#[test]
+fn guarded_option_arms_fall_through_in_return_position() {
+    let py = pyfun::compile(
+        "let g o =\n  match o:\n    case Some x if x > 10: \"big\"\n    case Some x: \"small\"\n    case None: \"none\"",
+    )
+    .unwrap();
+    // The guarded arm is its own `if`, so a failed guard reaches the arms after it.
+    assert!(
+        py.contains("    if isinstance(o, Some):\n        x = o._0\n        if x > 10:\n            return \"big\"\n    if isinstance(o, Some):\n        x = o._0\n        return \"small\"\n    else:\n        return \"none\"\n"),
+        "{py}"
+    );
+}
+
+#[test]
+fn a_guarded_catch_all_falls_through_to_the_arms_after_it() {
+    let py = pyfun::compile(
+        "let g o =\n  match o:\n    case Some x if x > 10: 1\n    case _ if false: 2\n    case None: 3\n    case Some _: 4",
+    )
+    .unwrap();
+    assert!(py.contains("    if False:\n        return 2\n"), "{py}");
+    assert!(
+        py.contains(
+            "    if isinstance(o, None_):\n        return 3\n    else:\n        return 4\n"
+        ),
+        "{py}"
+    );
+    // The checker proved the two unguarded arms cover the type, so the ladder's
+    // own (identical) rule drops the defensive raise.
+    assert!(!py.contains("non-exhaustive"), "{py}");
+}
+
+#[test]
+fn a_guarded_option_arm_in_value_position_keeps_the_match() {
+    let py = pyfun::compile(
+        "let g o = 1 + (match o:\n  case Some x if x > 10: 1\n  case Some x: 2\n  case None: 3)",
+    )
+    .unwrap();
+    assert!(py.contains("match o:"), "{py}");
+    assert!(py.contains("case Some(x) if x > 10:"), "{py}");
+}
+
+#[test]
+fn a_tuple_payload_unpacks_from_the_some_payload() {
+    let py = pyfun::compile("let h o =\n  match o:\n    case Some (a, b): a + b\n    case _: 0")
+        .unwrap();
+    assert!(py.contains("    if isinstance(o, Some):\n        a, b = o._0\n        return a + b\n    else:\n        return 0\n"), "{py}");
+}
+
+#[test]
+fn a_refutable_payload_keeps_the_match() {
+    let py =
+        pyfun::compile("let z o =\n  match o:\n    case Some 0: true\n    case _: false").unwrap();
+    assert!(py.contains("case Some(0):"), "{py}");
+}
+
+#[test]
+fn result_match_is_an_isinstance_ladder() {
+    let py =
+        pyfun::compile("let k r =\n  match r:\n    case Ok v: v\n    case Error e: -1").unwrap();
+    assert!(
+        py.contains("    if isinstance(r, Ok):\n        v = r._0\n        return v\n    else:\n        e = r._0\n        return -1\n"),
+        "{py}"
+    );
+    assert!(
+        py.contains("class Error:"),
+        "the Result prelude is pulled in: {py}"
+    );
+}
+
+#[test]
+fn a_user_adt_match_still_emits_match_case() {
+    let py = pyfun::compile(
+        "type Dir = Across | Down\nlet delta d =\n  match d:\n    case Across: (0, 1)\n    case Down: (1, 0)",
+    )
+    .unwrap();
+    assert!(py.contains("match d:"), "{py}");
+    assert!(py.contains("case Across():"), "{py}");
+}
+
+#[test]
+fn a_nullary_constructor_value_loads_its_singleton() {
+    let py =
+        pyfun::compile("type Dir = Across | Down\nlet d = Across\nlet ds = [Down, Down]").unwrap();
+    assert!(py.contains("class Across:"), "{py}");
+    assert!(py.contains("_Across = Across()"), "{py}");
+    assert!(py.contains("_Down = Down()"), "{py}");
+    assert!(py.contains("d = _Across"), "{py}");
+    assert!(py.contains("ds = [_Down, _Down]"), "{py}");
+    // The class is called exactly once, for the singleton.
+    assert_eq!(py.matches("Across()").count(), 1, "{py}");
+}
+
+#[test]
+fn a_nullary_singleton_falls_back_when_its_name_is_taken() {
+    let py =
+        pyfun::compile("type Dir = Across | Down\nlet _Across = 1\nlet d = Across\nlet e = Down")
+            .unwrap();
+    assert!(!py.contains("_Across = Across()"), "{py}");
+    assert!(py.contains("d = Across()"), "{py}");
+    assert!(py.contains("_Down = Down()"), "{py}");
+    assert!(py.contains("e = _Down"), "{py}");
+}
+
+#[test]
+fn none_loads_the_prelude_singleton_unless_its_name_is_taken() {
+    let py = pyfun::compile("let n = None\nlet o = Map.tryFind 1 Map.empty").unwrap();
+    assert!(py.contains("_None_ = None_()"), "{py}");
+    assert!(py.contains("n = _None_"), "{py}");
+    assert!(py.contains("return _None_"), "{py}");
+    let py =
+        pyfun::compile("let _None_ = 1\nlet n = None\nlet o = Map.tryFind 1 Map.empty").unwrap();
+    assert!(!py.contains("_None_ = None_()"), "{py}");
+    assert!(py.contains("n = None_()"), "{py}");
+    assert!(py.contains("return None_()"), "{py}");
+}
+
+#[test]
+fn every_emitted_class_uses_slots() {
+    let py = pyfun::compile(
+        "type Shape = Circle float | Dot\ntype P = { x: int }\nlet r = Ok 1\nlet o = Some 1",
+    )
+    .unwrap();
+    assert_eq!(py.matches("@dataclass(").count(), 7, "{py}");
+    assert_eq!(py.matches("slots=True").count(), 7, "{py}");
+}
+
+#[test]
+fn e2e_option_ladders_and_singletons_agree_with_the_match_semantics() {
+    run_and_check(
+        "
+        type Dir = Across | Down
+        let g o =
+          match o:
+            case Some x if x > 10: \"big\"
+            case Some x: \"small\"
+            case None: \"none\"
+        let h o =
+          match o:
+            case Some (a, b): a + b
+            case _: 0
+        let k r =
+          match r:
+            case Ok v: v
+            case Error e: -1
+        let v o = 1 + (match o:
+          case Some x: x
+          case None: 0)
+        let only o =
+          match o:
+            case Some x if x > 0: x
+            case _ if false: 1
+            case None: 2
+            case Some _: 3
+        let a = g (Some 11)
+        let b = g (Some 1)
+        let c = g None
+        let d = h (Some (1, 2))
+        let e = k (Ok 4)
+        let f = k (Error \"x\")
+        let i = v (Some 3)
+        let j = only (Some 5)
+        let l = only (Some (0 - 5))
+        let m = only None
+        let n = Across == Across
+        let p = Set.len (Set.ofList [Across, Down, Across])
+        let q = Map.findOr Down 0 (Map.ofList [(Down, 7)])
+        ",
+        &[
+            ("a", "big"),
+            ("b", "small"),
+            ("c", "none"),
+            ("d", "3"),
+            ("e", "4"),
+            ("f", "-1"),
+            ("i", "4"),
+            ("j", "5"),
+            ("l", "3"),
+            ("m", "2"),
+            ("n", "True"),
+            ("p", "2"),
+            ("q", "7"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_slotted_records_update_compare_and_hash() {
+    run_and_check(
+        "
+        type Point = { x: int, y: int }
+        let p = Point { x = 1, y = 2 }
+        let q = { p with x = 3 }
+        let lt = p < q
+        let s = Set.len (Set.ofList [p, q, p])
+        ",
+        &[("q", "Point(x=3, y=2)"), ("lt", "True"), ("s", "2")],
     );
 }
 

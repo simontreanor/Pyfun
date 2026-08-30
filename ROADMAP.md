@@ -285,9 +285,12 @@ map_build 1.64× vs hand-written.
   output** on the ADT-heavy workload, landing near hand-written speed — the L is justified on these
   numbers. Two riders: (1) roughly half the gap closed *before* compilation — CPython's
   class-pattern `match` dispatch is expensive (Windows 3.14 ablation: 2.31× → 1.44× from the
-  rewrite alone), so the `if`/`isinstance` lowering mypyc forces is also a candidate lever on its
-  own, though it trades away the readable `match`/`case` output the default emitter promises —
-  native-mode-only unless a real workload demands otherwise; (2) frozen-dataclass ADTs compiled
+  rewrite alone), so the `if`/`isinstance` lowering mypyc forces is also a lever on its own. **It
+  shipped in the default emitter for `Option`/`Result` scrutinees on 2026-08-30** (`DESIGN.md`
+  §5.5, issues #87/#89): a real workload (a Scrabble move generator asking `Map.tryFind`/`List.findIndex`
+  millions of times per position) demanded it, and for a two-case type with one payload the ladder
+  *is* the readable form. User ADTs keep `match`/`case`, so native mode still needs the general
+  `if`/`elif` lowering; (2) frozen-dataclass ADTs compiled
   fine — mypyc's remaining headroom (native classes vs dataclasses, boxed union fields) is upside
   not yet claimed.
 - **Native backend** (not planned — recorded as a design-space note so the property it rests on

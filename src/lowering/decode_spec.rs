@@ -415,7 +415,7 @@ impl Lowerer {
                     },
                     body: vec![PyStmt::Assign {
                         target: r.clone(),
-                        value: call("None_", vec![]),
+                        value: self.nullary_value("None"),
                     }],
                     orelse,
                 });

@@ -581,7 +581,10 @@ fn emit_class(
     if variant_ordered {
         line(out, depth, "@total_ordering");
     }
-    let mut args = vec!["frozen=True".to_string()];
+    // `slots=True` drops the per-instance `__dict__`: construction and attribute
+    // access get cheaper, and an instance holds exactly its fields. Applies to
+    // every emitted class (variants, records, the prelude's `Some`/`Ok`/…).
+    let mut args = vec!["frozen=True".to_string(), "slots=True".to_string()];
     if order.is_some() && record {
         args.push("order=True".to_string());
     }

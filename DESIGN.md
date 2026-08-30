@@ -147,8 +147,9 @@ cleaner interop, and a structured target later passes can operate on. Emitted Py
 human-readable for debugging.
 
 Representative mappings: `let x = e` → assignment; expression `if` → ternary `IfExp`; `match` →
-Python `match` (3.10+) or an if-chain; `x |> f |> g` → `g(f(x))` (the pipe is pure
-parse/lowering-time sugar, no runtime cost).
+Python `match` (3.10+), or an `isinstance` ladder for the built-in two-case types (§5.5), or an
+if-chain for active patterns; `x |> f |> g` → `g(f(x))` (the pipe is pure parse/lowering-time
+sugar, no runtime cost).
 
 **Currying lowering (curried in the type system, n-ary in the output).** Functions are curried by
 default (§7), but naive currying would emit `add(1)(2)` everywhere — unreadable and slow. Because
@@ -170,7 +171,11 @@ section is unchanged.
 **Representation contracts.** ADTs, records, tuples, options/results, and curried/partially-
 applied functions each need a *stable* Python representation. That representation is a public
 contract — emitted code and interop both depend on it — so changing it is a breaking change, not
-an implementation detail.
+an implementation detail. The contract today: every ADT variant, record and prelude class is a
+frozen, **slotted** dataclass (`@dataclass(frozen=True, slots=True)`), so an instance holds exactly
+its fields and has no `__dict__`; a field-less variant is additionally backed by one module-level
+instance (§5.5) that every use of the constructor as a value loads, though constructing through the
+class by hand stays valid and equal to it.
 
 **Names Python already owns.** A Pyfun name is emitted as itself, with one exception: the emitted
 module is a Python namespace the compiler is also using. A binding whose name is a Python **keyword**
@@ -284,6 +289,49 @@ Because a rejection is otherwise invisible — the program simply keeps recursin
 precondition stopped it (`` note: `collect` calls itself in tail position but keeps its recursive
 form: a closure in it captures `n` ``). Nothing is reported for the overwhelming majority of
 functions, which have no self tail call at all. Mechanics in `INTERNALS.md`.
+
+### 5.5 `Option`/`Result` matches as `isinstance` ladders; nullary constructors as singletons
+
+`Option` is the return type of every stdlib accessor (`Map.tryFind`, `List.head`, `List.findIndex`),
+so a `match` on one is the commonest match in the language, and a real program asks it millions of
+times. A Python `match` resolves a class pattern through `__match_args__` and `isinstance` at
+runtime, then binds by position, which is structural machinery a two-case type with one payload does
+not need. A match whose arms are the constructors of one built-in family (`Some p`/`None`, or
+`Ok p`/`Error e`) with irrefutable payload patterns, optionally ending in a catch-all, therefore
+lowers to what a person writes:
+
+```python
+def allowsLetter(checks, rc, l):      # match Map.tryFind rc checks:
+    _pf_t0 = _pf_map_try_find(rc, checks)
+    if isinstance(_pf_t0, None_):     #   case None: true
+        return True
+    else:                             #   case Some s: Set.contains l s
+        s = _pf_t0._0
+        return l in s
+```
+
+The last arm of an exhaustive match is a plain `else`, and the `raise RuntimeError("non-exhaustive
+match")` the `match` lowering keeps as a belt-and-braces guard is dropped: the checker has proved
+the arms cover the type, and the ladder's own rule (both constructors unguarded, or an unguarded
+catch-all) is the checker's rule for this shape. A guarded arm in return position is its own `if`,
+so a failed guard falls through to the arms after it exactly as `case … if …:` does; in value
+position a guard would need a matched-flag to do the same, so a guarded value-position match keeps
+the `match` lowering. A refutable payload pattern (`case Some 0:`, `case Some (Some x):`) keeps it
+too. The `result {}`/`option {}` computation expressions use the same ladder for every `let!`,
+forwarding the failure as the value it already is. User ADTs still lower to `match`/`case`: the
+readable structural output is the point of the emitter, and only the built-in family is hot enough,
+and simple enough, to earn the exception.
+
+A field-less constructor has one possible value, so building a fresh instance at every mention
+(`rules.Across()`, `None_()` on every miss) is work for nothing. Each nullary variant, and the
+prelude's `None`, is therefore built **once**, right after its class, as a module-level singleton
+named after the class with a leading underscore (`_Across = Across()`, `_None_ = None_()`), and
+every use of the constructor as a value loads it. Equality is untouched: the dataclass compares by
+class and (absent) fields, so `_Across == Across()` holds and a hand-constructed instance matches
+`case Across():` as before; what changes is that `d == Across` in a hot loop is now a name load and
+an identity check that short-circuits in C. A program that binds the singleton's own name
+(`let _Across = …`) keeps the call form for that constructor, so the rewrite can never shadow a
+user binding. Mechanics in `INTERNALS.md`.
 
 ## 6. Python interop — the hard boundary
 
@@ -1083,8 +1131,8 @@ target reads one attribute per field it names. The target is held to irrefutabil
 check a parameter's is, so `let Some x = …` is rejected with a message naming what was written and
 pointing at `match`, which has somewhere to fall through to. Three positions take a target: a
 top-level `let`, a block-local `let`, and a computation expression's `let`/`let!` — where a
-destructuring bind costs nothing extra, because `result`'s pattern rides inside the `Ok` it already
-matches (`case Ok((r, c)):`). What cannot destructure is a binding that needs a single name to
+destructuring bind is one unpacking statement from the payload `result` has already tested
+(`r, c = x._0`). What cannot destructure is a binding that needs a single name to
 *be*: a function binding (`params` are what make it one) and a `let mut` (whose name is what `<-`
 reassigns) both reject a pattern target, each with its own message. Each name a destructuring
 binding introduces is generalized on its own, the same let-generalization a single-name binding
@@ -1626,10 +1674,11 @@ The four built-ins and how they lower to Python:
 | `option {}` | short-circuit on `None`            | the `Option` ADT, the same early-return chain; pure but short-circuiting |
 
 `result` and `option` are one lowering (`lowering::ShortCircuit`) differing only in how they spell
-their two cases, so neither can drift from the other. `option`'s is the simpler: `None` carries no
-payload, so its failure arm binds nothing and returns a fresh one (`case None_(): return None_()`)
-where `result`'s must capture the error value to forward it. Both emit a flat sequence of `match`
-statements with early returns, which is the whole reason they are built in: the user-builder path is
+their success case, so neither can drift from the other. Each `let!` is the `isinstance` ladder of
+§5.5: `if isinstance(r, Ok): x = r._0 … else: return r`, the failure forwarded as the value in hand
+(an `Error e` rebuilt as `Error(e)` would be structurally equal, and Pyfun exposes no identity to
+tell them apart). Both emit a flat sequence of tests with early returns, which is the whole reason
+they are built in: the user-builder path is
 an *expression* transform, so the same program written against a hand-rolled `Opt` module compiles
 to a chain of nested `bind` lambdas on one line. A CE earns its keep at **two or more** binds; a
 single bind reads better as `Option.map`/`Option.bind`.
