@@ -6584,7 +6584,9 @@ fn match_binder_shadowing_a_local_function_stays_n_ary() {
         let r = f (Some (fun x -> x + 1))
         ";
     let py = pyfun::compile(src).unwrap();
-    assert!(py.contains("_pf_t0 = pair(10)"), "{py}");
+    // The capture is also renamed (`pair` is in use elsewhere in the frame,
+    // `DESIGN.md` §5 "Arm-scoped captures"), so the call is on `_pair`.
+    assert!(py.contains("_pf_t0 = _pair(10)"), "{py}");
     assert!(py.contains("outer = functools.partial(pair, 1)"), "{py}");
     run_and_check(src, &[("r", "14")]);
 }
@@ -6621,4 +6623,288 @@ fn non_function_rebinding_evicts_the_local_arity() {
     assert!(py.contains("pair = functools.partial(pair, 1)"), "{py}");
     assert!(py.contains("return pair(x)"), "{py}");
     run_and_check(src, &[("r", "3")]);
+}
+
+// ---------- arm-scoped captures (issue #92, `DESIGN.md` §5) ----------
+
+#[test]
+fn a_capture_colliding_with_a_block_local_function_is_renamed() {
+    // The issue's program: `case Some pair:` would make `pair` a function-wide
+    // Python local and clobber the local `def pair`.
+    let src = "
+        let f o =
+          let pair a b = a + b
+          let r =
+            match o:
+              case Some pair: pair
+              case None: 0
+          pair r 1
+        let r = f (Some 5)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pair = o._0"), "{py}");
+    assert!(py.contains("return pair(r, 1)"), "{py}");
+    run_and_check(src, &[("r", "6")]);
+}
+
+#[test]
+fn a_capture_colliding_with_a_top_level_function_is_renamed() {
+    let src = "
+        let pair a b = a + b
+        let f o =
+          let r =
+            match o:
+              case Some pair: pair
+              case None: 0
+          pair r 1
+        let r = f (Some 5)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pair = o._0"), "{py}");
+    assert!(py.contains("return pair(r, 1)"), "{py}");
+    run_and_check(src, &[("r", "6")]);
+}
+
+#[test]
+fn a_capture_colliding_with_a_parameter_read_later_is_renamed() {
+    // `x` is read in the `None` arm (outside the capturing arm), so the capture
+    // is renamed and the parameter keeps its name.
+    let src = "
+        let f x o =
+          match o:
+            case Some x: x
+            case None: x
+        let a = f 1 (Some 5)
+        let b = f 1 None
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("def f(x, o):"), "{py}");
+    assert!(py.contains("_x = o._0"), "{py}");
+    assert!(py.contains("return _x"), "{py}");
+    assert!(py.contains("        return x\n"), "{py}");
+    run_and_check(src, &[("a", "5"), ("b", "1")]);
+}
+
+#[test]
+fn sibling_arms_capturing_the_same_name_are_not_renamed() {
+    // Disjoint alternatives reading their own capture: nothing to protect.
+    let py =
+        pyfun::compile("let f r =\n  match r:\n    case Ok x: x\n    case Error x: 0 - x").unwrap();
+    assert!(py.contains("x = r._0"), "{py}");
+    assert!(!py.contains("_x"), "{py}");
+}
+
+#[test]
+fn an_unreferenced_outer_name_does_not_force_a_rename() {
+    // The parameter `x` is never read in the frame, so the capture keeps its name.
+    let py =
+        pyfun::compile("let f x o =\n  match o:\n    case Some x: x\n    case None: 0").unwrap();
+    assert!(py.contains("x = o._0"), "{py}");
+    assert!(!py.contains("_x"), "{py}");
+}
+
+#[test]
+fn e2e_nested_matches_capturing_the_same_name_get_distinct_fresh_names() {
+    // The outer arm reads its own capture after the inner match, so both are
+    // renamed, to different names, and the outer value survives.
+    let src = "
+        let f x o p =
+          match o:
+            case Some x:
+              let inner =
+                match p:
+                  case Some x: x * 10
+                  case None: x
+              inner + x
+            case None: x
+        let r = f 1 (Some 2) (Some 3)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = o._0"), "{py}");
+    assert!(py.contains("_x2 = p._0"), "{py}");
+    assert!(py.contains("return inner + _x"), "{py}");
+    run_and_check(src, &[("r", "32")]);
+}
+
+#[test]
+fn e2e_a_closure_made_before_the_match_reads_the_original_binding() {
+    // `get` closes over the block-local `n`; a capture named `n` must not
+    // rebind the slot the closure reads.
+    let src = "
+        let f o =
+          let n = 100
+          let get u = n + u
+          let r =
+            match o:
+              case Some n: n
+              case None: 0
+          r + get 0
+        let r = f (Some 5)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_n = o._0"), "{py}");
+    run_and_check(src, &[("r", "105")]);
+}
+
+#[test]
+fn e2e_or_and_record_pattern_captures_are_renamed_consistently() {
+    let src = "
+        type Point = { x : int, y : int }
+        let f y p q =
+          let a =
+            match p:
+              case Point { x = 0, y }: y
+              case Point { x }: x + y
+          let b =
+            match q:
+              case (0, y) | (y, 0): y
+              case (_, _): y
+          a + b
+        let r = f 1000 (Point { x = 0, y = 2 }) (0, 3)
+        let s = f 1000 (Point { x = 4, y = 2 }) (7, 8)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("case Point(x=0, y=_y):"), "{py}");
+    assert!(py.contains("case (0, _y2) | (_y2, 0):"), "{py}");
+    assert!(py.contains("_pf_t0 = x + y"), "{py}");
+    run_and_check(src, &[("r", "5"), ("s", "2004")]);
+}
+
+#[test]
+fn e2e_a_value_position_capture_is_renamed() {
+    let src = "
+        let f o =
+          let total a b = a + b
+          1 + (match o:
+                 case Some total: total
+                 case None: 0) + total 1 1
+        let r = f (Some 5)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_total = o._0"), "{py}");
+    assert!(py.contains("total(1, 1)"), "{py}");
+    run_and_check(src, &[("r", "8")]);
+}
+
+#[test]
+fn e2e_a_lookup_peephole_capture_is_renamed() {
+    // `match Map.tryFind` lowers to `if k in m:` and binds the payload directly;
+    // the binder goes through the same rename.
+    let src = "
+        let f m k =
+          let v = 100
+          let found =
+            match Map.tryFind k m:
+              case Some v: v
+              case None: 0
+          found + v
+        let r = f (Map.ofList [(1, 5)]) 1
+        let s = f (Map.ofList [(1, 5)]) 2
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("if k in m:\n        _v = m[k]"), "{py}");
+    run_and_check(src, &[("r", "105"), ("s", "100")]);
+}
+
+#[test]
+fn e2e_an_active_pattern_capture_is_renamed() {
+    let src = "
+        let (|Positive|_|) n = if n > 0 then Some n else None
+        let f p n =
+          let label =
+            match n:
+              case Positive p: p * 2
+              case _: 0
+          label + p
+        let r = f 1000 5
+        let s = f 1000 0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_p = _pf_t"), "{py}");
+    assert!(py.contains("_pf_t0 = _p * 2"), "{py}");
+    assert!(py.contains("return label + p"), "{py}");
+    run_and_check(src, &[("r", "1010"), ("s", "1000")]);
+}
+
+#[test]
+fn a_fresh_capture_name_bumps_past_a_name_in_use() {
+    // `_pair` is already a binding in the frame, so the capture becomes `_pair2`.
+    let src = "
+        let f o =
+          let pair a b = a + b
+          let _pair = 7
+          let r =
+            match o:
+              case Some pair: pair
+              case None: 0
+          pair r _pair
+        let r = f (Some 5)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pair2 = o._0"), "{py}");
+    run_and_check(src, &[("r", "12")]);
+}
+
+#[test]
+fn e2e_a_lambda_parameter_inside_the_arm_keeps_its_own_name() {
+    // The capture `x` is renamed (the frame reads `x` after the match); the
+    // lambda's own parameter `x` is its own scope and is not.
+    let src = "
+        let f x o =
+          let r =
+            match o:
+              case Some x: List.map (fun x -> x + 1) x
+              case None: []
+          List.len r + x
+        let r = f 10 (Some [1, 2, 3])
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_x = o._0"), "{py}");
+    assert!(py.contains("lambda x: x + 1, _x"), "{py}");
+    assert!(py.contains("return len(r) + x"), "{py}");
+    run_and_check(src, &[("r", "13")]);
+}
+
+#[test]
+fn e2e_a_module_level_capture_colliding_with_a_global_read_is_renamed() {
+    // A top-level value's match captures are module globals. A collision with a
+    // top-level *binding* is already isolated by `lower_module`'s frame wrap; a
+    // collision with a name the module reads but does not bind (a builtin) is
+    // the module frame's own census: `print` must not become an integer.
+    let src = "
+        let m =
+          match Some 5:
+            case Some print: print
+            case None: 0
+        let show x = print x
+        let r = m
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_print = "), "{py}");
+    assert!(py.contains("print(x)"), "{py}");
+    run_and_check(src, &[("r", "5")]);
+}
+
+#[test]
+fn a_fold_loop_arm_capture_is_renamed_in_the_enclosing_frame() {
+    // The folder body is inlined into the frame's `for` loop (the in-place fold
+    // pass), so a capture in it that collides with a name the frame reads is
+    // renamed like any other. (A collision with an enclosing *local* never gets
+    // this far: the fold pass's P8 check refuses to inline it.)
+    let src = "
+        let bump x = x + 100
+        let f xs =
+          let seen = List.fold (fun acc o ->
+            match o:
+              case Some bump: Map.add bump 1 acc
+              case None: acc) Map.empty xs
+          bump (Map.len seen)
+        let r = f [Some 1, None, Some 2]
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for o in xs:"), "{py}");
+    assert!(py.contains("case Some(_bump):"), "{py}");
+    assert!(py.contains("acc[_bump] = 1"), "{py}");
+    assert!(py.contains("return bump(len(seen))"), "{py}");
+    run_and_check(src, &[("r", "102")]);
 }

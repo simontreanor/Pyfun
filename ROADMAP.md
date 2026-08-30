@@ -208,6 +208,56 @@ let parseCoord tok =
    the tree-sitter grammar accepts the new targets (and destructuring *parameters*, which the language
    had but the grammar did not).
 
+## Dogfooding findings (2026-08-30, third session: performance)
+
+A third pass over the Scrabble program was about runtime cost rather than missing capability: the
+program was complete and correct, and the question was how far the emitted Python sat from what a
+person would write in the hot paths. Six issues came out of it (#84 to #89), each measured by
+hand-editing the emitted module and timing the result, and all shipped the same day in PRs #90, #91,
+#93 and #94; a seventh (#92), found while fixing #84, shipped in the PR that adds this entry.
+
+10. ~~**Two miscompiles the checker could not see**~~ **CLOSED 2026-08-30** (#84 in #91, #92 in the
+    PR carrying this entry). A block-local `let pair a b` applied to one argument was emitted as a
+    full call with one argument, because lowering took arity from a top-level table only; the
+    checker had typed it as a partial application. Now a block-scoped arity table sits beside the
+    fold pass's local-folder registry with the same save/restore/shadow discipline, so `List.map
+    (pair 10)` with a block-local `pair` prints `[11, 12]`, and two lambda workarounds in the
+    program came out. The second was the mirror image: a match-arm capture named like a block-local
+    `def` (`case Some pair: pair`, then `pair r 1`) is arm-scoped in Pyfun but a function-wide local
+    in Python, so the later call found an integer. A capture that reuses a name the function uses
+    elsewhere is now emitted as `_name` (`DESIGN.md` §5, "Arm-scoped captures").
+
+11. ~~**A destructuring folder went quadratic**~~ **CLOSED 2026-08-30** (#85 in #90). The in-place
+    fold pass rejected `fun m (p, l) -> Map.add p l m` because the element parameter had no single
+    name, and the `functools.reduce` fallback copies the accumulator on every step. The element
+    parameter may now be any irrefutable pattern (Python's own `for (p, l) in steps:` header). On
+    the program's automaton build: 2,000 words 478ms to 15ms, and the full 267,751-word list builds
+    in 1.85s, the same as the `fst`/`snd` spelling it used to need.
+
+12. ~~**Option was a tax on every accessor**~~ **CLOSED 2026-08-30** (#86 to #89 in #93 and #94).
+    Four costs in the stdlib's `Option` convention, each cheap alone and paid millions of times per
+    position: `List.findIndex ((==) x)` ran a Python-level scan with a fresh lambda; `match
+    Map.tryFind k m:` built a `Some` only to take it apart; every miss constructed a new `None_()`;
+    and every `Option` match went through CPython's class-pattern dispatch plus an unreachable
+    `case _`. Now `List.findIndex/find/exists ((==) x)` route to `list.index`/`in`; a match that
+    consumes `Map.tryFind`, `List.head` or `List.get` on the spot lowers to `if k in m: v = m[k]`
+    with no `Option` built; nullary constructors are module-level singletons (`_None_`, `_Across`);
+    and `Option`/`Result` matches are `if isinstance(o, Some): x = o._0` ladders. Downstream:
+    `takeLetter` emits `_pf_index_of(l, rack)` at 3 sites and `allowsLetter` emits `if rc in checks:
+    s = checks[rc]; return l in s`, output identical (46,271 candidates); generation on the Mega
+    position went ERSTAING 1.26s to 1.01s, ERSTAIN? 9.84s to 7.63s, QU??AING 13.3s to 10.3s, 1.29x
+    overall against the 1.27x predicted from the hand-patched output; and scoring through
+    `Rules.validate` gained about 8% (4.5s to 4.1s) without being the target, because it uses
+    `Option` and `Map.tryFind` too. 45 engine tests and 4 golden replays byte-identical, no source
+    changes needed.
+
+    Three decisions made this round, all now in `DESIGN.md` §5: the `isinstance` ladder is the
+    default emitter's output for `Option`/`Result` (the rider in the performance section below that
+    kept it native-mode-only is retired; user ADTs still emit `match`/`case`); `slots=True` on every
+    emitted class, so `vars(instance)` no longer works from Python, the one visible interop change
+    and one to name in the next release notes; and nullary singletons are spelled `_Ctor`, with a
+    fallback to `Ctor()` when a program binds that name.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named

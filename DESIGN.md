@@ -191,6 +191,19 @@ rather than a fixed list, so an `import` shadowed by a binding is **aliased** in
 (`import math as _pf_math`), leaving the user's `math` binding untouched. Programs that claim none of
 these names — nearly all of them — emit byte-identical output either way.
 
+**Arm-scoped captures.** A match arm's capture (`case Some pair: …`) is scoped to its arm. The
+Python it lowers to (`case Some(pair):`, or `pair = o._0` in an `isinstance` ladder) is an
+assignment to a local of the enclosing function, and Python locals are function-wide: one slot per
+name per function. Left alone, a capture that reuses a name the function also uses for something
+else (a block-local `def`, a parameter, a global it reads later) would rebind that slot for the rest
+of the function, and a later read would see the captured value where the program meant the original
+binding. So the compiler guarantees that an arm-scoped capture never rebinds another binding of the
+same name in the emitted function: when the name is in use elsewhere in that function, the capture
+is emitted as `_name` (`case Some(_pair): return _pair`, bumped to `_name2` if that is taken) and
+every reference inside the arm follows it; otherwise the name is emitted as itself. Sibling arms that
+capture the same name are disjoint alternatives reading their own capture and do not force the
+rename, so the common `case Ok x: … case Error x: …` keeps its names. Mechanics in `INTERNALS.md`.
+
 ### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 
 Because the collections are immutable-style (every operation returns a fresh container, §6), building a

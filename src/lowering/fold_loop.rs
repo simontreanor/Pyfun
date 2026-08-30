@@ -388,14 +388,26 @@ impl Lowerer {
                 (PyForTarget::Name(tmp), unpack)
             }
         };
-        // The inlined folder body as the loop body.
-        body.extend(self.lower_fold_step(
+        // The inlined folder body as the loop body. It joins the enclosing Python
+        // frame, whose capture-rename census hid the folder's own names as a
+        // nested scope, so the body's occurrences are added on top for the
+        // duration (`captures.rs`; an over-count only ever freshens more).
+        let merged = self.frames.last().map(|f| f.merged_with(plan.step_body));
+        let pushed = merged.is_some();
+        if let Some(frame) = merged {
+            self.frames.push(frame);
+        }
+        let step = self.lower_fold_step(
             plan.step_body,
             &plan.base_locals,
             &plan.slots,
             &plan.acc_param,
             plan.single,
-        )?);
+        );
+        if pushed {
+            self.frames.pop();
+        }
+        body.extend(step?);
         stmts.push(PyStmt::For { target, iter, body });
         // The result: the mutated accumulator(s) — a fresh container graph (P11).
         let value = if plan.single {
@@ -432,16 +444,15 @@ impl Lowerer {
             ExprKind::Match { scrutinee, arms } => {
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
-                for arm in arms {
+                for (i, arm) in arms.iter().enumerate() {
+                    // Binders shadow same-named registry entries, and a capture the
+                    // frame uses elsewhere is renamed (`enter_arm`).
+                    let scope = self.enter_arm(arms, i, locals);
                     let pattern = self.lower_pattern(&arm.pattern);
-                    let bindings = super::pattern_bindings(&arm.pattern);
-                    let arm_locals = super::extend(locals, &bindings);
-                    // Pattern binders shadow same-named local folders.
-                    let shadowed = self.shadow_local_fns(&bindings);
-                    let guard = self.lower_guard(&arm.guard, &arm_locals)?;
+                    let guard = self.lower_guard(&arm.guard, &scope.locals)?;
                     let body =
-                        self.lower_fold_step(&arm.body, &arm_locals, slots, acc_param, single)?;
-                    self.unshadow_local_fns(shadowed);
+                        self.lower_fold_step(&arm.body, &scope.locals, slots, acc_param, single)?;
+                    self.exit_arm(scope);
                     cases.push(PyCase {
                         pattern,
                         guard,

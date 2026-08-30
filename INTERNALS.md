@@ -231,6 +231,50 @@ driver computes each module's singleton set with the same two functions and pass
 defines it and `palette.Red()` otherwise; a project module that needs `Option` imports `_None_` from
 the runtime alongside `Some`/`None_` unless it binds that name itself.
 
+### Arm-scoped captures — implements DESIGN §5 ("Arm-scoped captures")
+
+A match arm's capture becomes a function-wide Python local, so a capture that reuses a name the
+enclosing Python frame uses elsewhere is renamed (issue #92). The rule, in `src/lowering/captures.rs`:
+a capture `n` of arm `A` is freshened when `n` occurs in the frame outside `A`, not counting sibling
+arms of the same match that also capture `n`. An occurrence is a `Var` reference or an `<-` assignment
+target, never a binder. The census (`collect_occurrences`) walks the frame's whole body, nested
+closures included (a closure's free reference resolves to the frame's slot), but on entering a nested
+Python scope (an `ExprKind::Fn`, a parameterised block `let`, a computation expression) it hides every
+name that scope binds for itself, its parameters and its frame-level binders, so a lambda's own `x`
+is its own slot. Binders in the same frame hide nothing: a block `let`, a parameter, another arm's
+capture and a fold loop variable all share the frame's one slot per name, which is the whole problem.
+
+`Lowerer::frames` is a stack of `Frame { occurrences, fresh }`, pushed in `lower_fn_body` (every
+function and every statement-bodied lambda), in `lower_ce` (a built-in CE body is its own function; a
+user builder desugars into the enclosing frame, so its frame is the enclosing census with the CE
+body's occurrences added on top), and once in `lower_module` (top-level values evaluate at module
+scope; a parameterised top-level `let` and an active-pattern recognizer are their own defs). The
+fold-loop pass inlines a folder body into the enclosing frame, whose census hid that body as a nested
+scope, so `emit_fold_loop` pushes the enclosing frame merged with the body's occurrences for the
+duration. A def-emission site without its own push inherits the enclosing census, and every merge
+over-counts; both only ever freshen more, never less.
+
+`Lowerer::enter_arm(arms, idx, locals)` is the one place an arm is entered, used by every arm-binding
+site (the return- and value-position `match`, the active-pattern chain and fall-through sequence, the
+`Option`/`Result` ladder, the lookup peephole, the fold pass's inlined match). It extends the locals,
+shadows same-named registry entries, then for each capture computes
+`frame[n] - occurrences_in(A) - Σ occurrences_in(sibling arms capturing n)` and, when positive,
+installs `n → fresh` in `Lowerer::renames`, where `fresh_capture_name` is `_` + the name, bumped with
+a counter while the frame uses it, it was already handed out in the frame, it is a binder anywhere in
+the module, or it would land in the reserved `_pf_` space. `exit_arm` removes the arm's renames and
+unshadows. `renames` follows the block-scoped registries' discipline (`LocalScope`/`Shadowed`):
+saved and restored per block, displaced by parameters, lambda parameters and inner captures
+(`shadow_local_fns`), evicted by a block `let` or CE binder of the same name. Every place a binder or
+reference is spelled consults it: `lower_var` (first thing, before any routing), `lower_pattern`
+(captures, list rests, as-names), `bind_irrefutable`/`unpack_into_as` through their rename hook, the
+lookup peephole's `bind_arm_payload`, the ladder's whole-value binding and the active-pattern chain's
+binder assignments.
+
+Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), and a CE
+`let!`/`let` target, which is block-scoped in Pyfun exactly as in Python and so needs no freshening.
+Also out of scope: a block-local `let` inside an arm that shadows an outer block-local of the same
+name has the same function-wide-slot shape and is not renamed by this pass.
+
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 
 `Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures —
