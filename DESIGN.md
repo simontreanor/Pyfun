@@ -199,16 +199,22 @@ locals are function-wide: one slot per name per function. Left alone, a capture 
 reuses a name the function also uses for something else (a block-local `def`, a parameter, an outer
 `let`, a global it reads later) would rebind that slot for the rest of the function, and a later read
 would see the inner value where the program meant the original binding. So the compiler guarantees
-that neither ever rebinds another binding of the same name in the emitted function: when the name is
-in use elsewhere in that function outside the arm or block, the binder is emitted as `_name`
-(`case Some(_pair): return _pair`; `_x = 10`, bumped to `_name2` if that is taken) and every
-reference to it follows; otherwise the name is emitted as itself. Sibling arms that capture the same
-name are disjoint alternatives reading their own capture and do not force the rename, so the common
-`case Ok x: … case Error x: …` keeps its names; a `let` at the root of a function body is never
-renamed, since rebinding a name in sequence is exactly what Python does too; and a nested
-`let x = x + 1` reads the outer `x` in its value and binds the fresh name, as `_x = x + 1`. A
-renamed nested function is defined under its fresh name and recurses under it, and a renamed
-`let mut` is assigned under it, including from a closure's `nonlocal`. Mechanics in `INTERNALS.md`.
+that neither ever rebinds another binding of the same name in the emitted function, and the rule is
+liveness: when some reference to the name outside the arm or block resolves to a binding that is
+live across it (a parameter, a `let` at the root of the function body, a global or builtin, a
+binding of an enclosing function, or an arm or block that encloses this one), the binder is emitted
+as `_name` (`case Some(_pair): return _pair`; `_x = 10`, bumped to `_name2` if that is taken) and
+every reference to it follows; otherwise the name is emitted as itself. A reference bound by a
+*disjoint* arm or block reads its own binding and does not force the rename, whether the two are
+sibling arms of one match or arms of two matches in sequence, so the common `case Ok v: … case
+Error why: …` keeps its names however many matches in a function spell it. The one exception is a
+reference inside a nested closure, which always counts, since a closure can outlive its arm: a
+lambda made in one arm that reads `why` forces a later arm capturing `why` to rename. A `let` at
+the root of a function body is never renamed, since rebinding a name in sequence is exactly what
+Python does too; a nested `let x = x + 1` reads the outer `x` in its value and binds the fresh
+name, as `_x = x + 1`. A renamed nested function is defined under its fresh name and recurses under
+it, and a renamed `let mut` is assigned under it, including from a closure's `nonlocal`. Mechanics
+in `INTERNALS.md`.
 
 ### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 

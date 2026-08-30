@@ -234,20 +234,37 @@ the runtime alongside `Some`/`None_` unless it binds that name itself.
 ### Arm-scoped captures and nested-block `let`s — implements DESIGN §5
 
 A match arm's capture, and a `let` in a nested block, both become function-wide Python locals, so one
-that reuses a name the enclosing Python frame uses elsewhere is renamed (issues #92 and #96). The
-rule, in `src/lowering/captures.rs`: a capture `n` of arm `A` is freshened when `n` occurs in the
-frame outside `A`, not counting sibling arms of the same match that also capture `n`; a `let n` in a
-nested block `B` is freshened when `n` occurs in the frame outside `B` (occurrences inside `B`
-include the `let`'s own value, so `let x = x + 1` there reads the outer `x` and Python's
-`_x = x + 1` is right either way). An occurrence is a `Var` reference or an `<-` assignment
-target, never a binder. The census (`collect_occurrences`) walks the frame's whole body, nested
-closures included (a closure's free reference resolves to the frame's slot), but on entering a nested
-Python scope (an `ExprKind::Fn`, a parameterised block `let`, a computation expression) it hides every
-name that scope binds for itself, its parameters and its frame-level binders, so a lambda's own `x`
-is its own slot. Binders in the same frame hide nothing: a block `let`, a parameter, another arm's
-capture and a fold loop variable all share the frame's one slot per name, which is the whole problem.
+that another binding of the same name is live across is renamed (issues #92, #96 and #97). The
+rule, in `src/lowering/captures.rs`, is liveness: binder `B` of name `n` (an arm capture or a
+nested-block `let`) is freshened when some reference to `n` outside `B` resolves, under Pyfun
+scoping, to a binding that is live across `B`: the frame root (a parameter, a root-level `let`, a
+global or builtin, a binding of an enclosing frame) or an arm/nested-block binder whose extent
+encloses `B`. A reference bound by a disjoint arm or block (a sibling arm, an arm of a different
+match, another block's `let`) reads its own binding and does not count; a reference inside a nested
+closure always counts, since the closure can outlive its arm; and `B`'s own references never count
+for `B`, closure or not. So `case Error why:` in three sequential matches keeps `why`, while the same
+three arms under a root-level `why` read at the end all rename, and a lambda made in one arm that
+reads `why` forces a later arm capturing `why` to rename.
 
-`Lowerer::frames` is a stack of `Frame { occurrences, fresh }`, pushed in `lower_fn_body` (every
+The census is one walk of the frame's body (`Census`) that resolves every `Var` reference and `<-`
+target to what it reads at that point, recorded as an `Occurrence { binder, in_closure }`: `binder`
+is `None` for the frame root, or the identity of a registered arm/nested-block binder. Identity is
+the address of the AST node (`binder_key`, the `MatchArm` or the `LetBinding`), which is what the
+lowering holds when it decides that binder, so no spans are involved and a desugared or cloned tree
+can never be mistaken for the original. Each registered binder also records its `ancestors`, the
+registered binders enclosing it, so `Frame::must_rename(n, key)` can tell an enclosing binder from a
+disjoint one. A binder the census never saw gets the conservative answer (every foreign occurrence
+counts). On entering a nested Python scope (an `ExprKind::Fn`, a parameterised block `let`, a
+computation expression) the walk marks that scope's parameters and everything it binds as `Inner`,
+which produces no occurrence at all (a lambda's own `x` is its own slot), while a free reference in
+it still resolves through the enclosing environment and is recorded with `in_closure`. A root-level
+`let` binds to the root; a nested-block `let` registers itself and binds for the rest of its block,
+its value having been walked first (so `let x = x + 1` reads the outer `x`); a parameterised `let`
+binds its name before its body, so a recursive reference is its own. Binders never produce an
+occurrence. The walk mirrors the lowering's block depth, so a block is root exactly when
+`Frame::block_is_nested` says so at that point.
+
+`Lowerer::frames` is a stack of `Frame`s, pushed in `lower_fn_body` (every
 function and every statement-bodied lambda), in `lower_ce` (a built-in CE body is its own function; a
 user builder desugars into the enclosing frame, so its frame is the enclosing census with the CE
 body's occurrences added on top), and once in `lower_module` (top-level values evaluate at module
@@ -260,9 +277,9 @@ over-counts; both only ever freshen more, never less.
 `Lowerer::enter_arm(arms, idx, locals)` is the one place an arm is entered, used by every arm-binding
 site (the return- and value-position `match`, the active-pattern chain and fall-through sequence, the
 `Option`/`Result` ladder, the lookup peephole, the fold pass's inlined match). It extends the locals,
-shadows same-named registry entries, then for each capture computes
-`frame[n] - occurrences_in(A) - Σ occurrences_in(sibling arms capturing n)` and, when positive,
-installs `n → fresh` in `Lowerer::renames`, where `fresh_capture_name` is `_` + the name, bumped with
+shadows same-named registry entries, then for each capture asks `Frame::must_rename(n, key(arm))`
+and, when it says so, installs `n → fresh` in `Lowerer::renames`, where `fresh_capture_name` is `_`
++ the name, bumped with
 a counter while the frame uses it, it was already handed out in the frame, it is a binder anywhere in
 the module, or it would land in the reserved `_pf_` space. `exit_arm` removes the arm's renames and
 unshadows. `renames` follows the block-scoped registries' discipline (`LocalScope`/`Shadowed`):
@@ -279,10 +296,9 @@ block) and reset by each frame push, plus `root_is_body`: whether the first bloc
 frame's own body (`lower_fn_body` sets it when the body is a block; a computation expression's items
 are not a block, so any block inside a CE is nested; the module frame treats a block-valued top-level
 binding as root, since a collision with a module-level binding is already isolated by
-`lower_module`'s frame wrap). A block that is not the root (`Frame::block_is_nested`) gets its own
-census (`block_occurrences`) on entry, and `lower_block_let` decides each bound name by
-`frame[n] - block[n] > 0`. A root-level `let` never renames: rebinding in sequence is what Python does
-too. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
+`lower_module`'s frame wrap). In a block that is not the root (`Frame::block_is_nested`, reported by
+`enter_block`), `lower_block_let` decides each bound name by `Frame::must_rename(n, key(let))`. A
+root-level `let` never renames: rebinding in sequence is what Python does too. Ordering: a value `let` lowers its value first (references there mean the outer binding), then
 installs `n → _n` in `renames` for the rest of the block, where it dies with the block's
 `restore_local_scope`; a parameterised `let` installs it before its body so a recursive call resolves
 to the renamed def, and the def is emitted under the fresh name. The emitted target is passed down
@@ -293,8 +309,10 @@ the value lowers. A `let mut` is covered: an `<-` target spells through `py_bind
 through the renames active when the nested function is lowered, which is while the outer rename is
 in force.
 
-Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), and a CE
-`let!`/`let` target, which is block-scoped in Pyfun exactly as in Python and so needs no freshening.
+Deliberately not counted: binders (a later `let x` in the frame assigns before it reads), a
+reference bound by a disjoint arm or block (its own slot in Pyfun and, by the time it runs, its own
+value in Python), and a CE `let!`/`let` target, which is block-scoped in Pyfun exactly as in Python
+and so needs no freshening.
 
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 

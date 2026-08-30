@@ -469,11 +469,11 @@ impl Lowerer {
                 let last = stmts.len().saturating_sub(1);
                 // Block scope for the local registries (see `lower_block_return`).
                 let saved = self.save_local_scope();
-                let nested = self.enter_block(stmts);
+                let nested = self.enter_block();
                 for (i, st) in stmts.iter().enumerate() {
                     match st {
                         BlockStmt::Let(b) => {
-                            self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
+                            self.lower_block_let(b, &locals, &mut out, nested)?;
                             locals.extend(b.bound_names());
                         }
                         BlockStmt::Expr(e) if i == last => {

@@ -228,7 +228,10 @@ this entry.
     in Python, so the later call found an integer, and a `let` in a nested block (#96, an `if`
     branch rebinding `x`) had the same shape. A capture or nested `let` that reuses a name the
     function uses elsewhere is now emitted as `_name` (`DESIGN.md` §5, "Arm-scoped captures and
-    nested-block `let`s").
+    nested-block `let`s"). Downstream review found the first rule too eager (#97, closed the same
+    day): it renamed a name reused across sequential matches, where nothing is live across the
+    rename, so the rule was tightened to liveness and `case Error why:` in three matches of one
+    function keeps its plain name.
 
 11. ~~**A destructuring folder went quadratic**~~ **CLOSED 2026-08-30** (#85 in #90). The in-place
     fold pass rejected `fun m (p, l) -> Map.add p l m` because the element parameter had no single

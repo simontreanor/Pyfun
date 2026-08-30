@@ -1247,10 +1247,10 @@ impl Lowerer {
     }
 
     /// Enter match arm `idx` of `arms`: extend the locals with its bindings,
-    /// shadow same-named registry entries, and rename any capture whose name the
-    /// enclosing Python frame uses outside this arm (`captures.rs`). Sibling arms
-    /// that capture the same name are disjoint alternatives reading their own
-    /// capture, so their occurrences do not count.
+    /// shadow same-named registry entries, and rename any capture that another
+    /// binding of the same name is live across (`captures.rs`, the liveness rule):
+    /// a reference bound by a disjoint arm or block reads its own binding and does
+    /// not force the rename; one inside a closure always does.
     fn enter_arm(
         &mut self,
         arms: &[crate::parser::ast::MatchArm],
@@ -1272,14 +1272,7 @@ impl Lowerer {
             let Some(frame) = self.frames.last() else {
                 continue;
             };
-            let total = frame.occurrences.get(name).copied().unwrap_or(0);
-            let mut inside = captures::arm_occurrences(arm, name);
-            for (j, other) in arms.iter().enumerate() {
-                if j != idx && pattern_bindings(&other.pattern).iter().any(|b| b == name) {
-                    inside += captures::arm_occurrences(other, name);
-                }
-            }
-            if total.saturating_sub(inside) == 0 {
+            if !frame.must_rename(name, captures::binder_key(arm)) {
                 continue;
             }
             let fresh = self.fresh_capture_name(name);
@@ -1301,15 +1294,15 @@ impl Lowerer {
         self.unshadow_local_fns(scope.shadowed);
     }
 
-    /// Enter a block: bump the frame's block depth and, when the block is nested
-    /// (not the frame's root body), return its occurrence census so its `let`s
-    /// can be renamed (`captures.rs`). Paired with [`Lowerer::exit_block`].
-    fn enter_block(&mut self, stmts: &[BlockStmt]) -> Option<HashMap<String, usize>> {
-        let frame = self.frames.last_mut()?;
+    /// Enter a block: bump the frame's block depth and say whether the block is
+    /// nested (not the frame's root body), so its `let`s are candidates for
+    /// renaming (`captures.rs`). Paired with [`Lowerer::exit_block`].
+    fn enter_block(&mut self) -> bool {
+        let Some(frame) = self.frames.last_mut() else {
+            return false;
+        };
         frame.depth += 1;
-        frame
-            .block_is_nested()
-            .then(|| captures::block_occurrences(stmts))
+        frame.block_is_nested()
     }
 
     fn exit_block(&mut self) {
@@ -1318,9 +1311,10 @@ impl Lowerer {
         }
     }
 
-    /// Lower one `let` of a block. In a nested block, a name the enclosing Python
-    /// frame uses outside this block is renamed to `_name` for the rest of the
-    /// block (it would otherwise rebind the function-wide slot, issue #96): a
+    /// Lower one `let` of a block. In a nested block, a name that another binding
+    /// is live across (`captures.rs`, the liveness rule) is renamed to `_name` for
+    /// the rest of the block (it would otherwise rebind the function-wide slot,
+    /// issue #96): a
     /// value `let` lowers its value first (references there mean the outer
     /// binding) and installs the rename after; a parameterised `let` installs it
     /// before its body so a recursive call resolves to the renamed def. The
@@ -1330,10 +1324,10 @@ impl Lowerer {
         b: &LetBinding,
         locals: &HashSet<String>,
         out: &mut Vec<PyStmt>,
-        block_occ: Option<&HashMap<String, usize>>,
+        nested: bool,
     ) -> Result<(), LowerError> {
         let mut targets = HashMap::new();
-        if let Some(occ) = block_occ {
+        if nested {
             for name in b.bound_names() {
                 if targets.contains_key(&name) {
                     continue;
@@ -1341,9 +1335,7 @@ impl Lowerer {
                 let Some(frame) = self.frames.last() else {
                     break;
                 };
-                let total = frame.occurrences.get(&name).copied().unwrap_or(0);
-                let inside = occ.get(&name).copied().unwrap_or(0);
-                if total.saturating_sub(inside) == 0 {
+                if !frame.must_rename(&name, captures::binder_key(b)) {
                     continue;
                 }
                 let fresh = self.fresh_capture_name(&name);
@@ -1581,11 +1573,11 @@ impl Lowerer {
         // Block scope for the local registries: entries this block adds (or
         // evicts) must not outlive it.
         let saved = self.save_local_scope();
-        let nested = self.enter_block(stmts);
+        let nested = self.enter_block();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
+                    self.lower_block_let(b, &locals, &mut out, nested)?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
@@ -1941,11 +1933,11 @@ impl Lowerer {
         let mut value = PyExpr::NoneLit;
         // Block scope for the local registries (see `lower_block_return`).
         let saved = self.save_local_scope();
-        let nested = self.enter_block(stmts);
+        let nested = self.enter_block();
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
-                    self.lower_block_let(b, &locals, &mut out, nested.as_ref())?;
+                    self.lower_block_let(b, &locals, &mut out, nested)?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) => {
