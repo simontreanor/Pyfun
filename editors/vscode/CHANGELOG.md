@@ -3,6 +3,15 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.8.1
+
+- Version aligned to the compiler's 0.8.1 release. No client changes; the compiler it drives fixes a
+  silent miscompile where a module `mut` assigned inside an `async`/`seq`/`result` block bound a
+  local instead of flipping the module binding, and generalizes unit-parameter erasure so a `unit`
+  argument is dropped wherever it sits in an extern's parameter list, not only when it is the sole
+  argument. One breaking change: an extern's mid-list `unit` argument no longer arrives as Python
+  `None`; it is dropped from the call entirely.
+
 ## 0.8.0
 
 - Version aligned to the compiler's 0.8.0 release. No client changes; the compiler it drives adds
