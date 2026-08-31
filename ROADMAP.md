@@ -555,31 +555,31 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **PyPI** — `pyfun-lang` at **0.8.0** (2026-08-30, published by the tag and verified by installing
-  `pyfun-lang[jupyter]==0.8.0` into a clean venv and running a `for`-in-`seq` program against it;
+- **PyPI** — `pyfun-lang` at **0.8.1** (2026-08-31, published by the tag and verified by installing
+  `pyfun-lang[jupyter]==0.8.1` into a clean venv and running the two fixed shapes from that release
+  — a leading/mid-list `unit` extern parameter and a `mut` assigned inside a CE block — against it;
   the index lags the tag build by a few minutes, so a first `No matching distribution` is a retry,
   not a failure). Rides the tag; no manual step.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.8.0** (2026-08-30, verified against the registry API; indexing lags the publish by a minute
-  or two, so check twice before believing it failed). Every release:
-  `ovsx publish <vsix> -p <token>` (scriptable, no moderation).
+  At **0.8.1** (2026-08-31, verified against the registry API; the first check after publishing can
+  read "published but not active" for a couple of minutes before the API reflects the new version,
+  which is indexing lag, not a failed publish). Every release: `ovsx publish <vsix> -p <token>`
+  (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.8.0**, uploaded 2026-08-30 and **awaiting moderation**; the
-  plugins API reports 0.7.0, so that one cleared (verified against the plugins API; an earlier
-  "0.4.0 is not uploaded yet" note here was stale, as an "awaiting moderation" one had been before
-  it — check the API, not this line). `editors/jetbrains/` has a
-  **committed Gradle wrapper**: `./gradlew publishPlugin` (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`)
-  needs nothing installed, because Gradle is *not* on this machine and two releases running lost
-  time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
-  API lists approved versions only, so it reads the previous one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.8.0** (vsix uploaded through
-  the publisher web UI 2026-08-30). Verification takes minutes, during which the API keeps reading the
-  previous version and the publisher UI shows the pending one as "Verifying" — a lag, not a failed
-  upload. The **only surface that cannot be scripted**: the vsix is uploaded by hand through
-  the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI
-  auth path is broken — see `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the
-  one that silently falls behind; check it whenever a release goes out.
+  mode + legacy CE, 2024.2+). At **0.8.1**, uploaded 2026-08-31 and **awaiting moderation**; the
+  plugins API reports 0.8.0, so that one cleared (verified against the plugins API — check the API,
+  not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
+  (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this
+  machine and two releases running lost time rediscovering that before reaching for a bare `gradle`.
+  Approval is not instant: the plugins API lists approved versions only, so it reads the previous
+  one until moderation clears.
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.8.1** (vsix uploaded through
+  the publisher web UI 2026-08-31, verified against the gallery API). The **only surface that cannot
+  be scripted**: the vsix is uploaded by hand through the publisher web UI at
+  `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI auth path is broken — see
+  `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls
+  behind; check it whenever a release goes out.
 - **Third-party registries — PARKED until there is adoption evidence** (decided 2026-07-31). The
   surfaces Pyfun controls (PyPI, VS Code Marketplace, Open VSX, JetBrains) are the ones that get
   kept current every release; these do not, and their status is deliberately *not* re-checked each
