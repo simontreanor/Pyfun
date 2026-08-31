@@ -520,13 +520,15 @@ impl Parser {
             (vec![name.clone()], None, Vec::new())
         };
         // A `...` slot consumes one argument of the declared arrow, so the type must
-        // have an argument to spare. A receiver takes the first one, and a nullary
-        // extern's only argument is the `unit` that lowering drops, so neither leaves
-        // anything for a slot to claim.
+        // have an argument to spare. A receiver takes the first one, and a `unit`
+        // parameter contributes no argument (lowering drops it, #123), so neither
+        // leaves anything for a slot to claim.
         let slots = kwargs.iter().filter(|(_, v)| *v == ExternArg::Slot).count();
         if slots > 0 {
             let kw_span = Span::new(kw_start, self.prev_end());
-            if type_is_unit_domain(&ty) {
+            let units = type_unit_param_count(&ty);
+            let available = type_arrow_arity(&ty) - usize::from(receiver.is_some()) - units;
+            if available == 0 && units > 0 {
                 return Err(ParseError {
                     message: "`...` needs an argument to take, but this extern's only \
                               argument is the `unit` that a nullary call drops"
@@ -534,7 +536,6 @@ impl Parser {
                     span: kw_span,
                 });
             }
-            let available = type_arrow_arity(&ty) - usize::from(receiver.is_some());
             if slots > available {
                 let slot_s = if slots == 1 { "" } else { "s" };
                 let arg_s = if available == 1 { "" } else { "s" };
@@ -2497,12 +2498,20 @@ fn type_arrow_arity(ty: &TypeExpr) -> usize {
     }
 }
 
-/// Whether an `extern`'s first parameter is `unit` — a *nullary* Python callable
-/// whose single argument lowering drops (`time.time ()` → `time.time()`).
-fn type_is_unit_domain(ty: &TypeExpr) -> bool {
-    matches!(ty, TypeExpr::Fun(domain, _, _)
+/// The number of plain `unit` parameters along an `extern`'s arrow — arguments
+/// lowering drops (`DESIGN.md` §6, #123), so a `...` slot cannot claim one.
+fn type_unit_param_count(ty: &TypeExpr) -> usize {
+    let mut n = 0;
+    let mut cur = ty;
+    while let TypeExpr::Fun(domain, ret, _) = cur {
         if matches!(domain.as_ref(),
-            TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty()))
+            TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty())
+        {
+            n += 1;
+        }
+        cur = ret;
+    }
+    n
 }
 
 /// Whether `tok` can begin a parameter: a name, `_`, or a `(`-led pattern.

@@ -487,9 +487,14 @@ concern: no Pyfun name is bound, the checker ignores it (`Item::ExternImport`), 
 emits nothing, and the emitted reference is always the full dotted target as written. The `extern`
 prefix keeps it distinct from Pyfun's own file-module `import Geometry` (§6.1) — the module graph and
 LSP are untouched. Receiver-reachable members can of course still use the instance-access form below
-instead. A **nullary** extern (`unit -> a`,
-e.g. `time.time`) applied to `()` lowers to a zero-argument call (`time.time()`), not `time.time(None)`
-— the unit argument is evaluated for effects but dropped. The mirror image is a **thunk parameter**:
+instead. A `unit` **parameter contributes no argument**, wherever it sits along the arrow: a
+**nullary** extern (`unit -> a`, e.g. `time.time`) applied to `()` lowers to a zero-argument call
+(`time.time()`), not `time.time(None)`; a leading unit before real parameters drops the same way
+(`extern myAbs : unit -> int -> int = abs` lowers `myAbs () (-5)` to `abs(-5)`, never the split
+`abs()(-5)`); and a mid-list unit simply vanishes from the call (`int -> unit -> int -> int = max`
+emits `max(3, 5)`). One rule, three shapes. The dropped argument is still evaluated when it could
+have effects, and a partial application closes over a lambda rather than `functools.partial`, which
+could not drop a `unit` that has not yet arrived. The mirror image is a **thunk parameter**:
 an extern parameter typed `unit -> a` (`asyncio.to_thread`'s function, an event handler with no
 arguments) is a Pyfun function of one parameter, the unit value, that Python will call with none, so
 the call site wraps that argument as `lambda: f(None)` (a literal `fun _ -> body` collapses to
@@ -576,8 +581,8 @@ positionally and the `...` slots take the **trailing** ones, in the order the ke
 pinned literals consume no argument, so they may sit anywhere among the slots
 (`m.f(a = 1, b = ..., c = "x", d = ...)` at arity 3 emits `m.f(s, a=1, b=i, c="x", d=b)`). A slot claims
 one argument of the declared arrow, so the type must have one to spare: a receiver takes the first
-argument, and a nullary extern's only argument is the `unit` that lowering drops, so both are rejected
-with a diagnostic rather than silently mis-lowered.
+argument and a `unit` parameter contributes none, so a type left with nothing for a slot to claim is
+rejected with a diagnostic rather than silently mis-lowered.
 
 A slot changes only *where* an argument lands in the emitted call, so like a pinned literal it stays
 **invisible to the type** (`parseInt` is an ordinary `string -> int -> int`), to inference, and to
