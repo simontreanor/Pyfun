@@ -39,7 +39,7 @@ uniq |> Set.len |> print
 3
 ```
 
-`fun x -> x * x` is a lambda, the same anonymous function you met in lesson 2 written inline. Where
+`fun x -> x * x` is a lambda, an anonymous function you write inline instead of naming with `let`. Where
 the function is just an operator, an operator section is shorter: `(+)` is addition as a two
 argument function, and `(*) 2` is multiplication with one argument already supplied, so
 `List.map ((*) 2) ns` doubles every element. `List.fold` walks the list carrying an accumulator,

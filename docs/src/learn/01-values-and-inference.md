@@ -29,10 +29,11 @@ You never wrote a type. The compiler infers one for every binding: `name` is a `
 annotations on `let`, and that is a deliberate design choice, not a missing feature. You
 get the safety of static types without writing them out.
 
-Inference is not guessing. The compiler knows enough about each value to reject code that
+Inference is not guessing: the compiler knows enough about each value to reject code that
 does not fit. Python allows `+` to mean both numeric addition and string joining, so a
-mistake there surfaces only when the line runs. Pyfun keeps the two apart and reports the
-mismatch before any Python is produced:
+mistake there surfaces only when the line runs. Suppose you write `let label = "age: " +
+36` in Pyfun. The compiler sees that `"age: "` is a `string` and that `+` works on numbers,
+and it refuses to produce any Python at all:
 
 ```console
 error: `+` is numeric and does not concatenate strings — use `String.concat a b`
@@ -42,25 +43,38 @@ error: `+` is numeric and does not concatenate strings — use `String.concat a 
   |             ^^^^^^^
 ```
 
-The compiler saw that `"age: "` is a `string` and that `+` works on numbers, so it stopped.
-`print` and f-strings (`f"{x}"`, the same interpolation Python 3.12 uses) are how you
-observe a value once it is bound. Because a `let` binding is immutable, there is no
-statement that overwrites it in place. That capability exists, and it arrives in
-lesson 10, but the default is a value that stays put.
+Every Pyfun diagnostic has the same shape: `-->` points at the line and column, the `|`
+margin quotes the source, and `^^^^` underlines exactly the span at fault. Reading one is
+most of the workflow for the rest of this course: `pyfun check` names what is wrong and
+where, and you fix the code from that. `print` and f-strings (`f"{x}"`, the same
+interpolation Python 3.12 uses) are how you observe a value once it is bound. Because a
+`let` binding is immutable, there is no statement that overwrites it in place. That
+capability exists, and it arrives in lesson 10, but the default is a value that stays put.
 
 ## Exercise
 
-Two baskets hold fruit. Fill the hole so the program adds them and prints the total. Run
-`pyfun check` on the starter: the compiler reports the type the hole expects and lists the
-names in scope that fit. Lesson 9 covers holes in full. For now, read the note and put the
-right name where `?count` sits.
+Two baskets hold fruit. Run `pyfun check` on the starter below: the compiler reports the
+type the hole `?` expects and lists the names in scope that fit.
 
 ```pyfun
 let apples = 4
 let oranges = 3
-let fruit = apples + ?count
+let fruit = apples + ?
 print (f"total fruit: {fruit}")
 ```
+
+The checker reports:
+
+```console
+note: hole `?` has type `int` — try: apples, oranges — or: List.sum ?, Seq.sum ?, String.len ?, cbrt ?
+ --> 3:22
+  |
+3 | let fruit = apples + ?
+  |                      ^
+1 unfilled hole
+```
+
+Replace `?` with the name that makes the total come out right.
 
 Expected output:
 
@@ -68,7 +82,7 @@ Expected output:
 total fruit: 7
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGFwcGxlcyA9IDQKbGV0IG9yYW5nZXMgPSAzCmxldCBmcnVpdCA9IGFwcGxlcyArID9jb3VudApwcmludCAoZiJ0b3RhbCBmcnVpdDoge2ZydWl0fSIpCg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGFwcGxlcyA9IDQKbGV0IG9yYW5nZXMgPSAzCmxldCBmcnVpdCA9IGFwcGxlcyArID8KcHJpbnQgKGYidG90YWwgZnJ1aXQ6IHtmcnVpdH0iKQo)
 
 <details>
 <summary>Show solution</summary>
