@@ -418,6 +418,18 @@ play comes first; the browser target is last because it depends on the async dec
     prelude a function body gets, and the CE's own binders join the frame stack, so a lambda nested
     in the block classifies its captures against them too.
 
+24. ~~**A leading `unit` parameter split the extern call**~~ **CLOSED 2026-08-31** (#123, found
+    wiring the keyboard pump: `unit -> int -> int = abs` emitted `abs()(-5)` — the nullary
+    zero-argument rule fired and the remaining arguments applied to its result — while a mid-list
+    unit travelled as `None` (`max(3, None, 5)`): three shapes, three meanings). Now **one rule: a
+    `unit` parameter contributes no argument, wherever it sits** — `abs(-5)`, `max(3, 5)`, and the
+    nullary call unchanged. Partial application closes over a lambda (a future unit is accepted and
+    ignored, which `functools.partial` cannot do), receiver methods and bare references drop units
+    the same way, and the parser's `...`-slot arithmetic counts only non-unit arguments — so the
+    extern the finding wanted, `unit -> (unit ->{io} unit) -> Thread =
+    threading.Thread(daemon = true, target = ...)`, now parses and emits the single call. The
+    mid-list `None` change is breaking in principle; nothing in the repo or lessons relied on it.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
@@ -561,9 +573,8 @@ registry (PR to zed-industries/extensions), and consider shipping Helix indent/t
   needs nothing installed, because Gradle is *not* on this machine and two releases running lost
   time rediscovering that before reaching for a bare `gradle`. Approval is not instant: the plugins
   API lists approved versions only, so it reads the previous one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.7.0**; the **0.8.0 vsix is
-  packaged and attached to the release but not yet uploaded** (2026-08-30, gallery API reads
-  0.7.0). Verification takes minutes, during which the API keeps reading the
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.8.0** (vsix uploaded through
+  the publisher web UI 2026-08-30). Verification takes minutes, during which the API keeps reading the
   previous version and the publisher UI shows the pending one as "Verifying" — a lag, not a failed
   upload. The **only surface that cannot be scripted**: the vsix is uploaded by hand through
   the publisher web UI at `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI

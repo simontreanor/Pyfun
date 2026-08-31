@@ -265,6 +265,104 @@ fn nullary_extern_lowers_to_a_zero_arg_call() {
 }
 
 #[test]
+fn a_unit_parameter_contributes_no_argument_wherever_it_sits() {
+    // #123: one rule for all three shapes. A leading unit before real parameters
+    // must not split the call (`abs()(-5)`), and a mid-list unit must not travel
+    // as `None` (`max(3, None, 5)`).
+    let py = pyfun::compile(
+        "extern myAbs: unit -> int -> int = abs\n\
+         extern pick: int -> unit -> int -> int = max\n\
+         print (myAbs () (-5))\n\
+         print (pick 3 () 5)",
+    )
+    .unwrap();
+    assert!(py.contains("print(abs(-5))"), "{py}");
+    assert!(py.contains("print(max(3, 5))"), "{py}");
+}
+
+#[test]
+fn a_partial_application_of_a_unit_extern_drops_supplied_and_future_units() {
+    // `functools.partial` cannot drop a unit, so the partial is a lambda: a
+    // supplied unit is gone, a future unit is accepted and ignored.
+    let py = pyfun::compile(
+        "extern myAbs: unit -> int -> int = abs\n\
+         extern pick: int -> unit -> int -> int = max\n\
+         let fromNeg = myAbs ()\n\
+         let lifted = pick 4\n\
+         print (fromNeg (-7))\n\
+         print (lifted () 2)",
+    )
+    .unwrap();
+    assert!(py.contains("fromNeg = lambda _pf_k0: abs(_pf_k0)"), "{py}");
+    assert!(
+        py.contains("lifted = lambda _pf_k0, _pf_k1: max(4, _pf_k1)"),
+        "{py}"
+    );
+}
+
+#[test]
+fn a_unit_extern_combines_with_a_kwarg_slot_and_a_thunk() {
+    // The extern #123 wanted: a leading unit, a pinned kwarg, a `...` slot and a
+    // thunk parameter in one declaration — previously the parser rejected the
+    // slot on any unit-domain type.
+    let py = pyfun::compile(
+        "extern import threading\n\
+         extern type Thread\n\
+         extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = true, target = ...)\n\
+         let t = newThread () (fun _ -> print \"hi\")",
+    )
+    .unwrap();
+    assert!(
+        py.contains("t = threading.Thread(daemon=True, target=lambda: _pf_fn0(None))"),
+        "{py}"
+    );
+}
+
+#[test]
+fn a_receiver_method_with_a_unit_parameter_drops_it() {
+    let py = pyfun::compile(
+        "extern type C\n\
+         extern ping: C -> unit -> string = .m()\n\
+         let f c = ping c ()",
+    )
+    .unwrap();
+    assert!(py.contains("return c.m()"), "{py}");
+    assert!(!py.contains("c.m(None)"), "{py}");
+}
+
+#[test]
+fn e2e_unit_parameters_across_the_boundary() {
+    // The issue's table plus the partial shapes, run for real.
+    run_and_check(
+        "extern myAbs: unit -> int -> int = abs\n\
+         extern pick: int -> unit -> int -> int = max\n\
+         let a = myAbs () (-5)\n\
+         let b = pick 3 () 5\n\
+         let fromNeg = myAbs ()\n\
+         let c = fromNeg (-7)\n\
+         let lifted = pick 4\n\
+         let d = lifted () 2",
+        &[("a", "5"), ("b", "5"), ("c", "7"), ("d", "4")],
+    );
+}
+
+#[test]
+fn e2e_a_unit_extern_thread_runs_its_pyfun_target() {
+    // The shape that bit: a daemon thread whose target is a Pyfun closure.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import threading\n\
+               extern type Thread\n\
+               extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = true, target = ...)\n\
+               extern start: Thread -> unit = .start()\n\
+               extern join: Thread -> unit = .join()\n\
+               let t = newThread () (fun _ -> print \"from the thread\")\n\
+               start t\n\
+               join t";
+    let program = pyfun::compile(src).unwrap();
+    assert_eq!(run_python(&python, &program).trim(), "from the thread");
+}
+
+#[test]
 fn extern_on_builtin_type_imports_nothing() {
     // A dotted target rooted at a builtin type is always in scope — no `import`.
     let py = pyfun::compile("extern up: string -> string = str.upper\nlet r = up \"hi\"").unwrap();

@@ -273,9 +273,13 @@ struct Lowerer {
     /// Instance-access externs (`= .read()` / `= .text`) → whether the target is a
     /// method call or a bare property read on the first argument (the receiver).
     receiver_externs: std::collections::HashMap<String, Receiver>,
-    /// Externs with a `unit` domain (`unit -> a`, e.g. `time.time`): a *nullary*
-    /// Python callable, applied to `()` as a zero-argument call (`time.time()`).
-    nullary_externs: HashSet<String>,
+    /// `extern` name → the positions of its plain `unit` parameters. A `unit`
+    /// parameter contributes no Python argument, wherever it sits (#123): a
+    /// nullary extern (`unit -> a`, e.g. `time.time`) applied to `()` is a
+    /// zero-argument call, a leading unit before real parameters drops the same
+    /// way (`unit -> int -> int = abs` → `abs(-5)`, never `abs()(-5)`), and a
+    /// mid-list unit vanishes from the call (`max(3, 5)`, never `max(3, None, 5)`).
+    extern_unit_slots: std::collections::HashMap<String, Vec<usize>>,
     /// `extern` name → the positions of its `unit -> a` parameters: a Pyfun thunk
     /// (`fun _ -> …`, one parameter for the unit value) that Python will call with
     /// no arguments, so the call site wraps it as `lambda: f(None)` (`DESIGN.md`
@@ -454,7 +458,7 @@ impl Lowerer {
         let mut extern_targets = std::collections::HashMap::new();
         let mut extern_module_imports: Vec<(Vec<String>, Option<String>)> = Vec::new();
         let mut receiver_externs = std::collections::HashMap::new();
-        let mut nullary_externs = HashSet::new();
+        let mut extern_unit_slots = std::collections::HashMap::new();
         let mut extern_thunk_slots = std::collections::HashMap::new();
         let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, KwSource)>> =
             std::collections::HashMap::new();
@@ -475,8 +479,9 @@ impl Lowerer {
                     if let Some(kind) = decl.receiver {
                         receiver_externs.insert(decl.name.clone(), kind);
                     }
-                    if is_unit_domain(&decl.ty) {
-                        nullary_externs.insert(decl.name.clone());
+                    let units = unit_param_slots(&decl.ty);
+                    if !units.is_empty() {
+                        extern_unit_slots.insert(decl.name.clone(), units);
                     }
                     let slots = thunk_param_slots(&decl.ty);
                     if !slots.is_empty() {
@@ -656,7 +661,7 @@ impl Lowerer {
             extern_targets,
             extern_module_imports,
             receiver_externs,
-            nullary_externs,
+            extern_unit_slots,
             extern_thunk_slots,
             extern_kwargs,
             needed_imports: BTreeSet::new(),
@@ -799,14 +804,21 @@ impl Lowerer {
                             .get(&decl.name)
                             .cloned()
                             .unwrap_or_default();
+                        let units = unit_param_slots(&decl.ty);
+                        let k = arrow_arity(&decl.ty);
                         let value = if let Some(kind) = decl.receiver {
                             // An instance-access extern binds to a receiver-taking
                             // lambda so dependent modules can reference it.
-                            receiver_lambda(&decl.target, arrow_arity(&decl.ty), kind, kwargs)
-                        } else if is_unit_domain(&decl.ty) {
-                            // A nullary extern binds to a lambda that ignores its
-                            // unit argument, so a cross-module `Mod.now ()` works.
+                            receiver_lambda(&decl.target, k, kind, kwargs, &units)
+                        } else if !units.is_empty() && units.len() == k {
+                            // An all-unit extern binds to a lambda that ignores its
+                            // unit argument(s), so a cross-module `Mod.now ()` works.
                             nullary_lambda(&self.extern_path(&decl.target), kwargs)
+                        } else if !units.is_empty() {
+                            // Unit parameters contribute no argument (#123), and a
+                            // cross-module call reaches this binding n-ary, so the
+                            // lambda accepts them and drops them.
+                            unit_dropping_lambda(&self.extern_path(&decl.target), k, &units, kwargs)
                         } else {
                             let path = self.extern_path(&decl.target);
                             // A plain extern with pinned kwargs binds to a
@@ -2377,6 +2389,13 @@ impl Lowerer {
         {
             let member = self.extern_targets[name].clone();
             let arity = self.arities.get(name).copied();
+            // Unit parameters after the receiver contribute no argument (#123);
+            // positions shift down one because the receiver takes the first.
+            let m_units: Vec<usize> = self
+                .extern_unit_slots
+                .get(name)
+                .map(|u| u.iter().filter_map(|i| i.checked_sub(1)).collect())
+                .unwrap_or_default();
             // A method extern may pin fixed Python kwargs (`= .write_text(encoding=…)`);
             // a property never does (the parser forbids parens on it).
             let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
@@ -2391,9 +2410,14 @@ impl Lowerer {
             // A bare (unapplied) reference becomes a receiver-taking lambda (which
             // pins any kwargs itself, `lambda r, a: r.write_text(a, encoding=…)`).
             if arg_vals.is_empty() {
+                let full_units = self
+                    .extern_unit_slots
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
                 return Ok((
                     stmts,
-                    receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs),
+                    receiver_lambda(&member, arity.unwrap_or(1), kind, kwargs, &full_units),
                 ));
             }
             let mut recv = arg_vals.remove(0);
@@ -2407,11 +2431,27 @@ impl Lowerer {
             }
             let accessed = attr_path(recv, &member);
             let result = match kind {
-                // Property: `recv.text`; any further args are over-application calls.
-                Receiver::Property => arg_vals.into_iter().fold(accessed, |f, a| PyExpr::Call {
-                    func: Box::new(f),
-                    args: vec![a],
-                }),
+                // Property: `recv.text`; any further args are over-application
+                // calls, a `unit` among them a zero-argument one.
+                Receiver::Property => {
+                    arg_vals
+                        .into_iter()
+                        .enumerate()
+                        .fold(accessed, |f, (i, a)| PyExpr::Call {
+                            func: Box::new(f),
+                            args: if m_units.contains(&i) {
+                                vec![]
+                            } else {
+                                vec![a]
+                            },
+                        })
+                }
+                // A method with `unit` parameters drops them from the emitted call
+                // at every arity (#123).
+                Receiver::Method if !m_units.is_empty() => {
+                    let k = method_arity.unwrap_or(arg_vals.len());
+                    self.build_call_units(accessed, k, &m_units, arg_vals, kwargs, &mut stmts)
+                }
                 // A method extern with kwargs routes every arity through
                 // `build_call_kw` so they are appended (full/over) or carried by
                 // `functools.partial` / a lambda (receiver-only, method-partial) —
@@ -2444,14 +2484,20 @@ impl Lowerer {
             return Ok((stmts, result));
         }
 
-        // A nullary extern (`unit -> a`) applied to `()` is a zero-argument Python
-        // call: `now ()` → `time.time()`, never `time.time(None)`. The unit argument
-        // is evaluated for any effects but dropped from the call.
+        // An extern with plain `unit` parameters: a `unit` parameter contributes
+        // no Python argument, wherever it sits (#123, `DESIGN.md` §6). One rule
+        // covers the nullary call (`now ()` → `time.time()`, never
+        // `time.time(None)`), a leading unit (`unit -> int -> int = abs` →
+        // `abs(-5)`, never the split `abs()(-5)`), and a mid-list unit
+        // (`max(3, 5)`, never `max(3, None, 5)`).
         if let ExprKind::Var(name) = &head.kind
             && !locals.contains(name)
-            && self.nullary_externs.contains(name)
+            && !self.user_defs.contains(name)
+            && let Some(units) = self.extern_unit_slots.get(name).cloned()
         {
             let target = self.extern_path(&self.extern_targets[name].clone());
+            let k = self.arities[name.as_str()];
+            let spec = self.extern_kwargs.get(name).cloned().unwrap_or_default();
             let mut stmts = Vec::new();
             let mut arg_vals = Vec::with_capacity(args_ast.len());
             for arg in &args_ast {
@@ -2459,33 +2505,10 @@ impl Lowerer {
                 stmts.extend(arg_stmts);
                 arg_vals.push(arg_val);
             }
-            // Drop the leading unit argument; call the target with no arguments
-            // (plus any pinned kwargs, `time.time()` → `f(tz=…)`).
-            let base = match self.extern_kwargs.get(name).cloned() {
-                // A nullary extern has no argument to spare, so the parser rejects a
-                // `...` slot on one and these kwargs are all pinned literals.
-                Some(spec) => {
-                    let (_, kwargs) = bind_kwargs(&spec, Vec::new());
-                    PyExpr::CallKw {
-                        func: Box::new(dotted_path(&target)),
-                        args: vec![],
-                        kwargs,
-                    }
-                }
-                None => PyExpr::Call {
-                    func: Box::new(dotted_path(&target)),
-                    args: vec![],
-                },
-            };
-            // Any further arguments (a `unit -> b -> c` extern) apply to the result.
-            let result = arg_vals
-                .into_iter()
-                .skip(1)
-                .fold(base, |f, a| PyExpr::Call {
-                    func: Box::new(f),
-                    args: vec![a],
-                });
-            return Ok((stmts, result));
+            self.wrap_thunk_args(name, &mut arg_vals);
+            let call =
+                self.build_call_units(dotted_path(&target), k, &units, arg_vals, spec, &mut stmts);
+            return Ok((stmts, call));
         }
 
         // A plain (non-receiver, non-nullary) extern carrying Python kwargs:
@@ -2878,15 +2901,26 @@ impl Lowerer {
                 let arity = self.arities.get(name).copied().unwrap_or(1);
                 let member = self.extern_targets[name].clone();
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
-                return receiver_lambda(&member, arity, kind, kwargs);
+                let units = self
+                    .extern_unit_slots
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default();
+                return receiver_lambda(&member, arity, kind, kwargs, &units);
             }
-            // A bare reference to a nullary extern is a unit-taking lambda that
-            // ignores its argument (`now` → `lambda *_: time.time()`); applied
+            // A bare reference to an extern with `unit` parameters is a lambda
+            // that accepts and drops them (`now` → `lambda *_: time.time()`,
+            // `myAbs` → `lambda _pf_a0, _pf_a1: abs(_pf_a1)`); applied
             // references are handled directly in `lower_application`.
-            if self.nullary_externs.contains(name) {
+            if let Some(units) = self.extern_unit_slots.get(name).cloned() {
                 let target = self.extern_path(&self.extern_targets[name].clone());
                 let kwargs = self.extern_kwargs.get(name).cloned().unwrap_or_default();
-                return nullary_lambda(&target, kwargs);
+                let k = self.arities.get(name).copied().unwrap_or(1);
+                return if units.len() == k {
+                    nullary_lambda(&target, kwargs)
+                } else {
+                    unit_dropping_lambda(&target, k, &units, kwargs)
+                };
             }
             // A bare reference to a plain extern carrying kwargs keeps them via
             // `functools.partial` (`openText` → `functools.partial(builtins.open,
@@ -4884,6 +4918,84 @@ impl Lowerer {
         }
     }
 
+    /// Like [`Self::build_call`]/[`Self::build_call_kw`] but for an `extern`
+    /// whose declared type has plain `unit` parameters: a `unit` parameter
+    /// contributes no Python argument, wherever it sits (#123). A dropped
+    /// argument that could have effects still runs, as its own statement, and
+    /// every neighbouring argument is then hoisted so evaluation order stays
+    /// left-to-right. Partial application closes over a lambda — a future
+    /// `unit` is accepted and ignored, which `functools.partial` cannot do —
+    /// with the supplied arguments bound first so they evaluate now.
+    fn build_call_units(
+        &mut self,
+        head: PyExpr,
+        k: usize,
+        units: &[usize],
+        args: Vec<PyExpr>,
+        spec: Vec<(String, KwSource)>,
+        stmts: &mut Vec<PyStmt>,
+    ) -> PyExpr {
+        let n = args.len();
+        let mut supplied = args;
+        let extras = supplied.split_off(n.min(k));
+        let sequence = n < k
+            || supplied
+                .iter()
+                .enumerate()
+                .any(|(i, a)| units.contains(&i) && !is_atomic(a));
+        let mut kept = Vec::new();
+        for (i, a) in supplied.into_iter().enumerate() {
+            if units.contains(&i) {
+                if !is_atomic(&a) {
+                    stmts.push(PyStmt::Expr(a));
+                }
+            } else if sequence && !is_atomic(&a) {
+                kept.push(self.hoist_tmp(a, stmts));
+            } else {
+                kept.push(a);
+            }
+        }
+        let kw_call = |head: PyExpr, args: Vec<PyExpr>, kwargs: Vec<(String, PyExpr)>| {
+            if kwargs.is_empty() {
+                PyExpr::Call {
+                    func: Box::new(head),
+                    args,
+                }
+            } else {
+                PyExpr::CallKw {
+                    func: Box::new(head),
+                    args,
+                    kwargs,
+                }
+            }
+        };
+        if n >= k {
+            // Full or over-application: one call with the kept window; extras
+            // apply to the result one at a time, as everywhere else.
+            let (positional, kwargs) = bind_kwargs(&spec, kept);
+            let base = kw_call(head, positional, kwargs);
+            return extras.into_iter().fold(base, |f, a| PyExpr::Call {
+                func: Box::new(f),
+                args: vec![a],
+            });
+        }
+        // Partial application: a lambda over the missing parameters, the future
+        // `unit`s among them accepted and ignored.
+        let params: Vec<String> = (0..k - n).map(|i| format!("_pf_k{i}")).collect();
+        let mut all = kept;
+        for (j, p) in params.iter().enumerate() {
+            if !units.contains(&(n + j)) {
+                all.push(PyExpr::Name(p.clone()));
+            }
+        }
+        let (positional, kwargs) = bind_kwargs(&spec, all);
+        let body = kw_call(head, positional, kwargs);
+        PyExpr::Lambda {
+            params,
+            body: Box::new(body),
+        }
+    }
+
     fn hoist_tmp(&mut self, value: PyExpr, hoist: &mut Vec<PyStmt>) -> PyExpr {
         if matches!(
             value,
@@ -5193,6 +5305,26 @@ fn is_unit_domain(ty: &TypeExpr) -> bool {
 }
 
 /// The positions (0-based, along the curried parameter list) of an extern's
+/// plain `unit` parameters — arguments the emitted call drops (#123). Distinct
+/// from [`thunk_param_slots`]: a *thunk* parameter is function-typed
+/// (`unit -> a`), a unit parameter is the unit itself.
+fn unit_param_slots(ty: &TypeExpr) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut cur = ty;
+    let mut i = 0;
+    while let TypeExpr::Fun(domain, ret, _) = cur {
+        if matches!(domain.as_ref(),
+            TypeExpr::Con(name, _, args) if name == "unit" && args.is_empty())
+        {
+            out.push(i);
+        }
+        i += 1;
+        cur = ret;
+    }
+    out
+}
+
+/// The positions (0-based, along the curried parameter list) of an extern's
 /// `unit -> a` parameters: callbacks Python calls with no arguments.
 fn thunk_param_slots(ty: &TypeExpr) -> Vec<usize> {
     let mut out = Vec::new();
@@ -5318,6 +5450,7 @@ fn receiver_lambda(
     arity: usize,
     kind: Receiver,
     spec: Vec<(String, KwSource)>,
+    units: &[usize],
 ) -> PyExpr {
     let recv = "_pf_recv".to_string();
     let accessed = attr_path(PyExpr::Name(recv.clone()), member);
@@ -5328,9 +5461,13 @@ fn receiver_lambda(
         };
     }
     // The lambda takes every argument after the receiver; a `...` slot claims one of
-    // them and lands as a keyword instead of a positional.
+    // them and lands as a keyword instead of a positional, and a `unit` parameter
+    // is accepted but contributes nothing (#123).
     let args: Vec<String> = (1..arity.max(1)).map(|i| format!("_pf_a{i}")).collect();
-    let call_args: Vec<PyExpr> = args.iter().cloned().map(PyExpr::Name).collect();
+    let call_args: Vec<PyExpr> = (1..arity.max(1))
+        .filter(|i| !units.contains(i))
+        .map(|i| PyExpr::Name(format!("_pf_a{i}")))
+        .collect();
     let body = if spec.is_empty() {
         PyExpr::Call {
             func: Box::new(accessed),
@@ -5356,6 +5493,39 @@ fn receiver_lambda(
 /// `*_` swallows the unit argument Pyfun passes at a `unit -> a` call site, so the
 /// value works however it is later applied. Any pinned `kwargs` are appended (a
 /// nullary extern has no argument to spare, so the parser rejects `...` on one).
+/// A lambda for a bare reference to an extern with `unit` parameters among real
+/// ones: it takes the full curried argument list (the boundary is n-ary) and
+/// passes only the non-unit positions (`lambda _pf_a0, _pf_a1: abs(_pf_a1)`).
+fn unit_dropping_lambda(
+    target: &[String],
+    arity: usize,
+    units: &[usize],
+    spec: Vec<(String, KwSource)>,
+) -> PyExpr {
+    let params: Vec<String> = (0..arity).map(|i| format!("_pf_a{i}")).collect();
+    let call_args: Vec<PyExpr> = (0..arity)
+        .filter(|i| !units.contains(i))
+        .map(|i| PyExpr::Name(format!("_pf_a{i}")))
+        .collect();
+    let (positional, kwargs) = bind_kwargs(&spec, call_args);
+    let body = if kwargs.is_empty() {
+        PyExpr::Call {
+            func: Box::new(dotted_path(target)),
+            args: positional,
+        }
+    } else {
+        PyExpr::CallKw {
+            func: Box::new(dotted_path(target)),
+            args: positional,
+            kwargs,
+        }
+    };
+    PyExpr::Lambda {
+        params,
+        body: Box::new(body),
+    }
+}
+
 fn nullary_lambda(target: &[String], spec: Vec<(String, KwSource)>) -> PyExpr {
     let body = if spec.is_empty() {
         PyExpr::Call {
