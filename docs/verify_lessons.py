@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-LEARN = REPO / "docs" / "src" / "learn"
+TRACKS = [REPO / "docs" / "src" / "learn", REPO / "docs" / "src" / "foundations"]
 PYFUN = Path(
     os.environ.get("PYFUN_BIN")
     or next(
@@ -89,7 +89,7 @@ def norm(s: str) -> str:
 require_current_compiler()
 
 failures = 0
-for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):
+for md in sorted(md for track in TRACKS for md in track.glob("[0-9][0-9]-*.md")):
     text = md.read_text(encoding="utf-8")
     problems = []
 
@@ -160,7 +160,7 @@ for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):
                 )
 
     status = "OK " if not problems else "FAIL"
-    print(f"[{status}] {md.name}")
+    print(f"[{status}] {md.relative_to(REPO)}")
     for p in problems:
         print(f"    - {p}")
         failures += 1

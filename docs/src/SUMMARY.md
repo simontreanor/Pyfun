@@ -1,10 +1,30 @@
 # Summary
 
 [Introduction](introduction.md)
-[How this course works](learn/README.md)
+
+# Foundations
+
+- [How this course works](foundations/README.md)
+- [Programs and values](foundations/01-programs-and-values.md)
+- [Functions](foundations/02-functions.md)
+- [Chaining work: pipes](foundations/03-pipes.md)
+- [Making decisions](foundations/04-decisions.md)
+- [Describing a thing: records](foundations/05-records.md)
+- [Describing a choice: your own types](foundations/06-your-own-types.md)
+- [The compiler checks your work](foundations/07-exhaustive-match.md)
+- [Lists](foundations/08-lists.md)
+- [When a value might be missing: Option](foundations/09-option.md)
+- [When something might go wrong: Result](foundations/10-result.md)
+- [Pairing values: tuples](foundations/11-tuples.md)
+- [Sets and maps](foundations/12-sets-and-maps.md)
+- [Changing your mind, on purpose](foundations/13-mutation.md)
+- [Talking to the real world: effects](foundations/14-effects.md)
+- [Reaching into Python's ecosystem](foundations/15-python-interop.md)
+- [Capstone](foundations/16-capstone.md)
 
 # Learn Pyfun
 
+- [How this track works](learn/README.md)
 - [Values and inference](learn/01-values-and-inference.md)
 - [Functions, currying, and pipes](learn/02-functions-currying-pipes.md)
 - [The None problem: Option](learn/03-option.md)

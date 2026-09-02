@@ -22,9 +22,11 @@ That check, and everything else Pyfun promises, happens before the Python exists
 
 This site is the learning home for the language. Pick the track that fits you:
 
-- **[Learn Pyfun](learn/index.html)**: a short, graded course for people who already know some
-  Python. Each lesson introduces one idea and ends with an exercise you can solve in the browser.
-  The compiler checks your work as you type.
+- **[Foundations](foundations/index.html)**: never written a program before? Start here. It
+  assumes nothing, not even Python, and builds programming up from scratch through Pyfun.
+- **[Learn Pyfun](learn/index.html)**: a short, graded course for people already comfortable
+  writing code who want the fast path through Pyfun's ideas. Each lesson introduces one idea and
+  ends with an exercise you can solve in the browser. The compiler checks your work as you type.
 - **[For educators](educators/index.html)**: a ready-made functional programming module for an
   existing intro-Python course, with session plans, exercises, and answer keys. Free to adapt
   under CC BY 4.0.
