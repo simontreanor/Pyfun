@@ -2,8 +2,8 @@
 
 ;; Copyright (C) 2026 Simon Treanor
 
-;; Author: Simon Treanor
-;; Maintainer: Simon Treanor
+;; Author: Simon Treanor <https://github.com/simontreanor>
+;; Maintainer: Simon Treanor <https://github.com/simontreanor>
 ;; Assisted-by: Claude Code:claude-opus-5
 ;; URL: https://github.com/simontreanor/Pyfun
 ;; Version: 0.8.1
