@@ -501,23 +501,20 @@ map_build 1.64× vs hand-written.
   with zero user toolchain. Weak spot: recursion (collatz 7.36× vs PyPy's own iterative baseline —
   absolute time still beats CPython). Docs line earned: "compute-bound? `--target 3.11` + PyPy."
   **CPython's own JIT** (experimental since 3.13) accrues to every program for free.
-- **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**;
-  **first slice SHIPPED 2026-09-28**: `pyfun compile --native` lowers every match built from
-  constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
-  expr_eval 2.30x → 1.63x on plain CPython; top-level or-patterns and list patterns followed the
-  same night, and so did nested or-patterns that bind no names. **First end-to-end mypyc
-  measurement (2026-09-28, `native-bench.yml`, ubuntu, CPython 3.12, untyped native output, data
-  class fields `Any` since mypyc rejects `object`):** all three benchmarks compile, run, and match
-  the baseline; mypyc is 1.24x / 1.28x / 1.11x faster than the same native file on CPython
-  (expr_eval / collatz / map_build), landing at 1.75x / **0.79x** / 1.58x of hand-written Python.
-  **Typed emit followed the same night** (top-level functions annotated from inferred types, a
-  union alias per sum type; mypyc run with `--allow-redefinition-new --local-partial-types`), and
-  the same job measured mypyc at 1.56x / **13.2x** / 1.32x faster than the native file on CPython,
-  landing at **1.40x / 0.08x / 1.34x of hand-written Python**: collatz, all int arithmetic, runs
-  about 12x faster than the hand-written baseline. `pyfun build --native <file> -o <dir>` (compile, mypyc, runnable
-  directory) followed too. Typed emit and `build` for projects followed too. Remaining, in
-  order: typed emit for block-local functions and for block-local functions, or-patterns that bind
-  names, then the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
+- **Typed-emit + mypyc AOT (`--native`)** (L; **mostly SHIPPED 2026-09-28**, `DESIGN.md` §5.6).
+  What landed, in one night: `pyfun compile --native` lowers every match (constructors, records,
+  tuples, literals, `as`, list patterns, or-patterns, and the `return!` of a match in `async { }`)
+  to an `if`/`isinstance` ladder; top-level functions are annotated from their inferred types, with a
+  union alias per sum type and typed data class fields; `pyfun build --native <file> -o <dir>` runs
+  mypyc (`--allow-redefinition-new --local-partial-types`) and leaves a directory that runs as
+  `python <dir>`; all of it works for projects. `native-bench.yml` measures it on Linux, CPython
+  3.12: mypyc runs the benchmarks 1.6x / **13x** / 1.3x faster than the same program as plain Python
+  (expr_eval / collatz / map_build), at **1.37x / 0.08x / 1.32x of hand-written Python**, so the
+  int-arithmetic benchmark beats the hand-written baseline about 12x. On plain CPython the ladders
+  alone take expr_eval from 2.30x to 1.63x. **Remaining:** annotations for block-local functions,
+  or-patterns whose alternatives bind names (the one match shape still left to `match`), trying a
+  mypyc build of a real program (the Scrabble game), and the closure/`seq` audit under mypyc.
+  The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
   with the interop story intact (the result is still an ordinary extension module). Real blockers
