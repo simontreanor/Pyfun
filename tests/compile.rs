@@ -4017,6 +4017,27 @@ fn native_annotates_top_level_functions_it_can_spell() {
 }
 
 #[test]
+fn native_ladders_reach_async_return_bang_matches() {
+    // `return! (match …)` in an `async { }` block lowers through its own path,
+    // which native mode now takes too, the Option/Result shape included.
+    let src = "extern runAsync: Async a -> a = asyncio.run\n\
+               let check n = if n > 0 then Ok n else Error \"negative\"\n\
+               let describe n =\n  \
+                 async {\n    \
+                   return! (match check n:\n      \
+                     case Ok v: async { return f\"ok {v}\" }\n      \
+                     case Error why: async { return why })\n  \
+                 }\n\
+               print (runAsync (describe 3))\n\
+               print (runAsync (describe (0 - 1)))";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(!py.contains("match "), "{py}");
+    assert_eq!(out, ["ok 3", "negative"]);
+}
+
+#[test]
 fn native_leaves_active_patterns_to_their_own_lowering() {
     // A total active pattern already lowers to its recognizer plus an
     // `isinstance` ladder over the hidden cases, in both modes.

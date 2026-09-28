@@ -1973,7 +1973,9 @@ impl Lowerer {
                     return Ok(stmts);
                 }
                 // An Option/Result match is an `isinstance` ladder (§5.5).
-                if let Some(stmts) = self.try_lower_native_match(scrutinee, arms, locals, None)? {
+                if let Some(stmts) =
+                    self.try_lower_native_match(scrutinee, arms, locals, NativeArmBody::Return)?
+                {
                     return Ok(stmts);
                 }
                 if let Some(stmts) = self.try_lower_ladder_match(scrutinee, arms, locals, None)? {
@@ -2177,9 +2179,12 @@ impl Lowerer {
                 // temps exactly as before.
                 let counter = self.tmp_counter;
                 let tmp = self.fresh_tmp();
-                if let Some(stmts) =
-                    self.try_lower_native_match(scrutinee, arms, locals, Some(&tmp))?
-                {
+                if let Some(stmts) = self.try_lower_native_match(
+                    scrutinee,
+                    arms,
+                    locals,
+                    NativeArmBody::Assign(&tmp),
+                )? {
                     return Ok((stmts, PyExpr::Name(tmp)));
                 }
                 if let Some(stmts) =
@@ -5029,6 +5034,14 @@ impl Lowerer {
                 Ok(stmts)
             }
             ExprKind::Match { scrutinee, arms } if !self.match_uses_ap(arms) => {
+                if let Some(stmts) = self.try_lower_native_match(
+                    scrutinee,
+                    arms,
+                    locals,
+                    NativeArmBody::AwaitReturn,
+                )? {
+                    return Ok(stmts);
+                }
                 let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
                 let mut cases = Vec::new();
                 for (i, arm) in arms.iter().enumerate() {
@@ -5526,7 +5539,7 @@ impl Lowerer {
         scrutinee: &Expr,
         arms: &[crate::parser::ast::MatchArm],
         locals: &HashSet<String>,
-        assign_to: Option<&str>,
+        mode: NativeArmBody<'_>,
     ) -> Result<Option<Vec<PyStmt>>, LowerError> {
         if !self.native || arms.is_empty() {
             return Ok(None);
@@ -5545,11 +5558,12 @@ impl Lowerer {
         {
             return Ok(None);
         }
-        // The Option/Result ladder already has the best form for its shape.
-        if ladder_shape(arms).is_some() {
+        // The Option/Result ladder already has the best form for its shape where
+        // it is tried; an `async { }` block's `return!` never tries it.
+        if ladder_shape(arms).is_some() && !matches!(mode, NativeArmBody::AwaitReturn) {
             return Ok(None);
         }
-        if assign_to.is_some() && arms.iter().any(|a| a.guard.is_some()) {
+        if matches!(mode, NativeArmBody::Assign(_)) && arms.iter().any(|a| a.guard.is_some()) {
             return Ok(None);
         }
         let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
@@ -5577,9 +5591,12 @@ impl Lowerer {
                 let mut binds = Vec::new();
                 self.native_pattern(&alt, PyExpr::Name(subject.clone()), &mut conds, &mut binds);
                 let guard = self.lower_guard(&arm.guard, &scope.locals)?;
-                let body = match assign_to {
-                    None => self.lower_return(&arm.body, &scope.locals)?,
-                    Some(tmp) => {
+                let body = match mode {
+                    NativeArmBody::Return => self.lower_return(&arm.body, &scope.locals)?,
+                    NativeArmBody::AwaitReturn => {
+                        self.lower_async_bang_return(&arm.body, &scope.locals)?
+                    }
+                    NativeArmBody::Assign(tmp) => {
                         let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
                         with_assign(arm_stmts, tmp, arm_val)
                     }
@@ -10715,6 +10732,16 @@ impl LadderFamily {
             _ => None,
         }
     }
+}
+
+/// How [`Lowerer::try_lower_native_match`] lowers each arm's body: returned
+/// (tail position), assigned to a temp (value position), or, in an `async { }`
+/// block's `return!`, returned awaited (`lower_async_bang_return`).
+#[derive(Clone, Copy)]
+enum NativeArmBody<'a> {
+    Return,
+    Assign(&'a str),
+    AwaitReturn,
 }
 
 /// One arm of a ladder-shaped match.
