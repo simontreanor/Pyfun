@@ -3851,6 +3851,37 @@ fn a_rejected_async_self_tail_call_says_why() {
 }
 
 #[test]
+fn e2e_a_start_joins_the_innermost_open_scope() {
+    // Each start belongs to the scope open where it runs: the inner scope joins
+    // its own task before the outer body carries on, and the outer scope's
+    // later start still finds the outer group.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern runAsync: Async a -> a = asyncio.run\n\
+               let worker name = async {\n  \
+                 do! Async.sleep 0.01\n  \
+                 print name\n\
+               }\n\
+               let launch name = Task.start (worker name)\n\
+               let session = Task.scope (async {\n  \
+                 launch \"outer-1\"\n  \
+                 let! inner = Task.scope (async {\n    \
+                   launch \"inner\"\n    \
+                   return 1\n  \
+                 })\n  \
+                 launch \"outer-2\"\n  \
+                 return inner + 1\n\
+               })\n\
+               print (runAsync session)";
+    let py = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &py);
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        ["outer-1", "inner", "outer-2", "2"],
+        "{py}"
+    );
+}
+
+#[test]
 fn the_cookbook_agent_loops_instead_of_recursing() {
     // The finding that forced the async form: the agent must outlive the stack.
     let path = format!(

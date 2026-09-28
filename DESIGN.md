@@ -81,8 +81,9 @@ and effects as part of the type system from the MVP.** This is a defining featur
 later add-on, and it shapes inference and lowering — so it must be designed in from the start.
 
 **Implemented (inference-first, zero pollution).** Function arrows (`Ty::Fun`) carry a latent
-[`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, mutation via `<-` —, and
-`async`) plus effect *variables* for polymorphism. Effects are **inferred and never written in
+[`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, mutation via `<-` —,
+`async`, and `spawn`, which `Task.start` performs and only a `Task.scope` discharges, §8) plus effect
+*variables* for polymorphism. Effects are **inferred and never written in
 ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : 'a ->{io}
 unit` and impurity **propagate automatically** (calling an impure function makes you impure), and
 labels from different calls **union** (a body that prints and fetches is `->{io, async}`). Defining a
@@ -777,16 +778,28 @@ item on the roadmap (`Task.scope`/`Task.start` over `asyncio.TaskGroup`); a free
 
 **Structured concurrency — the `Task` module.** Every task is owned by a scope, the scope does not
 exit until its children finish, one failure cancels the siblings, and leaving the scope cancels
-everything. Python 3.11 has the primitive (`asyncio.TaskGroup`); Pyfun types the discipline:
-`Task.scope : (Scope ->{e} Async a) ->{e} Async a` runs an async body inside `async with
-asyncio.TaskGroup() as tg` and hands the body the `Scope` (an opaque built-in handle, the capability),
-and `Task.start : Scope -> Async unit ->{io} unit` needs it, so a start outside a scope is a missing
-argument at compile time rather than a leaked task at run time, and there is no `cancel` to forget.
-This is the **value form** of the gate; the effect form (a `spawn` label only a scope discharges,
-Pyfun's first effect handler) is the aspiration on the roadmap. `Async.parallel`/`race`/`timeout`
+everything. Python 3.11 has the primitive (`asyncio.TaskGroup`); Pyfun types the discipline with an
+**effect**: `Task.start : Async unit ->{spawn} unit` performs `spawn`, and `Task.scope : Async a ->
+Async a` is its **handler**, Pyfun's first. When `Task.scope body` is applied, the `spawn` that
+evaluating `body` performs stops there (the rest of its effect passes through), so tasks started in
+the body, directly or through a helper whose arrow carries `->{spawn}`, belong to the scope. A
+top-level evaluation that still performs `spawn` is a compile error ("this starts a task outside any
+`Task.scope`"), since nothing would own the task; defining a function that starts tasks is fine, as
+its effect is latent until it is called. There is no `cancel` to forget. The discharge is a rule in
+`Infer::infer_apply` for a saturated `Task.scope` application rather than a change to effect
+unification: effects are sets, not rows, so `{spawn} ∪ e` meeting `{async, spawn}` widens `e`
+rather than subtracting, and teaching the unifier subtraction would change every effect-polymorphic
+signature. A bare `Task.scope` passed as a value is the plain `Async a -> Async a` and discharges
+nothing. At run time `Task.scope` opens `async with asyncio.TaskGroup()` in a task of its own and
+publishes the group through a `contextvars.ContextVar` (`_pf_scope`), which `Task.start` reads;
+running the scope as its own task gives it a private copy of the context, so the innermost open scope
+is always the one a start sees and nothing leaks to the caller when a scope ends. In a multi-file
+project the variable lives in `_pyfun_rt.py`, so a module's helper can start a task in a scope
+another module opened. This replaced an earlier **value form**, where the body received a `Scope`
+capability argument and `Task.start` took it explicitly; the effect makes the argument redundant. `Async.parallel`/`race`/`timeout`
 stay the one-shot combinators they are; a `task { }` spelling was considered and set aside: the §8.1
 rule keeps the built-ins at four, and a user builder cannot open the scope around the whole block
-(the protocol has no `run` member), while `Task.scope (fun scope -> async { … })` reads well enough
+(the protocol has no `run` member), while `Task.scope (async { … })` reads well enough
 that adding `run` to the protocol waits for demand. A failed child raises an `ExceptionGroup` out of
 the scope, which `Async.catch` reports as one `Exception` (kind `ExceptionGroup`); a
 `Result a (List Exception)` reading of the scope stays open until a program needs the members. The

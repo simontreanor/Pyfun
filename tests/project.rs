@@ -229,6 +229,42 @@ fn e2e_runs_a_cross_module_program() {
 }
 
 #[test]
+fn e2e_a_task_started_in_one_module_joins_a_scope_opened_in_another() {
+    // `Jobs.launch` performs `spawn`; `Main`'s scope discharges it. At run time
+    // both read the one `_pf_scope` context variable from `_pyfun_rt.py`.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Jobs\n\
+                 extern runAsync: Async a -> a = asyncio.run\n\
+                 let session = Task.scope (async {\n  \
+                   Jobs.launch \"x\"\n  \
+                   Jobs.launch \"y\"\n  \
+                   return 7\n\
+                 })\n\
+                 print (runAsync session)",
+            ),
+            (
+                "Jobs",
+                "let worker name = async {\n  \
+                   do! Async.sleep 0.01\n  \
+                   print name\n\
+                 }\n\
+                 let launch name = Task.start (worker name)",
+            ),
+        ],
+    );
+    assert!(file(&files, "_pyfun_rt.py").contains("_pf_scope = contextvars.ContextVar"));
+    assert!(file(&files, "jobs.py").contains("from _pyfun_rt import _pf_scope"));
+    let dir = Scratch::new("e2e_task_scope");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.lines().collect::<Vec<_>>(), ["x", "y", "7"]);
+    }
+}
+
+#[test]
 fn the_browser_cookbook_example_type_checks_and_lowers() {
     // #111: the `Dom` façade and its counter page compile as a project; running
     // them needs a browser (Pyodide's `js` module), so the test stops at lowering.
