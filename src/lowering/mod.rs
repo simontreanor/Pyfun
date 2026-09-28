@@ -5310,7 +5310,18 @@ impl Lowerer {
         if !self.native || arms.is_empty() {
             return Ok(None);
         }
-        if !arms.iter().all(|a| self.native_pattern_ok(&a.pattern)) {
+        // A top-level or-pattern is one arm per alternative, each with its own
+        // copy of the body; nested or-patterns keep the `match` lowering.
+        let alternatives = |arm: &'_ crate::parser::ast::MatchArm| -> Vec<Pattern> {
+            match &arm.pattern {
+                Pattern::Or(alts) => alts.clone(),
+                other => vec![other.clone()],
+            }
+        };
+        if !arms
+            .iter()
+            .all(|a| alternatives(a).iter().all(|p| self.native_pattern_ok(p)))
+        {
             return Ok(None);
         }
         // The Option/Result ladder already has the best form for its shape.
@@ -5338,51 +5349,48 @@ impl Lowerer {
             guarded: bool,
         }
         let mut pieces = Vec::with_capacity(arms.len());
-        for (idx, arm) in arms.iter().enumerate() {
-            let scope = self.enter_arm(arms, idx, locals);
-            let mut conds = Vec::new();
-            let mut binds = Vec::new();
-            self.native_pattern(
-                &arm.pattern,
-                PyExpr::Name(subject.clone()),
-                &mut conds,
-                &mut binds,
-            );
-            let guard = self.lower_guard(&arm.guard, &scope.locals)?;
-            let body = match assign_to {
-                None => self.lower_return(&arm.body, &scope.locals)?,
-                Some(tmp) => {
-                    let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
-                    with_assign(arm_stmts, tmp, arm_val)
+        'arms: for (idx, arm) in arms.iter().enumerate() {
+            for alt in alternatives(arm) {
+                let scope = self.enter_arm(arms, idx, locals);
+                let mut conds = Vec::new();
+                let mut binds = Vec::new();
+                self.native_pattern(&alt, PyExpr::Name(subject.clone()), &mut conds, &mut binds);
+                let guard = self.lower_guard(&arm.guard, &scope.locals)?;
+                let body = match assign_to {
+                    None => self.lower_return(&arm.body, &scope.locals)?,
+                    Some(tmp) => {
+                        let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
+                        with_assign(arm_stmts, tmp, arm_val)
+                    }
+                };
+                self.exit_arm(scope);
+                let mut inner: Vec<PyStmt> = binds
+                    .into_iter()
+                    .map(|(target, value)| PyStmt::Assign { target, value })
+                    .collect();
+                match guard {
+                    Some(test) => inner.push(PyStmt::If {
+                        test,
+                        body,
+                        orelse: vec![],
+                    }),
+                    None => inner.extend(body),
                 }
-            };
-            self.exit_arm(scope);
-            let mut inner: Vec<PyStmt> = binds
-                .into_iter()
-                .map(|(target, value)| PyStmt::Assign { target, value })
-                .collect();
-            match guard {
-                Some(test) => inner.push(PyStmt::If {
-                    test,
-                    body,
-                    orelse: vec![],
-                }),
-                None => inner.extend(body),
-            }
-            let cond = conds.into_iter().reduce(|a, b| PyExpr::BinOp {
-                op: PyBinOp::And,
-                left: Box::new(a),
-                right: Box::new(b),
-            });
-            let guarded = arm.guard.is_some();
-            let irrefutable = cond.is_none() && !guarded;
-            pieces.push(Piece {
-                cond,
-                inner,
-                guarded,
-            });
-            if irrefutable {
-                break; // later arms are unreachable
+                let cond = conds.into_iter().reduce(|a, b| PyExpr::BinOp {
+                    op: PyBinOp::And,
+                    left: Box::new(a),
+                    right: Box::new(b),
+                });
+                let guarded = arm.guard.is_some();
+                let irrefutable = cond.is_none() && !guarded;
+                pieces.push(Piece {
+                    cond,
+                    inner,
+                    guarded,
+                });
+                if irrefutable {
+                    break 'arms; // later arms are unreachable
+                }
             }
         }
         let last = pieces.len() - 1;
@@ -5437,7 +5445,20 @@ impl Lowerer {
             }
             Pattern::Tuple { elems } => elems.iter().all(|e| self.native_pattern_ok(e)),
             Pattern::As { pattern, .. } => self.native_pattern_ok(pattern),
-            Pattern::Or(_) | Pattern::List { .. } => false,
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                prefix
+                    .iter()
+                    .chain(suffix)
+                    .all(|p| self.native_pattern_ok(p))
+                    && rest
+                        .as_deref()
+                        .is_none_or(|r| matches!(r, Pattern::Var { .. } | Pattern::Wildcard))
+            }
+            Pattern::Or(_) => false,
         }
     }
 
@@ -5513,9 +5534,57 @@ impl Lowerer {
                     self.native_pattern(elem, item, conds, binds);
                 }
             }
-            Pattern::Or(_) | Pattern::List { .. } => {
-                unreachable!("native_pattern_ok rejects or- and list patterns")
+            // `[a, b, *mid, z]`: a length test, then each element by position,
+            // the suffix counted from the end and the rest as a slice.
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let len = PyExpr::Call {
+                    func: Box::new(PyExpr::Name("len".to_string())),
+                    args: vec![subject.clone()],
+                };
+                let fixed = (prefix.len() + suffix.len()) as i64;
+                conds.push(PyExpr::BinOp {
+                    op: if rest.is_some() {
+                        PyBinOp::Ge
+                    } else {
+                        PyBinOp::Eq
+                    },
+                    left: Box::new(len.clone()),
+                    right: Box::new(PyExpr::Int(fixed)),
+                });
+                let index = |i: i64| PyExpr::Subscript {
+                    value: Box::new(subject.clone()),
+                    index: Box::new(PyExpr::Int(i)),
+                };
+                for (i, elem) in prefix.iter().enumerate() {
+                    self.native_pattern(elem, index(i as i64), conds, binds);
+                }
+                let k = suffix.len() as i64;
+                for (j, elem) in suffix.iter().enumerate() {
+                    self.native_pattern(elem, index(j as i64 - k), conds, binds);
+                }
+                if let Some(rest) = rest.as_deref() {
+                    let upper = if k == 0 {
+                        len
+                    } else {
+                        PyExpr::BinOp {
+                            op: PyBinOp::Sub,
+                            left: Box::new(len),
+                            right: Box::new(PyExpr::Int(k)),
+                        }
+                    };
+                    let slice = PyExpr::Slice {
+                        value: Box::new(subject.clone()),
+                        lower: Box::new(PyExpr::Int(prefix.len() as i64)),
+                        upper: Box::new(upper),
+                    };
+                    self.native_pattern(rest, slice, conds, binds);
+                }
             }
+            Pattern::Or(_) => unreachable!("native_pattern_ok rejects nested or-patterns"),
         }
     }
 
