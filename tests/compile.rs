@@ -3925,17 +3925,56 @@ fn native_compiles_nested_tuple_record_literal_and_as_patterns() {
 }
 
 #[test]
-fn native_keeps_match_for_or_and_list_patterns() {
+fn native_lowers_or_and_list_patterns_too() {
+    // An or-pattern is one ladder arm per alternative; a list pattern is a
+    // length test, positional reads (the suffix from the end) and a rest slice.
     let src = "let f xs =\n  \
                  match xs:\n    \
                    case [] | [_]: \"short\"\n    \
-                   case _: \"long\"\n\
-               print (f [1, 2])";
+                   case [a, b]: f\"pair {a}{b}\"\n    \
+                   case [a, *mid, z]: f\"{a}..{z} with {List.len mid} inside\"\n\
+               let g n = match n:\n  \
+                 case 1 | 2 | 3: \"small\"\n  \
+                 case _: \"big\"\n\
+               print (f [])\n\
+               print (f [7])\n\
+               print (f [1, 2])\n\
+               print (f [1, 2, 3, 4])\n\
+               print (g 2)\n\
+               print (g 9)";
     let Some((py, out)) = run_native(src) else {
         return;
     };
-    assert!(py.contains("match xs:"), "{py}");
-    assert_eq!(out, ["long"]);
+    assert!(!py.contains("match "), "{py}");
+    assert!(py.contains("mid = xs[1:len(xs) - 1]"), "{py}");
+    assert_eq!(
+        out,
+        [
+            "short",
+            "short",
+            "pair 12",
+            "1..4 with 2 inside",
+            "small",
+            "big"
+        ]
+    );
+}
+
+#[test]
+fn native_leaves_active_patterns_to_their_own_lowering() {
+    // A total active pattern already lowers to its recognizer plus an
+    // `isinstance` ladder over the hidden cases, in both modes.
+    let src = "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
+               let parity n =\n  \
+                 match n:\n    \
+                   case Even: \"even\"\n    \
+                   case Odd: \"odd\"\n\
+               print (parity 3)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("_ap_Even_Odd(n)"), "{py}");
+    assert_eq!(out, ["odd"]);
 }
 
 #[test]

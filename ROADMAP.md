@@ -501,7 +501,8 @@ map_build 1.64× vs hand-written.
 - **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**;
   **first slice SHIPPED 2026-09-28**: `pyfun compile --native` lowers every match built from
   constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
-  expr_eval 2.30x → 1.63x on plain CPython. Remaining, in order: or-/list-pattern ladders, typed
+  expr_eval 2.30x → 1.63x on plain CPython; top-level or-patterns and list patterns followed the
+  same night. Remaining, in order: nested or-patterns, typed
   emit (annotations from the inferred types), a `--native` build step that runs mypyc, then the
   closure/`seq`/`_pyfun_rt` audit and project mode) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
