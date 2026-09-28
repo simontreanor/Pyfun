@@ -160,9 +160,9 @@ still the code you would have written.
 
 Starting a task is where async programs leak: a task nobody joins keeps running after the code
 that started it has moved on. Pyfun's `Task` module types the discipline. `Task.scope` runs an
-async body and hands it a `Scope`; `Task.start` needs that `Scope`, so a task can only start
-where something will join it, and when the body ends the scope waits for every task it started
-(or cancels them all if one fails). There is no `cancel` to forget.
+async body, and `Task.start` starts a task that the enclosing scope owns. When the body ends, the
+scope waits for every task it started (or cancels them all if one fails). There is no `cancel` to
+forget.
 
 ```pyfun
 extern runAsync: Async a -> a = asyncio.run
@@ -174,12 +174,11 @@ let worker name =
   }
 
 let session =
-  Task.scope (fun scope ->
-    async {
-      Task.start scope (worker "a")
-      Task.start scope (worker "b")
-      return "both joined"
-    })
+  Task.scope (async {
+    Task.start (worker "a")
+    Task.start (worker "b")
+    return "both joined"
+  })
 
 print (runAsync session)
 ```
@@ -190,8 +189,22 @@ b done
 both joined
 ```
 
-The body returns before the workers finish, and the scope holds the result until they have. A
-`Task.start` outside a scope has no `Scope` to give, which the checker reports as a type error.
+The body returns before the workers finish, and the scope holds the result until they have.
+
+What keeps a task inside a scope is an effect. `Task.start` performs `spawn`, the same way `print`
+performs `io`, and a `Task.scope` body is the one place `spawn` stops. A function that starts
+tasks is fine to write (its type says `->{spawn}`), and calling it inside a scope's body is fine
+too. Starting a task anywhere else is a compile error:
+
+```pyfun
+let stray = Task.start (Async.sleep 1.0)
+```
+
+```console
+error: this starts a task outside any `Task.scope`, so nothing would own it: it performs `spawn`,
+which only a `Task.scope` body discharges (start the task inside `Task.scope (async { ... })`)
+```
+
 The interop cookbook's `structured_concurrency` entry builds a mailbox agent over `asyncio.Queue`
 on the same two functions.
 

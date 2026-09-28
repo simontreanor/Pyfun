@@ -198,7 +198,10 @@ pub fn lower_in_project(
             .or_insert_with(|| tag.clone());
     }
     let py = lowerer.lower_module(module)?;
-    let uses_runtime = lowerer.needs_result || lowerer.needs_option || lowerer.needs_exception;
+    let uses_runtime = lowerer.needs_result
+        || lowerer.needs_option
+        || lowerer.needs_exception
+        || lowerer.needs_task_scope;
     Ok(LoweredModule {
         py,
         uses_runtime,
@@ -212,10 +215,29 @@ pub fn lower_in_project(
 pub fn runtime_module() -> PyModule {
     // The shared runtime is a project artifact (multi-file), so it always carries the
     // comparison methods — a `Result`/`Option` may be compared in any importing module.
-    let mut body = result_prelude(true);
+    let mut body = vec![PyStmt::Import("contextvars".to_string())];
+    body.extend(result_prelude(true));
     body.extend(option_prelude(true, true));
     body.extend(exception_prelude());
+    // One `Task.scope` context variable for the whole project, so a function in
+    // one module can start a task in a scope another module opened.
+    body.push(task_scope_var());
     PyModule { body }
+}
+
+/// `_pf_scope = contextvars.ContextVar("_pf_scope")`: where the innermost
+/// `Task.scope` publishes its TaskGroup for `Task.start` to find.
+fn task_scope_var() -> PyStmt {
+    PyStmt::Assign {
+        target: "_pf_scope".to_string(),
+        value: PyExpr::Call {
+            func: Box::new(PyExpr::Attribute {
+                value: Box::new(PyExpr::Name("contextvars".to_string())),
+                attr: "ContextVar".to_string(),
+            }),
+            args: vec![PyExpr::Str("_pf_scope".to_string())],
+        },
+    }
 }
 
 /// Lowering-side registry entry for one active-pattern **case** (`DESIGN.md`
@@ -346,6 +368,10 @@ struct Lowerer {
     needed_decode_helpers: BTreeSet<&'static str>,
     /// `Async`-module helpers referenced by the program (`_pf_async_*`).
     needed_async_helpers: BTreeSet<&'static str>,
+    /// Whether `Task.scope`/`Task.start` are used, which share the `_pf_scope`
+    /// context variable (defined here, or imported from `_pyfun_rt` in a
+    /// project so every module reads the same one).
+    needs_task_scope: bool,
     /// The derived codecs the checker resolved for this module's `Decode.auto`
     /// sites (`DESIGN.md` §6, "Derived codecs").
     codecs: crate::types::Codecs,
@@ -682,6 +708,7 @@ impl Lowerer {
             needed_combinators: BTreeSet::new(),
             needed_decode_helpers: BTreeSet::new(),
             needed_async_helpers: BTreeSet::new(),
+            needs_task_scope: false,
             codecs: crate::types::Codecs::default(),
             codec_table_used: std::collections::BTreeMap::new(),
             needed_codec_helpers: BTreeSet::new(),
@@ -1021,6 +1048,17 @@ impl Lowerer {
         body.extend(combinator_prelude(&self.needed_combinators));
         // Decode-module helpers referenced by the program.
         body.extend(decode_prelude(&self.needed_decode_helpers));
+        // The context variable `Task.scope` publishes its TaskGroup through.
+        if self.needs_task_scope {
+            if self.use_runtime {
+                body.push(PyStmt::ImportFrom {
+                    module: "_pyfun_rt".to_string(),
+                    names: vec!["_pf_scope".to_string()],
+                });
+            } else {
+                body.push(task_scope_var());
+            }
+        }
         // Async-module helpers referenced by the program.
         body.extend(async_prelude(&self.needed_async_helpers, none_singleton));
         body.extend(classes);
@@ -1305,6 +1343,14 @@ impl Lowerer {
     /// Snapshot the block-scoped registries (`local_fn_defs`, `local_arities`) so
     /// a block can restore them on exit: entries it adds or evicts must not
     /// outlive it.
+    /// `Task.scope`/`Task.start` need the shared `_pf_scope` context variable.
+    fn note_task_scope_var(&mut self) {
+        self.needs_task_scope = true;
+        if !self.use_runtime {
+            self.needed_imports.insert("contextvars".to_string());
+        }
+    }
+
     fn save_local_scope(&self) -> LocalScope {
         LocalScope {
             fn_defs: self.local_fn_defs.clone(),
@@ -3207,8 +3253,14 @@ impl Lowerer {
                 asy(self, "_pf_async_catch")
             }
             // Task — structured concurrency over `asyncio.TaskGroup`.
-            "Task.scope" => asy(self, "_pf_task_scope"),
-            "Task.start" => asy(self, "_pf_task_start"),
+            "Task.scope" => {
+                self.note_task_scope_var();
+                asy(self, "_pf_task_scope")
+            }
+            "Task.start" => {
+                self.note_task_scope_var();
+                asy(self, "_pf_task_start")
+            }
             // Encode.auto: the derived encoder reads the value's shape at run time
             // (a record's fields, a case's class name), so it needs no descriptor.
             "Encode.auto" => {
@@ -6156,22 +6208,49 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                     ))],
                 }],
             ),
-            // Task.scope(body): async with TaskGroup() as tg: return await body(tg)
+            // Task.scope(body) runs the body in its own task, whose copy of the
+            // context holds the scope's TaskGroup in `_pf_scope` without leaking
+            // it to the caller once the scope ends:
+            //   async def _pf_task_scope(body):
+            //       async def run():
+            //           async with asyncio.TaskGroup() as tg:
+            //               _pf_scope.set(tg)
+            //               return await body
+            //       return await asyncio.create_task(run())
             "_pf_task_scope" => adef(
                 helper,
                 &["body"],
-                vec![PyStmt::AsyncWith {
-                    context: call(asyncio("TaskGroup"), vec![]),
-                    binding: "tg".to_string(),
-                    body: vec![PyStmt::Return(await_(call(name("body"), vec![name("tg")])))],
-                }],
+                vec![
+                    adef(
+                        "run",
+                        &[],
+                        vec![PyStmt::AsyncWith {
+                            context: call(asyncio("TaskGroup"), vec![]),
+                            binding: "tg".to_string(),
+                            body: vec![
+                                PyStmt::Expr(call(
+                                    attr(name("_pf_scope"), "set"),
+                                    vec![name("tg")],
+                                )),
+                                PyStmt::Return(await_(name("body"))),
+                            ],
+                        }],
+                    ),
+                    PyStmt::Return(await_(call(
+                        asyncio("create_task"),
+                        vec![call(name("run"), vec![])],
+                    ))),
+                ],
             ),
-            // Task.start(tg, c): tg.create_task(c); the task is the scope's.
+            // Task.start(c): the enclosing scope's TaskGroup owns the task.
             "_pf_task_start" => PyStmt::FuncDef {
                 name: helper.to_string(),
-                params: vec!["tg".to_string(), "c".to_string()],
+                params: vec!["c".to_string()],
                 body: vec![
-                    PyStmt::Expr(call(attr(name("tg"), "create_task"), vec![name("c")])),
+                    PyStmt::Expr(call(
+                        attr(call(attr(name("_pf_scope"), "get"), vec![]), "create_task"),
+                        vec![name("c")],
+                    )),
                     PyStmt::Return(PyExpr::NoneLit),
                 ],
                 is_async: false,

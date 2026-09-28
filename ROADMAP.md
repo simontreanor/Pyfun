@@ -445,11 +445,11 @@ play comes first; the browser target is last because it depends on the async dec
   the goal is "as fast as idiomatic hand-written Python," and a genuinely hot inner loop still belongs
   behind an `extern` — the further lowering tiers (general inlining, fusion, micro-opts) remain
   **non-goals** (below). What runs the output is a separate axis — see **Performance beyond CPython**.
-- **A `spawn` effect label discharged only by a concurrency scope** (fourth dogfooding session,
-  item 17): `Task.start` would perform `spawn` and only a `Task.scope` handles it, so a start outside
-  a scope is "performs `spawn`" with nothing to discharge it. Pyfun's first effect *handler*, and the
-  reason structured concurrency belongs in the language rather than a library; the value form
-  (`Scope` as a capability argument) ships first and covers the use.
+- ~~**A `spawn` effect label discharged only by a concurrency scope**~~ **DONE 2026-09-28**:
+  `Task.start : Async unit ->{spawn} unit`, `Task.scope : Async a -> Async a` discharges it (a rule
+  for the saturated application, `DESIGN.md` §4/§8), and a top-level evaluation still performing
+  `spawn` is an error. Breaking: the `Scope` argument is gone (`Task.scope (async { … })`,
+  `Task.start job`).
 - **Larger prelude / package manager** — the *prelude* half is superseded by Dogfooding findings #5
   (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a

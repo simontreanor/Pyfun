@@ -4,10 +4,11 @@
 #   pyfun run examples/interop/structured_concurrency.pyfun
 #
 # Runs offline. Every task is owned by a scope: `Task.scope` opens an
-# `asyncio.TaskGroup` around an async body, hands it the `Scope`, and does not
-# return until every task started with `Task.start` has finished (or cancels
-# them all if one fails). A start needs the `Scope`, so there is no way to start a
-# task nothing will join, and no `cancel` to forget.
+# `asyncio.TaskGroup` around an async body and does not return until every task
+# started with `Task.start` has finished (or cancels them all if one fails).
+# `Task.start` performs the `spawn` effect, and a `Task.scope` body is the only
+# place that effect is discharged, so there is no way to start a task nothing
+# will join, and no `cancel` to forget.
 
 extern import asyncio
 extern runAsync: Async a -> a = asyncio.run
@@ -60,17 +61,16 @@ let producer inbox =
 # in the body; the closing of the scope joins the producer. Nothing here can
 # leak past the end of `session`.
 let session =
-  Task.scope (fun scope ->
-    async {
-      let inbox = newQueue ()
-      Task.start scope (producer inbox)
-      let! count = agentLoop inbox 0
-      return count
-    })
+  Task.scope (async {
+    let inbox = newQueue ()
+    Task.start (producer inbox)
+    let! count = agentLoop inbox 0
+    return count
+  })
 
 let count = runAsync session
 print f"agent handled {count} messages"
 
-# `Task.start` performs `io`, and `Scope` is only ever handed out by
-# `Task.scope`, so a start outside a scope is a missing argument at compile time,
-# not a leaked task at run time.
+# `Task.start` performs `spawn`, and only a `Task.scope` body discharges it, so a
+# start outside a scope is a compile error ("this starts a task outside any
+# `Task.scope`"), not a leaked task at run time.

@@ -148,6 +148,10 @@ pub enum EffLabel {
     /// declared arrows (externs / type decls) and by an `async {}` CE block,
     /// which performs `async` at its lexical site (`DESIGN.md` §4).
     Async,
+    /// Starting a task (`Task.start`). Pyfun's first *handled* effect: the
+    /// argument of a `Task.scope` discharges it, and a top-level evaluation that
+    /// still performs it is an error, since nothing would own the task.
+    Spawn,
 }
 
 impl EffLabel {
@@ -155,6 +159,7 @@ impl EffLabel {
         match self {
             EffLabel::Io => "io",
             EffLabel::Async => "async",
+            EffLabel::Spawn => "spawn",
         }
     }
 
@@ -164,6 +169,7 @@ impl EffLabel {
         match name {
             "io" => Some(EffLabel::Io),
             "async" => Some(EffLabel::Async),
+            "spawn" => Some(EffLabel::Spawn),
             _ => None,
         }
     }
@@ -351,7 +357,7 @@ const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
 /// and **`List`** (lexicographic, handled explicitly in [`Infer::require_ord_rec`],
 /// matching the Python list it lowers to). `Set`/`Map` have no natural order, and
 /// `Async`/`Seq`/`Exception` aren't comparable.
-const RESERVED_UNORDERED: [&str; 6] = ["Set", "Map", "Async", "Seq", "Exception", "Scope"];
+const RESERVED_UNORDERED: [&str; 5] = ["Set", "Map", "Async", "Seq", "Exception"];
 
 /// A depth cap on the structural-ordering check, so a pathological *non-regular*
 /// recursive type (whose expansion never repeats a `(name, args)` key) can't loop
@@ -652,9 +658,9 @@ pub const ASYNC_PRELUDE: &[(&str, usize)] = &[
 /// The `Task` module (`DESIGN.md` §6, structured concurrency): every task is owned
 /// by a scope, the scope does not exit until its children finish, one failure
 /// cancels the siblings, and leaving the scope cancels everything. `scope` opens
-/// one (`asyncio.TaskGroup`) around an async body that receives the `Scope`;
-/// `start` needs that `Scope`, so a task cannot be started outside one.
-pub const TASK_PRELUDE: &[(&str, usize)] = &[("scope", 1), ("start", 2)];
+/// one (`asyncio.TaskGroup`) around an async body; `start` performs `spawn`,
+/// which only a `scope` discharges, so a task cannot be started outside one.
+pub const TASK_PRELUDE: &[(&str, usize)] = &[("scope", 1), ("start", 1)];
 
 /// The `Decode` module (`DESIGN.md` §6): Elm-style JSON decoder combinators over the
 /// opaque built-in `Decoder a`. A `Decoder a` is a pure, total recipe that turns
@@ -750,7 +756,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     (
         "Task.start",
-        "Start a task inside a scope; it is owned by that scope. Performs `io`.",
+        "Start a task in the enclosing `Task.scope`, which owns it. Performs `spawn`, which only a scope discharges, so a start outside one is a compile error.",
     ),
     (
         "Async.catch",
@@ -1645,6 +1651,12 @@ pub const SEQ_PRELUDE: &[(&str, usize)] = &[
 /// identifier is the signal: value identifiers are lowercase, so `Upper.x` is only
 /// ever module access (a record-field base is a lowercase value). Shared by the
 /// checker and lowering so both resolve qualified references the same way.
+/// Whether a user binding has taken the `Task` name, so `Task.scope` is not the
+/// prelude's handler. The prelude's own entry is the only `Task.scope` otherwise.
+fn env_shadows_task(env: &Env) -> bool {
+    env.contains_key("Task")
+}
+
 pub fn qualified_name(expr: &Expr) -> Option<String> {
     if let ExprKind::Field { base, name } = &expr.kind
         && let ExprKind::Var(m) = &base.kind
@@ -2262,6 +2274,9 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         roles
     };
 
+    // What each top-level evaluation performs, checked for an unhandled `spawn`
+    // once inference is done (a later item can still resolve an effect variable).
+    let mut top_effects: Vec<(Span, Effect)> = Vec::new();
     for (idx, item) in module.items.iter().enumerate() {
         match item {
             // Measures and types are handled by the pre-pass and bind no value.
@@ -2305,7 +2320,12 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
             Item::Let(binding) => {
                 exported.extend(binding.bound_names());
                 match inf.infer_binding(binding, &env) {
-                    Ok((bound, _eff)) => {
+                    Ok((bound, eff)) => {
+                        // A function's body effect is latent; only evaluating a
+                        // value binding performs it.
+                        if binding.params.is_empty() {
+                            top_effects.push((binding.value.span(), eff));
+                        }
                         for (name, scheme) in bound {
                             env.insert(name, scheme);
                         }
@@ -2333,9 +2353,12 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 Err(e) => errors.push(e),
             },
             Item::Expr(expr) => {
+                let outer = std::mem::replace(&mut inf.cur_eff, Effect::pure());
                 if let Err(e) = inf.infer_expr(expr, &env) {
                     errors.push(e);
                 }
+                let performed = std::mem::replace(&mut inf.cur_eff, outer);
+                top_effects.push((expr.span(), performed));
             }
             // A module is typed in its own scope: members see prior siblings
             // unqualified (and qualified); only `Module.member` escapes to the outer
@@ -2344,7 +2367,12 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 let mut module_env = env.clone();
                 for member in items {
                     let bound = match inf.infer_binding(member, &module_env) {
-                        Ok((bound, _eff)) => bound,
+                        Ok((bound, eff)) => {
+                            if member.params.is_empty() {
+                                top_effects.push((member.value.span(), eff));
+                            }
+                            bound
+                        }
                         Err(e) => {
                             errors.push(e);
                             member
@@ -2406,6 +2434,20 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     // Resolve each hole's type variable against the final substitution and render
     // it (informative — a hole is reported, not an error; it blocks compilation),
     // and search the captured environment for **valid hole fits**.
+    // `spawn` has one handler, `Task.scope`; performing it anywhere else at the
+    // top level would start a task that no scope owns.
+    for (span, eff) in top_effects {
+        if inf.apply_eff(&eff).labels.contains(&EffLabel::Spawn) {
+            errors.push(TypeError {
+                message: "this starts a task outside any `Task.scope`, so nothing would own \
+                          it: it performs `spawn`, which only a `Task.scope` body discharges \
+                          (start the task inside `Task.scope (async { ... })`)"
+                    .to_string(),
+                span,
+            });
+        }
+    }
+
     let recorded_holes = std::mem::take(&mut inf.holes);
     let holes: Vec<Hole> = recorded_holes
         .into_iter()
@@ -3379,16 +3421,14 @@ fn seed_async_prelude(env: &mut Env) {
     );
 }
 
-/// Seed the `Task` module ([`TASK_PRELUDE`]). `scope` performs its body's
-/// effect when the value is built; `start` performs `io`.
+/// Seed the `Task` module ([`TASK_PRELUDE`]). `start` performs `spawn`, and a
+/// saturated `Task.scope body` discharges the `spawn` its body performs
+/// ([`Infer::infer_apply`]); as a bare value `scope` is the plain `Async a ->
+/// Async a` and discharges nothing.
 fn seed_task_prelude(env: &mut Env) {
     let asy = |t: Ty| Ty::Con("Async".to_string(), vec![t]);
-    let scope = || Ty::Con("Scope".to_string(), vec![]);
     let pf = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
-    let io_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::label(EffLabel::Io));
     let a = || Ty::Var(0);
-    let e = 0u32;
-    let arrow_e = |x: Ty, y: Ty| Ty::Fun(Box::new(x), Box::new(y), Effect::var(e));
     let scheme = |vars: Vec<u32>, eff_vars: Vec<u32>, ty: Ty| Scheme {
         vars,
         uvars: vec![],
@@ -3398,19 +3438,23 @@ fn seed_task_prelude(env: &mut Env) {
         mutable: false,
         ty,
     };
-    // Task.scope : (Scope ->{e} Async a) ->{e} Async a
+    // Task.scope : Async a -> Async a
     env.insert(
         "Task.scope".to_string(),
-        scheme(
-            vec![0],
-            vec![e],
-            arrow_e(arrow_e(scope(), asy(a())), asy(a())),
-        ),
+        scheme(vec![0], vec![], pf(asy(a()), asy(a()))),
     );
-    // Task.start : Scope -> Async unit ->{io} unit
+    // Task.start : Async unit ->{spawn} unit
     env.insert(
         "Task.start".to_string(),
-        scheme(vec![], vec![], pf(scope(), io_fn(asy(Ty::Unit), Ty::Unit))),
+        scheme(
+            vec![],
+            vec![],
+            Ty::Fun(
+                Box::new(asy(Ty::Unit)),
+                Box::new(Ty::Unit),
+                Effect::label(EffLabel::Spawn),
+            ),
+        ),
     );
     // Encode.auto : a -> string  (pure; the shape is read from the value at run
     // time, `DESIGN.md` §6 "Derived codecs")
@@ -5947,10 +5991,6 @@ fn seed_seq_prelude(env: &mut Env) {
 /// `Result a e` (with constructors `Ok`/`Error`) — see `DESIGN.md` §8.1.
 fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     decls.type_arity.insert("Async".to_string(), 1);
-    // `Scope` — the capability a `Task.scope` body receives and `Task.start`
-    // needs (`DESIGN.md` §6, structured concurrency): an opaque handle over
-    // the `asyncio.TaskGroup`, so a start outside a scope is a missing argument.
-    decls.type_arity.insert("Scope".to_string(), 0);
     decls.type_arity.insert("Seq".to_string(), 1);
     decls.type_arity.insert("Result".to_string(), 2);
     // `List a` — the eager collection (lowers to a Python list). It has no
@@ -5969,7 +6009,6 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     // purely from `Decode.*`. Reserved, so a user `type Decoder` is an error.
     decls.type_arity.insert("Decoder".to_string(), 1);
     decls.type_ctors.insert("Async".to_string(), Vec::new());
-    decls.type_ctors.insert("Scope".to_string(), Vec::new());
     decls.type_ctors.insert("Seq".to_string(), Vec::new());
     decls.type_ctors.insert(
         "Result".to_string(),
@@ -8029,7 +8068,7 @@ impl Infer {
                             .to_string(),
                     );
                 }
-                ("Async" | "Decoder" | "Scope", _) => {
+                ("Async" | "Decoder", _) => {
                     return Err(format!(
                         "cannot derive a decoder for `{}`: it has no JSON form",
                         show(&ty)
@@ -8649,6 +8688,27 @@ impl Infer {
     }
 
     fn infer_apply(
+        &mut self,
+        func: &Expr,
+        arg: &Expr,
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        // `Task.scope body` is the handler for `spawn`: every task the body starts
+        // belongs to the scope, so the `spawn` its evaluation performs stops here
+        // and the rest of its effect passes through (`DESIGN.md` §4).
+        if qualified_name(func).as_deref() == Some("Task.scope") && !env_shadows_task(env) {
+            let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+            let result = self.infer_apply_plain(func, arg, span, env);
+            let mut inner = self.apply_eff(&self.cur_eff.clone());
+            inner.labels.remove(&EffLabel::Spawn);
+            self.cur_eff = outer.union(&inner);
+            return result;
+        }
+        self.infer_apply_plain(func, arg, span, env)
+    }
+
+    fn infer_apply_plain(
         &mut self,
         func: &Expr,
         arg: &Expr,

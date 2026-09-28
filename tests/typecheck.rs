@@ -2673,22 +2673,40 @@ fn the_async_module_members_type_as_declared() {
 }
 
 #[test]
-fn task_scope_hands_out_the_scope_that_start_needs() {
-    // #109: a start outside a scope is a missing `Scope`, a type error.
+fn task_scope_discharges_the_spawn_that_start_performs() {
+    // `Task.start` performs `spawn`, and `Task.scope` is its one handler: inside a
+    // scope's body the effect stops there, including through a helper function.
     let src = "let worker = async { do! Async.sleep 0.01 }\n\
-               let session = Task.scope (fun scope -> async {\n  \
-                 Task.start scope worker\n  \
+               let launch w = Task.start w\n\
+               let session = Task.scope (async {\n  \
+                 Task.start worker\n  \
+                 launch worker\n  \
                  return 1\n\
                })";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
+    // A start outside any scope has nothing to own the task.
     assert_error_contains(
-        "let bad = Task.start (Async.sleep 1.0) (Async.sleep 2.0)",
-        "expected Scope, found Async unit",
+        "let bad = Task.start (Async.sleep 1.0)",
+        "outside any `Task.scope`",
     );
-    // `start` performs io, so a `let pure` cannot start tasks.
+    // ...including one tucked inside an async block that is run at top level.
     assert_error_contains(
-        "let pure go scope = Task.start scope (Async.sleep 1.0)",
-        "declared `pure` but performs `io`",
+        "extern runAsync: Async a -> a = asyncio.run\n\
+         let sneaky n = async { Task.start (Async.sleep 1.0) }\n\
+         let r = runAsync (sneaky 0)",
+        "outside any `Task.scope`",
+    );
+    // A function that starts tasks is fine to define; its arrow carries `spawn`.
+    assert!(pyfun::check("let launch w = Task.start w").is_ok());
+    // `let pure` sees the label like any other.
+    assert_error_contains(
+        "let pure go x = Task.start (Async.sleep 1.0)",
+        "declared `pure` but performs `spawn`",
+    );
+    // The old capability argument is gone.
+    assert_error_contains(
+        "let s = Task.scope (fun scope -> async { return 1 })",
+        "mismatch",
     );
 }
 
