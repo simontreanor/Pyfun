@@ -1150,6 +1150,20 @@ impl Parser {
             pattern
         } else {
             let name = self.parse_ident("binding name")?;
+            // A capitalised name is a constructor (or a module) everywhere else, so
+            // `let Some x = …` never means a function called `Some`: it is a
+            // constructor pattern written without its brackets. Say so, rather than
+            // quietly defining a function that shadows the constructor.
+            if name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                return Err(ParseError {
+                    message: format!(
+                        "`{name}` starts with a capital letter, so it reads as a constructor, \
+                         not a name to bind; name a value in lowercase, and take a value \
+                         apart with `match`, which has somewhere to fall through to"
+                    ),
+                    span: Span::new(start, self.prev_end()),
+                });
+            }
             Pattern::Var {
                 name,
                 span: NodeSpan::new(Span::new(start, self.prev_end())),

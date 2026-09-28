@@ -18,7 +18,7 @@ inferred from the symptom. All six are accepted work, and the two that carried a
 size of the standard-library sweep, and which of three shapes answers the recursion gap) were settled
 on 2026-07-31; each entry records what was chosen and what was turned down with it.
 
-1. **Imported types cannot appear in a `type` declaration** (S) — `types::run` calls `build_decls`
+1. ~~**Imported types cannot appear in a `type` declaration**~~ **CLOSED** (#36) (S) — `types::run` calls `build_decls`
    (which resolves every record field and ADT variant against `type_arity`) *before*
    `merge_imported_types`, so an imported type is not registered yet when local type bodies resolve.
    `type Holder = { item: Placed }` fails with "unknown type" even though the bare name is exactly how
@@ -32,7 +32,7 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    for *type* names, which are in-file only, can leave stale references behind. Cross-file type nav was
    never built because qualified type syntax did not exist; it does now, and `resolve::type_at` needs
    the cross-file dimension the value and constructor paths already have (`symbol_occurrences`).
-2. **Field access picks its record before the base type is known** (S) — `Infer::infer_field` calls
+2. ~~**Field access picks its record before the base type is known**~~ **CLOSED** (#37) (S) — `Infer::infer_field` calls
    `record_of_field` (the name-only multimap) and infers the base one line later, so two records
    sharing a field name collide at *every* use site even where the base's type is already solved. The
    dogfooded program paid for it in Hungarian prefixes (`cRow`, `cCol`, `cLetter`, plus nine
@@ -40,13 +40,13 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    workaround (pattern-match to disambiguate) means destructuring at every use site. Fix: infer the
    base first and use its solved `Ty::Con` when that record declares the field, keeping the multimap
    as the fallback for a still-unsolved base. That is F#'s own rule, and it needs no new syntax.
-3. **Single-file `pyfun run` cannot feed the program stdin** (S) — `main::run` pipes the emitted
+3. ~~**Single-file `pyfun run` cannot feed the program stdin**~~ **CLOSED** (#35) (S) — `main::run` pipes the emitted
    source to `python -`, so the program's stdin *is* its own source text and the first read raises
    `EOFError`. Interactive programs are therefore un-runnable by the tool whose job is running
    programs. The project path (`main::run_project`) already materializes to a temp directory and
    inherits stdio, so a multi-module interactive program works today: the fix is making the
    single-file path do what the project path does. Tooling, not language design.
-4. **No tuple patterns in function or lambda parameters** (M) — `parse_param` is `parse_ident`, so
+4. ~~**No tuple patterns in function or lambda parameters**~~ **CLOSED** (#38, #40, #41) (M) — `parse_param` is `parse_ident`, so
    `fun (t, sq) -> …` does not parse and anything folding over pairs needs a named helper wrapping a
    `match` (five such one-line functions in the dogfooded program). Widening `Param` to a pattern
    reaches the LSP, where `Param{name,span}` feeds hover, go-to-definition and rename. **Follow-ups**
@@ -54,7 +54,7 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    (`fun (Cell { letter }) -> …`), which are irrefutable and so belong in the admitted set, but need
    attribute-reading lowering rather than tuple unpacking; and **narrowing the self-tail-call capture
    guard** below to true free variables (see #6).
-5. **Standard library completion** (L, sliced per module) — the dogfooded program wrote 11 scaffolding
+5. ~~**Standard library completion**~~ **CLOSED** (#42–#49) (L, sliced per module) — the dogfooded program wrote 11 scaffolding
    functions before it could start on the game, and defined `takeN`/`dropN` index-based over
    zip-with-indices because the natural recursive definitions are stack-unsafe (item 6). Confirmed
    missing across the prelude: `fst`/`snd` (no tuple accessors at all), `List.take`/`drop`/`head`/
@@ -81,7 +81,7 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    valuable half was a bug: every multi-argument callback's scheme put the effect variable on *every*
    arrow, so an impure two-argument callback could never unify and `List.fold` could not print
    (`DESIGN.md`, "Effects through a multi-argument callback").
-6. **Unbounded recursion has no stack-safe form** (M, decided) — an interactive turn loop is not a
+6. ~~**Unbounded recursion has no stack-safe form**~~ **CLOSED** (#39, #41) (M, decided) — an interactive turn loop is not a
    collection traversal, so the Non-goals answer below ("iteration is the `List`/`Seq` combinators
    plus recursion") does not cover it: every turn and every rejected input is a frame that never
    returns until the game ends, and the dogfooded program calls `setRecursionLimit 20000` at startup
@@ -651,7 +651,7 @@ green against a stale compiler. Still open:
 Both surfaced while checking what the docs claim against what the compiler does, and neither is a
 documentation problem, so they are recorded here rather than papered over in prose.
 
-1. **An uppercase `let` binding silently defines a function** (S) — `let Some x = Some 1`
+1. ~~**An uppercase `let` binding silently defines a function**~~ **CLOSED 2026-09-28** (S; now a parse error naming the capitalized name as a constructor) — `let Some x = Some 1`
    type-checks. `parser::parse_binding_target` enters the pattern grammar only after `(` or
    `Ident {`, so a bare constructor name is read as the *function name* of `let f x = …`, and the
    program defines a function called `Some` that shadows the constructor. The irrefutability rule
