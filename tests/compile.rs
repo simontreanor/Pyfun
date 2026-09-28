@@ -3980,6 +3980,43 @@ fn native_joins_a_nested_or_pattern_with_or() {
 }
 
 #[test]
+fn native_annotates_top_level_functions_it_can_spell() {
+    let src = "type Shape = Circle float | Square float\n\
+               type Point = { x: int, y: int }\n\
+               let area s =\n  \
+                 match s:\n    \
+                   case Circle r: 3.0 * r * r\n    \
+                   case Square w: w * w\n\
+               let shift p dx = { p with x = p.x + dx }\n\
+               let names xs = List.map (fun s -> String.upper s) xs\n\
+               let first xs = List.head xs\n\
+               let apply f x = f x\n\
+               print (area (Square 2.0))\n\
+               print (shift (Point { x = 1, y = 2 }) 3).x\n\
+               print (names [\"a\"])\n\
+               print (first [1])\n\
+               print (apply (fun n -> n + 1) 1)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("Shape = Circle | Square"), "{py}");
+    assert!(py.contains("def area(s: Shape) -> float:"), "{py}");
+    assert!(
+        py.contains("def shift(p: Point, dx: int) -> Point:"),
+        "{py}"
+    );
+    assert!(
+        py.contains("def names(xs: list[str]) -> list[str]:"),
+        "{py}"
+    );
+    // `first` is polymorphic (`List 'a`), so only its result is spelled.
+    assert!(py.contains("def first(xs) -> Some | None_:"), "{py}");
+    // A function parameter and a type variable stay unannotated.
+    assert!(py.contains("def apply(f, x):"), "{py}");
+    assert_eq!(out, ["4.0", "4", "['A']", "Some(1)", "2"]);
+}
+
+#[test]
 fn native_leaves_active_patterns_to_their_own_lowering() {
     // A total active pattern already lowers to its recognizer plus an
     // `isinstance` ladder over the hidden cases, in both modes.

@@ -74,8 +74,18 @@ def main():
             compiled = work / f"{name}_mypyc.py"
             shutil.copy(native, compiled)
             shutil.copy(BENCH / f"{name}_baseline.py", work / f"{name}_base.py")
+            # Pyfun reuses a Python local across match arms, so a name can hold
+            # differently narrowed types in different arms; mypy's newer
+            # redefinition rule accepts that (`DESIGN.md` §5.6).
             build = subprocess.run(
-                [sys.executable, "-m", "mypyc", compiled.name],
+                [
+                    sys.executable,
+                    "-m",
+                    "mypyc",
+                    "--allow-redefinition-new",
+                    "--local-partial-types",
+                    compiled.name,
+                ],
                 cwd=work,
                 capture_output=True,
                 text=True,

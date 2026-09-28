@@ -510,9 +510,13 @@ map_build 1.64× vs hand-written.
   class fields `Any` since mypyc rejects `object`):** all three benchmarks compile, run, and match
   the baseline; mypyc is 1.24x / 1.28x / 1.11x faster than the same native file on CPython
   (expr_eval / collatz / map_build), landing at 1.75x / **0.79x** / 1.58x of hand-written Python.
-  Typed emit is what the July mock-up says closes the rest (1.26x of baseline on expr_eval). Remaining, in order: or-patterns that bind names,
-  typed emit (annotations from the inferred types), a `--native` build step that runs mypyc, then
-  the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
+  **Typed emit followed the same night** (top-level functions annotated from inferred types, a
+  union alias per sum type; mypyc run with `--allow-redefinition-new --local-partial-types`), and
+  the same job measured mypyc at 1.56x / **13.2x** / 1.32x faster than the native file on CPython,
+  landing at **1.40x / 0.08x / 1.34x of hand-written Python**: collatz, all int arithmetic, runs
+  about 12x faster than the hand-written baseline. Remaining, in order: a `--native` build step that runs mypyc
+  (`pyfun build`), typed emit for projects and for block-local functions, or-patterns that bind
+  names, then the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
   with the interop story intact (the result is still an ordinary extension module). Real blockers

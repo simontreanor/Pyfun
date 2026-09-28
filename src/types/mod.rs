@@ -1833,6 +1833,9 @@ pub struct TypeSpan {
     /// The concrete latent effect performed on full application (`"io"`,
     /// `"io, async"`), or `None` when pure / not a function.
     pub effect: Option<String>,
+    /// The resolved type itself, for lowering that needs more than the text
+    /// (native mode's annotations, `DESIGN.md` §5.6).
+    pub raw: Ty,
 }
 
 /// The concrete latent effect a value of type `ty` performs when **fully applied**:
@@ -2407,6 +2410,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                     span: *span,
                     ty: show(&applied),
                     effect: effect_summary(&applied),
+                    raw: applied,
                 }
             })
             .collect()

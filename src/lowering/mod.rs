@@ -112,8 +112,30 @@ pub fn lower_collecting_with(
     codecs: &crate::types::Codecs,
     native: bool,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
+    lower_native_typed(
+        module,
+        float_literals,
+        order,
+        codecs,
+        native,
+        HashMap::new(),
+    )
+}
+
+/// [`lower_collecting_with`] plus the checker's binding types (span of each
+/// binding target → its resolved type), from which native mode annotates the
+/// top-level functions it can spell (`DESIGN.md` §5.6).
+pub fn lower_native_typed(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+    codecs: &crate::types::Codecs,
+    native: bool,
+    binding_types: HashMap<Span, crate::types::Ty>,
+) -> Result<(PyModule, Vec<String>), LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
+    lowerer.binding_types = binding_types;
     lowerer.float_literals = float_literals.clone();
     lowerer.order = order;
     lowerer.codecs = codecs.clone();
@@ -391,6 +413,9 @@ struct Lowerer {
     /// Native lowering (`--native`, `DESIGN.md` §5.6): user sum-type matches
     /// become `isinstance` ladders too.
     native: bool,
+    /// Native mode's type table: the resolved type of each binding, keyed by the
+    /// binding target's span, for the annotations on top-level functions.
+    binding_types: HashMap<Span, crate::types::Ty>,
     /// The derived codecs the checker resolved for this module's `Decode.auto`
     /// sites (`DESIGN.md` §6, "Derived codecs").
     codecs: crate::types::Codecs,
@@ -729,6 +754,7 @@ impl Lowerer {
             needed_async_helpers: BTreeSet::new(),
             needs_task_scope: false,
             native: false,
+            binding_types: HashMap::new(),
             codecs: crate::types::Codecs::default(),
             codec_table_used: std::collections::BTreeMap::new(),
             needed_codec_helpers: BTreeSet::new(),
@@ -763,9 +789,141 @@ impl Lowerer {
         let lowered = self.lower_module_items(module);
         self.frames.pop();
         if self.native {
-            return lowered.map(any_for_object_fields);
+            return lowered
+                .map(any_for_object_fields)
+                .map(|py| self.annotate_functions(module, py));
         }
         lowered
+    }
+
+    /// Native mode: give each top-level function whose type is known the
+    /// annotations its Python can carry, and a union alias to each user sum type
+    /// so a function over one can say so (`Expr = Num | Add | Mul`). A type with
+    /// no Python spelling (a function, a type variable, `Async`, an opaque or
+    /// newtype) leaves that parameter or return unannotated.
+    fn annotate_functions(&self, module: &Module, mut py: PyModule) -> PyModule {
+        use crate::parser::ast::{Item, TypeDeclKind};
+        if self.binding_types.is_empty() {
+            return py;
+        }
+        // The Python spelling of each user type: a record is its class, a sum
+        // type an alias over its constructors' classes (skipped when a
+        // constructor shares the type's name, which the alias would shadow).
+        let class_names: HashSet<String> = py
+            .body
+            .iter()
+            .filter_map(|s| match s {
+                PyStmt::ClassDef { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut spell: HashMap<String, String> = HashMap::new();
+        let mut aliases: Vec<(String, Vec<String>)> = Vec::new();
+        for item in &module.items {
+            if let Item::Type(decl) = item {
+                match &decl.kind {
+                    TypeDeclKind::Record(_) => {
+                        let class = py_record_class(&decl.name);
+                        if class_names.contains(&class) {
+                            spell.insert(decl.name.clone(), class);
+                        }
+                    }
+                    TypeDeclKind::Sum(variants) if !variants.is_empty() => {
+                        let classes: Vec<String> =
+                            variants.iter().map(|v| py_ctor_name(&v.name)).collect();
+                        if classes.iter().all(|c| class_names.contains(c))
+                            && !class_names.contains(&decl.name)
+                        {
+                            spell.insert(decl.name.clone(), decl.name.clone());
+                            aliases.push((decl.name.clone(), classes));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if class_names.contains("Some") && class_names.contains("None_") {
+            spell.insert("Option".to_string(), "Some | None_".to_string());
+        }
+        if class_names.contains("Ok") && class_names.contains("Error") {
+            spell.insert("Result".to_string(), "Ok | Error".to_string());
+        }
+        // Each alias goes right after the last of its classes.
+        for (alias, classes) in aliases {
+            let at = py
+                .body
+                .iter()
+                .rposition(|s| matches!(s, PyStmt::ClassDef { name, .. } if classes.contains(name)))
+                .map_or(0, |i| i + 1);
+            // A nullary constructor's singleton follows its class; keep it there.
+            let at = at
+                + py.body[at..]
+                    .iter()
+                    .take_while(
+                        |s| matches!(s, PyStmt::Assign { target, .. } if target.starts_with('_')),
+                    )
+                    .count();
+            py.body.insert(
+                at,
+                PyStmt::Assign {
+                    target: alias,
+                    value: PyExpr::Name(classes.join(" | ")),
+                },
+            );
+        }
+        // The top-level function bindings and their types.
+        let mut fn_types: HashMap<String, (usize, crate::types::Ty)> = HashMap::new();
+        for item in &module.items {
+            if let Item::Let(b) = item
+                && !b.params.is_empty()
+                && let Some(name) = b.name()
+                && let Some(ty) = self.binding_types.get(&b.target_span.span())
+            {
+                fn_types.insert(py_value_name(name), (b.params.len(), ty.clone()));
+            }
+        }
+        for stmt in &mut py.body {
+            let PyStmt::FuncDef {
+                name,
+                params,
+                body,
+                is_async,
+            } = stmt
+            else {
+                continue;
+            };
+            let Some((arity, ty)) = fn_types.get(name.as_str()) else {
+                continue;
+            };
+            if params.len() != *arity {
+                continue;
+            }
+            let mut anns = Vec::with_capacity(params.len());
+            let mut rest = ty.clone();
+            for p in params.iter() {
+                let crate::types::Ty::Fun(arg, ret, _) = rest else {
+                    break;
+                };
+                anns.push((p.clone(), py_type_annotation(&arg, &spell)));
+                rest = *ret;
+            }
+            if anns.len() != params.len() {
+                continue;
+            }
+            let returns = if *is_async {
+                None
+            } else {
+                py_type_annotation(&rest, &spell)
+            };
+            *stmt = PyStmt::TypedFuncDef {
+                name: name.clone(),
+                params: anns,
+                returns,
+                body: std::mem::take(body),
+                is_async: *is_async,
+            };
+        }
+        py
     }
 
     fn lower_module_items(&mut self, module: &Module) -> Result<PyModule, LowerError> {
@@ -6298,6 +6456,32 @@ fn any_for_object_fields(mut module: PyModule) -> PyModule {
         );
     }
     module
+}
+
+/// A checker type spelled as a Python annotation, for native mode's typed
+/// functions (`DESIGN.md` §5.6); `None` when Python has no spelling for it here.
+/// `spell` maps a user type name to its class or union alias.
+fn py_type_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) -> Option<String> {
+    use crate::types::Ty;
+    let inner = |t: &Ty| py_type_annotation(t, spell);
+    Some(match ty {
+        Ty::Int(_) | Ty::Num(..) => "int".to_string(),
+        Ty::Float(_) => "float".to_string(),
+        Ty::Bool => "bool".to_string(),
+        Ty::Str => "str".to_string(),
+        Ty::Unit => "None".to_string(),
+        Ty::Tuple(elems) => {
+            let parts: Option<Vec<String>> = elems.iter().map(inner).collect();
+            format!("tuple[{}]", parts?.join(", "))
+        }
+        Ty::Con(name, args) => match (name.as_str(), args.as_slice()) {
+            ("List", [a]) => format!("list[{}]", inner(a)?),
+            ("Set", [a]) => format!("set[{}]", inner(a)?),
+            ("Map", [k, v]) => format!("dict[{}, {}]", inner(k)?, inner(v)?),
+            (other, _) => spell.get(other)?.clone(),
+        },
+        Ty::Var(_) | Ty::Fun(..) => return None,
+    })
 }
 
 fn py_annotation(ty: &crate::parser::ast::TypeExpr) -> String {
