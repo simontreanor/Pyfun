@@ -1744,6 +1744,15 @@ impl Parser {
             }
             Tok::LBrace => return self.parse_record(start),
             Tok::LBracket => return self.parse_list(start),
+            Tok::Return if self.ce_items.is_empty() => {
+                return Err(ParseError {
+                    message:
+                        "`return` is only valid inside a computation expression; a function's \
+                             value is its last expression, so drop `return`"
+                            .to_string(),
+                    span: self.span(),
+                });
+            }
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))
