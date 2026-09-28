@@ -71,6 +71,10 @@ jobs:
       - name: Build the book
         run: mdbook build docs
 
+      # The runner image ships Google Chrome, which prints the educator pack.
+      - name: Print the educator pack
+        run: python3 docs/build_educator_pdf.py
+
       - name: Assemble site (book at root, playground under /playground/)
         run: |
           mkdir -p _site/playground

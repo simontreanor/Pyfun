@@ -5,6 +5,10 @@ functional-programming unit you can slot into an existing Python course. It is o
 class sessions with demo scripts, exercise assignments, and an instructor answer key. You can lift
 it wholesale or adapt any part of it.
 
+For a department that circulates paper, the whole pack (this overview, the five sessions and the
+answer keys) is also a single [printable PDF](educator-pack.pdf). Its links still open the lessons
+and playground exercises.
+
 ## Who this is for
 
 Instructors of an intro or intermediate Python course who want to add a functional-programming unit
