@@ -85,3 +85,26 @@ jobs:
         with:
           version: ${{ matrix.emacs }}
       - run: emacs -Q --batch -l editors/emacs/lint.el
+
+  # The Tree-sitter grammar feeds five editors' queries (the grammar's own
+  # highlights, Neovim, Helix, Zed). The corpus goldens pin the parse trees, and
+  # compiling every query file against the grammar catches a renamed node before
+  # an editor does. Pinned to the CLI version the grammar is generated with.
+  tree-sitter:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: editors/tree-sitter-pyfun
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      - run: npm install -g tree-sitter-cli@0.26.11
+      - run: tree-sitter test
+      - name: Compile every editor query against the grammar
+        run: |
+          for q in queries/*.scm ../helix/queries/pyfun/*.scm ../nvim/queries/pyfun/*.scm ../zed/languages/pyfun/*.scm; do
+            echo "$q"
+            tree-sitter query "$q" test/stress.pyfun > /dev/null
+          done

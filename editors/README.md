@@ -124,7 +124,14 @@ source = { git = "https://github.com/simontreanor/Pyfun", rev = "main", subpath 
 hx --grammar fetch && hx --grammar build
 mkdir -p ~/.config/helix/runtime/queries/pyfun
 cp editors/tree-sitter-pyfun/queries/highlights.scm ~/.config/helix/runtime/queries/pyfun/
+cp editors/helix/queries/pyfun/*.scm ~/.config/helix/runtime/queries/pyfun/
 ```
+
+The second copy adds [indentation and textobjects](helix/queries/pyfun/): a new line after
+`=`, `->`, `:` or `then` indents, and `maf`/`mif` select a function (a `let` with parameters, or a
+lambda), `mat`/`mit` a type or module, `maa` a parameter or record field, `mae` a match arm or
+variant, `mac` a comment, and `]f`/`[f` jump between functions. Rebuild the grammar after updating Pyfun
+(`hx --grammar fetch && hx --grammar build`), since the queries follow the current grammar.
 
 ---
 
