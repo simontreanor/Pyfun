@@ -3877,6 +3877,40 @@ fn valid_hole_fits_list_in_scope_bindings_of_the_hole_type() {
 }
 
 #[test]
+fn a_named_hole_puts_the_fit_with_its_name_first() {
+    // `string -> string` has more equally specific fits than the cap, and the
+    // alphabet used to push `String.upper` off the end. The hole's name decides.
+    let fits = fits_of("let r = [\"a\"] |> List.map ?upper |> String.join \",\"");
+    assert_eq!(
+        fits.first().map(String::as_str),
+        Some("String.upper"),
+        "{fits:?}"
+    );
+    let fits = fits_of("let r = [\"a\"] |> List.map ?lower |> String.join \",\"");
+    assert_eq!(
+        fits.first().map(String::as_str),
+        Some("String.lower"),
+        "{fits:?}"
+    );
+}
+
+#[test]
+fn a_truncated_fit_list_says_how_many_it_left_out() {
+    let module =
+        pyfun::parse("let r = [\"a\"] |> List.map ?f |> String.join \",\"").expect("parse");
+    let (_e, _t, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
+    let hole = &holes[0];
+    assert_eq!(hole.fits.len(), 6);
+    assert!(hole.more_fits > 0);
+    assert!(
+        hole.message()
+            .contains(&format!("and {} more", hole.more_fits)),
+        "{}",
+        hole.message()
+    );
+}
+
+#[test]
 fn an_unconstrained_hole_lists_no_fits() {
     // A bare, fully-polymorphic hole (`'a`) would match everything — unhelpful, so
     // no fits are listed.

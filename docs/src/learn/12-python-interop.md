@@ -159,7 +159,7 @@ whatever the callback performs.
 Complete the decoder by filling both holes with the strict field decoders. `pyfun check` reports each hole's type and suggests the fit. The first report is:
 
 ```console
-note: hole `?titleDec` has type `Decoder string` — try: Decode.string — or: Decode.fail ?, Decode.oneOf ?, Decode.succeed ?, Decode.field ? ?
+note: hole `?titleDec` has type `Decoder string` — try: Decode.string, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.oneOf ?, Decode.field ? ?
 ```
 
 ```pyfun

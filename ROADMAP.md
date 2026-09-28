@@ -660,7 +660,7 @@ documentation problem, so they are recorded here rather than papered over in pro
    every time it is written. Fix: reject an uppercase-initial binding name, with a message pointing
    at the parenthesized pattern form when a constructor pattern was plainly intended. Lesson 8 had
    to work around it (it quotes the parenthesized spelling), which is how it was found.
-2. **The hole-fit shortlist can hide the answer it exists to name** (S–M) — `hole_fits` ranks by
+2. ~~**The hole-fit shortlist can hide the answer it exists to name**~~ **CLOSED 2026-09-28** (name match first, then prelude order, plus `and N more`; lesson 9 has `?upper` back) (S–M) — `hole_fits` ranks by
    generality, then by qualified-vs-bare, then **by name**, and truncates at `HOLE_FIT_CAP = 6`. For
    a common shape like `string -> string` the stdlib sweep left far more than six equally specific
    fits, so the tail is decided alphabetically: `String.upper` now falls off the end of a
