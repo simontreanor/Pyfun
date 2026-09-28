@@ -30,3 +30,11 @@ jobs:
       - run: python bench/mypyc_run.py --runs 5
         env:
           PYFUN_BIN: target/release/pyfun
+      # A multi-module project through the same build, checked against `pyfun run`.
+      - name: Build a project natively
+        run: |
+          target/release/pyfun build --native examples/modules/main.pyfun -o /tmp/modules-native
+          target/release/pyfun run examples/modules/main.pyfun > /tmp/plain.txt
+          python /tmp/modules-native > /tmp/native.txt
+          diff /tmp/plain.txt /tmp/native.txt
+          ls /tmp/modules-native

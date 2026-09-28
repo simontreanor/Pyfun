@@ -468,7 +468,7 @@ On the repository's benchmarks (CPython 3.12, `bench/mypyc_run.py`), the mypyc b
 13x faster than the same program as plain Python, and the arithmetic-heavy one runs about 12x
 faster than the hand-written Python it's measured against. `pyfun compile --native` alone, without
 mypyc, is already faster on match-heavy code, because CPython skips its pattern-matching
-machinery. Native builds are single-file for now; [`DESIGN.md` §5.6](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md)
+machinery. A multi-module project builds the same way. [`DESIGN.md` §5.6](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md)
 has the details.
 
 ---

@@ -440,8 +440,9 @@ redefinition rule (`--allow-redefinition-new --local-partial-types`): a Python l
 match arms can hold differently narrowed types in different arms, which the default
 first-assignment rule rejects. `pyfun build --native <file> -o <dir>` does the whole trip: it
 compiles natively, runs mypyc with those flags, leaves the extension and a `__main__.py` in `<dir>`
-(so the program runs as `python <dir>`), and needs `mypy` plus a C compiler in the environment
-(single file for now). With both, `bench/mypyc_run.py` builds every benchmark that way: 1.3x to 13x faster than the same file on CPython, and on the
+(so the program runs as `python <dir>`), and needs `mypy` plus a C compiler in the environment. A
+project builds the same way: every module is annotated from its own types and compiled by mypyc,
+and the shared `_pyfun_rt.py` stays Python, imported by the compiled modules like any other. With both, `bench/mypyc_run.py` builds every benchmark that way: 1.3x to 13x faster than the same file on CPython, and on the
 arithmetic-heavy one about 12x faster than hand-written Python. Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
 `match`/`case` because it reads as the program was written. Every example and the whole end-to-end suite produce identical
 output in both modes.

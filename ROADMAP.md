@@ -515,7 +515,8 @@ map_build 1.64× vs hand-written.
   the same job measured mypyc at 1.56x / **13.2x** / 1.32x faster than the native file on CPython,
   landing at **1.40x / 0.08x / 1.34x of hand-written Python**: collatz, all int arithmetic, runs
   about 12x faster than the hand-written baseline. `pyfun build --native <file> -o <dir>` (compile, mypyc, runnable
-  directory) followed too. Remaining, in order: typed emit and `build` for projects and for block-local functions, or-patterns that bind
+  directory) followed too. Typed emit and `build` for projects followed too. Remaining, in
+  order: typed emit for block-local functions and for block-local functions, or-patterns that bind
   names, then the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed

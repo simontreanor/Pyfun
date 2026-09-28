@@ -55,7 +55,7 @@ fn build(path: &Path, out: &Path) -> ExitCode {
     if let Ok(module) = pyfun::parse(&source)
         && crate::has_imports(&module)
     {
-        return fail("`build --native` supports a single file so far, not a project");
+        return build_project(path, out);
     }
     let python = match pyfun::compile_with(&source, PyTarget::default(), true) {
         Ok((py, notes)) => {
@@ -85,20 +85,64 @@ fn build(path: &Path, out: &Path) -> ExitCode {
     if let Err(e) = std::fs::write(&source_file, &python) {
         return fail(&format!("cannot write {}: {e}", source_file.display()));
     }
+    finish(path, out, &module, &[module.clone()])
+}
+
+/// A project: every module compiled natively into `out`, and every one but the
+/// shared `_pyfun_rt.py` built by mypyc (the runtime stays Python, which the
+/// compiled modules import like any other module).
+fn build_project(path: &Path, out: &Path) -> ExitCode {
+    let entry = path.to_string_lossy().to_string();
+    let project = match crate::resolve_project(&entry) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    if !crate::check_project_ok(&project) {
+        return ExitCode::FAILURE;
+    }
+    let files = match crate::lower_project(&project, PyTarget::default(), true) {
+        Ok(f) => f,
+        Err(code) => return code,
+    };
+    if let Err(e) = std::fs::create_dir_all(out) {
+        return fail(&format!("cannot create {}: {e}", out.display()));
+    }
+    let mut modules = Vec::new();
+    for (name, source) in &files {
+        if let Err(e) = std::fs::write(out.join(name), source) {
+            return fail(&format!("cannot write {name}: {e}"));
+        }
+        if let Some(stem) = name.strip_suffix(".py")
+            && stem != "_pyfun_rt"
+        {
+            modules.push(stem.to_string());
+        }
+    }
+    let Some(entry_module) = pyfun::project::module_name_from_path(path).map(|m| m.to_lowercase())
+    else {
+        return fail("the file needs a name");
+    };
+    finish(path, out, &entry_module, &modules)
+}
+
+/// Run mypyc over `modules` in `out`, drop their sources so imports find the
+/// extensions, and write the `__main__.py` that imports `entry`.
+fn finish(path: &Path, out: &Path, entry: &str, modules: &[String]) -> ExitCode {
     let Some(interpreter) = crate::python_cmd() else {
         return fail("no Python interpreter found (set PYFUN_PYTHON)");
     };
     // Pyfun reuses a Python local across match arms, so a name can hold
     // differently narrowed types in different arms: mypy's newer redefinition
     // rule accepts that where the default first-assignment rule does not.
+    let mut args = vec![
+        "-m".to_string(),
+        "mypyc".to_string(),
+        "--allow-redefinition-new".to_string(),
+        "--local-partial-types".to_string(),
+    ];
+    args.extend(modules.iter().map(|m| format!("{m}.py")));
     let status = Command::new(&interpreter)
-        .args([
-            "-m",
-            "mypyc",
-            "--allow-redefinition-new",
-            "--local-partial-types",
-            &format!("{module}.py"),
-        ])
+        .args(&args)
         .current_dir(out)
         .status();
     match status {
@@ -113,10 +157,12 @@ fn build(path: &Path, out: &Path) -> ExitCode {
     }
     // The extension now sits beside the source; remove the source so an import
     // finds the extension, and give the directory an entry point.
-    let _ = std::fs::remove_file(&source_file);
+    for m in modules {
+        let _ = std::fs::remove_file(out.join(format!("{m}.py")));
+    }
     let _ = std::fs::remove_dir_all(out.join("build"));
     let main = format!(
-        "# Runs the mypyc-compiled Pyfun program `{module}`.\nimport {module}  # noqa: F401\n"
+        "# Runs the mypyc-compiled Pyfun program `{entry}`.\nimport {entry}  # noqa: F401\n"
     );
     if let Err(e) = std::fs::write(out.join("__main__.py"), main) {
         return fail(&format!("cannot write __main__.py: {e}"));
