@@ -888,3 +888,18 @@ fn an_active_pattern_is_top_level_only() {
         err.message()
     );
 }
+
+#[test]
+fn suggests_keyword_operators_for_symbolic_logical_operator_typos() {
+    for (source, expected) in [
+        ("let ok = ready && valid", "use `and` instead of `&&`"),
+        ("let ok = ready || valid", "use `or` instead of `||`"),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message().contains(expected),
+            "{source} -> {}",
+            err.message()
+        );
+    }
+}

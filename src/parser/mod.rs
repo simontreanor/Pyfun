@@ -1744,6 +1744,9 @@ impl Parser {
             }
             Tok::LBrace => return self.parse_record(start),
             Tok::LBracket => return self.parse_list(start),
+            Tok::Bar if matches!(self.peek2(), Tok::Bar) => {
+                return Err(self.error("use `or` instead of `||`"));
+            }
             _ => return Err(self.error("expected an expression")),
         };
         Ok(self.mk(start, kind))

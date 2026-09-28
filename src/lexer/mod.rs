@@ -800,6 +800,10 @@ impl<'a> Lexer<'a> {
 
     fn lex_symbol(&mut self, start: usize) -> Result<(), LexError> {
         let c = self.peek().unwrap();
+        if c == b'&' && self.peek2() == Some(b'&') {
+            self.pos += 2;
+            return Err(self.err(start, "use `and` instead of `&&`"));
+        }
         // Two-character operators first.
         if c == b'|' && self.peek2() == Some(b'>') {
             self.pos += 2;
