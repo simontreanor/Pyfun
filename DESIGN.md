@@ -424,7 +424,10 @@ its own copy of the body, a nested or-pattern that binds no names (`Some (1 | 2)
 joined with `or` (one that binds names keeps `match`), and a list pattern becomes a length
 test (`len(xs) == n`, or `>=` with a rest), positional reads with the suffix counted from the end
 (`xs[-1]`), and the rest as a slice (`xs[1:len(xs) - 1]`). Active patterns already lower to their
-recognizer and an `isinstance` ladder in both modes.
+recognizer and an `isinstance` ladder in both modes. The `return!` of a `match` in an `async { }`
+block, which lowers through its own path so a self tail call stays visible (§5.4), takes the ladder
+too, `Option`/`Result` shapes included; on the dogfooded Scrabble game (11 modules) native output
+has no `match` statement left, and every recorded replay prints the same in both modes.
 
 The ladder is also faster on CPython by itself, since a class pattern goes through `__match_args__`
 and positional binding at run time: on `bench/expr_eval` (ADT allocation and matching) the output
