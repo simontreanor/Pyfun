@@ -72,6 +72,11 @@ pip install "pyfun-lang[jupyter]"
 python -m pyfun_kernel.install
 ```
 
+Every lesson is also published as a notebook, one `.ipynb` per lesson in
+[`docs/src/notebooks/`](https://github.com/simontreanor/Pyfun/tree/main/docs/src/notebooks), ready
+to hand out through a course platform. The notebooks are generated from the lesson pages, so they
+always match what the site says, and each solution stays folded away until a student opens it.
+
 Only lesson 15 (modules across files) needs the installed compiler, because it uses a folder of
 source files. Every other lesson runs in the playground as it is.
 

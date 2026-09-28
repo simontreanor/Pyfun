@@ -177,6 +177,24 @@ def main():
                     status == "ok" and "100" in out,
                     f"status={status} out={out.strip()!r}",
                 )
+
+            # --- async: `asyncio.run` works although ipykernel's loop is running ---
+            status, out, err = run_cell(
+                kc,
+                "extern runAsync: Async a -> a = asyncio.run\n"
+                "let job = async {\n  let! x = async { return 20 }\n  return x + 1\n}\n"
+                "print (runAsync job)",
+            )
+            check("async cell runs", status == "ok" and "21" in out, (out + err).strip()[-120:])
+            status, out, _ = run_cell(kc, "n + 1")
+            check("kernel usable after async cell", status == "ok" and "43" in out, out.strip())
+
+            # --- :reset starts a fresh session, then runs the rest of the cell ---
+            status, _, err = run_cell(kc, "type Point = { x: int }")
+            status, out, err = run_cell(kc, ":reset\ntype Point = { x: int, y: int }\nlet p = Point { x = 1, y = 2 }")
+            check("reset allows a redefinition", status == "ok" and "p : Point" in out, (out + err).strip()[-120:])
+            status, _, err = run_cell(kc, "n")
+            check("reset forgets earlier definitions", status == "error" and "n" in err, err.strip()[:80])
         finally:
             kc.stop_channels()
             km.shutdown_kernel(now=True)

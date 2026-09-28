@@ -69,6 +69,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build
       - run: python docs/verify_lessons.py
+      - run: python docs/build_notebooks.py --check
 
   # MELPA builds pyfun-mode.el straight from main, so it gets the checks MELPA
   # reviewers run (byte-compile, checkdoc, package-lint) on every change. 29.1
