@@ -20,6 +20,7 @@ median, spread, and the pyfun/baseline ratio.
 """
 
 import argparse
+import os
 import platform
 import statistics
 import subprocess
@@ -33,7 +34,9 @@ BENCHES = ["expr_eval", "collatz", "map_build"]
 
 
 def find_compiler():
-    """Prefer an already-built pyfun binary; fall back to cargo run."""
+    """PYFUN_BIN if set, else an already-built pyfun binary, else cargo run."""
+    if os.environ.get("PYFUN_BIN"):
+        return [os.environ["PYFUN_BIN"]]
     exe = ".exe" if platform.system() == "Windows" else ""
     for profile in ("release", "debug"):
         candidate = REPO_ROOT / "target" / profile / f"pyfun{exe}"
@@ -42,11 +45,13 @@ def find_compiler():
     return ["cargo", "run", "--quiet", "--"]
 
 
-def compile_bench(name, compiler, out_dir, target=None):
+def compile_bench(name, compiler, out_dir, target=None, native=False):
     src = BENCH_DIR / f"{name}.pyfun"
     dst = out_dir / f"{name}.py"
     out_dir.mkdir(exist_ok=True)
     extra = ["--target", target] if target else []
+    if native:
+        extra.append("--native")
     result = subprocess.run(
         compiler + ["compile", str(src), "-o", str(dst)] + extra,
         cwd=REPO_ROOT,
@@ -103,10 +108,14 @@ def main():
     parser.add_argument("--target", choices=["3.11", "3.12"],
                         help="pyfun emission target; 3.11 output lands in "
                              "bench/out-3.11/ (for PyPy)")
+    parser.add_argument("--native", action="store_true",
+                        help="compile with --native (output in bench/out-native/)")
     args = parser.parse_args()
 
     selected = args.bench or BENCHES
-    out_dir = BENCH_DIR / (f"out-{args.target}" if args.target else "out")
+    out_dir = BENCH_DIR / (
+        "out-native" if args.native else f"out-{args.target}" if args.target else "out"
+    )
     compiler = None if args.skip_compile else find_compiler()
 
     version = subprocess.run([args.python, "-VV"], capture_output=True, text=True)
@@ -121,7 +130,7 @@ def main():
         emitted = (
             out_dir / f"{name}.py"
             if args.skip_compile
-            else compile_bench(name, compiler, out_dir, args.target)
+            else compile_bench(name, compiler, out_dir, args.target, args.native)
         )
         if not emitted.exists():
             sys.exit(f"{emitted} missing -- run once without --skip-compile")
