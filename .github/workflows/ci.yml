@@ -52,6 +52,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo fmt --check
+      # The Sublime syntax is generated from the VS Code TextMate grammar.
+      - run: python3 editors/sublime/build.py --check
 
   # The learner track is executable documentation: every lesson's solution runs
   # and its output is compared against what the lesson prints. A compiler change

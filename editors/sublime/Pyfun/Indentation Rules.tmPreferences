@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>scope</key>
+	<string>source.pyfun</string>
+	<key>settings</key>
+	<dict>
+		<!-- Pyfun is offside-ruled: a line ending in `=`, `->`, `:`, `then`,
+		     `else`, or an open bracket starts an indented block. -->
+		<key>increaseIndentPattern</key>
+		<string>^.*(=|->|:|\bthen|\belse|[\[({])\s*(#.*)?$</string>
+		<key>decreaseIndentPattern</key>
+		<string>^\s*([\])}]|else\b|elif\b)</string>
+	</dict>
+</dict>
+</plist>

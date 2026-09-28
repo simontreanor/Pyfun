@@ -623,10 +623,12 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
     validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`), ready to retarget
     when the ecosystem settles.
   - **Sublime Text Package Control** and a **Pygments lexer** on PyPI (the kernel declares the
-    `fsharp` lexer as an approximation). **The Pygments lexer is BUILT** (2026-09-28,
-    `editors/pygments/`, the `pygments-pyfun` package, tested in CI against every example);
-    publishing it to PyPI, and then switching the kernel's `pygments_lexer` to `pyfun`, waits for
-    Simon's go-ahead.
+    `fsharp` lexer as an approximation). **Both are BUILT** (2026-09-28): the Sublime package in
+    `editors/sublime/` (syntax generated from the VS Code grammar and checked in CI) and the
+    `pygments-pyfun` package in `editors/pygments/` (tested in CI against every example). Submitting
+    to Package Control and publishing to PyPI wait for Simon's go-ahead. Package Control wants a
+    package at a repository root, so it needs a mirror repo or a subdirectory-aware release, and
+    once the lexer is on PyPI the kernel's `pygments_lexer` can switch from `fsharp` to `pyfun`.
 
   The documented fallback for every one of these already exists in `editors/README.md`, so a user
   on any of those editors is not blocked — they install by hand instead of by registry. Revisit the

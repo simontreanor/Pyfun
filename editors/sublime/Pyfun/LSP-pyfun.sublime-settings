@@ -1,0 +1,13 @@
+// Language server settings for the LSP package (packagecontrol.io/packages/LSP).
+// Copy this "clients" entry into Preferences > Package Settings > LSP > Settings,
+// or keep this file in your User package. `pyfun` must be on PATH
+// (`pip install pyfun-lang`).
+{
+	"clients": {
+		"pyfun": {
+			"enabled": true,
+			"command": ["pyfun", "lsp"],
+			"selector": "source.pyfun",
+		},
+	},
+}
