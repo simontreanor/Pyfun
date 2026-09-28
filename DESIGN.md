@@ -431,9 +431,16 @@ and positional binding at run time: on `bench/expr_eval` (ADT allocation and mat
 goes from 2.30x to 1.63x of the hand-written baseline on CPython 3.14, before any compilation.
 A data class field whose type has no Python class of its own (a sum type, a type variable) is
 annotated `typing.Any` in native output rather than the default `object`, because mypyc cannot build
-a dataclass with an `object` field. With that, `bench/mypyc_run.py` compiles every benchmark's
-native output with mypyc unchanged (1.1x to 1.3x faster than the same file on CPython, before any
-typed emit). Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
+a dataclass with an `object` field. Top-level functions carry **annotations from their inferred
+types** where Python can spell them (`int`, `float`, `bool`, `str`, `None`, `list`/`set`/`dict`/`tuple`
+of those, a record's class, and a union alias per user sum type, `Expr = Num | Add | Mul | Neg`,
+emitted after its classes); a type variable, a function type or an async result stays unannotated,
+so the annotations never claim more than the checker proved. The output is written for mypy's newer
+redefinition rule (`--allow-redefinition-new --local-partial-types`): a Python local reused across
+match arms can hold differently narrowed types in different arms, which the default
+first-assignment rule rejects. With both, `bench/mypyc_run.py` compiles every benchmark's native
+output with mypyc unchanged: 1.3x to 13x faster than the same file on CPython, and on the
+arithmetic-heavy one about 12x faster than hand-written Python. Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
 `match`/`case` because it reads as the program was written. Every example and the whole end-to-end suite produce identical
 output in both modes.
 
