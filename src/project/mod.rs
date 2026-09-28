@@ -295,6 +295,9 @@ pub fn compile_with(
     // (`DESIGN.md` §6.1), which the lowering context below needs.
     let mut exports: HashMap<String, crate::types::ModuleExports> = HashMap::new();
     let mut codecs_by_module: HashMap<String, crate::types::Codecs> = HashMap::new();
+    // Native mode annotates functions from their types (`DESIGN.md` §5.6).
+    let mut types_by_module: HashMap<String, HashMap<crate::lexer::Span, crate::types::Ty>> =
+        HashMap::new();
     let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
         let mut spans = HashMap::new();
         for module in &project.modules {
@@ -306,6 +309,12 @@ pub fn compile_with(
             let (_errors, types, module_exports, codecs) =
                 crate::types::check_module_collecting(&module.ast, &imports);
             spans.insert(module.name.clone(), crate::float_literal_spans(&types));
+            if native {
+                types_by_module.insert(
+                    module.name.clone(),
+                    types.iter().map(|t| (t.span, t.raw.clone())).collect(),
+                );
+            }
             codecs_by_module.insert(module.name.clone(), codecs);
             exports.insert(module.name.clone(), module_exports);
         }
@@ -374,7 +383,9 @@ pub fn compile_with(
         }
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
         let codecs = codecs_by_module.get(&module.name).unwrap_or(&no_codecs);
-        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native)?;
+        let binding_types = types_by_module.remove(&module.name).unwrap_or_default();
+        let lowered =
+            lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native, binding_types)?;
         needs_runtime |= lowered.uses_runtime;
         notes.extend(
             lowered

@@ -204,9 +204,11 @@ pub fn lower_in_project(
     float_literals: &HashSet<Span>,
     codecs: &crate::types::Codecs,
     native: bool,
+    binding_types: HashMap<Span, crate::types::Ty>,
 ) -> Result<LoweredModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
+    lowerer.binding_types = binding_types;
     lowerer.float_literals = float_literals.clone();
     lowerer.codecs = codecs.clone();
     lowerer.imported_modules = ctx.modules.clone();
@@ -809,12 +811,15 @@ impl Lowerer {
         // The Python spelling of each user type: a record is its class, a sum
         // type an alias over its constructors' classes (skipped when a
         // constructor shares the type's name, which the alias would shadow).
+        // Classes this module defines, plus the ones a project imports from the
+        // shared runtime (`Some`, `None_`, `Ok`, `Error`).
         let class_names: HashSet<String> = py
             .body
             .iter()
-            .filter_map(|s| match s {
-                PyStmt::ClassDef { name, .. } => Some(name.clone()),
-                _ => None,
+            .flat_map(|s| match s {
+                PyStmt::ClassDef { name, .. } => vec![name.clone()],
+                PyStmt::ImportFrom { module, names } if module == "_pyfun_rt" => names.clone(),
+                _ => vec![],
             })
             .collect();
         let mut spell: HashMap<String, String> = HashMap::new();
