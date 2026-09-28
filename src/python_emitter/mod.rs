@@ -136,6 +136,16 @@ pub enum PyStmt {
         body: Vec<PyStmt>,
         is_async: bool,
     },
+    /// `def name(p: T, …) -> R: body`: a [`PyStmt::FuncDef`] with annotations,
+    /// which native mode (`DESIGN.md` §5.6) puts on top-level functions whose
+    /// types it can spell. `None` leaves a parameter or the return unannotated.
+    TypedFuncDef {
+        name: String,
+        params: Vec<(String, Option<String>)>,
+        returns: Option<String>,
+        body: Vec<PyStmt>,
+        is_async: bool,
+    },
     /// `yield value`
     Yield(PyExpr),
     /// `yield from value`
@@ -505,6 +515,32 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         } => {
             let kw = if *is_async { "async def" } else { "def" };
             line(out, depth, &format!("{kw} {name}({}):", params.join(", ")));
+            emit_block(body, depth + 1, out);
+        }
+        PyStmt::TypedFuncDef {
+            name,
+            params,
+            returns,
+            body,
+            is_async,
+        } => {
+            let kw = if *is_async { "async def" } else { "def" };
+            let params: Vec<String> = params
+                .iter()
+                .map(|(p, ann)| match ann {
+                    Some(ann) => format!("{p}: {ann}"),
+                    None => p.clone(),
+                })
+                .collect();
+            let returns = returns
+                .as_ref()
+                .map(|r| format!(" -> {r}"))
+                .unwrap_or_default();
+            line(
+                out,
+                depth,
+                &format!("{kw} {name}({}){returns}:", params.join(", ")),
+            );
             emit_block(body, depth + 1, out);
         }
         PyStmt::Yield(value) => line(out, depth, &format!("yield {}", expr(value))),

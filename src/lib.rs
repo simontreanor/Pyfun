@@ -194,12 +194,19 @@ pub fn compile_with(
     let floats = float_literal_spans(&types);
     // Single file: the whole program is visible, so emit ordering methods only for the
     // types actually compared (`DESIGN.md` §7.1).
-    let (py, notes) = lowering::lower_collecting_with(
+    // Native mode annotates functions from their inferred types (`DESIGN.md` §5.6).
+    let binding_types = if native {
+        types.iter().map(|t| (t.span, t.raw.clone())).collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let (py, notes) = lowering::lower_native_typed(
         &module,
         &floats,
         lowering::OrderPolicy::OnDemand(ordered),
         &codecs,
         native,
+        binding_types,
     )
     .map_err(CompileError::Lower)?;
     Ok((python_emitter::emit_for(&py, target), notes))
