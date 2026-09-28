@@ -44,7 +44,10 @@ def pyfun_bin():
 
 def time_import(workdir, module, runs):
     cmd = [sys.executable, "-c", f"import {module}"]
-    out = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, check=True).stdout
+    first = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
+    if first.returncode != 0:
+        raise RuntimeError(f"importing {module} failed:\n{first.stderr[-3000:]}")
+    out = first.stdout
     samples = []
     for _ in range(runs):
         start = time.perf_counter()
@@ -81,9 +84,13 @@ def main():
                 print(f"{name:<11} mypyc failed:\n{build.stdout[-2000:]}{build.stderr[-2000:]}")
                 continue
             compiled.unlink()  # so the import finds the extension, not the source
-            t_native, o_native = time_import(work, f"{name}_native", args.runs)
-            t_mypyc, o_mypyc = time_import(work, f"{name}_mypyc", args.runs)
-            t_base, o_base = time_import(work, f"{name}_base", args.runs)
+            try:
+                t_native, o_native = time_import(work, f"{name}_native", args.runs)
+                t_mypyc, o_mypyc = time_import(work, f"{name}_mypyc", args.runs)
+                t_base, o_base = time_import(work, f"{name}_base", args.runs)
+            except RuntimeError as err:
+                print(f"{name:<11} {err}")
+                continue
             if not (o_native == o_mypyc == o_base):
                 print(f"{name:<11} OUTPUT MISMATCH")
                 continue
