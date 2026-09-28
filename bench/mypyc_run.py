@@ -4,7 +4,7 @@ For each benchmark, time three versions of the same program against the
 hand-written baseline, checking all of them print the same output:
 
   native      `pyfun compile --native`, run by CPython as plain Python
-  mypyc       the same file compiled to a C extension by mypyc
+  mypyc       `pyfun build --native`: the same program as a mypyc C extension
   baseline    the hand-written Python in bench/<name>_baseline.py
 
 The emitted program runs its work at import time, so each version is timed as
@@ -71,32 +71,20 @@ def main():
                 [compiler, "compile", "--native", str(BENCH / f"{name}.pyfun"), "-o", str(native)],
                 check=True,
             )
-            compiled = work / f"{name}_mypyc.py"
-            shutil.copy(native, compiled)
-            shutil.copy(BENCH / f"{name}_baseline.py", work / f"{name}_base.py")
-            # Pyfun reuses a Python local across match arms, so a name can hold
-            # differently narrowed types in different arms; mypy's newer
-            # redefinition rule accepts that (`DESIGN.md` §5.6).
+            # The mypyc build is `pyfun build --native`, the command users run.
+            built = work / "built"
             build = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "mypyc",
-                    "--allow-redefinition-new",
-                    "--local-partial-types",
-                    compiled.name,
-                ],
-                cwd=work,
+                [compiler, "build", "--native", str(BENCH / f"{name}.pyfun"), "-o", str(built)],
                 capture_output=True,
                 text=True,
             )
             if build.returncode != 0:
-                print(f"{name:<11} mypyc failed:\n{build.stdout[-2000:]}{build.stderr[-2000:]}")
+                print(f"{name:<11} pyfun build failed:\n{build.stdout[-2000:]}{build.stderr[-2000:]}")
                 continue
-            compiled.unlink()  # so the import finds the extension, not the source
+            shutil.copy(BENCH / f"{name}_baseline.py", work / f"{name}_base.py")
             try:
                 t_native, o_native = time_import(work, f"{name}_native", args.runs)
-                t_mypyc, o_mypyc = time_import(work, f"{name}_mypyc", args.runs)
+                t_mypyc, o_mypyc = time_import(built, name, args.runs)
                 t_base, o_base = time_import(work, f"{name}_base", args.runs)
             except RuntimeError as err:
                 print(f"{name:<11} {err}")

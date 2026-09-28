@@ -26,6 +26,7 @@ use pyfun::syntax::{Item, Module};
 
 mod bundle;
 mod kernel;
+mod native_build;
 mod packages;
 mod repl;
 
@@ -70,6 +71,7 @@ fn main() -> ExitCode {
             Ok(parsed) => bundle::run(parsed),
             Err(msg) => fail(&msg),
         },
+        Some("build") => native_build::run(&args[1..]),
         Some("add") => packages::add(&args[1..]),
         Some("install") => packages::install(),
         Some("remove") => packages::remove(&args[1..]),
@@ -101,6 +103,10 @@ fn help() {
     );
     eprintln!("                                            ladders, the form mypyc compiles");
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
+    eprintln!(
+        "  pyfun build   --native <file.pyfun> -o <dir>  compile to a C extension with mypyc;"
+    );
+    eprintln!("                                            run the result with `python <dir>`");
     eprintln!(
         "                                            (args after the path go to the program's sys.argv)"
     );
