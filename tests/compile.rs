@@ -3850,6 +3850,94 @@ fn a_rejected_async_self_tail_call_says_why() {
     assert!(notes[0].contains("captures `n`"), "{notes:?}");
 }
 
+/// Compile `src` with `--native` and run it, returning stdout lines. `None`
+/// when no interpreter is on PATH.
+fn run_native(src: &str) -> Option<(String, Vec<String>)> {
+    let python = python_cmd()?;
+    let (py, _) = pyfun::compile_with(src, pyfun::python_emitter::PyTarget::default(), true)
+        .unwrap_or_else(|e| panic!("native compile failed: {}", e.message()));
+    let out = run_python(&python, &py);
+    Some((py, out.lines().map(str::to_string).collect()))
+}
+
+#[test]
+fn native_lowers_user_sum_type_matches_to_isinstance_ladders() {
+    // Guards fall through in return position, the last unguarded arm is a plain
+    // `else`, and payloads bind from `._0`, `._1`.
+    let src = "type Shape = Circle float | Rect float float | Dot\n\
+               let describe s =\n  \
+                 match s:\n    \
+                   case Circle r if r > 10.0: \"big circle\"\n    \
+                   case Circle r: f\"circle {r}\"\n    \
+                   case Rect w h: f\"rect {w * h}\"\n    \
+                   case Dot: \"dot\"\n\
+               print (describe (Circle 20.0))\n\
+               print (describe (Circle 1.5))\n\
+               print (describe (Rect 2.0 3.0))\n\
+               print (describe Dot)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(!py.contains("match "), "{py}");
+    assert!(py.contains("isinstance(s, Circle)"), "{py}");
+    assert!(py.contains("h = s._1"), "{py}");
+    assert!(!py.contains("non-exhaustive"), "{py}");
+    assert_eq!(out, ["big circle", "circle 1.5", "rect 6.0", "dot"]);
+}
+
+#[test]
+fn native_compiles_nested_tuple_record_literal_and_as_patterns() {
+    let src = "type Expr = Num int | Add Expr Expr\n\
+               type Point = { x: int, y: int }\n\
+               opaque type Id = string\n\
+               let simp e =\n  \
+                 match e:\n    \
+                   case Add (Num 0) b: b\n    \
+                   case Add a (Num 0): a\n    \
+                   case other: other\n\
+               let quad p =\n  \
+                 let q =\n    \
+                   match p:\n      \
+                     case Point { x = 0, y = 0 }: \"origin\"\n      \
+                     case Point { x = 0 }: \"y axis\"\n      \
+                     case Point { x, y } as whole: f\"{x},{y} {whole.x}\"\n  \
+                 q\n\
+               let name i = match (i, true):\n  \
+                 case (Id \"root\", true): \"admin\"\n  \
+                 case (Id s, _): s\n\
+               print (simp (Add (Num 0) (Num 7)))\n\
+               print (simp (Add (Num 5) (Num 0)))\n\
+               print (quad (Point { x = 0, y = 0 }))\n\
+               print (quad (Point { x = 0, y = 3 }))\n\
+               print (quad (Point { x = 2, y = 3 }))\n\
+               print (name (Id \"root\"))\n\
+               print (name (Id \"ada\"))";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(!py.contains("match "), "{py}");
+    assert_eq!(
+        out,
+        [
+            "Num(7)", "Num(5)", "origin", "y axis", "2,3 2", "admin", "ada"
+        ]
+    );
+}
+
+#[test]
+fn native_keeps_match_for_or_and_list_patterns() {
+    let src = "let f xs =\n  \
+                 match xs:\n    \
+                   case [] | [_]: \"short\"\n    \
+                   case _: \"long\"\n\
+               print (f [1, 2])";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("match xs:"), "{py}");
+    assert_eq!(out, ["long"]);
+}
+
 #[test]
 fn e2e_a_start_joins_the_innermost_open_scope() {
     // Each start belongs to the scope open where it runs: the inner scope joins

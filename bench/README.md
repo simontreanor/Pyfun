@@ -31,10 +31,11 @@ python bench/run.py --python graalpy # time both sides on another interpreter
 python bench/run.py --runs 10        # more samples
 python bench/run.py --skip-compile   # reuse out/*.py (e.g. hand-edited for a mypyc experiment)
 python bench/run.py --target 3.11 --python pypy3   # 3.11-target emit (bench/out-3.11/) on PyPy
+python bench/run.py --native         # compile with --native (bench/out-native/)
 ```
 
-The runner uses `target/release/pyfun` or `target/debug/pyfun` if built,
-falling back to `cargo run`. Compile time is not measured; only the timed runs
+The runner uses `PYFUN_BIN` if set, else `target/release/pyfun` or
+`target/debug/pyfun` if built, falling back to `cargo run`. Compile time is not measured; only the timed runs
 of the resulting programs are.
 
 ## Method

@@ -163,6 +163,18 @@ pub fn compile_collecting(
     source: &str,
     target: python_emitter::PyTarget,
 ) -> Result<(String, Vec<String>), CompileError> {
+    compile_with(source, target, false)
+}
+
+/// [`compile_collecting`] with the **native** lowering on or off (`--native`,
+/// `DESIGN.md` §5.6): a `match` on a user sum type becomes an `isinstance`
+/// ladder, the form mypyc compiles and CPython runs faster, instead of
+/// `match`/`case`.
+pub fn compile_with(
+    source: &str,
+    target: python_emitter::PyTarget,
+    native: bool,
+) -> Result<(String, Vec<String>), CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
@@ -182,11 +194,12 @@ pub fn compile_collecting(
     let floats = float_literal_spans(&types);
     // Single file: the whole program is visible, so emit ordering methods only for the
     // types actually compared (`DESIGN.md` §7.1).
-    let (py, notes) = lowering::lower_collecting(
+    let (py, notes) = lowering::lower_collecting_with(
         &module,
         &floats,
         lowering::OrderPolicy::OnDemand(ordered),
         &codecs,
+        native,
     )
     .map_err(CompileError::Lower)?;
     Ok((python_emitter::emit_for(&py, target), notes))

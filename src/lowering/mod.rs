@@ -99,7 +99,21 @@ pub fn lower_collecting(
     order: OrderPolicy,
     codecs: &crate::types::Codecs,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
+    lower_collecting_with(module, float_literals, order, codecs, false)
+}
+
+/// [`lower_collecting`] with the **native** lowering switched on or off
+/// (`DESIGN.md` §5.6): in native mode a `match` on a user sum type lowers to an
+/// `if isinstance(…)` ladder, the form mypyc compiles, instead of `match`/`case`.
+pub fn lower_collecting_with(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+    codecs: &crate::types::Codecs,
+    native: bool,
+) -> Result<(PyModule, Vec<String>), LowerError> {
     let mut lowerer = Lowerer::new(module);
+    lowerer.native = native;
     lowerer.float_literals = float_literals.clone();
     lowerer.order = order;
     lowerer.codecs = codecs.clone();
@@ -372,6 +386,9 @@ struct Lowerer {
     /// context variable (defined here, or imported from `_pyfun_rt` in a
     /// project so every module reads the same one).
     needs_task_scope: bool,
+    /// Native lowering (`--native`, `DESIGN.md` §5.6): user sum-type matches
+    /// become `isinstance` ladders too.
+    native: bool,
     /// The derived codecs the checker resolved for this module's `Decode.auto`
     /// sites (`DESIGN.md` §6, "Derived codecs").
     codecs: crate::types::Codecs,
@@ -709,6 +726,7 @@ impl Lowerer {
             needed_decode_helpers: BTreeSet::new(),
             needed_async_helpers: BTreeSet::new(),
             needs_task_scope: false,
+            native: false,
             codecs: crate::types::Codecs::default(),
             codec_table_used: std::collections::BTreeMap::new(),
             needed_codec_helpers: BTreeSet::new(),
@@ -1734,6 +1752,9 @@ impl Lowerer {
                     return Ok(stmts);
                 }
                 // An Option/Result match is an `isinstance` ladder (§5.5).
+                if let Some(stmts) = self.try_lower_native_match(scrutinee, arms, locals, None)? {
+                    return Ok(stmts);
+                }
                 if let Some(stmts) = self.try_lower_ladder_match(scrutinee, arms, locals, None)? {
                     return Ok(stmts);
                 }
@@ -1935,6 +1956,11 @@ impl Lowerer {
                 // temps exactly as before.
                 let counter = self.tmp_counter;
                 let tmp = self.fresh_tmp();
+                if let Some(stmts) =
+                    self.try_lower_native_match(scrutinee, arms, locals, Some(&tmp))?
+                {
+                    return Ok((stmts, PyExpr::Name(tmp)));
+                }
                 if let Some(stmts) =
                     self.try_lower_ladder_match(scrutinee, arms, locals, Some(&tmp))?
                 {
@@ -5114,15 +5140,23 @@ impl Lowerer {
         locals: &HashSet<String>,
         assign_to: Option<&str>,
     ) -> Result<Option<Vec<PyStmt>>, LowerError> {
-        let Some((family, shaped)) = ladder_shape(arms) else {
-            return Ok(None);
+        let (shaped, full_set): (Vec<LadderArm<'_>>, Vec<String>) = match ladder_shape(arms) {
+            Some((family, shaped)) => {
+                match family {
+                    LadderFamily::Option => self.needs_option = true,
+                    LadderFamily::Result => self.needs_result = true,
+                }
+                let (a, b) = family.classes();
+                let names = |class: &str| match class {
+                    "None_" => "None".to_string(),
+                    other => other.to_string(),
+                };
+                (shaped, vec![names(a), names(b)])
+            }
+            None => return Ok(None),
         };
         if assign_to.is_some() && shaped.iter().any(|a| a.arm.guard.is_some()) {
             return Ok(None);
-        }
-        match family {
-            LadderFamily::Option => self.needs_option = true,
-            LadderFamily::Result => self.needs_result = true,
         }
         // The scrutinee is read once per arm test, so anything but a plain name
         // is bound to a temp first.
@@ -5138,15 +5172,15 @@ impl Lowerer {
                 tmp
             }
         };
-        let unguarded = |class: &str| {
+        let unguarded = |ctor: &str| {
             shaped
                 .iter()
-                .any(|a| a.arm.guard.is_none() && a.class == Some(class))
+                .any(|a| a.arm.guard.is_none() && a.ctor == Some(ctor))
         };
         let exhaustive = shaped
             .iter()
-            .any(|a| a.arm.guard.is_none() && a.class.is_none())
-            || (unguarded(family.classes().0) && unguarded(family.classes().1));
+            .any(|a| a.arm.guard.is_none() && a.ctor.is_none())
+            || (!full_set.is_empty() && full_set.iter().all(|c| unguarded(c)));
 
         // Each arm: its `isinstance` test (none for a catch-all) and the block that
         // runs when it matches: payload binding, then the (guarded) body.
@@ -5171,16 +5205,16 @@ impl Lowerer {
                 }
             };
             let mut inner = Vec::new();
-            if let Some(payload) = a.payload {
+            for (i, payload) in a.payloads.iter().enumerate() {
                 let value = PyExpr::Attribute {
                     value: Box::new(PyExpr::Name(subject.clone())),
-                    attr: "_0".to_string(),
+                    attr: format!("_{i}"),
                 };
                 let rename = self.renames.clone();
                 bind_irrefutable(
                     payload,
                     value,
-                    &subject,
+                    &format!("{subject}_{i}"),
                     &|n| rename.get(n).cloned().unwrap_or_else(|| py_value_name(n)),
                     &mut inner,
                 );
@@ -5200,11 +5234,11 @@ impl Lowerer {
                 }),
                 None => inner.extend(body),
             }
-            let cond = a.class.map(|class| PyExpr::Call {
+            let cond = a.ctor.map(|ctor| PyExpr::Call {
                 func: Box::new(PyExpr::Name("isinstance".to_string())),
                 args: vec![
                     PyExpr::Name(subject.clone()),
-                    PyExpr::Name(class.to_string()),
+                    PyExpr::Name(self.ctor_class_name(ctor)),
                 ],
             });
             pieces.push(Piece {
@@ -5252,6 +5286,237 @@ impl Lowerer {
         }
         stmts.extend(tail);
         Ok(Some(stmts))
+    }
+
+    // ----- Native lowering: every match as an `if` ladder (`DESIGN.md` §5.6) -----
+
+    /// In native mode (`--native`), lower a `match` to an `if`/`elif` ladder of
+    /// plain tests (`isinstance`, `==`) and assignments, the form mypyc compiles
+    /// and CPython runs without its class-pattern machinery. Any pattern built from
+    /// constructors, records, tuples, literals, variables, wildcards and `as`
+    /// qualifies; an or-pattern, a list pattern or an active pattern keeps the
+    /// `match` lowering, as does a guard in value position. Return position only
+    /// for guarded arms, as in [`Self::try_lower_ladder_match`].
+    ///
+    /// The checker has proved the unguarded arms cover the scrutinee's type, so
+    /// the last arm, when unguarded, is a plain `else`.
+    fn try_lower_native_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[crate::parser::ast::MatchArm],
+        locals: &HashSet<String>,
+        assign_to: Option<&str>,
+    ) -> Result<Option<Vec<PyStmt>>, LowerError> {
+        if !self.native || arms.is_empty() {
+            return Ok(None);
+        }
+        if !arms.iter().all(|a| self.native_pattern_ok(&a.pattern)) {
+            return Ok(None);
+        }
+        // The Option/Result ladder already has the best form for its shape.
+        if ladder_shape(arms).is_some() {
+            return Ok(None);
+        }
+        if assign_to.is_some() && arms.iter().any(|a| a.guard.is_some()) {
+            return Ok(None);
+        }
+        let (mut stmts, subject) = self.lower_value(scrutinee, locals)?;
+        let subject = match subject {
+            PyExpr::Name(n) => n,
+            other => {
+                let tmp = self.fresh_tmp();
+                stmts.push(PyStmt::Assign {
+                    target: tmp.clone(),
+                    value: other,
+                });
+                tmp
+            }
+        };
+        struct Piece {
+            cond: Option<PyExpr>,
+            inner: Vec<PyStmt>,
+            guarded: bool,
+        }
+        let mut pieces = Vec::with_capacity(arms.len());
+        for (idx, arm) in arms.iter().enumerate() {
+            let scope = self.enter_arm(arms, idx, locals);
+            let mut conds = Vec::new();
+            let mut binds = Vec::new();
+            self.native_pattern(
+                &arm.pattern,
+                PyExpr::Name(subject.clone()),
+                &mut conds,
+                &mut binds,
+            );
+            let guard = self.lower_guard(&arm.guard, &scope.locals)?;
+            let body = match assign_to {
+                None => self.lower_return(&arm.body, &scope.locals)?,
+                Some(tmp) => {
+                    let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
+                    with_assign(arm_stmts, tmp, arm_val)
+                }
+            };
+            self.exit_arm(scope);
+            let mut inner: Vec<PyStmt> = binds
+                .into_iter()
+                .map(|(target, value)| PyStmt::Assign { target, value })
+                .collect();
+            match guard {
+                Some(test) => inner.push(PyStmt::If {
+                    test,
+                    body,
+                    orelse: vec![],
+                }),
+                None => inner.extend(body),
+            }
+            let cond = conds.into_iter().reduce(|a, b| PyExpr::BinOp {
+                op: PyBinOp::And,
+                left: Box::new(a),
+                right: Box::new(b),
+            });
+            let guarded = arm.guard.is_some();
+            let irrefutable = cond.is_none() && !guarded;
+            pieces.push(Piece {
+                cond,
+                inner,
+                guarded,
+            });
+            if irrefutable {
+                break; // later arms are unreachable
+            }
+        }
+        let last = pieces.len() - 1;
+        let exhaustive = !pieces[last].guarded;
+        let mut tail: Vec<PyStmt> = if exhaustive {
+            vec![]
+        } else {
+            vec![PyStmt::RaiseRuntimeError(
+                "non-exhaustive match".to_string(),
+            )]
+        };
+        for (i, piece) in pieces.into_iter().enumerate().rev() {
+            tail = match (piece.cond, piece.guarded) {
+                (None, false) => piece.inner,
+                (Some(_), false) if i == last => piece.inner,
+                (Some(test), false) => vec![PyStmt::If {
+                    test,
+                    body: piece.inner,
+                    orelse: tail,
+                }],
+                (cond, true) => {
+                    let mut out = match cond {
+                        Some(test) => vec![PyStmt::If {
+                            test,
+                            body: piece.inner,
+                            orelse: vec![],
+                        }],
+                        None => piece.inner,
+                    };
+                    out.extend(tail);
+                    out
+                }
+            };
+        }
+        stmts.extend(tail);
+        Ok(Some(stmts))
+    }
+
+    /// Whether [`Self::native_pattern`] can compile `pattern` to plain tests.
+    fn native_pattern_ok(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Wildcard
+            | Pattern::Var { .. }
+            | Pattern::Int(_)
+            | Pattern::Str(_)
+            | Pattern::Bool(_) => true,
+            Pattern::Ctor { name, args, .. } => {
+                !self.ap_uses.contains_key(name) && args.iter().all(|a| self.native_pattern_ok(a))
+            }
+            Pattern::Record { fields, .. } => {
+                fields.iter().all(|f| self.native_pattern_ok(&f.pattern))
+            }
+            Pattern::Tuple { elems } => elems.iter().all(|e| self.native_pattern_ok(e)),
+            Pattern::As { pattern, .. } => self.native_pattern_ok(pattern),
+            Pattern::Or(_) | Pattern::List { .. } => false,
+        }
+    }
+
+    /// Compile `pattern` against the value `subject` into the tests that decide
+    /// it (`conds`, and-ed in order) and the assignments that bind its names
+    /// (`binds`). Only called on patterns [`Self::native_pattern_ok`] accepts.
+    fn native_pattern(
+        &mut self,
+        pattern: &Pattern,
+        subject: PyExpr,
+        conds: &mut Vec<PyExpr>,
+        binds: &mut Vec<(String, PyExpr)>,
+    ) {
+        let eq = |subject: PyExpr, lit: PyExpr| PyExpr::BinOp {
+            op: PyBinOp::Eq,
+            left: Box::new(subject),
+            right: Box::new(lit),
+        };
+        let attr = |value: &PyExpr, name: String| PyExpr::Attribute {
+            value: Box::new(value.clone()),
+            attr: name,
+        };
+        let isinstance = |value: &PyExpr, class: String| PyExpr::Call {
+            func: Box::new(PyExpr::Name("isinstance".to_string())),
+            args: vec![value.clone(), PyExpr::Name(class)],
+        };
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Var { name, .. } => binds.push((self.py_binder_name(name), subject)),
+            Pattern::As { pattern, name, .. } => {
+                binds.push((self.py_binder_name(name), subject.clone()));
+                self.native_pattern(pattern, subject, conds, binds);
+            }
+            Pattern::Int(n) => conds.push(eq(subject, PyExpr::Int(*n))),
+            Pattern::Str(t) => conds.push(eq(subject, PyExpr::Str(t.clone()))),
+            Pattern::Bool(b) => conds.push(PyExpr::BinOp {
+                op: PyBinOp::Is,
+                left: Box::new(subject),
+                right: Box::new(PyExpr::Bool(*b)),
+            }),
+            Pattern::Ctor { name, args, .. } => {
+                // A newtype erases: its pattern is the payload's, on the value itself.
+                if self.newtype_ctors.contains(name)
+                    && let [payload] = args.as_slice()
+                {
+                    return self.native_pattern(payload, subject, conds, binds);
+                }
+                if name == "Ok" || name == "Error" {
+                    self.needs_result = true;
+                }
+                if name == "Some" || name == "None" {
+                    self.needs_option = true;
+                }
+                conds.push(isinstance(&subject, self.ctor_class_name(name)));
+                for (i, arg) in args.iter().enumerate() {
+                    let field = attr(&subject, format!("_{i}"));
+                    self.native_pattern(arg, field, conds, binds);
+                }
+            }
+            Pattern::Record { ty, fields, .. } => {
+                conds.push(isinstance(&subject, self.record_class_name(ty)));
+                for f in fields {
+                    let field = attr(&subject, py_field_name(&f.name));
+                    self.native_pattern(&f.pattern, field, conds, binds);
+                }
+            }
+            Pattern::Tuple { elems } => {
+                for (i, elem) in elems.iter().enumerate() {
+                    let item = PyExpr::Subscript {
+                        value: Box::new(subject.clone()),
+                        index: Box::new(PyExpr::Int(i as i64)),
+                    };
+                    self.native_pattern(elem, item, conds, binds);
+                }
+            }
+            Pattern::Or(_) | Pattern::List { .. } => {
+                unreachable!("native_pattern_ok rejects or- and list patterns")
+            }
+        }
     }
 
     fn fresh_tmp(&mut self) -> String {
@@ -10083,10 +10348,11 @@ impl LadderFamily {
 /// One arm of a ladder-shaped match.
 struct LadderArm<'a> {
     arm: &'a crate::parser::ast::MatchArm,
-    /// The class to test with `isinstance`; `None` for a catch-all arm.
-    class: Option<&'static str>,
-    /// The payload pattern to bind from `._0` (constructor arms with a payload).
-    payload: Option<&'a Pattern>,
+    /// The constructor (surface name) to test with `isinstance`; `None` for a
+    /// catch-all arm.
+    ctor: Option<&'a str>,
+    /// The payload patterns, bound from `._0`, `._1`, … in order.
+    payloads: Vec<&'a Pattern>,
     /// A catch-all *variable* arm binds the whole scrutinee.
     whole: Option<&'a str>,
 }
@@ -10103,19 +10369,19 @@ fn ladder_shape(
     for arm in arms {
         match &arm.pattern {
             Pattern::Ctor { name, args, .. } => {
-                let (fam, class, has_payload) = LadderFamily::of_ctor(name)?;
+                let (fam, _class, has_payload) = LadderFamily::of_ctor(name)?;
                 if *family.get_or_insert(fam) != fam {
                     return None;
                 }
-                let payload = match (has_payload, args.as_slice()) {
-                    (true, [p]) if simple_irrefutable(p) => Some(p),
-                    (false, []) => None,
+                let payloads = match (has_payload, args.as_slice()) {
+                    (true, [p]) if simple_irrefutable(p) => vec![p],
+                    (false, []) => vec![],
                     _ => return None,
                 };
                 out.push(LadderArm {
                     arm,
-                    class: Some(class),
-                    payload,
+                    ctor: Some(name.as_str()),
+                    payloads,
                     whole: None,
                 });
             }
@@ -10126,8 +10392,8 @@ fn ladder_shape(
                 };
                 out.push(LadderArm {
                     arm,
-                    class: None,
-                    payload: None,
+                    ctor: None,
+                    payloads: vec![],
                     whole,
                 });
                 if arm.guard.is_none() {

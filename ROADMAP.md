@@ -498,7 +498,12 @@ map_build 1.64× vs hand-written.
   with zero user toolchain. Weak spot: recursion (collatz 7.36× vs PyPy's own iterative baseline —
   absolute time still beats CPython). Docs line earned: "compute-bound? `--target 3.11` + PyPy."
   **CPython's own JIT** (experimental since 3.13) accrues to every program for free.
-- **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**) —
+- **Typed-emit + mypyc AOT (`--native`)** (M to measure, L to ship; **gated on the measurement**;
+  **first slice SHIPPED 2026-09-28**: `pyfun compile --native` lowers every match built from
+  constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
+  expr_eval 2.30x → 1.63x on plain CPython. Remaining, in order: or-/list-pattern ladders, typed
+  emit (annotations from the inferred types), a `--native` build step that runs mypyc, then the
+  closure/`seq`/`_pyfun_rt` audit and project mode) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
   with the interop story intact (the result is still an ordinary extension module). Real blockers

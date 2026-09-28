@@ -44,7 +44,7 @@ fn main() -> ExitCode {
             None => fail("`check` needs a file path"),
         },
         Some("compile") => match parse_compile_args(&args[1..]) {
-            Ok((path, out, target)) => compile(path, out.as_deref(), target),
+            Ok((path, out, target, native)) => compile(path, out.as_deref(), target, native),
             Err(msg) => fail(&msg),
         },
         Some("run") => match args.get(1) {
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
         // Shorthand: a bare path means `compile <path>` to stdout.
-        Some(path) => compile(path, None, PyTarget::default()),
+        Some(path) => compile(path, None, PyTarget::default(), false),
     }
 }
 
@@ -91,6 +91,12 @@ fn help() {
     );
     eprintln!(
         "                                            PEP 701 f-strings so the output runs on PyPy)"
+    );
+    eprintln!(
+        "                [--native]                  lower matches on your own types to isinstance"
+    );
+    eprintln!(
+        "                                            ladders, the form mypyc compiles (single file)"
     );
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
     eprintln!(
@@ -175,16 +181,20 @@ fn check(path: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn compile(path: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
+fn compile(path: &str, out: Option<&str>, target: PyTarget, native: bool) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
     if let Ok(module) = pyfun::parse(&source)
         && has_imports(&module)
     {
+        if native {
+            eprintln!("error: `--native` supports a single file so far, not a project");
+            return ExitCode::FAILURE;
+        }
         return compile_project(path, out, target);
     }
-    let python = match pyfun::compile_collecting(&source, target) {
+    let python = match pyfun::compile_with(&source, target, native) {
         Ok((py, notes)) => {
             report_notes(&notes);
             py
@@ -505,10 +515,11 @@ fn parse_only(path: &str) -> ExitCode {
 
 /// Parse `compile` arguments: a required path, an optional `-o <out>`, and an
 /// optional `--target 3.11|3.12` (default 3.12 — see `python_emitter::PyTarget`).
-fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget), String> {
+fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget, bool), String> {
     let mut path = None;
     let mut out = None;
     let mut target = PyTarget::default();
+    let mut native = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -516,6 +527,7 @@ fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget
                 i += 1;
                 out = Some(args.get(i).ok_or("`-o` needs a path")?.clone());
             }
+            "--native" => native = true,
             "--target" => {
                 i += 1;
                 target = match args.get(i).map(String::as_str) {
@@ -532,7 +544,12 @@ fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget
         }
         i += 1;
     }
-    Ok((path.ok_or("`compile` needs a file path")?, out, target))
+    Ok((
+        path.ok_or("`compile` needs a file path")?,
+        out,
+        target,
+        native,
+    ))
 }
 
 fn read(path: &str) -> Option<String> {

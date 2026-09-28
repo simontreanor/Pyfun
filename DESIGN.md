@@ -390,6 +390,45 @@ an identity check that short-circuits in C. A program that binds the singleton's
 (`let _Across = …`) keeps the call form for that constructor, so the rewrite can never shadow a
 user binding. Mechanics in `INTERNALS.md`.
 
+### 5.6 Native lowering (`--native`): every match as an `if` ladder
+
+`pyfun compile --native` is the first step toward compiling Pyfun output with mypyc
+(`ROADMAP.md`, "Typed-emit + mypyc AOT"). mypyc does not compile `match` statements, and every Pyfun
+`match` lowers to one, so native mode lowers a match to an `if`/`elif` ladder of plain tests instead,
+generalizing §5.5 from the `Option`/`Result` family to every pattern built from constructors,
+records, tuples, literals, variables, wildcards and `as`:
+
+```python
+    elif isinstance(e, Add):                          # case Add a b:
+        a = e._0
+        b = e._1
+        _pf_t2 = (simplify(a), simplify(b))           #   match (simplify a, simplify b):
+        if isinstance(_pf_t2[0], Num) and _pf_t2[0]._0 == 0:
+            sb = _pf_t2[1]                            #     case (Num 0, sb): sb
+            return sb
+        ...
+        else:                                         #     case (sa, sb): Add sa sb
+            sa = _pf_t2[0]
+            sb = _pf_t2[1]
+            return Add(sa, sb)
+```
+
+A pattern compiles to the tests that decide it (`isinstance` for a constructor or record tag, `==`
+for a literal, `is` for a boolean), and-ed in order and short-circuiting before any field is read,
+and the assignments that bind its names, which run once the arm is chosen. A newtype pattern erases
+to its payload's, as everywhere. The checker has proved the unguarded arms cover the type, so the
+last arm, when unguarded, is a plain `else` with no `raise` behind it. Guards follow §5.5: in return
+position a guarded arm is its own `if` and a failed guard falls through; in value position a guard
+keeps the `match` lowering. An or-pattern, a list pattern or an active pattern also keeps `match`
+(the ladder for them needs a matched-flag or slicing, left for a later slice).
+
+The ladder is also faster on CPython by itself, since a class pattern goes through `__match_args__`
+and positional binding at run time: on `bench/expr_eval` (ADT allocation and matching) the output
+goes from 2.30x to 1.63x of the hand-written baseline on CPython 3.14, before any compilation.
+Native mode is opt-in and single-file for now; the default emitter keeps `match`/`case` because it
+reads as the program was written. Every example and the whole end-to-end suite produce identical
+output in both modes.
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the
