@@ -109,3 +109,15 @@ jobs:
             echo "$q"
             tree-sitter query "$q" test/stress.pyfun > /dev/null
           done
+
+  # The Pygments lexer (editors/pygments) must lex every example in the repo
+  # without an error token, so a new syntax form shows up here first.
+  pygments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install pygments
+      - run: python editors/pygments/tests/test_lexer.py

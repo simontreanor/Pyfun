@@ -623,7 +623,10 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
     validated branch is parked at `simontreanor/nvim-treesitter` (`add-pyfun`), ready to retarget
     when the ecosystem settles.
   - **Sublime Text Package Control** and a **Pygments lexer** on PyPI (the kernel declares the
-    `fsharp` lexer as an approximation) were always demand-gated and stay that way.
+    `fsharp` lexer as an approximation). **The Pygments lexer is BUILT** (2026-09-28,
+    `editors/pygments/`, the `pygments-pyfun` package, tested in CI against every example);
+    publishing it to PyPI, and then switching the kernel's `pygments_lexer` to `pyfun`, waits for
+    Simon's go-ahead.
 
   The documented fallback for every one of these already exists in `editors/README.md`, so a user
   on any of those editors is not blocked — they install by hand instead of by registry. Revisit the

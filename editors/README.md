@@ -220,6 +220,19 @@ VS Code-format extensions directly):
 
 ---
 
+## Documentation tools (Pygments)
+
+Sphinx, MkDocs, Jupyter's nbconvert and `pygmentize` highlight through Pygments.
+[`pygments/`](pygments/) is a Pygments lexer for Pyfun that registers itself under the alias
+`pyfun` once installed:
+
+```bash
+pip install ./editors/pygments
+pygmentize -l pyfun examples/hello.pyfun
+```
+
+---
+
 ## Any other editor
 
 If your editor has an LSP client, point it at:
