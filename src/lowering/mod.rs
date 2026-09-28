@@ -950,7 +950,8 @@ impl Lowerer {
         // Module-level values another module reads need their type written down:
         // mypyc cannot infer it across modules ("Cannot determine type"). Each
         // nullary singleton names its class, and a top-level value binding bound
-        // once gets its inferred type when Python can spell it.
+        // once gets its inferred type when Python can spell it, with `Any` for a
+        // type variable.
         let mut value_types: HashMap<String, String> = HashMap::new();
         let mut bound_count: HashMap<String, usize> = HashMap::new();
         for item in &module.items {
@@ -961,7 +962,7 @@ impl Lowerer {
                 if b.params.is_empty()
                     && let Some(name) = b.name()
                     && let Some(ty) = self.binding_types.get(&b.target_span.span())
-                    && let Some(ann) = py_type_annotation(ty, &spell)
+                    && let Some(ann) = py_value_annotation(ty, &spell)
                 {
                     value_types.insert(py_value_name(name), ann);
                 }
@@ -970,6 +971,7 @@ impl Lowerer {
         // Only a name's first assignment carries the annotation (a top-level
         // `let mut` is reassigned by `<-`).
         let mut annotated: HashSet<String> = HashSet::new();
+        let mut needs_any = false;
         for stmt in &mut py.body {
             let PyStmt::Assign { target, value } = stmt else {
                 continue;
@@ -993,8 +995,22 @@ impl Lowerer {
             } else if bound_count.get(target.as_str()) == Some(&1)
                 && let Some(ann) = value_types.get(target.as_str())
             {
+                needs_any |= ann.contains("Any");
                 *target = format!("{target}: {ann}");
             }
+        }
+        let has_any = py.body.iter().any(|s| {
+            matches!(s, PyStmt::ImportFrom { module, names }
+                if module == "typing" && names.iter().any(|n| n == "Any"))
+        });
+        if needs_any && !has_any {
+            py.body.insert(
+                0,
+                PyStmt::ImportFrom {
+                    module: "typing".to_string(),
+                    names: vec!["Any".to_string()],
+                },
+            );
         }
         // The top-level function bindings and their types.
         let mut fn_types: HashMap<String, (usize, crate::types::Ty)> = HashMap::new();
@@ -6699,8 +6715,23 @@ fn return_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) -> 
 /// functions (`DESIGN.md` §5.6); `None` when Python has no spelling for it here.
 /// `spell` maps a user type name to its class or union alias.
 fn py_type_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) -> Option<String> {
+    spell_type(ty, spell, false)
+}
+
+/// A module-level value's annotation: as [`py_type_annotation`], except that a
+/// type variable is `Any`. A generalized value (`let empty = Map.empty`) is
+/// used at many types, which is what `Any` says.
+fn py_value_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) -> Option<String> {
+    spell_type(ty, spell, true)
+}
+
+fn spell_type(
+    ty: &crate::types::Ty,
+    spell: &HashMap<String, String>,
+    vars_any: bool,
+) -> Option<String> {
     use crate::types::Ty;
-    let inner = |t: &Ty| py_type_annotation(t, spell);
+    let inner = |t: &Ty| spell_type(t, spell, vars_any);
     Some(match ty {
         Ty::Int(_) | Ty::Num(..) => "int".to_string(),
         Ty::Float(_) => "float".to_string(),
@@ -6717,6 +6748,7 @@ fn py_type_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) ->
             ("Map", [k, v]) => format!("dict[{}, {}]", inner(k)?, inner(v)?),
             (other, _) => spell.get(other)?.clone(),
         },
+        Ty::Var(_) if vars_any => "Any".to_string(),
         Ty::Var(_) | Ty::Fun(..) => return None,
     })
 }
