@@ -450,7 +450,10 @@ play comes first; the browser target is last because it depends on the async dec
   for the saturated application, `DESIGN.md` §4/§8), and a top-level evaluation still performing
   `spawn` is an error. Breaking: the `Scope` argument is gone (`Task.scope (async { … })`,
   `Task.start job`).
-- **Larger prelude / package manager** — the *prelude* half is superseded by Dogfooding findings #5
+- **Larger prelude / package manager** — **the package half's first slice SHIPPED 2026-09-28**
+  (`pyfun.toml` + `pyfun add` + `pyfun install`, façades as ordinary pip distributions vendored
+  into `.pyfun/facades/`, `DESIGN.md` §6.2; still to come: a hashed lock file, `pyfun remove`, and
+  publishing a first real façade). The *prelude* half is superseded by Dogfooding findings #5
   (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
   non-goal, below — not part of this bucket.) (Decode specialization shipped 2026-07-13 — `DESIGN.md`

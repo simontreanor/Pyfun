@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyfun-textwrap"
+version = "0.1.0"
+description = "A Pyfun façade over Python's textwrap module (an example façade package)"
+requires-python = ">=3.12"
+
+# The façade's .pyfun files travel as package data; `pyfun add` finds them in
+# the installed distribution's file list and vendors them into the project.
+[tool.setuptools]
+packages = ["pyfun_textwrap"]
+
+[tool.setuptools.package-data]
+pyfun_textwrap = ["*.pyfun"]

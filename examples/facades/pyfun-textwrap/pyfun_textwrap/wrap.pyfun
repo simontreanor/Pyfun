@@ -1,0 +1,22 @@
+# Typed declarations for Python's `textwrap`, imported in Pyfun as `Wrap`.
+# Every function here is pure: it reads its arguments and returns a string.
+#
+# A façade is ordinary Pyfun, so beside the `extern`s it can hold small
+# functions that give the Python API a pipe-friendly shape: the text comes
+# last, so `text |> Wrap.fill 24` reads left to right.
+
+extern import textwrap
+
+extern pure fillText: string -> int -> string = textwrap.fill(width = ...)
+extern pure shortenText: string -> int -> string = textwrap.shorten(width = ...)
+extern pure indentText: string -> string -> string = textwrap.indent
+
+# `text |> Wrap.fill 24`: the text re-flowed to lines of at most 24 characters.
+let fill width text = fillText text width
+
+# `text |> Wrap.shorten 30`: the text collapsed and cut to fit 30 characters,
+# ending in " [...]" when something was cut.
+let shorten width text = shortenText text width
+
+# `text |> Wrap.indent "> "`: every non-blank line prefixed.
+let indent prefix text = indentText text prefix

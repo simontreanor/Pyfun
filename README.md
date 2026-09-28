@@ -389,6 +389,12 @@ Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.py
 drives the whole graph. Clone the repo for a runnable tour in [`examples/`](https://github.com/simontreanor/Pyfun/tree/main/examples), including a
 multi-module project (`pyfun run examples/modules/main.pyfun`).
 
+Typed declarations for a Python library can be shared as a **façade package**, an ordinary pip
+package that carries `.pyfun` files. `pyfun add <package>` installs one, vendors its declarations
+into the project and records it in `pyfun.toml`; `pyfun install` restores them on another machine.
+[`examples/facades/pyfun-textwrap`](https://github.com/simontreanor/Pyfun/tree/main/examples/facades/pyfun-textwrap)
+is a small one to try.
+
 **Building from source** (or hacking on the compiler) needs [Rust](https://rustup.rs/), which
 auto-selects the pinned 1.97 toolchain:
 

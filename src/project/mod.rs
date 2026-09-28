@@ -14,7 +14,9 @@
 //! (slice 3) and multi-file lowering/emit (slice 4) build on `Project`.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+pub mod manifest;
 
 use crate::CompileError;
 use crate::parser::ast::{Item, Module};
@@ -126,8 +128,26 @@ where
     Ok(Project { modules })
 }
 
+/// The file module `name` resolves to from a module in `dir`: the sibling
+/// `<name>.pyfun` first, then the same file in each façade vendored into the
+/// enclosing project (`<root>/.pyfun/facades/*/`, `DESIGN.md` §6.2), so a
+/// project's own module always wins over a façade of the same name.
+pub fn locate_module(dir: &Path, name: &str) -> Option<PathBuf> {
+    let file = module_file_name(name);
+    let sibling = dir.join(&file);
+    if sibling.is_file() {
+        return Some(sibling);
+    }
+    let root = manifest::find_root(dir)?;
+    manifest::facade_dirs(&root)
+        .into_iter()
+        .map(|d| d.join(&file))
+        .find(|p| p.is_file())
+}
+
 /// Resolve the module graph rooted at a source file on disk, reading imported
-/// modules from sibling `<name>.pyfun` files in the entry's directory.
+/// modules from sibling `<name>.pyfun` files in the entry's directory, or from
+/// the project's vendored façades ([`locate_module`]).
 pub fn build_from_path(entry: &Path) -> Result<Project, ProjectError> {
     let entry_name = module_name_from_path(entry).ok_or_else(|| ProjectError::Missing {
         name: entry.display().to_string(),
@@ -135,7 +155,10 @@ pub fn build_from_path(entry: &Path) -> Result<Project, ProjectError> {
     })?;
     let root = entry.parent().map(Path::to_path_buf).unwrap_or_default();
     build(&entry_name, |name| {
-        std::fs::read_to_string(root.join(module_file_name(name))).ok()
+        if name == entry_name {
+            return std::fs::read_to_string(entry).ok();
+        }
+        std::fs::read_to_string(locate_module(&root, name)?).ok()
     })
 }
 
@@ -401,7 +424,7 @@ fn resolve_exports(
     if visiting.contains(name) {
         return None; // a cycle — bail rather than recurse forever
     }
-    let source = std::fs::read_to_string(dir.join(module_file_name(name))).ok()?;
+    let source = std::fs::read_to_string(locate_module(dir, name)?).ok()?;
     let module = crate::parse(&source).ok()?;
 
     visiting.insert(name.to_string());
