@@ -703,6 +703,20 @@ impl Server {
             return location;
         }
 
+        // A type declared in an imported module jumps to that module's file.
+        if let Some((tmod, name, _)) = self.type_target(module, uri, offset)
+            && current_module(uri).as_deref() != Some(tmod.as_str())
+            && let Some((target_uri, source)) =
+                self.sibling_source(uri, &crate::project::module_file_name(&tmod))
+            && let Ok(other) = crate::parse(&source)
+            && let Some(span) = user_type_decl_span(&other, &name)
+        {
+            return obj(vec![
+                ("uri", str(&target_uri)),
+                ("range", span_range(&source, span)),
+            ]);
+        }
+
         // A type-name occurrence jumps to its (in-file) declaration.
         if let Some((name, _)) = resolve::type_at(module, offset)
             && let Some(span) = user_type_decl_span(module, &name)
@@ -750,6 +764,153 @@ impl Server {
             ("uri", str(&target_uri)),
             ("range", span_range(&source, sym.span)),
         ]))
+    }
+
+    /// A sibling project file's source, from its open buffer if there is one, else
+    /// from disk.
+    fn sibling_source(&self, uri: &str, file_name: &str) -> Option<(String, String)> {
+        let file_uri = sibling_uri(uri, file_name);
+        let source = match self.documents.get(&file_uri) {
+            Some(doc) => doc.text.clone(),
+            None => std::fs::read_to_string(uri_to_path(&file_uri)?).ok()?,
+        };
+        Some((file_uri, source))
+    }
+
+    /// The **user type** under the cursor, resolved to the module that declares
+    /// it: `(declaring module, bare type name, whether it is a record)`. The
+    /// cursor may be on a type annotation (bare or qualified), a bare record tag,
+    /// the declaration's own name, or a qualified record tag (`Shapes.Placed { … }`).
+    /// A bare name is this file's own type when it declares one (a local type wins
+    /// a clash), else the imported module's that declares it. `None` for a
+    /// built-in type, or a document outside a project directory.
+    fn type_target(
+        &self,
+        module: &crate::syntax::Module,
+        uri: &str,
+        offset: usize,
+    ) -> Option<(String, String, bool)> {
+        let is_record = |m: &crate::syntax::Module, name: &str| {
+            resolve::definitions(m)
+                .iter()
+                .any(|s| s.name == name && s.kind == resolve::SymbolKind::Record)
+        };
+        let (qualifier, name, from_tag) = match resolve::type_at(module, offset) {
+            Some((written, _)) => match written.split_once('.') {
+                Some((q, n)) => (Some(q.to_string()), n.to_string(), false),
+                None => (None, written, false),
+            },
+            None => {
+                let q = resolve::qualified_at(module, offset)?;
+                (Some(q.module), q.member, true)
+            }
+        };
+        match qualifier {
+            None if user_type_decl_span(module, &name).is_some() => {
+                Some((current_module(uri)?, name.clone(), is_record(module, &name)))
+            }
+            None => module.items.iter().find_map(|item| {
+                let crate::syntax::Item::Import { name: m, .. } = item else {
+                    return None;
+                };
+                let (_, source) = self.sibling_source(uri, &crate::project::module_file_name(m))?;
+                let other = crate::parse(&source).ok()?;
+                user_type_decl_span(&other, &name)
+                    .map(|_| (m.clone(), name.clone(), is_record(&other, &name)))
+            }),
+            Some(q) => {
+                if !module_imports(module, &q) {
+                    return None;
+                }
+                let (_, source) =
+                    self.sibling_source(uri, &crate::project::module_file_name(&q))?;
+                let other = crate::parse(&source).ok()?;
+                user_type_decl_span(&other, &name)?;
+                let record = is_record(&other, &name);
+                // A qualified expression names a type only as a record's tag; for
+                // a sum type it is a constructor that happens to share the name.
+                (record || !from_tag).then_some((q, name, record))
+            }
+        }
+    }
+
+    /// Every occurrence of the user type `ty` declared in `target_module`, across
+    /// the project directory's `.pyfun` files (`DESIGN.md` §6.1): its declaration
+    /// name (when `include_decl`) and bare uses in the declaring file, and in every
+    /// file that imports it, qualified uses (`Shapes.Placed`, rewriting only the
+    /// member part) plus bare uses where that file declares no type of its own by
+    /// the same name. A record's qualified tags (`Shapes.Placed { … }`) count too,
+    /// since the tag *is* the type's name. `None` if the declaration isn't found,
+    /// or — when `strict` — some project file fails to parse.
+    fn type_occurrences(
+        &self,
+        uri: &str,
+        target_module: &str,
+        ty: &str,
+        record: bool,
+        include_decl: bool,
+        strict: bool,
+    ) -> Option<Vec<(String, Json)>> {
+        let dir = uri_to_path(uri)?.parent()?.to_path_buf();
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .ok()?
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
+                    .then(|| p.file_name()?.to_str().map(str::to_string))
+                    .flatten()
+            })
+            .collect();
+        files.sort();
+
+        let qualified = format!("{target_module}.{ty}");
+        let mut out: Vec<(String, Json)> = Vec::new();
+        let mut declaring_found = false;
+        for fname in files {
+            let Some((file_uri, source)) = self.sibling_source(uri, &fname) else {
+                continue;
+            };
+            let Ok(m) = crate::parse(&source) else {
+                if strict {
+                    return None;
+                }
+                continue;
+            };
+            let is_declaring = crate::project::module_name_from_path(Path::new(&fname)).as_deref()
+                == Some(target_module);
+            if is_declaring {
+                let Some(decl) = user_type_decl_span(&m, ty) else {
+                    continue;
+                };
+                declaring_found = true;
+                if include_decl {
+                    out.push((file_uri.clone(), span_range(&source, decl)));
+                }
+                for span in resolve::type_use_references(&m, ty) {
+                    out.push((file_uri.clone(), span_range(&source, span)));
+                }
+            } else if module_imports(&m, target_module) {
+                let shadowed = user_type_decl_span(&m, ty).is_some();
+                for t in resolve::type_references(&m) {
+                    if t.name == qualified {
+                        let span = member_subspan(&source, t.span, ty.len());
+                        out.push((file_uri.clone(), span_range(&source, span)));
+                    } else if t.name == ty && !shadowed {
+                        out.push((file_uri.clone(), span_range(&source, t.span)));
+                    }
+                }
+                if record {
+                    for q in resolve::qualified_references(&m) {
+                        if q.module == target_module && q.member == ty {
+                            let span = member_subspan(&source, q.span, ty.len());
+                            out.push((file_uri.clone(), span_range(&source, span)));
+                        }
+                    }
+                }
+            }
+        }
+        declaring_found.then_some(out)
     }
 
     /// Every occurrence of the top-level **value or constructor** `member` defined
@@ -869,6 +1030,18 @@ impl Server {
             .map(|v| v == &Json::Bool(true))
             .unwrap_or(true);
 
+        // A user type in a project: every file that declares or imports it.
+        if let Some((tmod, name, record)) = self.type_target(module, uri, offset)
+            && let Some(occ) =
+                self.type_occurrences(uri, &tmod, &name, record, include_declaration, false)
+        {
+            let locations = occ
+                .into_iter()
+                .map(|(u, range)| obj(vec![("uri", str(u)), ("range", range)]))
+                .collect();
+            return Json::Array(locations);
+        }
+
         // A type name: its in-file annotation uses, plus its declaration when asked.
         if let Some((name, _)) = resolve::type_at(module, offset) {
             let mut spans = resolve::type_use_references(module, &name);
@@ -924,6 +1097,21 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
+        // A user type in a project: the editable range is the bare type name (the
+        // member part of a qualified `Shapes.Placed`).
+        if let Some((tmod, name, record)) = self.type_target(module, uri, offset)
+            && self
+                .type_occurrences(uri, &tmod, &name, record, true, true)
+                .is_some()
+        {
+            let span = resolve::type_at(module, offset)
+                .map(|(_, span)| span)
+                .or_else(|| resolve::qualified_at(module, offset).map(|q| q.span));
+            return match span {
+                Some(span) => span_range(text, member_subspan(text, span, name.len())),
+                None => Json::Null,
+            };
+        }
         // A user type: the editable range is the type-name occurrence.
         if let Some((name, span)) = resolve::type_at(module, offset) {
             return if user_type_decl_span(module, &name).is_some() {
@@ -980,9 +1168,23 @@ impl Server {
         let Some(module) = analysis.module.as_ref().filter(|_| analysis.parse_ok) else {
             return Json::Null;
         };
-        // A user type renames in-file (type names have no cross-file dimension):
-        // its declaration plus its annotation uses. A type renames to a type
-        // (uppercase identifier).
+        // A user type in a project renames across every file that declares or
+        // imports it; a strict scan must succeed (every file parses) or we refuse.
+        if let Some((tmod, name, record)) = self.type_target(module, uri, offset)
+            && self
+                .type_occurrences(uri, &tmod, &name, record, true, false)
+                .is_some()
+        {
+            if !is_ctor_identifier(new_name) {
+                return Json::Null;
+            }
+            let Some(occ) = self.type_occurrences(uri, &tmod, &name, record, true, true) else {
+                return Json::Null;
+            };
+            return workspace_edit(occ, new_name);
+        }
+        // Outside a project, a user type renames in-file: its declaration plus its
+        // annotation uses. A type renames to a type (uppercase identifier).
         if let Some((name, _)) = resolve::type_at(module, offset)
             && let Some(decl_span) = user_type_decl_span(module, &name)
         {
@@ -1021,19 +1223,7 @@ impl Server {
             let Some(occ) = self.symbol_occurrences(uri, &tmod, &member, true, true) else {
                 return Json::Null;
             };
-            let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
-            for (u, range) in occ {
-                let edit = obj(vec![("range", range), ("newText", str(new_name))]);
-                match by_uri.iter_mut().find(|(k, _)| *k == u) {
-                    Some((_, edits)) => edits.push(edit),
-                    None => by_uri.push((u, vec![edit])),
-                }
-            }
-            let changes = by_uri
-                .into_iter()
-                .map(|(u, edits)| (u, Json::Array(edits)))
-                .collect();
-            return Json::Object(vec![("changes".to_string(), Json::Object(changes))]);
+            return workspace_edit(occ, new_name);
         }
         let Some((_, target)) = resolve::symbol_at(module, offset) else {
             return Json::Null;
@@ -1316,6 +1506,24 @@ fn item_doc(module: &crate::syntax::Module, name: &str) -> Option<String> {
         Item::Extern(decl) if decl.name == name => decl.doc.clone(),
         _ => None,
     })
+}
+
+/// A multi-file `WorkspaceEdit` replacing every `(uri, range)` occurrence with
+/// `new_name`, edits grouped per document.
+fn workspace_edit(occurrences: Vec<(String, Json)>, new_name: &str) -> Json {
+    let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
+    for (u, range) in occurrences {
+        let edit = obj(vec![("range", range), ("newText", str(new_name))]);
+        match by_uri.iter_mut().find(|(k, _)| *k == u) {
+            Some((_, edits)) => edits.push(edit),
+            None => by_uri.push((u, vec![edit])),
+        }
+    }
+    let changes = by_uri
+        .into_iter()
+        .map(|(u, edits)| (u, Json::Array(edits)))
+        .collect();
+    Json::Object(vec![("changes".to_string(), Json::Object(changes))])
 }
 
 fn user_type_decl_span(module: &crate::syntax::Module, name: &str) -> Option<crate::lexer::Span> {
@@ -2094,6 +2302,102 @@ let n = max 1",
             .unwrap()
             .as_i64();
         assert_eq!(line, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_type_rewrites_across_files() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_xtype_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let shapes_src =
+            "type Placed = { row: int, col: int }\nlet origin = Placed { row = 0, col = 0 }";
+        std::fs::write(dir.join("shapes.pyfun"), shapes_src).unwrap();
+        let main_src = "import Shapes\n\
+                        type Holder = { item: Shapes.Placed, spare: Placed }\n\
+                        let p = Shapes.Placed { row = 1, col = 2 }";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let shapes_uri = file_uri(&dir.join("shapes.pyfun"));
+
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        // Cursor on `Placed` in the qualified annotation `Shapes.Placed` (line 1).
+        let out = server.handle(&json::parse(&rename_msg(&main_uri, 1, 30, "Tile")).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        let starts = |uri: &str| -> Vec<(i64, i64)> {
+            let mut v: Vec<(i64, i64)> = changes
+                .get(uri)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    let s = e.get("range").unwrap().get("start").unwrap();
+                    (
+                        s.get("line").and_then(Json::as_i64).unwrap(),
+                        s.get("character").and_then(Json::as_i64).unwrap(),
+                    )
+                })
+                .collect();
+            v.sort();
+            v
+        };
+        // The declaration and the bare record tag in the declaring file.
+        assert_eq!(starts(&shapes_uri), vec![(0, 5), (1, 13)]);
+        // The qualified annotation (member part only), the bare annotation, and
+        // the qualified record tag in the importer.
+        assert_eq!(starts(&main_uri), vec![(1, 29), (1, 44), (2, 15)]);
+
+        // Go-to-definition from the importer lands on the declaring file.
+        let req = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(2)),
+            ("method", str("textDocument/definition")),
+            (
+                "params",
+                obj(vec![
+                    ("textDocument", obj(vec![("uri", str(&main_uri))])),
+                    (
+                        "position",
+                        obj(vec![("line", int(1)), ("character", int(46))]),
+                    ),
+                ]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&req).unwrap());
+        let loc = out[0].get("result").unwrap();
+        assert_eq!(
+            loc.get("uri").and_then(Json::as_str),
+            Some(shapes_uri.as_str())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_local_type_shadows_an_imported_one_of_the_same_name() {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_xshadow_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("shapes.pyfun"), "type Placed = { row: int }").unwrap();
+        let main_src = "import Shapes\n\
+                        type Placed = { col: int }\n\
+                        type Holder = { a: Placed, b: Shapes.Placed }";
+        std::fs::write(dir.join("main.pyfun"), main_src).unwrap();
+        let main_uri = file_uri(&dir.join("main.pyfun"));
+        let shapes_uri = file_uri(&dir.join("shapes.pyfun"));
+        let mut server = Server::default();
+        server.handle(&json::parse(&open_msg(&main_uri, main_src)).unwrap());
+        // Rename the imported one via its qualified use: the local `Placed`
+        // declaration and its bare use stay untouched.
+        let out = server.handle(&json::parse(&rename_msg(&main_uri, 2, 38, "Tile")).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        assert_eq!(
+            changes.get(&shapes_uri).unwrap().as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(changes.get(&main_uri).unwrap().as_array().unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1232,12 +1232,16 @@ patterns: `Pattern::Ctor` and the `type` variant declaration each carry a name s
 records pattern constructors in the same reference channels as the expression forms, so the occurrence set
 is complete. Rename is sound: it fires only for a top-level value or constructor (a value renames to a
 value, a constructor to a constructor), and a *strict* scan **refuses** rather than do a partial rewrite if
-any project file fails to parse. **Type names** also navigate and rename, but **in-file only** — there is
-no qualified-type syntax, so a type name appears only in its own file's annotations (sum-variant and record
-field types, `extern` types). `TypeExpr::Con` and the `type` declaration each carry a name span, the
-resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name occurrences, and
-`resolve::type_at` / `type_use_references` drive go-to-definition, find-references, and rename (a type
-renames to an uppercase type name; builtins are refused). The **project-wide LSP cache** is described in `INTERNALS.md`.
+any project file fails to parse. **Type names** navigate and rename across the project too. A type is
+written in annotations (sum-variant and record field types, `extern` types), bare or qualified
+(`Shapes.Placed`), and a record's name is also its tag. The declaring module is found from the
+occurrence under the cursor (a local declaration wins a bare-name clash, else the importing file's
+imports decide), and `type_occurrences` collects the declaration and bare uses in the declaring file plus,
+in each importer, qualified uses (member part only), bare uses where the importer declares no type of that
+name, and a record's qualified tags. `TypeExpr::Con` and the `type` declaration each carry a name span,
+and the resolver walks type annotations (`resolve::walk_type`) collecting uppercase-name occurrences. A
+type renames to an uppercase type name; builtins are refused, and a document outside a project directory
+keeps the in-file behaviour. The **project-wide LSP cache** is described in `INTERNALS.md`.
 
 **Post-Phase-2 follow-ons (each detailed above):** cross-module sum-type ADTs, cross-module records
 (§8.3), cross-module externs and measures, and cross-file LSP navigation. **Explicit non-goals

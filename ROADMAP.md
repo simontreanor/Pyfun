@@ -27,7 +27,8 @@ on 2026-07-31; each entry records what was chosen and what was turned down with 
    then allow dotted names in type position. **Highest language impact of the six**: it forces every
    record mentioning another module's type into a single file, which collapsed a board module and a
    rules module into one 340-line engine in the dogfooded program. This is the only finding that
-   changed a program's architecture rather than its phrasing. **Follow-up it creates** (S, LSP): a type
+   changed a program's architecture rather than its phrasing. **Follow-up it creates** (S, LSP, **CLOSED
+   2026-09-28**: type names now navigate and rename across files): a type
    name can now be written in a file other than the one declaring it, so rename and find-references
    for *type* names, which are in-file only, can leave stale references behind. Cross-file type nav was
    never built because qualified type syntax did not exist; it does now, and `resolve::type_at` needs

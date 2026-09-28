@@ -206,6 +206,13 @@ pub fn type_use_references(module: &Module, name: &str) -> Vec<Span> {
         .collect()
 }
 
+/// Every type-name occurrence in the module: annotation uses (bare or qualified,
+/// `Placed` / `Shapes.Placed`) and bare record tags, for cross-file type
+/// find-references / rename. A qualified record tag is a [`QualRef`] instead.
+pub fn type_references(module: &Module) -> Vec<TypeRef> {
+    walk(module).type_refs
+}
+
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
