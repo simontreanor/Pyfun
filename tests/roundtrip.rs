@@ -736,6 +736,25 @@ fn a_bare_uppercase_parameter_is_still_two_parameters() {
 }
 
 #[test]
+fn a_capitalised_let_name_is_rejected_as_a_constructor() {
+    // `let Some x = Some 1` used to define a function called `Some` that shadowed
+    // the constructor. A capitalised binding name is a mistake every time.
+    for src in [
+        "let Some x = Some 1",
+        "let Pi = 3.14",
+        "let f x =\n    let Ok v = Ok x\n    v",
+    ] {
+        let err = parse(src).unwrap_err();
+        assert!(
+            err.message().contains("reads as a constructor"),
+            "{src}: {}",
+            err.message()
+        );
+    }
+    assert!(parse("let some x = x").is_ok());
+}
+
+#[test]
 fn let_rec_is_rejected_with_a_helpful_hint() {
     // Pyfun has no `rec` keyword (functions are implicitly recursive). The F#/ML
     // `let rec f x = …` would otherwise silently define a function named `rec`; we

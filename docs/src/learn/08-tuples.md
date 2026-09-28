@@ -114,8 +114,8 @@ error: a `let` binding must always match, so it takes a name, `_`, or a tuple or
 not a constructor pattern (use `match` instead, which has somewhere to fall through to)
 ```
 
-The brackets matter. Without them, `let Some x = …` reads the way `let f x = …` does, as a function
-definition whose parameter is `x`, so the constructor never reaches the pattern grammar at all.
+Leaving the brackets off does not help. A name after `let` that starts with a capital letter can
+only be a constructor, so `let Some x = …` is refused too, with a message that says so.
 
 That is the trade. `match` handles the patterns that can fail, because it has other arms to fall
 through to, and `let` handles the ones that cannot, because it does not.

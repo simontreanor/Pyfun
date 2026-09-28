@@ -1293,8 +1293,10 @@ Python spells this `a, b = f()`, and Pyfun emits precisely that: a tuple of plai
 single statement straight from the value, with no temp in the way. Anything deeper reads through a
 reserved temp, one statement per level (`a, _pf_t0_1 = p` then `b, c = _pf_t0_1`), and a record
 target reads one attribute per field it names. The target is held to irrefutability by the same
-check a parameter's is, so `let Some x = …` is rejected with a message naming what was written and
-pointing at `match`, which has somewhere to fall through to. Three positions take a target: a
+check a parameter's is, so `let (Some x) = …` is rejected with a message naming what was written and
+pointing at `match`, which has somewhere to fall through to. The bracket-less `let Some x = …` would
+otherwise parse as a *function* called `Some`, so a capitalized binding name is rejected outright:
+it can only be a constructor written without its brackets (or a module name), never a value. Three positions take a target: a
 top-level `let`, a block-local `let`, and a computation expression's `let`/`let!` — where a
 destructuring bind is one unpacking statement from the payload `result` has already tested
 (`r, c = x._0`). What cannot destructure is a binding that needs a single name to
