@@ -642,7 +642,7 @@ green against a stale compiler. Still open:
 - **Notebook-format lessons** (M, demand-gated) — the same lessons as `.ipynb` files riding the
   shipped Jupyter kernel, so instructors can distribute them through existing course
   infrastructure. Wait for an educator to ask.
-- **CONTRIBUTING.md + curated good-first-issues** (S) — point new contributors at the internals
+- ~~**CONTRIBUTING.md + curated good-first-issues**~~ **DONE 2026-09-28** (S) — point new contributors at the internals
   tour's "Where you would add..." notes; label a handful of well-scoped issues.
 - **Printable educator pack** (S, demand-gated) — a PDF export of the five session docs for
   departments that circulate paper.
