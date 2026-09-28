@@ -294,6 +294,21 @@ fn an_import_resolves_from_a_vendored_facade_after_the_siblings() {
 }
 
 #[test]
+fn native_mode_lowers_every_module_of_a_project() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let project = project::build_from_path(&root.join("examples/modules/main.pyfun")).unwrap();
+    let compiled = project::compile_with(&project, Default::default(), true).unwrap();
+    for (name, py) in &compiled.files {
+        assert!(!py.contains("match "), "{name} still has a match:\n{py}");
+    }
+    let dir = Scratch::new("native_project");
+    let native = run_project(&dir, &compiled.files, "main.py");
+    let plain = project::compile(&project).unwrap();
+    let dir2 = Scratch::new("plain_project");
+    assert_eq!(native, run_project(&dir2, &plain.files, "main.py"));
+}
+
+#[test]
 fn the_browser_cookbook_example_type_checks_and_lowers() {
     // #111: the `Dom` façade and its counter page compile as a project; running
     // them needs a browser (Pyodide's `js` module), so the test stops at lowering.

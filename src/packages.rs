@@ -1,4 +1,5 @@
-//! `pyfun add` and `pyfun install`: façade dependencies (`DESIGN.md` §6.2).
+//! `pyfun add`, `pyfun install` and `pyfun remove`: façade dependencies
+//! (`DESIGN.md` §6.2).
 //!
 //! A façade is an ordinary pip distribution that ships typed `extern`
 //! declarations as `.pyfun` files. `add` installs it with the environment's own
@@ -55,6 +56,51 @@ pub fn install() -> ExitCode {
         if let Err(msg) = install_and_vendor(&root, &spec, &dist) {
             return fail(&msg);
         }
+    }
+    ExitCode::SUCCESS
+}
+
+/// `pyfun remove <package>...`: drop each from `pyfun.toml`, delete its vendored
+/// façade, and uninstall it from the environment.
+pub fn remove(dists: &[String]) -> ExitCode {
+    if dists.is_empty() {
+        return fail("`remove` needs a package name");
+    }
+    let root = match project_root(false) {
+        Ok(root) => root,
+        Err(msg) => return fail(&msg),
+    };
+    let manifest_path = root.join(manifest::MANIFEST);
+    let mut text = std::fs::read_to_string(&manifest_path).unwrap_or_default();
+    for dist in dists {
+        let (updated, removed) = manifest::remove(&text, "dependencies", dist);
+        if !removed {
+            return fail(&format!(
+                "`{dist}` is not a dependency in {}",
+                manifest::MANIFEST
+            ));
+        }
+        text = updated;
+        let vendored = root
+            .join(manifest::FACADES)
+            .join(manifest::normalize_dist(dist));
+        let _ = std::fs::remove_dir_all(&vendored);
+        if let Some(python) = crate::python_cmd() {
+            let uv = Command::new("uv").arg("--version").output().is_ok();
+            let _ = if uv {
+                Command::new("uv")
+                    .args(["pip", "uninstall", "--python", &python, dist])
+                    .status()
+            } else {
+                Command::new(&python)
+                    .args(["-m", "pip", "uninstall", "-y", dist])
+                    .status()
+            };
+        }
+        println!("removed {dist}");
+    }
+    if let Err(e) = std::fs::write(&manifest_path, text) {
+        return fail(&format!("cannot write {}: {e}", manifest_path.display()));
     }
     ExitCode::SUCCESS
 }

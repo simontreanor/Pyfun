@@ -452,8 +452,8 @@ play comes first; the browser target is last because it depends on the async dec
   `Task.start job`).
 - **Larger prelude / package manager** — **the package half's first slice SHIPPED 2026-09-28**
   (`pyfun.toml` + `pyfun add` + `pyfun install`, façades as ordinary pip distributions vendored
-  into `.pyfun/facades/`, `DESIGN.md` §6.2; still to come: a hashed lock file, `pyfun remove`, and
-  publishing a first real façade). The *prelude* half is superseded by Dogfooding findings #5
+  into `.pyfun/facades/`, `DESIGN.md` §6.2, plus `pyfun remove`; still to come: a hashed lock
+  file and publishing a first real façade). The *prelude* half is superseded by Dogfooding findings #5
   (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
   non-goal, below — not part of this bucket.) (Decode specialization shipped 2026-07-13 — `DESIGN.md`
@@ -506,7 +506,7 @@ map_build 1.64× vs hand-written.
   constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
   expr_eval 2.30x → 1.63x on plain CPython. Remaining, in order: or-/list-pattern ladders, typed
   emit (annotations from the inferred types), a `--native` build step that runs mypyc, then the
-  closure/`seq`/`_pyfun_rt` audit and project mode) —
+  closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
   with the interop story intact (the result is still an ordinary extension module). Real blockers

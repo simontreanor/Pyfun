@@ -113,6 +113,28 @@ pub fn set(text: &str, table: &str, key: &str, value: &str) -> String {
     join(out)
 }
 
+/// `text` without `[table]`'s `key` entry (unchanged when there is none), and
+/// whether an entry was removed.
+pub fn remove(text: &str, table: &str, key: &str) -> (String, bool) {
+    let mut inside = false;
+    let mut removed = false;
+    let mut out = Vec::new();
+    for raw in text.lines() {
+        let line = raw.trim();
+        if let Some(header) = header_of(line) {
+            inside = header == table;
+        } else if inside
+            && let Some((k, _)) = entry_of(line)
+            && normalize_dist(&k) == normalize_dist(key)
+        {
+            removed = true;
+            continue;
+        }
+        out.push(raw.to_string());
+    }
+    (join(out), removed)
+}
+
 /// The normalized name of a distribution (PEP 503): lowercase, runs of
 /// `-`, `_` and `.` folded to `-`. Used for the façade's directory.
 pub fn normalize_dist(name: &str) -> String {
@@ -192,6 +214,19 @@ mod tests {
         let commented = set("# top\n[project]\nname = \"x\"\n", "project", "name", "y");
         assert!(commented.starts_with("# top\n"));
         assert_eq!(table(&commented, "project")[0].1, "y");
+    }
+
+    #[test]
+    fn remove_drops_one_entry_by_normalized_name() {
+        let text = set(&new_manifest("demo"), "dependencies", "Pyfun_Text", "1");
+        let text = set(&text, "dependencies", "other", "2");
+        let (text, removed) = remove(&text, "dependencies", "pyfun-text");
+        assert!(removed);
+        assert_eq!(
+            table(&text, "dependencies"),
+            vec![("other".to_string(), "2".to_string())]
+        );
+        assert!(!remove(&text, "dependencies", "absent").1);
     }
 
     #[test]

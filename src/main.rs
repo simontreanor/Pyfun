@@ -72,6 +72,7 @@ fn main() -> ExitCode {
         },
         Some("add") => packages::add(&args[1..]),
         Some("install") => packages::install(),
+        Some("remove") => packages::remove(&args[1..]),
         Some("lsp") => lsp_server(),
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
@@ -98,9 +99,7 @@ fn help() {
     eprintln!(
         "                [--native]                  lower matches on your own types to isinstance"
     );
-    eprintln!(
-        "                                            ladders, the form mypyc compiles (single file)"
-    );
+    eprintln!("                                            ladders, the form mypyc compiles");
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
     eprintln!(
         "                                            (args after the path go to the program's sys.argv)"
@@ -117,6 +116,9 @@ fn help() {
         "                                            its .pyfun files (records it in pyfun.toml)"
     );
     eprintln!("  pyfun install                             install every façade pyfun.toml lists");
+    eprintln!(
+        "  pyfun remove  <package>...                drop a façade from pyfun.toml and the project"
+    );
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
     eprintln!(
@@ -198,11 +200,7 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget, native: bool) -> Exi
     if let Ok(module) = pyfun::parse(&source)
         && has_imports(&module)
     {
-        if native {
-            eprintln!("error: `--native` supports a single file so far, not a project");
-            return ExitCode::FAILURE;
-        }
-        return compile_project(path, out, target);
+        return compile_project(path, out, target, native);
     }
     let python = match pyfun::compile_with(&source, target, native) {
         Ok((py, notes)) => {
@@ -392,8 +390,9 @@ fn report_notes(notes: &[String]) {
 fn lower_project(
     project: &project::Project,
     target: PyTarget,
+    native: bool,
 ) -> Result<Vec<(String, String)>, ExitCode> {
-    match project::compile_targeting(project, target) {
+    match project::compile_with(project, target, native) {
         Ok(compiled) => {
             report_notes(&compiled.notes);
             Ok(compiled.files)
@@ -405,7 +404,7 @@ fn lower_project(
     }
 }
 
-fn compile_project(entry: &str, out: Option<&str>, target: PyTarget) -> ExitCode {
+fn compile_project(entry: &str, out: Option<&str>, target: PyTarget, native: bool) -> ExitCode {
     let project = match resolve_project(entry) {
         Ok(p) => p,
         Err(code) => return code,
@@ -414,7 +413,7 @@ fn compile_project(entry: &str, out: Option<&str>, target: PyTarget) -> ExitCode
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project, target) {
+    let files = match lower_project(&project, target, native) {
         Ok(f) => f,
         Err(code) => return code,
     };
@@ -453,7 +452,7 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project, PyTarget::default()) {
+    let files = match lower_project(&project, PyTarget::default(), false) {
         Ok(f) => f,
         Err(code) => return code,
     };
