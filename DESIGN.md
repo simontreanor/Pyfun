@@ -433,16 +433,22 @@ The ladder is also faster on CPython by itself, since a class pattern goes throu
 and positional binding at run time: on `bench/expr_eval` (ADT allocation and matching) the output
 goes from 2.30x to 1.63x of the hand-written baseline on CPython 3.14, before any compilation.
 
-**Annotations.** Top-level functions carry annotations taken from their inferred types where Python
-can spell them: `int`, `float`, `bool`, `str`, `None`, `list`/`set`/`dict`/`tuple` of those, a
+**Annotations.** Top-level functions, and functions defined inside them, carry annotations taken
+from their inferred types where Python can spell them: `int`, `float`, `bool`, `str`, `None`, `list`/`set`/`dict`/`tuple` of those, a
 record's class, and a union alias per user sum type (`Expr = Num | Add | Mul | Neg`, emitted after
 its classes). A type variable, a function type or an async result stays unannotated, so the
-annotations never claim more than the checker proved. Data class fields follow suit: a field
+annotations never claim more than the checker proved, and so does a `unit` result, since Pyfun
+returns a unit call's value (`return f(x)`), which mypy rejects under `-> None`. Data class fields follow suit: a field
 declared as a user sum type or record names it (`_0: "Expr"`, a string because the alias comes
 later), and any other field without a Python class of its own is `typing.Any`, since mypyc cannot
 build a dataclass with an `object` field. The output is written for mypy's newer redefinition rule
 (`--allow-redefinition-new --local-partial-types`): a Python local reused across match arms can hold
-differently narrowed types in different arms, which the default first-assignment rule rejects.
+differently narrowed types in different arms, which the default first-assignment rule rejects. A
+build also turns off three of mypy's error codes that only restate the Python boundary:
+`func-returns-value` (Pyfun binds a unit call's result, `_ = f(x)`), and `var-annotated` and
+`union-attr` (a module-level value mypy cannot infer, a typeshed union at an `extern` call), where
+the `extern` declarations are the contract and Pyfun's checker has already held the program to
+them.
 
 **Building.** `pyfun build --native <file> -o <dir>` does the whole trip: it compiles natively, runs
 mypyc with those flags, and leaves the extension and a `__main__.py` in `<dir>`, so the program runs

@@ -136,6 +136,9 @@ pub fn lower_native_typed(
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
     lowerer.binding_types = binding_types;
+    if native {
+        lowerer.native_spell = native_type_spellings(module);
+    }
     lowerer.float_literals = float_literals.clone();
     lowerer.order = order;
     lowerer.codecs = codecs.clone();
@@ -209,6 +212,9 @@ pub fn lower_in_project(
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
     lowerer.binding_types = binding_types;
+    if native {
+        lowerer.native_spell = native_type_spellings(module);
+    }
     lowerer.float_literals = float_literals.clone();
     lowerer.codecs = codecs.clone();
     lowerer.imported_modules = ctx.modules.clone();
@@ -263,6 +269,13 @@ pub fn runtime_module() -> PyModule {
     // one module can start a task in a scope another module opened.
     body.push(task_scope_var());
     PyModule { body }
+}
+
+/// [`runtime_module`] for a native build: its data class fields say `Any`
+/// rather than `object`, so a payload unwrapped from an `Option`/`Result` keeps
+/// a type mypy will pass on (`DESIGN.md` §5.6).
+pub fn runtime_module_native() -> PyModule {
+    any_for_object_fields(runtime_module())
 }
 
 /// `_pf_scope = contextvars.ContextVar("_pf_scope")`: where the innermost
@@ -418,6 +431,10 @@ struct Lowerer {
     /// Native mode's type table: the resolved type of each binding, keyed by the
     /// binding target's span, for the annotations on top-level functions.
     binding_types: HashMap<Span, crate::types::Ty>,
+    /// Native mode: the Python spelling of each local user type (a record's
+    /// class, a sum type's union alias), for annotating block-local functions as
+    /// they lower. See [`native_type_spellings`].
+    native_spell: HashMap<String, String>,
     /// The derived codecs the checker resolved for this module's `Decode.auto`
     /// sites (`DESIGN.md` §6, "Derived codecs").
     codecs: crate::types::Codecs,
@@ -757,6 +774,7 @@ impl Lowerer {
             needs_task_scope: false,
             native: false,
             binding_types: HashMap::new(),
+            native_spell: HashMap::new(),
             codecs: crate::types::Codecs::default(),
             codec_table_used: std::collections::BTreeMap::new(),
             needed_codec_helpers: BTreeSet::new(),
@@ -971,7 +989,7 @@ impl Lowerer {
             let returns = if *is_async {
                 None
             } else {
-                py_type_annotation(&rest, &spell)
+                return_annotation(&rest, &spell)
             };
             *stmt = PyStmt::TypedFuncDef {
                 name: name.clone(),
@@ -1833,6 +1851,23 @@ impl Lowerer {
                 self.notes.push(note);
             }
             let body = rewritten.body;
+            // Native mode: a function defined inside another is annotated here,
+            // where its binding is in hand (top-level ones are annotated by
+            // `annotate_functions`, which can also spell `Option`/`Result`).
+            if self.native
+                && !self.fn_local_stack.is_empty()
+                && let Some(ty) = self.binding_types.get(&binding.target_span.span())
+                && let Some((params, returns)) = typed_signature(&py_params, ty, &self.native_spell)
+            {
+                out.push(PyStmt::TypedFuncDef {
+                    name: py_name,
+                    params,
+                    returns,
+                    body,
+                    is_async: false,
+                });
+                return Ok(());
+            }
             out.push(PyStmt::FuncDef {
                 name: py_name,
                 params: py_params,
@@ -6531,6 +6566,67 @@ fn any_for_object_fields(mut module: PyModule) -> PyModule {
         );
     }
     module
+}
+
+/// The Python spelling of each non-generic local user type for native
+/// annotations: a record is its class, and a sum type its union alias (which
+/// `annotate_functions` emits after the classes), unless a constructor shares
+/// the type's name.
+fn native_type_spellings(module: &Module) -> HashMap<String, String> {
+    use crate::parser::ast::{Item, TypeDeclKind};
+    let mut spell = HashMap::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && decl.params.is_empty()
+        {
+            match &decl.kind {
+                TypeDeclKind::Record(_) => {
+                    spell.insert(decl.name.clone(), py_record_class(&decl.name));
+                }
+                TypeDeclKind::Sum(variants)
+                    if !variants.is_empty() && variants.iter().all(|v| v.name != decl.name) =>
+                {
+                    spell.insert(decl.name.clone(), decl.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    spell
+}
+
+/// A function's annotated parameter list and return annotation from its type,
+/// peeling one arrow per parameter; `None` when the type has fewer arrows than
+/// the def has parameters.
+/// Annotated parameters (each name with its annotation, if any) and the return
+/// annotation, as [`PyStmt::TypedFuncDef`] takes them.
+type TypedSignature = (Vec<(String, Option<String>)>, Option<String>);
+
+fn typed_signature(
+    params: &[String],
+    ty: &crate::types::Ty,
+    spell: &HashMap<String, String>,
+) -> Option<TypedSignature> {
+    let mut anns = Vec::with_capacity(params.len());
+    let mut rest = ty.clone();
+    for p in params {
+        let crate::types::Ty::Fun(arg, ret, _) = rest else {
+            return None;
+        };
+        anns.push((p.clone(), py_type_annotation(&arg, spell)));
+        rest = *ret;
+    }
+    Some((anns, return_annotation(&rest, spell)))
+}
+
+/// A return annotation: as [`py_type_annotation`], except that `unit` is left
+/// unannotated, since Pyfun returns a unit call's result (`return f(x)`) and mypy
+/// rejects returning any expression from a function declared `-> None`.
+fn return_annotation(ty: &crate::types::Ty, spell: &HashMap<String, String>) -> Option<String> {
+    match ty {
+        crate::types::Ty::Unit => None,
+        other => py_type_annotation(other, spell),
+    }
 }
 
 /// A checker type spelled as a Python annotation, for native mode's typed

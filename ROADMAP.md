@@ -511,9 +511,14 @@ map_build 1.64× vs hand-written.
   3.12: mypyc runs the benchmarks 1.6x / **13x** / 1.3x faster than the same program as plain Python
   (expr_eval / collatz / map_build), at **1.37x / 0.08x / 1.32x of hand-written Python**, so the
   int-arithmetic benchmark beats the hand-written baseline about 12x. On plain CPython the ladders
-  alone take expr_eval from 2.30x to 1.63x. **Remaining:** annotations for block-local functions,
-  or-patterns whose alternatives bind names (the one match shape still left to `match`), trying a
-  mypyc build of a real program (the Scrabble game), and the closure/`seq` audit under mypyc.
+  alone take expr_eval from 2.30x to 1.63x. Block-local functions are annotated too.
+  **The real-program audit (the Scrabble game, locally):** its native output passes plain mypy with
+  the build's flags (64 errors down to 0 after the shared runtime's fields became `Any`, unit
+  returns went bare, and three boundary error codes were disabled), and every replay prints the same.
+  mypyc itself still stops on **"Cannot determine type" for module-level values another module reads
+  at import time** (nullary singletons like `board._QW`, layout tables): that is the next native
+  blocker. **Remaining:** that, or-patterns whose alternatives bind names, and the closure/`seq`
+  audit under mypyc.
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
