@@ -420,7 +420,8 @@ to its payload's, as everywhere. The checker has proved the unguarded arms cover
 last arm, when unguarded, is a plain `else` with no `raise` behind it. Guards follow §5.5: in return
 position a guarded arm is its own `if` and a failed guard falls through; in value position a guard
 keeps the `match` lowering. A top-level or-pattern becomes one ladder arm per alternative, each with
-its own copy of the body (a nested or-pattern keeps `match`), and a list pattern becomes a length
+its own copy of the body, a nested or-pattern that binds no names (`Some (1 | 2)`) becomes one test
+joined with `or` (one that binds names keeps `match`), and a list pattern becomes a length
 test (`len(xs) == n`, or `>=` with a rest), positional reads with the suffix counted from the end
 (`xs[-1]`), and the rest as a slice (`xs[1:len(xs) - 1]`). Active patterns already lower to their
 recognizer and an `isinstance` ladder in both modes.
