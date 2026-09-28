@@ -429,7 +429,11 @@ recognizer and an `isinstance` ladder in both modes.
 The ladder is also faster on CPython by itself, since a class pattern goes through `__match_args__`
 and positional binding at run time: on `bench/expr_eval` (ADT allocation and matching) the output
 goes from 2.30x to 1.63x of the hand-written baseline on CPython 3.14, before any compilation.
-Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
+A data class field whose type has no Python class of its own (a sum type, a type variable) is
+annotated `typing.Any` in native output rather than the default `object`, because mypyc cannot build
+a dataclass with an `object` field. With that, `bench/mypyc_run.py` compiles every benchmark's
+native output with mypyc unchanged (1.1x to 1.3x faster than the same file on CPython, before any
+typed emit). Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
 `match`/`case` because it reads as the program was written. Every example and the whole end-to-end suite produce identical
 output in both modes.
 
