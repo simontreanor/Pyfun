@@ -505,10 +505,12 @@ map_build 1.64× vs hand-written.
   **first slice SHIPPED 2026-09-28**: `pyfun compile --native` lowers every match built from
   constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
   expr_eval 2.30x → 1.63x on plain CPython; top-level or-patterns and list patterns followed the
-  same night, and so did nested or-patterns that bind no names. **mypyc datapoint (2026-09-28,
-  mypy 2.3.1, Windows):** the native output of `bench/expr_eval` passes mypyc's front end unchanged
-  and reaches `build_ext`, where this machine lacks the MSVC C++ Build Tools; the next measurement
-  wants Linux/gcc or the Build Tools installed. Remaining, in order: or-patterns that bind names,
+  same night, and so did nested or-patterns that bind no names. **First end-to-end mypyc
+  measurement (2026-09-28, `native-bench.yml`, ubuntu, CPython 3.12, untyped native output, data
+  class fields `Any` since mypyc rejects `object`):** all three benchmarks compile, run, and match
+  the baseline; mypyc is 1.24x / 1.28x / 1.11x faster than the same native file on CPython
+  (expr_eval / collatz / map_build), landing at 1.75x / **0.79x** / 1.58x of hand-written Python.
+  Typed emit is what the July mock-up says closes the rest (1.26x of baseline on expr_eval). Remaining, in order: or-patterns that bind names,
   typed emit (annotations from the inferred types), a `--native` build step that runs mypyc, then
   the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated

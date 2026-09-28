@@ -1,0 +1,32 @@
+# Measure `--native` output compiled with mypyc against plain CPython and the
+# hand-written baselines (ROADMAP: Typed-emit + mypyc AOT). A measurement, not a
+# gate: run it by hand, or it runs when the script or this file changes.
+name: native-bench
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "bench/mypyc_run.py"
+      - ".github/workflows/native-bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mypyc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - run: pip install mypy setuptools
+      - run: python bench/mypyc_run.py --runs 5
+        env:
+          PYFUN_BIN: target/release/pyfun

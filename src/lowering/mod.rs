@@ -762,6 +762,9 @@ impl Lowerer {
         self.frames.push(captures::Frame::of_items(&module.items));
         let lowered = self.lower_module_items(module);
         self.frames.pop();
+        if self.native {
+            return lowered.map(any_for_object_fields);
+        }
         lowered
     }
 
@@ -6270,6 +6273,33 @@ fn call1(name: &str, arg: PyExpr) -> PyExpr {
 /// anything else — a type variable, a user ADT/record, `Option`/`Result`, a function —
 /// maps to `object`. The annotation only lets the dataclass recognize the field (the
 /// value is erased), and mapping a user type *name* here would risk a forward reference.
+/// Native mode (`DESIGN.md` §5.6): a data class field whose type has no Python
+/// class of its own (a sum type, a type variable, a function) is annotated
+/// `object` in the default output, and mypyc cannot build a dataclass with an
+/// `object` field (`KeyError: 'object'` at import). `typing.Any` says the same
+/// thing to a reader and compiles, so native output uses it.
+fn any_for_object_fields(mut module: PyModule) -> PyModule {
+    let mut used = false;
+    for stmt in &mut module.body {
+        if let PyStmt::ClassDef { field_types, .. } = stmt {
+            for ty in field_types.iter_mut().filter(|t| *t == "object") {
+                *ty = "Any".to_string();
+                used = true;
+            }
+        }
+    }
+    if used {
+        module.body.insert(
+            0,
+            PyStmt::ImportFrom {
+                module: "typing".to_string(),
+                names: vec!["Any".to_string()],
+            },
+        );
+    }
+    module
+}
+
 fn py_annotation(ty: &crate::parser::ast::TypeExpr) -> String {
     use crate::parser::ast::TypeExpr;
     match ty {
