@@ -451,6 +451,28 @@ Every lesson of the course also comes as a notebook for this kernel, in
 
 ---
 
+## Going native
+
+The Python Pyfun emits by default is written to be read. When a program needs speed instead,
+`--native` emits Python shaped for [mypyc](https://mypyc.readthedocs.io), the compiler that turns
+typed Python into a C extension: every `match` becomes an `if`/`isinstance` ladder, and top-level
+functions carry annotations taken from their inferred types, so the annotations can't be wrong.
+
+```bash
+pip install mypy                                   # mypyc ships with mypy; it needs a C compiler
+pyfun build --native collatz.pyfun -o collatz_native
+python collatz_native                              # runs the compiled program
+```
+
+On the repository's benchmarks (CPython 3.12, `bench/mypyc_run.py`), the mypyc build runs 1.3x to
+13x faster than the same program as plain Python, and the arithmetic-heavy one runs about 12x
+faster than the hand-written Python it's measured against. `pyfun compile --native` alone, without
+mypyc, is already faster on match-heavy code, because CPython skips its pattern-matching
+machinery. Native builds are single-file for now; [`DESIGN.md` §5.6](https://github.com/simontreanor/Pyfun/blob/main/DESIGN.md)
+has the details.
+
+---
+
 ## How it works
 
 Pyfun is a dependency-free Rust crate that runs a classic pipeline, and the compiler is the
