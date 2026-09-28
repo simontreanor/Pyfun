@@ -4023,14 +4023,19 @@ fn native_annotates_module_level_values_for_other_modules() {
     let src = "type Cell = Plain | Double\n\
                let layout = [Plain, Double]\n\
                let size = List.len layout\n\
-               print size";
+               let empty = Map.empty\n\
+               print size\n\
+               print (Map.len (Map.add 1 \"a\" empty))";
     let Some((py, out)) = run_native(src) else {
         return;
     };
     assert!(py.contains("_Double: Double = Double()"), "{py}");
     assert!(py.contains("layout: list[Cell] = "), "{py}");
     assert!(py.contains("size: int = "), "{py}");
-    assert_eq!(out, ["2"]);
+    // A generalized value spells its type variables as `Any`.
+    assert!(py.contains("empty: dict[Any, Any] = "), "{py}");
+    assert!(py.contains("from typing import Any"), "{py}");
+    assert_eq!(out, ["2", "1"]);
 }
 
 #[test]
