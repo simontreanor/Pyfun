@@ -551,8 +551,7 @@ Zed user-confirmed 2026-07-14 (dev-extension install; needs `rustup target add w
 documented in `editors/zed/README.md`). PyCharm user-confirmed 2026-07-14 (LSP4IJ + TextMate
 bundle; hover is noticeably slower than in VS Code — LSP4IJ behavior, not the server). **No open
 gaps.** Post-launch follow-ups that came out of the sweep: publish the Zed extension to the
-registry (PR to zed-industries/extensions), and consider shipping Helix indent/textobject queries
-(`hx --health` reports them missing; highlights ship today).
+registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject queries~~ (**DONE 2026-09-28**: `editors/helix/queries/pyfun/`, compiled against the grammar in CI alongside every other editor's queries).
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
