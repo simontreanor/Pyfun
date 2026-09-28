@@ -92,10 +92,12 @@ checked against the real compiler, so after editing one run:
 ```bash
 cargo build
 python docs/verify_lessons.py
+python docs/build_notebooks.py
 ```
 
-It checks that each playground link decodes to the starter shown beside it and that each solution
-prints what the lesson says it prints.
+The first checks that each playground link decodes to the starter shown beside it and that each
+solution prints what the lesson says it prints. The second regenerates the lesson's notebook in
+`docs/src/notebooks/`, which CI compares against the lessons.
 
 ## Licence
 

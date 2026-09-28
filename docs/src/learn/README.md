@@ -33,8 +33,11 @@ pyfun run lesson.pyfun
 ```
 
 Or work in a notebook with the Jupyter kernel (`pip install "pyfun-lang[jupyter]"`, then
-`python -m pyfun_kernel.install`). Lesson 15 uses files and folders, so it needs the installed
-compiler; everything else runs anywhere.
+`python -m pyfun_kernel.install`). Every lesson comes ready-made as a notebook: download it from
+`notebooks/` beside this page, for example
+[`notebooks/01-values-and-inference.ipynb`](../notebooks/01-values-and-inference.ipynb), or browse
+[the whole set](https://github.com/simontreanor/Pyfun/tree/main/docs/src/notebooks). Lesson 15 uses
+files and folders, so it needs the installed compiler; everything else runs anywhere.
 
 ## The course at a glance
 

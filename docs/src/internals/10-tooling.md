@@ -67,6 +67,12 @@ kernel process is itself Python, so there is no separate worker and Jupyter's ow
 routes cell output. It reuses the REPL's chunking helpers directly (`blob_of_new`,
 `chunk_python`), which is why the two stay in step.
 
+Two things live on the Python side. A cell that opens with `:reset` makes the package drop the
+engine (a fresh one starts on the next request, with nothing to replay) and empty the namespace
+before running the rest of the cell. And a cell whose Python uses `asyncio` runs on a worker
+thread while the kernel waits, because ipykernel executes cells inside its own event loop and
+`asyncio.run` refuses to start in a thread where a loop is already running.
+
 ## The playground
 
 [playground/src/lib.rs](https://github.com/simontreanor/Pyfun/blob/main/playground/src/lib.rs) is

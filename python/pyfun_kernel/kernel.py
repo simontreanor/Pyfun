@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import traceback
 
 from ipykernel.kernelbase import Kernel
@@ -127,6 +128,12 @@ class Engine:
             # Rebuild the session state; blobs are discarded (already executed).
             self._roundtrip("eval", cell)
 
+    def reset(self):
+        """Forget every definition: the next request spawns a fresh engine with
+        nothing to replay."""
+        self.close()
+        self._log = []
+
     def close(self):
         if self._proc is not None:
             try:
@@ -202,6 +209,16 @@ class PyfunKernel(Kernel):
     def do_execute(
         self, code, silent, store_history=True, user_expressions=None, allow_stdin=False
     ):
+        # `:reset` on a cell's first line starts a fresh session, as it does in
+        # the REPL: the engine forgets every definition and the namespace is
+        # emptied, then the rest of the cell runs. A notebook of standalone
+        # examples (the lesson notebooks) uses it where one example would
+        # otherwise redefine another's types.
+        first, _, rest = code.lstrip().partition("\n")
+        if first.strip() == ":reset":
+            self._engine.reset()
+            self._ns = {}
+            code = rest
         if not code.strip():
             return {
                 "status": "ok",
@@ -229,7 +246,7 @@ class PyfunKernel(Kernel):
             sys.stdout = _StreamProxy(self, "stdout", silent)
             sys.stderr = _StreamProxy(self, "stderr", silent)
             try:
-                exec(blob, self._ns)
+                self._exec(blob)
             except BaseException:
                 text = traceback.format_exc()
                 if not silent:
@@ -243,6 +260,33 @@ class PyfunKernel(Kernel):
             "payload": [],
             "user_expressions": {},
         }
+
+    def _exec(self, blob):
+        """Run a cell's Python in this namespace.
+
+        ipykernel runs cells inside its own event loop, and `asyncio.run` (how a
+        Pyfun program runs an `async { }` block) refuses to start while a loop
+        is running in its thread. A cell that uses asyncio therefore runs on a
+        worker thread, which has no loop of its own, and the kernel waits for
+        it; any other cell runs here, where an interrupt reaches it directly.
+        """
+        if "asyncio" not in blob:
+            exec(blob, self._ns)
+            return
+        outcome = {}
+
+        def work():
+            try:
+                exec(blob, self._ns)
+            except BaseException as exc:  # re-raised on the kernel's thread
+                outcome["error"] = exc
+
+        worker = threading.Thread(target=work, name="pyfun-cell", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(0.05)
+        if "error" in outcome:
+            raise outcome["error"]
 
     def do_inspect(self, code, cursor_pos, detail_level=0, omit_sections=()):
         """Shift-Tab: the inferred type of the identifier under the cursor."""

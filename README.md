@@ -437,7 +437,11 @@ type-checked against the session before anything runs — an ill-typed cell is r
 rustc-style diagnostics and changes nothing. A cell can mix definitions with a trailing
 expression to display; re-running a cell re-runs the expression but not the definitions'
 effects (they ran once, at entry). Shift-Tab shows the inferred type of the identifier
-under the cursor.
+under the cursor. A cell whose first line is `:reset` starts a fresh session, as `:reset` does in
+the REPL, and `async { }` code runs through `asyncio.run` in a cell as it does in a script.
+
+Every lesson of the course also comes as a notebook for this kernel, in
+[`docs/src/notebooks/`](https://github.com/simontreanor/Pyfun/tree/main/docs/src/notebooks).
 
 ---
 
