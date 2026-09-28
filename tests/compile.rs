@@ -3961,6 +3961,25 @@ fn native_lowers_or_and_list_patterns_too() {
 }
 
 #[test]
+fn native_joins_a_nested_or_pattern_with_or() {
+    let src = "let f o =\n  \
+                 match o:\n    \
+                   case Some (1 | 2): \"low\"\n    \
+                   case Some ((3 | 4) as n): f\"mid {n}\"\n    \
+                   case Some _: \"high\"\n    \
+                   case None: \"none\"\n\
+               print (f (Some 2))\n\
+               print (f (Some 4))\n\
+               print (f (Some 9))\n\
+               print (f None)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("(o._0 == 1 or o._0 == 2)"), "{py}");
+    assert_eq!(out, ["low", "mid 4", "high", "none"]);
+}
+
+#[test]
 fn native_leaves_active_patterns_to_their_own_lowering() {
     // A total active pattern already lowers to its recognizer plus an
     // `isinstance` ladder over the hidden cases, in both modes.

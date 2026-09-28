@@ -5460,7 +5460,12 @@ impl Lowerer {
                         .as_deref()
                         .is_none_or(|r| matches!(r, Pattern::Var { .. } | Pattern::Wildcard))
             }
-            Pattern::Or(_) => false,
+            // A nested or-pattern is one test joined with `or`, which works when
+            // no alternative binds a name (`Some (1 | 2)`); a binding one would
+            // need a different assignment per alternative.
+            Pattern::Or(alts) => alts
+                .iter()
+                .all(|a| a.bound_names().is_empty() && self.native_pattern_ok(a)),
         }
     }
 
@@ -5586,7 +5591,31 @@ impl Lowerer {
                     self.native_pattern(rest, slice, conds, binds);
                 }
             }
-            Pattern::Or(_) => unreachable!("native_pattern_ok rejects nested or-patterns"),
+            Pattern::Or(alts) => {
+                // Each alternative's tests and-ed, the alternatives or-ed. One
+                // with no tests matches everything, so the whole test is moot.
+                let mut any = Vec::with_capacity(alts.len());
+                for alt in alts {
+                    let mut alt_conds = Vec::new();
+                    let mut no_binds = Vec::new();
+                    self.native_pattern(alt, subject.clone(), &mut alt_conds, &mut no_binds);
+                    match alt_conds.into_iter().reduce(|a, b| PyExpr::BinOp {
+                        op: PyBinOp::And,
+                        left: Box::new(a),
+                        right: Box::new(b),
+                    }) {
+                        Some(test) => any.push(test),
+                        None => return,
+                    }
+                }
+                if let Some(test) = any.into_iter().reduce(|a, b| PyExpr::BinOp {
+                    op: PyBinOp::Or,
+                    left: Box::new(a),
+                    right: Box::new(b),
+                }) {
+                    conds.push(test);
+                }
+            }
         }
     }
 

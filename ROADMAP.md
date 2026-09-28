@@ -505,9 +505,12 @@ map_build 1.64× vs hand-written.
   **first slice SHIPPED 2026-09-28**: `pyfun compile --native` lowers every match built from
   constructors/records/tuples/literals/`as` to an `if`/`isinstance` ladder, `DESIGN.md` §5.6,
   expr_eval 2.30x → 1.63x on plain CPython; top-level or-patterns and list patterns followed the
-  same night. Remaining, in order: nested or-patterns, typed
-  emit (annotations from the inferred types), a `--native` build step that runs mypyc, then the
-  closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
+  same night, and so did nested or-patterns that bind no names. **mypyc datapoint (2026-09-28,
+  mypy 2.3.1, Windows):** the native output of `bench/expr_eval` passes mypyc's front end unchanged
+  and reaches `build_ext`, where this machine lacks the MSVC C++ Build Tools; the next measurement
+  wants Linux/gcc or the Build Tools installed. Remaining, in order: or-patterns that bind names,
+  typed emit (annotations from the inferred types), a `--native` build step that runs mypyc, then
+  the closure/`seq`/`_pyfun_rt` audit (project mode followed the same night) —
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
   with the interop story intact (the result is still an ordinary extension module). Real blockers
