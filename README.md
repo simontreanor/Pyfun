@@ -478,6 +478,9 @@ interpolation, active patterns, typed holes, file-based modules, and a full LSP.
 This is a solo, actively-developed project: the MVP is feature-complete and runnable, but it's
 pre-1.0. Expect sharp edges; the language surface is stabilizing but not frozen.
 
+Contributions are welcome. [`CONTRIBUTING.md`](https://github.com/simontreanor/Pyfun/blob/main/CONTRIBUTING.md)
+covers setup, where to start, and what a PR needs.
+
 ---
 
 ## License
