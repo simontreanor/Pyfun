@@ -515,10 +515,12 @@ map_build 1.64× vs hand-written.
   **The real-program audit (the Scrabble game, locally):** its native output passes plain mypy with
   the build's flags (64 errors down to 0 after the shared runtime's fields became `Any`, unit
   returns went bare, and three boundary error codes were disabled), and every replay prints the same.
-  mypyc itself still stops on **"Cannot determine type" for module-level values another module reads
-  at import time** (nullary singletons like `board._QW`, layout tables): that is the next native
-  blocker. **Remaining:** that, or-patterns whose alternatives bind names, and the closure/`seq`
-  audit under mypyc.
+  mypyc's front end now accepts the whole game too: module-level values are annotated (another
+  module's reads were "Cannot determine type"), and a unit match in statement position runs its arms
+  in place (a temp assigned only unit calls was "inferred type None"). It stops only at `build_ext`
+  on a machine without a C compiler, so the compiled game hasn't been timed. **Remaining:** a
+  compiled run of a real program on a machine with a C toolchain, or-patterns whose alternatives
+  bind names, and the closure/`seq` audit under mypyc.
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed

@@ -947,6 +947,55 @@ impl Lowerer {
                 }
             }
         }
+        // Module-level values another module reads need their type written down:
+        // mypyc cannot infer it across modules ("Cannot determine type"). Each
+        // nullary singleton names its class, and a top-level value binding bound
+        // once gets its inferred type when Python can spell it.
+        let mut value_types: HashMap<String, String> = HashMap::new();
+        let mut bound_count: HashMap<String, usize> = HashMap::new();
+        for item in &module.items {
+            if let Item::Let(b) = item {
+                for name in b.bound_names() {
+                    *bound_count.entry(py_value_name(&name)).or_default() += 1;
+                }
+                if b.params.is_empty()
+                    && let Some(name) = b.name()
+                    && let Some(ty) = self.binding_types.get(&b.target_span.span())
+                    && let Some(ann) = py_type_annotation(ty, &spell)
+                {
+                    value_types.insert(py_value_name(name), ann);
+                }
+            }
+        }
+        // Only a name's first assignment carries the annotation (a top-level
+        // `let mut` is reassigned by `<-`).
+        let mut annotated: HashSet<String> = HashSet::new();
+        for stmt in &mut py.body {
+            let PyStmt::Assign { target, value } = stmt else {
+                continue;
+            };
+            if !annotated.insert(target.clone()) {
+                continue;
+            }
+            let singleton_class = match value {
+                PyExpr::Call { func, args } if args.is_empty() => match func.as_ref() {
+                    PyExpr::Name(class)
+                        if class_names.contains(class) && *target == format!("_{class}") =>
+                    {
+                        Some(class.clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(class) = singleton_class {
+                *target = format!("{target}: {class}");
+            } else if bound_count.get(target.as_str()) == Some(&1)
+                && let Some(ann) = value_types.get(target.as_str())
+            {
+                *target = format!("{target}: {ann}");
+            }
+        }
         // The top-level function bindings and their types.
         let mut fn_types: HashMap<String, (usize, crate::types::Ty)> = HashMap::new();
         for item in &module.items {
@@ -2067,11 +2116,8 @@ impl Lowerer {
                 }
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
                 BlockStmt::Expr(e) => {
-                    let (mut s, v) = self.lower_value(e, &locals)?;
-                    out.append(&mut s);
-                    if !matches!(v, PyExpr::NoneLit) {
-                        out.push(PyStmt::Expr(v));
-                    }
+                    let (s, v) = self.lower_value(e, &locals)?;
+                    self.push_discarded(&mut out, s, v);
                 }
             }
         }
@@ -2438,11 +2484,11 @@ impl Lowerer {
                 }
                 BlockStmt::Expr(e) => {
                     let (mut s, v) = self.lower_value(e, &locals)?;
-                    out.append(&mut s);
                     if i == last {
+                        out.append(&mut s);
                         value = v;
-                    } else if !matches!(v, PyExpr::NoneLit) {
-                        out.push(PyStmt::Expr(v));
+                    } else {
+                        self.push_discarded(&mut out, s, v);
                     }
                 }
             }
@@ -5569,6 +5615,26 @@ impl Lowerer {
     ///
     /// The checker has proved the unguarded arms cover the scrutinee's type, so
     /// the last arm, when unguarded, is a plain `else`.
+    /// Emit a statement-position expression whose value is dropped. In native
+    /// mode a value match hoisted into a temp that nothing reads evaluates its
+    /// arms in place instead: mypyc rejects a local whose every assignment is a
+    /// unit call ("has inferred type None").
+    fn push_discarded(&self, out: &mut Vec<PyStmt>, mut stmts: Vec<PyStmt>, value: PyExpr) {
+        if self.native
+            && let PyExpr::Name(tmp) = &value
+            && tmp.starts_with("_pf_t")
+            && let Some(PyStmt::If { .. }) = stmts.last()
+        {
+            discard_temp(&mut stmts, tmp);
+            out.append(&mut stmts);
+            return;
+        }
+        out.append(&mut stmts);
+        if !matches!(value, PyExpr::NoneLit) {
+            out.push(PyStmt::Expr(value));
+        }
+    }
+
     fn try_lower_native_match(
         &mut self,
         scrutinee: &Expr,
@@ -11092,6 +11158,37 @@ fn py_param_names(names: &[String]) -> Vec<String> {
 }
 
 /// Append `target = value` to a (possibly empty) statement list.
+/// Turn every assignment of `tmp` in an `if` ladder (as built by
+/// `try_lower_native_match`) into a bare evaluation of its value, dropping it
+/// when the value is a bare name (evaluating one does nothing).
+fn discard_temp(stmts: &mut Vec<PyStmt>, tmp: &str) {
+    let mut i = 0;
+    while i < stmts.len() {
+        match &mut stmts[i] {
+            PyStmt::If { body, orelse, .. } => {
+                discard_temp(body, tmp);
+                discard_temp(orelse, tmp);
+            }
+            PyStmt::Assign { target, value } if target == tmp => {
+                let value = std::mem::replace(value, PyExpr::NoneLit);
+                match value {
+                    PyExpr::NoneLit => {
+                        stmts.remove(i);
+                        continue;
+                    }
+                    PyExpr::Name(_) => {
+                        stmts.remove(i);
+                        continue;
+                    }
+                    other => stmts[i] = PyStmt::Expr(other),
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
 fn with_assign(mut stmts: Vec<PyStmt>, target: &str, value: PyExpr) -> Vec<PyStmt> {
     stmts.push(PyStmt::Assign {
         target: target.to_string(),

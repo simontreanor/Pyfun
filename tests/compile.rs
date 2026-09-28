@@ -4017,6 +4017,40 @@ fn native_annotates_top_level_functions_it_can_spell() {
 }
 
 #[test]
+fn native_annotates_module_level_values_for_other_modules() {
+    // mypyc cannot infer a module-level value's type from another module, so
+    // native mode writes singletons' and top-level values' types down.
+    let src = "type Cell = Plain | Double\n\
+               let layout = [Plain, Double]\n\
+               let size = List.len layout\n\
+               print size";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("_Double: Double = Double()"), "{py}");
+    assert!(py.contains("layout: list[Cell] = "), "{py}");
+    assert!(py.contains("size: int = "), "{py}");
+    assert_eq!(out, ["2"]);
+}
+
+#[test]
+fn native_evaluates_a_discarded_match_in_place() {
+    // A unit match in statement position runs its arms directly: a temp
+    // assigned only unit calls is one mypyc rejects ("inferred type None").
+    let src = "let report o =\n  \
+                 match o:\n    \
+                   case Some n: print n\n    \
+                   case None: print \"none\"\n  \
+                 print \"done\"\n\
+               report (Some 1)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(!py.contains("_pf_t"), "{py}");
+    assert_eq!(out, ["1", "done"]);
+}
+
+#[test]
 fn native_annotates_block_local_functions_and_leaves_unit_returns_bare() {
     let src = "type Shape = Circle float | Square float\n\
                let total shapes =\n  \

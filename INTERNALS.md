@@ -412,7 +412,13 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
   spells data class fields that name a user type (`"Expr"`), and rewrites each top-level
   `PyStmt::FuncDef` whose binding type is known into a `PyStmt::TypedFuncDef` using
   `py_type_annotation` over `Lowerer.binding_types` (span of the binding target → `types::Ty`, from
-  `TypeSpan::raw`). An unspellable type leaves its position unannotated.
+  `TypeSpan::raw`). An unspellable type leaves its position unannotated. The same pass annotates
+  module-level values, which mypyc cannot type when another module reads them: a nullary singleton
+  `_X: X = X()`, and the first assignment of a top-level value bound once.
+- **Discarded matches.** `Lowerer::push_discarded` emits a statement-position expression. In
+  native mode, when its value is a temp set by an `if` ladder, `discard_temp` turns each assignment
+  of the temp into a bare evaluation, since mypyc rejects a local whose every assignment is a unit
+  call.
 - **Build.** `src/native_build.rs` writes the native output to a directory, runs `python -m mypyc
   --allow-redefinition-new --local-partial-types` over every module but `_pyfun_rt.py`, removes the
   sources and writes `__main__.py`. `bench/mypyc_run.py` and `.github/workflows/native-bench.yml`
