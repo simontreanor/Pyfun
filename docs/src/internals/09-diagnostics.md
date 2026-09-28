@@ -84,7 +84,8 @@ hole's. The test is a real trial unification that snapshots the substitution map
 each candidate scheme, unifies it against the resolved hole type, and rolls back
 (`Infer::hole_fits`, described in
 [INTERNALS.md](https://github.com/simontreanor/Pyfun/blob/main/INTERNALS.md)'s typed-holes
-section). Fits are ranked most-specific first and capped. The `or:` list is refinement fits: a
+section). Fits whose name matches the hole's name come first, then the most specific, and the
+list is capped at six with an `and N more` when it cuts. The `or:` list is refinement fits: a
 function whose result, after applying one or two further holes, unifies with the target, so
 `area ?` and `sqrt ?` appear because each returns a `float`. A hole blocks `compile` and `run`
 and makes `check` exit non-zero, so it is informative during development without ever slipping

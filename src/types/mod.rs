@@ -1734,6 +1734,8 @@ pub struct Hole {
     /// the hole directly (their scheme unifies with the hole's type), most-specific
     /// first, capped. Empty for a fully-unconstrained hole (everything fits).
     pub fits: Vec<String>,
+    /// How many further direct fits the cap left out of `fits`.
+    pub more_fits: usize,
     /// **Refinement fits**: function bindings whose *result* (after applying one or
     /// more arguments) unifies with the hole's type — shown applied to further holes
     /// (`String.upper ?`, `String.concat ? ?`). Fewest-holes-first, capped.
@@ -1750,7 +1752,11 @@ impl Hole {
             None => format!("hole `?` has type `{}`", self.ty),
         }];
         if !self.fits.is_empty() {
-            parts.push(format!("try: {}", self.fits.join(", ")));
+            let more = match self.more_fits {
+                0 => String::new(),
+                n => format!(", and {n} more"),
+            };
+            parts.push(format!("try: {}{more}", self.fits.join(", ")));
         }
         if !self.refinements.is_empty() {
             parts.push(format!("or: {}", self.refinements.join(", ")));
@@ -2404,13 +2410,14 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     let holes: Vec<Hole> = recorded_holes
         .into_iter()
         .map(|(span, name, ty, env)| {
-            let fits = inf.hole_fits(&env, &ty);
+            let (fits, more_fits) = inf.hole_fits(&env, &ty, name.as_deref());
             let direct: std::collections::HashSet<String> = fits.iter().cloned().collect();
-            let refinements = inf.hole_refinements(&env, &ty, &direct);
+            let refinements = inf.hole_refinements(&env, &ty, &direct, name.as_deref());
             Hole {
                 name,
                 ty: show(&inf.apply(&ty)),
                 fits,
+                more_fits,
                 refinements,
                 span,
             }
@@ -6205,6 +6212,53 @@ const REFINE_CAP: usize = 4;
 /// beyond a couple of holes the suggestion stops being helpful).
 const MAX_REFINE_DEPTH: usize = 2;
 
+/// How well a candidate's name matches the hole's own name, lower first: the
+/// member name equals the hole's name (`?upper` and `String.upper`), one contains
+/// the other (`?upperCase`, `?len` and `String.length`), or no relation. A bare
+/// `?` has no name to match, so every candidate ties.
+fn name_affinity(hole: Option<&str>, candidate: &str) -> u8 {
+    let Some(hole) = hole else { return 2 };
+    let hole = hole.to_ascii_lowercase();
+    let member = candidate
+        .rsplit('.')
+        .next()
+        .unwrap_or(candidate)
+        .to_ascii_lowercase();
+    if member == hole {
+        0
+    } else if hole.len() >= 3
+        && member.len() >= 3
+        && (member.contains(&hole) || hole.contains(&member))
+    {
+        1
+    } else {
+        2
+    }
+}
+
+/// A candidate's position in the prelude's declaration order: stable, and grouped
+/// the way each module groups its members, where the alphabet would scatter them.
+/// Names outside the prelude (the program's own bindings) sort after it, by name.
+fn prelude_rank(name: &str) -> usize {
+    match name.split_once('.') {
+        Some((module, member)) => MODULE_PRELUDES
+            .iter()
+            .position(|(m, _)| *m == module)
+            .and_then(|mi| {
+                MODULE_PRELUDES[mi]
+                    .1
+                    .iter()
+                    .position(|(n, _)| *n == member)
+                    .map(|i| (mi + 1) * 1000 + i)
+            })
+            .unwrap_or(usize::MAX),
+        None => PRELUDE
+            .iter()
+            .position(|(n, _)| *n == name)
+            .unwrap_or(usize::MAX),
+    }
+}
+
 /// A rollback point for the unification state, used by [`Infer::hole_fits`] to try a
 /// candidate binding against a hole's type without committing.
 struct SubstSnapshot {
@@ -9406,36 +9460,47 @@ impl Infer {
     /// Empty when `target` is a bare unresolved variable (everything fits — noise).
     /// Each candidate is tried by a real unification that is immediately rolled back,
     /// so the checker's own substitution is untouched.
-    fn hole_fits(&mut self, env: &Env, target: &Ty) -> Vec<String> {
+    /// Returns the shortlist and how many further fits the cap left out.
+    fn hole_fits(&mut self, env: &Env, target: &Ty, hole: Option<&str>) -> (Vec<String>, usize) {
         let target = self.apply(target);
         if matches!(target, Ty::Var(_)) {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let snap = self.subst_snapshot();
-        let mut fits: Vec<(usize, bool, String)> = Vec::new();
+        let mut fits: Vec<(u8, usize, bool, usize, String)> = Vec::new();
         for (name, scheme) in env {
             let candidate = self.instantiate(scheme);
             let ok = self.unify(&candidate, &target, Span::new(0, 0)).is_ok();
             self.subst_restore(&snap);
             if ok {
-                // Rank by (1) fewer generalized variables ⇒ a tighter fit — this is
-                // the load-bearing key: it puts specific matches (`String.upper` for
-                // a `string -> string` hole) ahead of trivially-general combinators
-                // (`id`, `ignore`, `Some`) that fit almost anything but are rarely
-                // the answer. Then (2) unqualified names (the user's own bindings)
-                // before qualified module members, and (3) name for stable output.
+                // Rank by (1) how well the name matches the hole's own name, so
+                // `?upper` puts `String.upper` first; then (2) fewer generalized
+                // variables ⇒ a tighter fit, which puts specific matches ahead of
+                // trivially-general combinators (`id`, `ignore`, `Some`) that fit
+                // almost anything but are rarely the answer; then (3) unqualified
+                // names (the user's own bindings) before qualified module members;
+                // and (4) declaration order in the prelude rather than the alphabet.
                 let poly = scheme.vars.len()
                     + scheme.uvars.len()
                     + scheme.num_vars.len()
                     + scheme.eff_vars.len();
-                fits.push((poly, name.contains('.'), name.clone()));
+                fits.push((
+                    name_affinity(hole, name),
+                    poly,
+                    name.contains('.'),
+                    prelude_rank(name),
+                    name.clone(),
+                ));
             }
         }
         fits.sort();
-        fits.into_iter()
-            .map(|(_, _, n)| n)
+        let more = fits.len().saturating_sub(HOLE_FIT_CAP);
+        let shown = fits
+            .into_iter()
+            .map(|(_, _, _, _, n)| n)
             .take(HOLE_FIT_CAP)
-            .collect()
+            .collect();
+        (shown, more)
     }
 
     /// **Refinement fits** (`DESIGN.md` §9): function bindings whose *result* — after
@@ -9452,13 +9517,14 @@ impl Infer {
         env: &Env,
         target: &Ty,
         direct: &std::collections::HashSet<String>,
+        hole: Option<&str>,
     ) -> Vec<String> {
         let target = self.apply(target);
         if matches!(target, Ty::Var(_)) {
             return Vec::new();
         }
         let snap = self.subst_snapshot();
-        let mut out: Vec<(usize, usize, bool, String)> = Vec::new();
+        let mut out: Vec<(u8, usize, usize, bool, usize, String)> = Vec::new();
         for (name, scheme) in env {
             if direct.contains(name) {
                 continue;
@@ -9492,12 +9558,19 @@ impl Infer {
                     + scheme.num_vars.len()
                     + scheme.eff_vars.len();
                 let holes = vec!["?"; d].join(" ");
-                out.push((d, poly, name.contains('.'), format!("{name} {holes}")));
+                out.push((
+                    name_affinity(hole, name),
+                    d,
+                    poly,
+                    name.contains('.'),
+                    prelude_rank(name),
+                    format!("{name} {holes}"),
+                ));
             }
         }
         out.sort();
         out.into_iter()
-            .map(|(_, _, _, s)| s)
+            .map(|(_, _, _, _, _, s)| s)
             .take(REFINE_CAP)
             .collect()
     }

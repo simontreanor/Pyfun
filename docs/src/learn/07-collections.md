@@ -109,13 +109,13 @@ print atTen
 The checker reports:
 
 ```console
-note: hole `?` has type `int -> int -> int` — try: const, max, min — or: flip ?
+note: hole `?` has type `int -> int -> int` — try: min, max, const — or: flip ?
  --> 3:23
   |
 3 | let total = List.fold ? 0 ns
   |                       ^
 
-note: hole `?` has type `int` — try: total — or: List.sum ?, Seq.sum ?, String.len ?, cbrt ?
+note: hole `?` has type `int` — try: total — or: List.sum ?, Seq.sum ?, String.len ?, round ?
  --> 4:32
   |
 4 | let atTen = Option.withDefault ? (List.get 10 ns)

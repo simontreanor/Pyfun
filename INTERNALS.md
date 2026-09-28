@@ -592,13 +592,16 @@ error, and `check` exits non-zero.
 the environment snapshotted at the hole and reports every binding whose type unifies with the hole's.
 The test is a real **trial unification** rolled back afterward (`Infer::hole_fits` snapshots the
 substitution maps, instantiates each candidate scheme, unifies against the resolved hole type, and
-restores). Fits are ranked most-specific (fewest generalized variables) first, unqualified names before
-qualified module members, capped at 6; a fully-unconstrained hole (`'a`) lists none. **Refinement fits**
+restores). Fits are ranked by the hole's own name first (`name_affinity`: `?upper` puts a member named
+`upper` ahead, then names containing it), then most-specific (fewest generalized variables), unqualified
+names before qualified module members, and prelude declaration order (`prelude_rank`) rather than the
+alphabet. The list is capped at 6 and says `and N more` when it cuts; a fully-unconstrained hole (`'a`)
+lists none. **Refinement fits**
 go further: a function binding whose *result* — after applying one or two arguments — unifies with the
 hole's type is reported *applied to that many further holes* (`String.upper ?`, `String.concat ? ?`).
 `Infer::hole_refinements` peels leading arrows off each candidate (up to `MAX_REFINE_DEPTH` = 2) and
 trial-unifies the tail, skipping a peeled result that is a bare variable — a **structural filter** that
-keeps out trivially-general combinators (`id`, `const`). Fewest-holes-first, capped at 4, never
+keeps out trivially-general combinators (`id`, `const`). Name match, then fewest-holes-first, capped at 4, never
 duplicating a direct fit.
 
 ## Syntax highlighting (TextMate grammar)
