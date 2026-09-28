@@ -6602,11 +6602,11 @@ impl Infer {
         let lt = self.infer_expr(lhs, env)?;
         let (lb, lu) = self
             .expect_num(&lt, lhs.span())
-            .map_err(|e| self.string_concat_hint(op, &lt, e))?;
+            .map_err(|e| self.addition_hint(op, &lt, e))?;
         let rt = self.infer_expr(rhs, env)?;
         let (rb, ru) = self
             .expect_num(&rt, rhs.span())
-            .map_err(|e| self.string_concat_hint(op, &rt, e))?;
+            .map_err(|e| self.addition_hint(op, &rt, e))?;
         let base_clash = |this: &Self| {
             mismatch(
                 &this.num_ty(lb, this.apply_unit(&lu)),
@@ -6635,15 +6635,23 @@ impl Infer {
         }
     }
 
-    /// Turn the generic "expected int, found string" from an `expect_num` failure
-    /// into a guiding hint when the user wrote `+` between strings — `+` is numeric
-    /// (§7.1), and `String.concat` is the concatenation path. Only augments the
-    /// `Add`-on-`string` case; every other numeric mismatch keeps its message.
-    fn string_concat_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
-        if op == BinOp::Add && matches!(self.apply(operand), Ty::Str) {
-            err.message =
-                "`+` is numeric and does not concatenate strings — use `String.concat a b`"
-                    .to_string();
+    /// Turn generic numeric type errors into guidance when `+` is used for
+    /// string or list concatenation. Every other numeric mismatch keeps its message.
+    fn addition_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
+        if op == BinOp::Add {
+            match self.apply(operand) {
+                Ty::Str => {
+                    err.message =
+                        "`+` is numeric and does not concatenate strings — use `String.concat a b`"
+                            .to_string();
+                }
+                Ty::Con(name, _) if name == "List" => {
+                    err.message =
+                        "`+` is numeric and does not concatenate lists — use `List.concat [a] [b]`"
+                            .to_string();
+                }
+                _ => {}
+            }
         }
         err
     }
