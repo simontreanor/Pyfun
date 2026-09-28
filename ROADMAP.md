@@ -437,7 +437,8 @@ play comes first; the browser target is last because it depends on the async dec
   folders incl. `dedupLegs`, chained updates, fresh-reset slots with the store-then-reset idiom,
   `Map.remove`/`Set.remove`, defensive-copy/alias `Var` inits — `DESIGN.md` §5.1), so the known rejecting
   shapes are covered. What still falls back, honestly: ordered *inserts* (network-rail's `insertByDep` —
-  list slicing/splicing, not an append), folds inside in-file `module`s (P8 mangling), and anything the
+  list slicing/splicing, not an append), a *named* top-level folder used inside an in-file `module`
+  (lambdas and block-local folders inline there since 2026-09-28), and anything the
   occurrence discipline can't prove. Pick one up only when a real hot fold rejects on it. (A
   persistent-map/HAMT `Map` would kill the O(n²) generally but still loses to a bare `dict` on this
   pattern.) The ceiling framing stands and caps all *emitted-code* perf work: Pyfun targets un-JIT'd CPython, so

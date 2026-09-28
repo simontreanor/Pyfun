@@ -5849,6 +5849,36 @@ fn e2e_fold_opt_single_map_lambda() {
 }
 
 #[test]
+fn a_top_level_fold_keeps_its_loop_names_off_top_level_bindings() {
+    // At module scope the loop variable is a global, so inlining the fold here
+    // would leave `x` at the last element. The pass falls back instead.
+    let src = "let x = 100\n\
+               let total = List.fold (fun acc e -> List.concat acc [e]) [] [1, 2, 3]\n\
+               let doubled = List.fold (fun acc x -> List.concat acc [x * 2]) [] [1, 2, 3]\n\
+               let out = (x, doubled, total)";
+    run_and_check(src, &[("out", "(100, [2, 4, 6], [1, 2, 3])")]);
+    let py = pyfun::compile(src).unwrap();
+    assert!(
+        py.contains("for e in"),
+        "the clash-free fold still loops: {py}"
+    );
+    assert!(!py.contains("for x in"), "{py}");
+}
+
+#[test]
+fn a_fold_inside_an_in_file_module_lowers_to_a_loop() {
+    let src = "module Stats =\n  \
+               let scale = 3\n  \
+               let tally xs = List.fold (fun acc x -> Map.add x (x * scale) acc) Map.empty xs\n\
+               let out = Map.toList (Stats.tally [1, 2])";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("for x in xs:"), "{py}");
+    // The sibling reference keeps its mangled module name inside the loop.
+    assert!(py.contains("x * Stats_scale"), "{py}");
+    run_and_check(src, &[("out", "[(1, 3), (2, 6)]")]);
+}
+
+#[test]
 fn fold_opt_cross_slot_read_is_hoisted_before_mutation() {
     // P7: a later slot reads an earlier slot (`Map.len m`); the read must be
     // hoisted to a temp BEFORE the `m[x] = x` mutation so it sees the old value.
@@ -6020,12 +6050,16 @@ let out = match List.fold w (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.toL
 }
 
 #[test]
-fn fold_reject_inside_in_file_module() {
-    // Name mangling inside an in-file module would apply inconsistently (P8).
-    let src = "module M =\n  \
-                 let scan xs = List.fold (fun m x -> Map.add x x m) Map.empty xs\n\
+fn fold_reject_a_named_folder_inside_an_in_file_module() {
+    // Inside a module a bare name may be a sibling member (mangled), which the
+    // top-level folder registry does not know, so a named folder falls back.
+    let src = "let step m x = Map.add x x m\n\
+               module M =\n  \
+                 let scan xs = List.fold step Map.empty xs\n\
                let r = Map.len (M.scan [1, 2, 3])";
-    assert_fold_fallback(src, &[("r", "3")]);
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("_pf_fold"), "{py}");
+    run_and_check(src, &[("r", "3")]);
 }
 
 #[test]
