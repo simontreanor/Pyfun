@@ -646,7 +646,7 @@ green against a stale compiler. Still open:
   infrastructure. Wait for an educator to ask.
 - ~~**CONTRIBUTING.md + curated good-first-issues**~~ **DONE 2026-09-28** (S) — point new contributors at the internals
   tour's "Where you would add..." notes; label a handful of well-scoped issues.
-- **Printable educator pack** (S, demand-gated) — a PDF export of the five session docs for
+- ~~**Printable educator pack**~~ **DONE 2026-09-28** (`docs/build_educator_pdf.py`, printed by the Pages build to `/educators/educator-pack.pdf`) (S, demand-gated) — a PDF export of the five session docs for
   departments that circulate paper.
 
 ## Two surface gaps the 0.5.0 documentation audit found (2026-08-02)
