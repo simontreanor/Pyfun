@@ -876,6 +876,59 @@ impl Lowerer {
                 },
             );
         }
+        // Data class fields: one whose declared type is a user sum type or record
+        // (non-generic) names it, as a string, since the alias comes after the
+        // classes. `Any` otherwise, which the checker's own fields already say.
+        let field_spell = |te: &crate::parser::ast::TypeExpr| -> Option<String> {
+            match te {
+                crate::parser::ast::TypeExpr::Con(name, _, args) if args.is_empty() => {
+                    spell.get(name).map(|s| format!("\"{s}\""))
+                }
+                _ => None,
+            }
+        };
+        let mut field_types: HashMap<String, Vec<Option<String>>> = HashMap::new();
+        for item in &module.items {
+            if let Item::Type(decl) = item
+                && decl.params.is_empty()
+            {
+                match &decl.kind {
+                    TypeDeclKind::Sum(variants) => {
+                        for v in variants {
+                            field_types.insert(
+                                py_ctor_name(&v.name),
+                                v.fields.iter().map(field_spell).collect(),
+                            );
+                        }
+                    }
+                    TypeDeclKind::Record(fields) => {
+                        field_types.insert(
+                            py_record_class(&decl.name),
+                            fields.iter().map(|f| field_spell(&f.ty)).collect(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for stmt in &mut py.body {
+            if let PyStmt::ClassDef {
+                name,
+                field_types: types,
+                ..
+            } = stmt
+                && let Some(spelled) = field_types.get(name.as_str())
+                && spelled.len() == types.len()
+            {
+                for (ty, spelled) in types.iter_mut().zip(spelled) {
+                    if let Some(spelled) = spelled
+                        && (ty == "Any" || ty == "object")
+                    {
+                        *ty = spelled.clone();
+                    }
+                }
+            }
+        }
         // The top-level function bindings and their types.
         let mut fn_types: HashMap<String, (usize, crate::types::Ty)> = HashMap::new();
         for item in &module.items {
