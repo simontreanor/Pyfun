@@ -1752,6 +1752,8 @@ pub struct Hole {
     /// more arguments) unifies with the hole's type — shown applied to further holes
     /// (`String.upper ?`, `String.concat ? ?`). Fewest-holes-first, capped.
     pub refinements: Vec<String>,
+    /// How many further refinement fits the cap left out of `refinements`.
+    pub more_refinements: usize,
     pub span: Span,
 }
 
@@ -1771,7 +1773,11 @@ impl Hole {
             parts.push(format!("try: {}{more}", self.fits.join(", ")));
         }
         if !self.refinements.is_empty() {
-            parts.push(format!("or: {}", self.refinements.join(", ")));
+            let more = match self.more_refinements {
+                0 => String::new(),
+                n => format!(", and {n} more"),
+            };
+            parts.push(format!("or: {}{more}", self.refinements.join(", ")));
         }
         parts.join(" — ")
     }
@@ -2458,13 +2464,15 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         .map(|(span, name, ty, env)| {
             let (fits, more_fits) = inf.hole_fits(&env, &ty, name.as_deref());
             let direct: std::collections::HashSet<String> = fits.iter().cloned().collect();
-            let refinements = inf.hole_refinements(&env, &ty, &direct, name.as_deref());
+            let (refinements, more_refinements) =
+                inf.hole_refinements(&env, &ty, &direct, name.as_deref());
             Hole {
                 name,
                 ty: show(&inf.apply(&ty)),
                 fits,
                 more_fits,
                 refinements,
+                more_refinements,
                 span,
             }
         })
@@ -9576,16 +9584,17 @@ impl Infer {
     /// keeps out trivially-general combinators (`id`, `const`) that would otherwise
     /// "refine" into every hole. `direct` is the set already reported as direct fits.
     /// Fewest-holes-first, then fewest generalized vars, then unqualified, then name.
+    /// Returns the shortlist and how many further refinements the cap left out.
     fn hole_refinements(
         &mut self,
         env: &Env,
         target: &Ty,
         direct: &std::collections::HashSet<String>,
         hole: Option<&str>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, usize) {
         let target = self.apply(target);
         if matches!(target, Ty::Var(_)) {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let snap = self.subst_snapshot();
         let mut out: Vec<(u8, usize, usize, bool, usize, String)> = Vec::new();
@@ -9633,10 +9642,13 @@ impl Infer {
             }
         }
         out.sort();
-        out.into_iter()
+        let more = out.len().saturating_sub(REFINE_CAP);
+        let shown = out
+            .into_iter()
             .map(|(_, _, _, _, _, s)| s)
             .take(REFINE_CAP)
-            .collect()
+            .collect();
+        (shown, more)
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
