@@ -112,11 +112,6 @@ impl Lowerer {
         args_ast: &[&Expr],
         locals: &HashSet<String>,
     ) -> Result<Option<(Vec<PyStmt>, PyExpr)>, LowerError> {
-        // P8: an in-file `module`'s name mangling would apply inconsistently to an
-        // inlined body — reject inside a module.
-        if self.cur_module.is_some() {
-            return Ok(None);
-        }
         let [folder, init, xs] = args_ast else {
             return Ok(None);
         };
@@ -142,6 +137,11 @@ impl Lowerer {
                 Some((ps, b)) if ps.len() == 2 => (ps.clone(), b.clone(), true),
                 _ => return Ok(None),
             },
+            // Inside an in-file `module`, a bare name may be a sibling member
+            // (lowered under its mangled name), which `top_fn_defs` does not
+            // know, so only a folder whose body is in hand — a lambda or a
+            // block-local `let` — inlines there.
+            ExprKind::Var(_) if self.cur_module.is_some() => return Ok(None),
             ExprKind::Var(f) => match self.top_fn_defs.get(f) {
                 Some((ps, b)) if ps.len() == 2 => (ps.clone(), b.clone(), false),
                 _ => return Ok(None),
@@ -154,6 +154,20 @@ impl Lowerer {
         let mut enclosing = locals.clone();
         for frame in &self.fn_local_stack {
             enclosing.extend(frame.iter().cloned());
+        }
+        // At module scope the loop's names are module globals, so every
+        // top-level name the program binds (earlier *or* later, since a function
+        // defined above reads the global when it runs) would be overwritten by
+        // them: `let x = 100` then a fold over `fun acc x -> …` must not leave
+        // `x` at the last element. The names of the binding being defined are
+        // the exception, since it assigns them itself once the loop is done.
+        if self.fn_local_stack.is_empty() {
+            enclosing.extend(self.user_defs.iter().cloned());
+            enclosing.extend(self.extern_targets.keys().cloned());
+            enclosing.extend(self.imported_modules.iter().cloned());
+            for own in &self.cur_top_names {
+                enclosing.remove(own);
+            }
         }
         let Some(plan) = self.plan_fold(&params, &body, init, xs, same_frame, locals, &enclosing)
         else {

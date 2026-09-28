@@ -407,6 +407,8 @@ struct Lowerer {
     /// `mut` as `nonlocal` (found in an enclosing function) vs `global`
     /// (module-level) when emitting a closure.
     fn_local_stack: Vec<HashSet<String>>,
+    /// The names the top-level item being lowered binds (see `lower_module`).
+    cur_top_names: HashSet<String>,
     /// Stack of enclosing Python frames' occurrence censuses (`captures.rs`),
     /// consulted when a match arm binds a name: a capture whose name the frame
     /// uses elsewhere is renamed so the function-wide Python local it becomes
@@ -695,6 +697,7 @@ impl Lowerer {
             // Default to the sound multi-file policy; single-file `lower` overrides it.
             order: OrderPolicy::All,
             fn_local_stack: Vec::new(),
+            cur_top_names: HashSet::new(),
             frames: Vec::new(),
             renames: HashMap::new(),
             tmp_counter: 0,
@@ -784,6 +787,13 @@ impl Lowerer {
         // Lower the code; this is what sets needs_functools / needs_result.
         let mut code = Vec::new();
         for item in &module.items {
+            // The names this item binds at module scope: a fold inlined into its
+            // value may reuse them for its loop (`let m = List.fold (fun m x ->
+            // …)`), since the item is about to assign them anyway.
+            self.cur_top_names = match item {
+                Item::Let(binding) => binding.bound_names().into_iter().collect(),
+                _ => HashSet::new(),
+            };
             match item {
                 // Measures, type declarations, `import`, and `extern import` emit
                 // no runtime code (the latter's Python import is hoisted only when

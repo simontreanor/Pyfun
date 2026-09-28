@@ -117,8 +117,10 @@ a flat tuple of them (a `Var` init is rejected — it may be read after the fold
 threaded **position-preservingly** (no swap, no duplication, no cross-slot storage, no closure
 capture, no escape to a user function — retention is unknowable, so reject); reads of a slot use a
 whitelist of ops that return scalars or fresh copies; and inlining is capture-safe (the folder's free
-variables and introduced binders are disjoint from every enclosing Python frame; rejected inside an
-in-file `module`). Read-before-mutate and effect order are preserved by lowering every op argument
+variables and introduced binders are disjoint from every enclosing Python frame, and at module
+scope, where the loop's names are globals, from every top-level name the program binds other than
+the binding being defined, tracked in `cur_top_names`; inside an in-file `module` only a lambda or
+block-local folder inlines, since a bare name there may be a mangled sibling member). Read-before-mutate and effect order are preserved by lowering every op argument
 (hoisting non-atomic ones to temps) **before** emitting the mutations. When in doubt, reject. The
 folder is always pure (an effectful folder does not typecheck against `fold`'s scheme), so the only
 ordering hazard is a value dependency between slots, which the hoisting handles. Full preconditions
