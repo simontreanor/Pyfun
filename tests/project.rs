@@ -265,6 +265,35 @@ fn e2e_a_task_started_in_one_module_joins_a_scope_opened_in_another() {
 }
 
 #[test]
+fn an_import_resolves_from_a_vendored_facade_after_the_siblings() {
+    // `pyfun add` vendors a façade's .pyfun files into .pyfun/facades/<dist>/;
+    // the loader looks there once no sibling file has the module.
+    let dir = Scratch::new("facade");
+    dir.write(
+        "pyfun.toml",
+        "[project]\nname = \"demo\"\n\n[dependencies]\n",
+    );
+    fs::create_dir_all(dir.0.join("src")).unwrap();
+    let facade = dir.0.join(".pyfun/facades/pyfun-shout");
+    fs::create_dir_all(&facade).unwrap();
+    fs::write(facade.join("shout.pyfun"), "let loud s = String.upper s").unwrap();
+    fs::write(
+        dir.0.join("src/main.pyfun"),
+        "import Shout\n\"hi\" |> Shout.loud |> print",
+    )
+    .unwrap();
+    let project = project::build_from_path(&dir.0.join("src/main.pyfun")).expect("resolves");
+    let names: Vec<&str> = project.modules.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(names, ["Shout", "Main"]);
+    assert!(project::check(&project).iter().all(|m| m.errors.is_empty()));
+
+    // A project module of the same name wins over the façade.
+    fs::write(dir.0.join("src/shout.pyfun"), "let loud s = s").unwrap();
+    let project = project::build_from_path(&dir.0.join("src/main.pyfun")).expect("resolves");
+    assert_eq!(project.modules[0].source, "let loud s = s");
+}
+
+#[test]
 fn the_browser_cookbook_example_type_checks_and_lowers() {
     // #111: the `Dom` façade and its counter page compile as a project; running
     // them needs a browser (Pyodide's `js` module), so the test stops at lowering.

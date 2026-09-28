@@ -26,6 +26,7 @@ use pyfun::syntax::{Item, Module};
 
 mod bundle;
 mod kernel;
+mod packages;
 mod repl;
 
 fn main() -> ExitCode {
@@ -69,6 +70,8 @@ fn main() -> ExitCode {
             Ok(parsed) => bundle::run(parsed),
             Err(msg) => fail(&msg),
         },
+        Some("add") => packages::add(&args[1..]),
+        Some("install") => packages::install(),
         Some("lsp") => lsp_server(),
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
@@ -107,6 +110,13 @@ fn help() {
     eprintln!(
         "                [--asset <file>]... [--page <fragment.html>]   on Pyodide (CPython in WebAssembly)"
     );
+    eprintln!(
+        "  pyfun add     <package>...                install a Pyfun façade package and vendor"
+    );
+    eprintln!(
+        "                                            its .pyfun files (records it in pyfun.toml)"
+    );
+    eprintln!("  pyfun install                             install every façade pyfun.toml lists");
     eprintln!("  pyfun lsp                                 run the language server (stdio)");
     eprintln!("  pyfun repl                                interactive read-eval-print loop");
     eprintln!(
@@ -478,8 +488,14 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
     }
 }
 
-/// The first available Python interpreter command, if any.
+/// The Python interpreter to use: `PYFUN_PYTHON` when set (so `run` and `add`
+/// can target a virtual environment), else the first of `python`/`python3`.
 fn python_cmd() -> Option<String> {
+    if let Ok(python) = std::env::var("PYFUN_PYTHON")
+        && !python.is_empty()
+    {
+        return Some(python);
+    }
     for candidate in ["python", "python3"] {
         if Command::new(candidate)
             .arg("--version")

@@ -1303,6 +1303,51 @@ combinators are the stack-safe path, so deep self-recursion matching hand-writte
 `RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from X import y` / `open`;
 nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
 
+### 6.2 Façade packages: `pyfun.toml`, `pyfun add`, `pyfun install`
+
+The friction §6 leaves is distribution: a set of typed `extern` declarations for a library is
+cheap to write (five to ten lines a library) but was copied between projects by hand. A **façade**
+is those declarations published once as an **ordinary pip distribution** whose package data
+includes `.pyfun` files, so the Python ecosystem's own tools (pip, uv, PyPI, private indexes)
+carry them and Pyfun adds no registry of its own. `examples/facades/pyfun-textwrap/` is one.
+
+A project is marked by a **manifest**, `pyfun.toml`, at its root:
+
+```toml
+[project]
+name = "scrabble"
+
+[dependencies]
+pyfun-textwrap = "0.1.0"
+```
+
+`pyfun add <package>` (a name with an optional version specifier, or a local directory) installs
+the package into the interpreter's environment (`uv pip install` when `uv` is on PATH, else
+`python -m pip install`; `PYFUN_PYTHON` picks the interpreter, as it does for `pyfun run`), reads
+the installed distribution's file list for its `.pyfun` files, copies them into
+`<root>/.pyfun/facades/<dist>/`, and records the installed version in `[dependencies]`, creating
+the manifest if there is none. `pyfun install` repeats that for every dependency listed, pinned to
+its recorded version, which is how a fresh checkout or another machine gets the same façades.
+
+Resolution then gains one step: `import Name` looks for the sibling `name.pyfun` first (§6.1) and,
+failing that, for the same file in each vendored façade directory under the nearest `pyfun.toml`,
+so a project's own module always wins over a façade of the same name. Everything else is unchanged:
+a façade module is a module in the graph like any other, type-checked, lowered to its own `.py` file,
+and imported by the Python its dependents emit. **The compiler reads only the vendored copies**, so
+checking and compiling need neither Python nor the network, and the vendored directory is safe to
+commit for fully reproducible builds (or to leave out, since `pyfun install` recreates it).
+
+A façade is ordinary Pyfun, so beside its `extern`s it can hold small functions that give a
+Python API a pipe-friendly argument order (`let fill width text = fillText text width`), which
+keyword slots alone cannot, since a slot takes a trailing parameter. One naming rule matters: the
+façade's module name must differ from the Python package it wraps, because the module lowers to a
+`.py` file of its own name (`Wrap` becomes `wrap.py`, which would shadow a real `wrap` package).
+
+The manifest reader is deliberately a small subset of TOML (`[table]` headers and `key = "string"`
+entries, edited line by line so comments survive), keeping the compiler dependency-free. Deferred:
+a lock file with hashes (the recorded version pins the façade, and pip's own resolver pins its
+dependencies), dependency resolution *between* façades, and `pyfun remove`.
+
 ## 7. Surface language (MVP)
 
 Differences from Python that the MVP commits to:
