@@ -220,6 +220,17 @@ VS Code-format extensions directly):
 
 ---
 
+## Sublime Text
+
+[`sublime/`](sublime/) is a Sublime Text package: syntax highlighting (generated from the same
+TextMate grammar as VS Code), comment toggling, and offside indentation. Copy its `Pyfun` folder
+into Sublime's Packages folder (**Preferences > Browse Packages…**). For the language server,
+install the [LSP](https://packagecontrol.io/packages/LSP) package and add the client entry from
+[`sublime/Pyfun/LSP-pyfun.sublime-settings`](sublime/Pyfun/LSP-pyfun.sublime-settings) to the LSP
+settings. [`sublime/README.md`](sublime/README.md) has the details.
+
+---
+
 ## Documentation tools (Pygments)
 
 Sphinx, MkDocs, Jupyter's nbconvert and `pygmentize` highlight through Pygments.
