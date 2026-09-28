@@ -472,10 +472,12 @@ the defining file, and every qualified use elsewhere, rewriting only the member 
 construction expressions and patterns (`Pattern::Ctor` and the `type` variant declaration each carry a
 name span). Rename fires only for a top-level value or constructor and a *strict* scan **refuses**
 rather than do a partial rewrite if any project file fails to parse. **Type names** navigate and rename
-**in-file only** — there is no qualified-type syntax, so a type name appears only in its own file's
-annotations; `TypeExpr::Con` and the `type` declaration each carry a name span, the resolver walks type
-annotations (`resolve::walk_type`), and `resolve::type_at` / `type_use_references` drive the three
-operations (a type renames to an uppercase type name; builtins are refused).
+across files the same way: `Server::type_target` resolves the occurrence under the cursor (an
+annotation, bare or `Shapes.Placed`; a record tag; the declaration name) to its declaring module, and
+`Server::type_occurrences` scans the project (declaration and bare uses at home; qualified uses, unshadowed
+bare uses, and a record's qualified tags in importers). `resolve::type_references` exposes the raw
+occurrences; a qualified expression counts as a type only when it is a record's tag, since a sum type's
+same-named constructor is a value. A type renames to an uppercase type name; builtins are refused.
 
 **Resilient & incremental analysis.** A half-typed file still yields results. The parser has an
 error-recovering entry point (`parser::parse_recover → (Module, Vec<ParseError>)`) used by the editor
