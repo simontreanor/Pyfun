@@ -3979,11 +3979,17 @@ fn plus_on_strings_hints_at_string_concat() {
 }
 
 #[test]
+fn plus_on_lists_hints_at_list_concat() {
+    assert_error_contains("let xs = [1, 2] + [3]", "List.concat [a] [b]");
+}
+
+#[test]
 fn a_plain_numeric_mismatch_keeps_its_message() {
     // A non-string numeric mismatch must NOT gain a spurious concat hint.
     let msgs = errors("let bad = 1 + true");
     assert!(
-        msgs.iter().all(|m| !m.contains("String.concat")),
+        msgs.iter()
+            .all(|m| !m.contains("String.concat") && !m.contains("List.concat")),
         "unexpected concat hint: {msgs:?}"
     );
 }
