@@ -4017,6 +4017,32 @@ fn native_annotates_top_level_functions_it_can_spell() {
 }
 
 #[test]
+fn native_annotates_block_local_functions_and_leaves_unit_returns_bare() {
+    let src = "type Shape = Circle float | Square float\n\
+               let total shapes =\n  \
+                 let area s =\n    \
+                   match s:\n      \
+                     case Circle r: 3.0 * r * r\n      \
+                     case Square w: w * w\n  \
+                 let add acc s = acc + area s\n  \
+                 List.fold add 0.0 shapes\n\
+               let report n = print (n + 0.0)\n\
+               report (total [Circle 1.0, Square 2.0])";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("    def area(s: Shape) -> float:"), "{py}");
+    assert!(
+        py.contains("    def add(acc: float, s: Shape) -> float:"),
+        "{py}"
+    );
+    // A unit result stays unannotated: `return print(n)` under `-> None` is an
+    // error to mypy.
+    assert!(py.contains("def report(n: float):"), "{py}");
+    assert_eq!(out, ["7.0"]);
+}
+
+#[test]
 fn native_ladders_reach_async_return_bang_matches() {
     // `return! (match …)` in an `async { }` block lowers through its own path,
     // which native mode now takes too, the Option/Result shape included.

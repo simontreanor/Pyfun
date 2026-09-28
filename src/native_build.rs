@@ -139,6 +139,17 @@ fn finish(path: &Path, out: &Path, entry: &str, modules: &[String]) -> ExitCode 
         "mypyc".to_string(),
         "--allow-redefinition-new".to_string(),
         "--local-partial-types".to_string(),
+        // Pyfun binds a unit call's result (`_ = f(x)`), which mypy reports
+        // when `f` is annotated `-> None`; the binding is harmless.
+        "--disable-error-code".to_string(),
+        "func-returns-value".to_string(),
+        // At the Python boundary the extern declarations are the contract, and
+        // Pyfun's checker has already held the program to them; mypy's view of
+        // an unannotated module-level value or a stub's union adds nothing.
+        "--disable-error-code".to_string(),
+        "var-annotated".to_string(),
+        "--disable-error-code".to_string(),
+        "union-attr".to_string(),
     ];
     args.extend(modules.iter().map(|m| format!("{m}.py")));
     let status = Command::new(&interpreter)

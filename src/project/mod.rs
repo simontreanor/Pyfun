@@ -401,7 +401,14 @@ pub fn compile_with(
     if needs_runtime {
         files.push((
             "_pyfun_rt.py".to_string(),
-            python_emitter::emit_for(&lowering::runtime_module(), target),
+            python_emitter::emit_for(
+                &if native {
+                    lowering::runtime_module_native()
+                } else {
+                    lowering::runtime_module()
+                },
+                target,
+            ),
         ));
     }
     Ok(CompiledProject { files, notes })
