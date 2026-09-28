@@ -85,7 +85,7 @@ fn build(path: &Path, out: &Path) -> ExitCode {
     if let Err(e) = std::fs::write(&source_file, &python) {
         return fail(&format!("cannot write {}: {e}", source_file.display()));
     }
-    finish(path, out, &module, &[module.clone()])
+    finish(path, out, &module, std::slice::from_ref(&module))
 }
 
 /// A project: every module compiled natively into `out`, and every one but the
