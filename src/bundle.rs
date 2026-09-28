@@ -76,7 +76,7 @@ pub fn run(args: Args<'_>) -> ExitCode {
             if !crate::check_project_ok(&project) {
                 return ExitCode::FAILURE;
             }
-            let files = match crate::lower_project(&project, PyTarget::default()) {
+            let files = match crate::lower_project(&project, PyTarget::default(), false) {
                 Ok(f) => f,
                 Err(code) => return code,
             };

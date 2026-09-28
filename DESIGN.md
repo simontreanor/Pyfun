@@ -428,8 +428,8 @@ recognizer and an `isinstance` ladder in both modes.
 The ladder is also faster on CPython by itself, since a class pattern goes through `__match_args__`
 and positional binding at run time: on `bench/expr_eval` (ADT allocation and matching) the output
 goes from 2.30x to 1.63x of the hand-written baseline on CPython 3.14, before any compilation.
-Native mode is opt-in and single-file for now; the default emitter keeps `match`/`case` because it
-reads as the program was written. Every example and the whole end-to-end suite produce identical
+Native mode is opt-in and applies to every module of a project alike; the default emitter keeps
+`match`/`case` because it reads as the program was written. Every example and the whole end-to-end suite produce identical
 output in both modes.
 
 ## 6. Python interop — the hard boundary
@@ -1330,7 +1330,8 @@ the package into the interpreter's environment (`uv pip install` when `uv` is on
 the installed distribution's file list for its `.pyfun` files, copies them into
 `<root>/.pyfun/facades/<dist>/`, and records the installed version in `[dependencies]`, creating
 the manifest if there is none. `pyfun install` repeats that for every dependency listed, pinned to
-its recorded version, which is how a fresh checkout or another machine gets the same façades.
+its recorded version, which is how a fresh checkout or another machine gets the same façades, and
+`pyfun remove <package>` drops the entry, deletes the vendored copy and uninstalls the distribution.
 
 Resolution then gains one step: `import Name` looks for the sibling `name.pyfun` first (§6.1) and,
 failing that, for the same file in each vendored façade directory under the nearest `pyfun.toml`,
@@ -1349,7 +1350,7 @@ façade's module name must differ from the Python package it wraps, because the 
 The manifest reader is deliberately a small subset of TOML (`[table]` headers and `key = "string"`
 entries, edited line by line so comments survive), keeping the compiler dependency-free. Deferred:
 a lock file with hashes (the recorded version pins the façade, and pip's own resolver pins its
-dependencies), dependency resolution *between* façades, and `pyfun remove`.
+dependencies) and dependency resolution *between* façades.
 
 ## 7. Surface language (MVP)
 

@@ -234,6 +234,16 @@ pub fn compile_targeting(
     project: &Project,
     target: crate::python_emitter::PyTarget,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_with(project, target, false)
+}
+
+/// [`compile_targeting`] with the native lowering on or off (`--native`,
+/// `DESIGN.md` §5.6) for every module of the project.
+pub fn compile_with(
+    project: &Project,
+    target: crate::python_emitter::PyTarget,
+    native: bool,
+) -> Result<CompiledProject, crate::lowering::LowerError> {
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
 
@@ -364,7 +374,7 @@ pub fn compile_targeting(
         }
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
         let codecs = codecs_by_module.get(&module.name).unwrap_or(&no_codecs);
-        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats, codecs)?;
+        let lowered = lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native)?;
         needs_runtime |= lowered.uses_runtime;
         notes.extend(
             lowered

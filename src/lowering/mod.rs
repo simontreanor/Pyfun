@@ -181,8 +181,10 @@ pub fn lower_in_project(
     ctx: &ImportContext,
     float_literals: &HashSet<Span>,
     codecs: &crate::types::Codecs,
+    native: bool,
 ) -> Result<LoweredModule, LowerError> {
     let mut lowerer = Lowerer::new(module);
+    lowerer.native = native;
     lowerer.float_literals = float_literals.clone();
     lowerer.codecs = codecs.clone();
     lowerer.imported_modules = ctx.modules.clone();
