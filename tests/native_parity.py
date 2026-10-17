@@ -113,6 +113,8 @@ def main():
                 failures += 1
             else:
                 print(f"[KNOWN] {name}: {status} ({KNOWN[name]})")
+                for line in detail.splitlines():
+                    print(f"    {line}")
                 known += 1
             continue
         print(f"[{'OK ' if status == 'ok' else 'FAIL'}] {name}" + ("" if status == "ok" else f": {status}"))
