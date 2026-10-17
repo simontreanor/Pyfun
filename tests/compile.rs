@@ -4244,6 +4244,34 @@ fn e2e_an_async_value_is_cold_and_runs_again_on_every_await() {
 }
 
 #[test]
+fn e2e_an_async_extern_passed_by_name_or_partially_applied_stays_cold() {
+    // `List.map pause xs` and `List.map (sleepThen 0.0) xs` build values through
+    // the extern's adapting lambda, so each can be awaited twice, as a saturated
+    // call's can.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               extern pause: float -> Async unit = asyncio.sleep\n\
+               extern sleepThen: float -> a -> Async a = asyncio.sleep\n\
+               let pauses = [0.0, 0.0] |> List.map pause\n\
+               let values = [1, 2] |> List.map (sleepThen 0.0)\n\
+               let main = async {\n  \
+                 for p in pauses:\n    \
+                   do! p\n    \
+                   do! p\n  \
+                 for v in values:\n    \
+                   let! a = v\n    \
+                   let! b = v\n    \
+                   print (a + b)\n  \
+                 return ()\n\
+               }\n\
+               runAsync main";
+    let py = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &py);
+    assert_eq!(out.lines().collect::<Vec<_>>(), ["2", "4"], "{py}");
+}
+
+#[test]
 fn e2e_an_async_callback_handed_to_python_runs() {
     // `asyncio.start_server` schedules a handler's result only if it is a real
     // coroutine; handed a cold `_pf_Async` it would silently never run, and the
@@ -4803,7 +4831,8 @@ fn e2e_async_ce_produces_a_coroutine() {
     let mut program =
         pyfun::compile("let twice = async { let! x = async { return 21 }  return (x + x) }")
             .unwrap();
-    program.push_str("\nimport asyncio\nprint(asyncio.run(twice))\n");
+    // Python runs a Pyfun `Async` by calling it, as it would an `async def`.
+    program.push_str("\nimport asyncio\nprint(asyncio.run(twice()))\n");
     assert_eq!(run_python(&python, &program).trim(), "42");
 }
 
@@ -8486,7 +8515,7 @@ fn e2e_an_async_bind_shadowing_an_outer_name_is_renamed() {
     let mut program = pyfun::compile(src).unwrap();
     assert!(program.contains("_n = await "), "{program}");
     assert!(program.contains("return _n + m"), "{program}");
-    program.push_str("\nimport asyncio\nprint(asyncio.run(r))\n");
+    program.push_str("\nimport asyncio\nprint(asyncio.run(r()))\n");
     assert_eq!(run_python(&python, &program).trim(), "8");
 }
 

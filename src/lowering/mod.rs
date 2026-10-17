@@ -2189,7 +2189,7 @@ impl Lowerer {
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
             ExprKind::Unit => Ok((vec![], PyExpr::NoneLit)),
-            ExprKind::Var(name) => Ok((vec![], self.lower_var(name, locals))),
+            ExprKind::Var(name) => Ok((vec![], self.lower_var_value(name, locals))),
 
             ExprKind::Binary { op, lhs, rhs } => {
                 let (mut stmts, left) = self.lower_value(lhs, locals)?;
@@ -2769,6 +2769,34 @@ impl Lowerer {
             };
             return Ok((stmts, self.cold_async(vec![sleep, secs])));
         }
+        // A partial application of an `extern` that carries `Async` closes over
+        // its adapting lambda, so each later call still yields a cold value and
+        // gives Python real coroutines (`urls |> List.map (fetch session)`).
+        if let ExprKind::Var(name) = &head.kind
+            && self.is_async_extern(name, locals)
+            && let Some(&k) = self.arities.get(name)
+            && !args_ast.is_empty()
+            && args_ast.len() < k
+        {
+            let mut stmts = Vec::new();
+            let mut args = Vec::with_capacity(args_ast.len());
+            for arg in &args_ast {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                args.push(arg_val);
+            }
+            let bare = self.lower_var(name, locals);
+            let adapter = self.async_extern_binding(name, k, bare);
+            self.needs_functools = true;
+            let partial = PyExpr::Call {
+                func: Box::new(PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name("functools".to_string())),
+                    attr: "partial".to_string(),
+                }),
+                args: std::iter::once(adapter).chain(args).collect(),
+            };
+            return Ok((stmts, partial));
+        }
         let (stmts, value) = self.lower_application_inner(expr, locals)?;
         if let ExprKind::Var(name) = &head.kind
             && !locals.contains(name)
@@ -3058,7 +3086,12 @@ impl Lowerer {
             _ => None,
         };
 
-        let (mut stmts, head_val) = self.lower_value(head, locals)?;
+        // A variable head lowers bare: the call itself is adapted where it is
+        // built, so an `Async`-touching extern is not first wrapped as a value.
+        let (mut stmts, head_val) = match &head.kind {
+            ExprKind::Var(name) => (Vec::new(), self.lower_var(name, locals)),
+            _ => self.lower_value(head, locals)?,
+        };
         let mut arg_vals = Vec::with_capacity(args_ast.len());
         for arg in &args_ast {
             let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
@@ -5484,6 +5517,28 @@ impl Lowerer {
         }
     }
 
+    /// Whether `name` here is an `extern` that carries `Async` across the boundary
+    /// (an `Async` result or parameter), rather than a local or user binding.
+    fn is_async_extern(&self, name: &str, locals: &HashSet<String>) -> bool {
+        !locals.contains(name)
+            && !self.user_defs.contains(name)
+            && (self.extern_async_results.contains(name)
+                || self.extern_async_slots.contains_key(name))
+    }
+
+    /// A variable in value position. A bare `extern` that carries `Async` is its
+    /// adapting lambda (see [`Self::async_extern_binding`]), so `List.map fetch
+    /// urls` builds cold values and Python receives coroutines.
+    fn lower_var_value(&mut self, name: &str, locals: &HashSet<String>) -> PyExpr {
+        let bare = self.lower_var(name, locals);
+        match self.arities.get(name).copied() {
+            Some(k) if self.is_async_extern(name, locals) => {
+                self.async_extern_binding(name, k, bare)
+            }
+            _ => bare,
+        }
+    }
+
     /// A saturated call of an `extern` whose result is `Async`, made cold: the
     /// Python call runs on each await, with the function and arguments evaluated
     /// now. Pinned keyword arguments ride a `functools.partial`. Any other shape
@@ -7234,6 +7289,7 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
             //     __slots__ = ("fn", "args")
             //     def __init__(self, fn, *args): self.fn = fn; self.args = args
             //     def __await__(self): return self.fn(*self.args).__await__()
+            //     async def __call__(self): return await self
             "_pf_Async" => {
                 let this = |a: &str| attr(name("self"), a);
                 PyStmt::Class {
@@ -7272,6 +7328,14 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                                 vec![],
                             ))],
                             false,
+                        ),
+                        // Python code runs a Pyfun value by calling it, as it would
+                        // a zero-argument `async def`: `asyncio.run(job())`.
+                        def(
+                            "__call__",
+                            &["self"],
+                            vec![PyStmt::Return(await_(name("self")))],
+                            true,
                         ),
                         def(
                             "__repr__",

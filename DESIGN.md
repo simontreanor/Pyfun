@@ -857,10 +857,13 @@ def _pf_run(a): return await a`), a fresh coroutine of any awaitable: an `extern
 `asyncio.start_server` schedules a handler's result only if it is a coroutine, and would otherwise
 drop it silently), a `unit -> Async a` thunk, and every element `Async.parallel`/`race` start. In a
 project the exporting module's binding for such an extern does the adapting, since a dependent
-knows only its arity. A bare or partially applied `extern` returning `Async` stays the raw Python
-callable, whose results are single-shot coroutines. Python code handed a Pyfun `Async` can `await`
-it (any number of times), but an `asyncio` API that wants a coroutine needs `_pf_run` or a Pyfun
-`extern` that declares the parameter.
+knows only its arity, and a bare or partially applied reference is the same adapting lambda
+(`lambda p0: _pf_Async(asyncio.sleep, p0)`, under a `functools.partial` for supplied arguments), so
+`urls |> List.map fetch` builds cold values too. Python code handed a Pyfun `Async` can `await` it
+any number of times, or call it for a fresh coroutine, as it would a zero-argument `async def`
+(`asyncio.run(job())`): `_pf_Async.__call__` is `async def __call__(self): return await self`.
+Python 3.14's `asyncio.run` accepts any awaitable, but 3.12 and 3.13 want a coroutine, so code that
+must run on them calls the value.
 
 **Async combinators — the `Async` module.** `async { }` builds an `Async a`; the module is the rest
 of what F#'s `Async` offers that `asyncio` can supply, typed once

@@ -615,7 +615,9 @@ around an inner `async def run()`. At the boundary, `Lowerer::new` records each 
 `wrap_async_args` runs after `wrap_thunk_args` at every extern call site, and `lower_application`
 wraps a saturated `Async`-returning extern call with `cold_extern_result` (`_pf_Async(f, *args)`,
 or a `functools.partial` for pinned keywords). In a project, `async_extern_binding` gives such an
-extern an adapting lambda, since a dependent knows only its arity. The emitter prints
+extern an adapting lambda, since a dependent knows only its arity; `lower_var_value` uses the same
+lambda for a bare reference, and `lower_application` a `functools.partial` over it for a partial
+application. `_pf_Async.__call__` gives Python code a fresh coroutine (`asyncio.run(job())`). The emitter prints
 `await _pf_Async(f, *args)` as `await f(*args)`. The async self-tail-call rewrite
 (`rewrite_async_wrapper`) matches `return _pf_Async(g)`, gives `g` the parameters and returns
 `_pf_Async(g, *params)`.
