@@ -8770,11 +8770,95 @@ impl Infer {
         let arg_ty = self.infer_expr(arg, env)?;
         let result = self.fresh();
         let latent = self.fresh_eff();
-        let expected = Ty::Fun(Box::new(arg_ty), Box::new(result.clone()), latent.clone());
-        self.unify(&func_ty, &expected, span)?;
+        let expected = Ty::Fun(
+            Box::new(arg_ty.clone()),
+            Box::new(result.clone()),
+            latent.clone(),
+        );
+        self.unify(&func_ty, &expected, span)
+            .map_err(|e| self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e))?;
         let latent = self.apply_eff(&latent);
         self.perform(&latent);
         Ok(self.apply(&result))
+    }
+
+    /// Turn an effect mismatch on a callback argument into guidance (#180). An
+    /// arrow with a closed effect set comes from a declaration, almost always an
+    /// `extern` written `(Reader -> Writer -> Async unit)`, and a function that
+    /// does anything (an `async { }` block performs `async`, §4) cannot meet it.
+    /// The fix is an effect variable on that arrow, `->{e}`, not the argument's
+    /// inferred set, which would accept only callbacks performing exactly that.
+    /// The message names both sides, points at the argument, and shows the
+    /// declared type with `->{e}` in place. Any other failure keeps its message.
+    fn closed_callback_hint(
+        &self,
+        func: &Expr,
+        arg: &Expr,
+        func_ty: &Ty,
+        arg_ty: &Ty,
+        err: TypeError,
+    ) -> TypeError {
+        if !err.message.starts_with("effect mismatch") {
+            return err;
+        }
+        let Ty::Fun(param, _, _) = self.apply(func_ty) else {
+            return err;
+        };
+        let given = self.apply(arg_ty);
+        // Walk the declared callback and the argument arrow by arrow to the first
+        // closed declared effect the argument's differs from: declared effects are
+        // exact, so a callback doing less is rejected as surely as one doing more.
+        let (mut declared, mut actual, mut arrow) = (param.as_ref(), &given, 0);
+        let (closed, performs) = loop {
+            match (declared, actual) {
+                (Ty::Fun(_, d_ret, d_eff), Ty::Fun(_, a_ret, a_eff)) => {
+                    let d_eff = self.apply_eff(d_eff);
+                    let a_eff = self.apply_eff(a_eff);
+                    if d_eff.vars.is_empty() && a_eff.labels != d_eff.labels {
+                        break (d_eff, a_eff);
+                    }
+                    (declared, actual, arrow) = (d_ret, a_ret, arrow + 1);
+                }
+                _ => return err,
+            }
+        };
+        let mut head = func;
+        while let ExprKind::App { func, .. } = &head.kind {
+            head = func;
+        }
+        let Some(owner) = (match &head.kind {
+            ExprKind::Var(name) => Some(name.clone()),
+            _ => qualified_name(head),
+        }) else {
+            return err;
+        };
+        let who = match &arg.kind {
+            ExprKind::Var(name) => format!("`{name}`"),
+            _ => "this function".to_string(),
+        };
+        let effects = |eff: &Effect| {
+            if eff.labels.is_empty() {
+                "nothing".to_string()
+            } else {
+                format!("{{{}}}", eff.show_labels())
+            }
+        };
+        let allows = if closed.labels.is_empty() {
+            "which performs nothing".to_string()
+        } else {
+            format!("which performs exactly {}", effects(&closed))
+        };
+        TypeError {
+            message: format!(
+                "{who} performs {}, but `{owner}` takes this callback as `{}`, {allows}; \
+                 to accept a callback whatever it does, give that arrow an effect variable in \
+                 the extern that declares it: `{}`",
+                effects(&performs),
+                show(declared),
+                show_with_effect_var(&param, arrow),
+            ),
+            span: arg.span(),
+        }
     }
 
     fn bind_pattern(
@@ -10039,6 +10123,32 @@ fn show(ty: &Ty) -> String {
     let mut buf = String::new();
     show_into(ty, &mut namer, &mut buf, false);
     buf
+}
+
+/// A function type shown with the effect variable `->{e}` on its arrow number
+/// `arrow` (0 is the outermost), as the fix to suggest for a closed callback
+/// arrow (#180): `Reader -> Writer ->{e} Async unit`.
+fn show_with_effect_var(ty: &Ty, arrow: usize) -> String {
+    let mut namer = Namer::default();
+    let mut out = String::new();
+    let mut cur = ty;
+    let mut i = 0;
+    while let Ty::Fun(domain, ret, eff) = cur {
+        show_into(domain, &mut namer, &mut out, true);
+        if i == arrow {
+            out.push_str(" ->{e} ");
+        } else if eff.labels.is_empty() {
+            out.push_str(" -> ");
+        } else {
+            out.push_str(" ->{");
+            out.push_str(&eff.show_labels());
+            out.push_str("} ");
+        }
+        cur = ret;
+        i += 1;
+    }
+    show_into(cur, &mut namer, &mut out, false);
+    out
 }
 
 fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {

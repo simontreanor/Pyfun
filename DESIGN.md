@@ -127,7 +127,12 @@ collected like type variables (`collect_effect_vars`), generalized in the extern
 variable into the innermost `{io, e}`, so `let pure` still rejects an impure pipeline. A `->{e}` on
 the innermost arrow counts as annotated (skips the io-by-default rule, asserting "exactly the
 callback's effect"). In a `type` declaration effect variables remain an error — ADT/record fields
-would need effect-*parameterized* types, which stays out of scope.
+would need effect-*parameterized* types, which stays out of scope. A callback arrow written without a
+variable is closed, and an `async { }` handler (which performs `async`) never fits one, so an argument
+whose arrow meets a closed declared arrow is reported at the argument with both effects and the
+`->{e}` fix (`` `handle` performs {io, async}, but `serve` takes this callback as `Writer -> Async
+unit`, which performs nothing; … `Reader -> Writer ->{e} Async unit` ``, #180), not the inferred set,
+which would accept only callbacks performing exactly that.
 
 **Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
 written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or
