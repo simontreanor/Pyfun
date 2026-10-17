@@ -3979,12 +3979,24 @@ fn plus_on_strings_hints_at_string_concat() {
 }
 
 #[test]
+fn multiply_on_strings_hints_at_string_repeat() {
+    // `*` is numeric; the hint shows count-first String.repeat syntax.
+    assert_error_contains("let line = \"-\" * 20", "`String.repeat count string`");
+    assert_error_contains("let line = 20 * \"-\"", "`String.repeat count string`");
+}
+
+#[test]
 fn a_plain_numeric_mismatch_keeps_its_message() {
-    // A non-string numeric mismatch must NOT gain a spurious concat hint.
-    let msgs = errors("let bad = 1 + true");
+    // Non-string numeric mismatches must not gain string operator hints.
+    let add_msgs = errors("let bad = 1 + true");
     assert!(
-        msgs.iter().all(|m| !m.contains("String.concat")),
-        "unexpected concat hint: {msgs:?}"
+        add_msgs.iter().all(|m| !m.contains("String.concat")),
+        "unexpected concat hint: {add_msgs:?}"
+    );
+    let mul_msgs = errors("let bad = 1 * true");
+    assert!(
+        mul_msgs.iter().all(|m| !m.contains("String.repeat")),
+        "unexpected repeat hint: {mul_msgs:?}"
     );
 }
 
