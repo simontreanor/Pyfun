@@ -361,7 +361,68 @@ impl Parser {
         }
     }
 
+    /// `def area w h = …` or `def area(w, h):` is Python muscle memory. `def` is an
+    /// ordinary identifier in Pyfun, so the line would otherwise fail at its `=` or
+    /// `:` with "expected an expression". The hint fires only when `def name` is
+    /// followed on the same line by `=` or `:` outside brackets, the shape of a
+    /// definition, so a function the program itself calls `def` still works.
+    fn def_hint(&self) -> Option<ParseError> {
+        let (Tok::Ident(def), Tok::Ident(name)) = (self.peek(), self.peek2()) else {
+            return None;
+        };
+        if def != "def" {
+            return None;
+        }
+        // Parameter names come bare (`def area w h =`) or first in each slot of a
+        // Python parameter list (`def area(w: int, h: int) -> int:`); annotations
+        // and a return type are skipped.
+        let mut params = Vec::new();
+        let mut depth = 0usize;
+        let mut slot_open = false;
+        let mut returns = false;
+        let mut parenthesized = false;
+        for token in &self.tokens[self.pos + 2..] {
+            match &token.tok {
+                Tok::LParen | Tok::LBracket | Tok::LBrace => {
+                    parenthesized |= depth == 0 && !returns;
+                    depth += 1;
+                    slot_open = depth == 1 && !returns;
+                }
+                Tok::RParen | Tok::RBracket | Tok::RBrace => depth = depth.saturating_sub(1),
+                Tok::Comma if depth == 1 => slot_open = !returns,
+                Tok::Ident(p) if depth == 1 && slot_open => {
+                    params.push(p.clone());
+                    slot_open = false;
+                }
+                Tok::Ident(p) if depth == 0 && !returns => params.push(p.clone()),
+                Tok::Arrow if depth == 0 => returns = true,
+                Tok::Sep | Tok::Indent | Tok::Dedent | Tok::Eof => return None,
+                Tok::Eq | Tok::Colon if depth == 0 => {
+                    let mut shape = vec!["let".to_string(), name.clone()];
+                    if parenthesized && params.is_empty() {
+                        // `def greet():` takes no arguments, which Pyfun spells `()`.
+                        params.push("()".to_string());
+                    }
+                    shape.extend(params);
+                    return Some(ParseError {
+                        message: format!(
+                            "Pyfun defines functions with `let`: write `{} = …`",
+                            shape.join(" ")
+                        ),
+                        span: self.span(),
+                    });
+                }
+                _ if depth > 0 || returns => {}
+                _ => return None,
+            }
+        }
+        None
+    }
+
     fn parse_item(&mut self) -> Result<Item, ParseError> {
+        if let Some(err) = self.def_hint() {
+            return Err(err);
+        }
         match self.peek() {
             Tok::Measure => self.parse_measure(),
             Tok::Type => Ok(Item::Type(self.parse_type_decl()?)),
@@ -1044,6 +1105,9 @@ impl Parser {
         self.expect(&Tok::Indent, "an indented block")?;
         let mut stmts = Vec::new();
         loop {
+            if let Some(err) = self.def_hint() {
+                return Err(err);
+            }
             let stmt = if matches!(self.peek(), Tok::Let) {
                 BlockStmt::Let(self.parse_let_binding()?)
             } else {

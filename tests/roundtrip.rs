@@ -772,6 +772,30 @@ fn let_rec_is_rejected_with_a_helpful_hint() {
 }
 
 #[test]
+fn def_is_answered_with_the_let_spelling() {
+    // `def` is Python muscle memory; the hint rewrites the line's own shape.
+    for (source, expected) in [
+        ("def area w h = w * h", "write `let area w h = …`"),
+        ("def area(w, h):\n  w * h", "write `let area w h = …`"),
+        (
+            "def area(w: int, h: int) -> int:\n  w * h",
+            "write `let area w h = …`",
+        ),
+        ("def greet():\n  print \"hi\"", "write `let greet () = …`"),
+        ("let f x =\n  def g y = y + 1\n  g x", "write `let g y = …`"),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message().contains(expected),
+            "{source} -> {}",
+            err.message()
+        );
+    }
+    // `def` is still an ordinary identifier: a function the program calls `def`.
+    assert!(parse("let def x = x + 1\nprint (def 2)").is_ok());
+}
+
+#[test]
 fn doc_comment_attaches_to_the_following_declaration() {
     // `## …` lines at column 0 join (with `\n`) onto the next top-level
     // `let`/`type`/`extern`; the printer re-emits them, one `## ` line each.
