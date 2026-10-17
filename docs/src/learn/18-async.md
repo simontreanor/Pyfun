@@ -76,6 +76,11 @@ The block runs twice, once for each `let!`. A Python coroutine can only be await
 await runs it again from the start. F# calls this a *cold* async. It means you can keep an `Async` in
 a variable, pass it to a function that retries it, or put the same one in a list twice.
 
+It also means nothing starts early. Two `let!` lines in a row run one after the other, because the
+second value has not started by the time the first finishes. When you want several things to run at
+the same time, such as two web requests, hand them to `Async.parallel` together, which you will meet
+in a moment.
+
 ## Running one at the top level
 
 An `Async` value has to be awaited somewhere, and at the top level there is no enclosing `async`

@@ -865,7 +865,11 @@ knows only its arity, and a bare or partially applied reference is the same adap
 any number of times, or call it for a fresh coroutine, as it would a zero-argument `async def`
 (`asyncio.run(job())`): `_pf_Async.__call__` is `async def __call__(self): return await self`.
 Python 3.14's `asyncio.run` accepts any awaitable, but 3.12 and 3.13 want a coroutine, so code that
-must run on them calls the value.
+must run on them calls the value. Cold also means an `extern` whose Python call starts work at once
+(a call returning an `asyncio` Task or Future, or a JS promise under Pyodide) now starts it at the
+await: two such calls bound with `let` and awaited afterwards run one after the other, where they
+used to overlap, and awaiting one twice makes the call twice. A program overlaps work by handing it
+to `Async.parallel` (or `race`) together, which starts every element before awaiting any.
 
 **Async combinators — the `Async` module.** `async { }` builds an `Async a`; the module is the rest
 of what F#'s `Async` offers that `asyncio` can supply, typed once
@@ -962,7 +966,9 @@ holds (a lifetime detail a façade hides). The cookbook's `browser/` entry is th
 `Dom` module a program imports, with a counter page as its consumer. Two things fall out of work
 already done: a click handler is an ordinary one-parameter Pyfun function (Python calls it with the
 event, §6's calling convention), and a JS `Promise` is awaitable under Pyodide, so an extern over a
-JS async API is typed `-> Async a` and awaited with `let!` like any other, no bridge to build.
+JS async API is typed `-> Async a` and awaited with `let!` like any other, no bridge to build. Since
+an `Async` is cold (§8), the JS call is made at the await, so requests meant to overlap go to
+`Async.parallel` together.
 Signalling for a peer-to-peer transport is the program's problem, not the language's.
 
 **Derived codecs — `Decode.auto` and `Encode.auto`.** A program that speaks to itself over a wire
