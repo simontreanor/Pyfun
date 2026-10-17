@@ -504,7 +504,9 @@ something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorp
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
 staying *unqualified* Pyfun names), plus the **unit-aware roots `sqrt : float<'u^2> -> float<'u>`**
 (√area = length) **and `cbrt : float<'u^3> -> float<'u>`** (∛volume = length; see §8.2; lower to
-`math.sqrt`/`math.cbrt` like the conversions), plus a `unit` type whose one value is written `()` (both lower to
+`math.sqrt`/`math.cbrt` like the conversions; as in Python, the result is the platform C library's, and glibc's
+`cbrt` is not correctly rounded, so `cbrt 27.0` prints `3.0000000000000004` on Linux and `3.0` on Windows: the
+last digit of a float maths function can differ between systems), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the natural result of an effectful call). It also seeds the **standard combinators**
 `id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
 `flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
