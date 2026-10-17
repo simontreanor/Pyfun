@@ -1809,6 +1809,13 @@ impl Parser {
             }
             Tok::LBrace => return self.parse_record(start),
             Tok::LBracket => return self.parse_list(start),
+            // Built directly: `self.error` would append `, found `|``.
+            Tok::Bar if matches!(self.peek2(), Tok::Bar) => {
+                return Err(ParseError {
+                    message: "use `or` instead of `||`".to_string(),
+                    span: self.span(),
+                });
+            }
             Tok::Return if self.ce_items.is_empty() => {
                 return Err(ParseError {
                     message:

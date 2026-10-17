@@ -917,6 +917,26 @@ fn an_active_pattern_is_top_level_only() {
 }
 
 #[test]
+fn suggests_keyword_operators_for_symbolic_logical_operator_typos() {
+    for (source, expected) in [
+        ("let ok = ready && valid", "use `and` instead of `&&`"),
+        ("let ok = ready || valid", "use `or` instead of `||`"),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message().contains(expected),
+            "{source} -> {}",
+            err.message()
+        );
+    }
+    // The message ends at the suggestion, with no `, found` tacked on.
+    assert_eq!(
+        parse("let ok = ready || valid").unwrap_err().message(),
+        "use `or` instead of `||`"
+    );
+}
+
+#[test]
 fn return_outside_computation_expression_suggests_dropping_return() {
     let err = parse("let double x = return x * 2").unwrap_err();
     let message = err.to_string();
