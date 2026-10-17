@@ -781,7 +781,7 @@ fn def_is_answered_with_the_let_spelling() {
             "def area(w: int, h: int) -> int:\n  w * h",
             "write `let area w h = …`",
         ),
-        ("def greet():\n  print \"hi\"", "write `let greet () = …`"),
+        ("def greet():\n  print \"hi\"", "write `let greet _ = …`"),
         ("let f x =\n  def g y = y + 1\n  g x", "write `let g y = …`"),
     ] {
         let err = parse(source).unwrap_err();
@@ -791,6 +791,9 @@ fn def_is_answered_with_the_let_spelling() {
             err.message()
         );
     }
+    // Every suggested spelling parses.
+    assert!(parse("let area w h = w * h").is_ok());
+    assert!(parse("let greet _ =\n  print \"hi\"").is_ok());
     // `def` is still an ordinary identifier: a function the program calls `def`.
     assert!(parse("let def x = x + 1\nprint (def 2)").is_ok());
 }

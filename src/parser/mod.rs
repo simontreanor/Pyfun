@@ -400,8 +400,9 @@ impl Parser {
                 Tok::Eq | Tok::Colon if depth == 0 => {
                     let mut shape = vec!["let".to_string(), name.clone()];
                     if parenthesized && params.is_empty() {
-                        // `def greet():` takes no arguments, which Pyfun spells `()`.
-                        params.push("()".to_string());
+                        // `def greet():` takes no arguments: Pyfun gives it one it
+                        // ignores (`let greet _ = …`), called as `greet ()`.
+                        params.push("_".to_string());
                     }
                     shape.extend(params);
                     return Some(ParseError {
