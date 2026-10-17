@@ -6,7 +6,7 @@
 ;; Maintainer: Simon Treanor <https://github.com/simontreanor>
 ;; Assisted-by: Claude Code:claude-opus-5
 ;; URL: https://github.com/simontreanor/Pyfun
-;; Version: 0.9.0
+;; Version: 0.10.0
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: languages
 
