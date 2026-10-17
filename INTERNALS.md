@@ -415,6 +415,11 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
   `TypeSpan::raw`). An unspellable type leaves its position unannotated. The same pass annotates
   module-level values, which mypyc cannot type when another module reads them: a nullary singleton
   `_X: X = X()`, and the first assignment of a top-level value bound once.
+- **Comparisons and closures.** `native_classes` sets `PyStmt::ClassDef::native`, so an ordered
+  variant emits `__eq__` and all four orderings instead of `@total_ordering` (mypyc compiled `==` as
+  identity on a class with `__lt__` alone). After `annotate_functions`, `unannotate_nonlocal_params`
+  clears the annotation of any `TypedFuncDef` parameter a nested function names in a `nonlocal`
+  (python/mypy#22221).
 - **Discarded matches.** `Lowerer::push_discarded` emits a statement-position expression. In
   native mode, when its value is a temp set by an `if` ladder, `discard_temp` turns each assignment
   of the temp into a bare evaluation, since mypyc rejects a local whose every assignment is a unit
@@ -422,7 +427,9 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
 - **Build.** `src/native_build.rs` writes the native output to a directory, runs `python -m mypyc
   --allow-redefinition-new --local-partial-types` over every module but `_pyfun_rt.py`, removes the
   sources and writes `__main__.py`. `bench/mypyc_run.py` and `.github/workflows/native-bench.yml`
-  measure it.
+  measure it, and `tests/native_parity.py` (the `native` CI job) diffs every runnable lesson,
+  offline example and `tests/native/` program against `pyfun run`. A file Python cannot import
+  (`01-intro.pyfun`) builds as `_pf_01_intro`.
 
 ### The `--target 3.11` emission pass
 

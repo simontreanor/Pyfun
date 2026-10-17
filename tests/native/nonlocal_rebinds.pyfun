@@ -1,0 +1,42 @@
+# Every shape that rebinds a captured name through `nonlocal` in the emitted
+# Python, each built natively by tests/native_parity.py (python/mypy#22221).
+extern import asyncio
+extern runAsync: Async a -> a = asyncio.run
+
+let finished count = async { return count }
+
+# An async self tail call loops over its parameters inside the coroutine.
+let countdown n acc =
+  async {
+    return! (if n == 0 then finished acc else countdown (n - 1) (acc + n))
+  }
+
+# A `mut` changed inside a `seq` block, which lowers to a generator.
+let numbered xs =
+  let mut i = 0
+  seq {
+    for x in xs:
+      i <- i + 1
+      yield (i, x)
+  }
+
+# A `mut` local changed from a closure.
+let tally xs =
+  let mut total = 0
+  let add x = total <- total + x
+  List.iter add xs
+  total
+
+# A `mut` changed inside an `async` block.
+let bump start =
+  let mut n = start
+  let step = async {
+    n <- n + 1
+    return n
+  }
+  runAsync step
+
+print (runAsync (countdown 4 0))
+print (numbered ["a", "b"] |> Seq.toList)
+print (tally [1, 2, 3])
+print (bump 41)

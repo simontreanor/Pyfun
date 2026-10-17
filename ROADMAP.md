@@ -521,17 +521,13 @@ map_build 1.64× vs hand-written.
   "inferred type None"). Compiled on Windows (MSVC, CPython 3.14), every replay prints the same, and
   its move-generation bench runs about **1.5x** faster than plain Python (generation up to 2x on
   the heaviest position). The replays themselves gain only 1.1–1.2x, since loading the dictionary
-  takes most of each run. **Remaining:** or-patterns whose alternatives
-  bind names, and **a crash in any nested function that rebinds a `nonlocal`** (found 2026-10-17
-  by `tests/native_parity.py`, the CI gate that diffs every runnable lesson and offline example
-  against `pyfun run`). Under mypy's `--allow-redefinition-new`, mypyc generates C that stores an
-  unboxed `int` into an object slot for the rebound name: gcc rejects it (`-Werror=int-conversion`)
-  and an MSVC build segfaults at run time. Eight lines of plain Python reproduce it, closure,
-  generator and coroutine alike, so an async or `seq` self tail call and a `mut` captured by a closure all crash a native
-  build (`examples/interop/structured_concurrency.pyfun` is the gate's one known failure). Dropping
-  the flag removes the crash but fails six programs, each a `try` temporary assigned `Ok` then
-  `Error`; annotating that temporary with the union is the likely fix, if nothing else needs the
-  flag. Not yet reported upstream.
+  takes most of each run. **Remaining:** or-patterns whose alternatives bind names.
+  `tests/native_parity.py` (the `native` CI job) diffs every runnable lesson, the offline examples
+  and the programs in `tests/native/` against `pyfun run`, so a native-only miscompile fails the PR.
+  Two it found are fixed: `==` on a compared sum type (explicit comparison methods, §5.6) and an
+  async self tail call, whose parameters a coroutine rebinds through `nonlocal`. mypyc copied such
+  a parameter into the closure unboxed when it was annotated `int` (python/mypy#22221), so those
+  parameters stay unannotated (#173).
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
