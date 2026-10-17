@@ -3929,6 +3929,36 @@ fn a_truncated_fit_list_says_how_many_it_left_out() {
 }
 
 #[test]
+fn a_truncated_refinement_list_says_how_many_it_left_out() {
+    // Same string->string hole as the truncated direct-fit case: many functions
+    // refine into it (String.lower ?, String.upper ?, …), so the refinement
+    // shortlist is capped and must say how many it left out.
+    let module =
+        pyfun::parse("let r = [\"a\"] |> List.map ?f |> String.join \",\"").expect("parse");
+    let (_e, _t, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
+    let hole = &holes[0];
+    assert_eq!(hole.refinements.len(), 4);
+    assert!(hole.more_refinements > 0);
+    // The "and N more" for refinements sits on the `or:` clause; pin that the
+    // message reports the leftover count (the try: clause also has one for fits).
+    assert!(
+        hole.message()
+            .contains(&format!("or: {}", hole.refinements.join(", "))),
+        "{}",
+        hole.message()
+    );
+    assert!(
+        hole.message().contains(&format!(
+            "or: {}, and {} more",
+            hole.refinements.join(", "),
+            hole.more_refinements
+        )),
+        "{}",
+        hole.message()
+    );
+}
+
+#[test]
 fn an_unconstrained_hole_lists_no_fits() {
     // A bare, fully-polymorphic hole (`'a`) would match everything — unhelpful, so
     // no fits are listed.
