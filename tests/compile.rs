@@ -4283,7 +4283,7 @@ fn e2e_an_async_callback_handed_to_python_runs() {
                extern type Writer\n\
                extern type Server\n\
                extern type Bytes\n\
-               extern startServer: (Reader -> Writer ->{io, async} Async unit) -> string -> int -> Async Server = asyncio.start_server\n\
+               extern startServer: (Reader -> Writer ->{e} Async unit) -> string -> int -> Async Server = asyncio.start_server\n\
                extern openConnection: string -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
                extern readline: Reader -> Async Bytes = .readline()\n\
                extern write: Writer -> Bytes -> unit = .write\n\

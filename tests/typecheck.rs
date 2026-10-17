@@ -2955,6 +2955,62 @@ fn effect_var_extern_accepts_both_pure_and_io_callbacks() {
 }
 
 #[test]
+fn a_closed_callback_arrow_points_at_the_effect_variable() {
+    // #180: a callback arrow written without `->{e}` is closed, so any handler
+    // that does something misses it. The error names both sides, sits on the
+    // argument rather than the whole call, and shows the `->{e}` fix.
+    let src = "extern type Writer\n\
+               extern type Server\n\
+               extern closeConn: Writer -> unit = .close()\n\
+               extern serve: (Writer -> Async unit) -> int -> Async Server = asyncio.start_server\n\
+               let handle w = async { closeConn w }\n\
+               let listen = serve handle 7777";
+    let errs = pyfun::check(src).unwrap_err();
+    assert_eq!(
+        errs[0].message,
+        "`handle` performs {io, async}, but `serve` takes this callback as \
+         `Writer -> Async unit`, which performs nothing; to accept a callback whatever it \
+         does, give that arrow an effect variable in the extern that declares it: \
+         `Writer ->{e} Async unit`"
+    );
+    let at = src.rfind("handle").unwrap();
+    assert_eq!(
+        (errs[0].span.start, errs[0].span.end),
+        (at, at + "handle".len())
+    );
+    // With the effect variable, the same handler checks.
+    assert!(
+        pyfun::check(&src.replace("(Writer -> Async unit)", "(Writer ->{e} Async unit)")).is_ok()
+    );
+}
+
+#[test]
+fn pasting_the_inferred_set_into_the_callback_still_points_at_the_effect_variable() {
+    // Declared effects are exact: `->{io, async}` rejects a handler that only
+    // awaits, and the message says so instead of just "effect mismatch".
+    let src = "extern type Writer\n\
+               extern type Server\n\
+               extern serve: (Writer ->{io, async} Async unit) -> int -> Async Server = asyncio.start_server\n\
+               let idle w = async { return () }\n\
+               let listen = serve idle 7777";
+    assert_error_contains(src, "`idle` performs {async}");
+    assert_error_contains(src, "which performs exactly {io, async}");
+    assert_error_contains(src, "`Writer ->{e} Async unit`");
+}
+
+#[test]
+fn a_callback_of_the_wrong_type_keeps_its_type_mismatch() {
+    let src = "extern type Writer\n\
+               extern type Server\n\
+               extern serve: (Writer -> Async unit) -> int -> Async Server = asyncio.start_server\n\
+               let listen = serve 5 7777";
+    assert_eq!(
+        errors(src),
+        ["type mismatch: expected Writer -> Async unit, found int"]
+    );
+}
+
+#[test]
 fn pure_pipeline_through_an_effect_var_extern_is_pure() {
     // With a pure callback the whole pipeline is provably pure: `e` on the callback
     // and on the innermost arrow are the *same* var, so both resolve to pure and the
