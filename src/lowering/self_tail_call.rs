@@ -107,14 +107,16 @@ pub(super) fn rewrite(name: &str, params: &[String], body: Vec<PyStmt>) -> Outco
 }
 
 /// The async form of the rewrite (`DESIGN.md` §5.4). A `let f a = async { … }`
-/// lowers to `def f(a): async def g(): …; return g()`, and its self tail call is
-/// `return await f(…)` inside `g` — each message of an agent loop then awaits a
-/// fresh coroutine on the same stack, and CPython's ~1000-frame limit is the
-/// lifetime cap the loop was written to escape. When the body ends in exactly
-/// that wrapper shape, the awaited tail calls in `g` rebind the *outer*
-/// parameters (they are `g`'s closure, so a `nonlocal` declaration makes them
-/// writable) and go round a `while True:` inside the one coroutine. The
-/// preconditions are the sync pass's, applied to `g`'s body.
+/// lowers to `def f(a): async def g(): …; return _pf_Async(g)`, and its self tail
+/// call is `return await f(…)` inside `g` — each message of an agent loop then
+/// awaits a fresh coroutine on the same stack, and CPython's ~1000-frame limit is
+/// the lifetime cap the loop was written to escape. When the body ends in exactly
+/// that wrapper shape, `g` takes the parameters as its own
+/// (`async def g(a): while True: …`, returned as `_pf_Async(g, a)`): the awaited
+/// tail calls rebind them and go round the loop inside the one coroutine, and
+/// since an `Async` is cold, every await of `f(…)` starts again from the
+/// arguments it was built with. The preconditions are the sync pass's, applied
+/// to `g`'s body.
 fn rewrite_async_wrapper(
     name: &str,
     params: &[String],
@@ -135,8 +137,8 @@ fn rewrite_async_wrapper(
                 PyStmt::Return(PyExpr::Call { func, args }),
             ) => {
                 g_params.is_empty()
-                    && args.is_empty()
-                    && matches!(func.as_ref(), PyExpr::Name(f) if f == g)
+                    && matches!(func.as_ref(), PyExpr::Name(c) if c == "_pf_Async")
+                    && matches!(args.as_slice(), [PyExpr::Name(f)] if f == g)
             }
             _ => false,
         };
@@ -197,27 +199,22 @@ fn rewrite_async_wrapper(
     let mut found = false;
     rewrite_await_stmts(&mut g_rest, name, params, &mut found);
     debug_assert!(found, "has_await_self_tail_call said there was one");
-    // The parameters are the enclosing def's; rebinding them from inside `g`
-    // needs a `nonlocal` for each one not already declared (a `mut` capture the
-    // block reassigns may have declared its own).
-    let declared: HashSet<&String> = g_decls
-        .iter()
-        .flat_map(|s| match s {
-            PyStmt::Global(names) | PyStmt::Nonlocal(names) => names.iter().collect::<Vec<_>>(),
-            _ => Vec::new(),
-        })
-        .collect();
-    let fresh: Vec<String> = params
-        .iter()
-        .filter(|p| !declared.contains(p))
-        .cloned()
-        .collect();
+    // The loop variables are `g`'s own parameters, bound afresh on every await.
     let mut new_body = g_decls;
-    if !fresh.is_empty() {
-        new_body.push(PyStmt::Nonlocal(fresh));
-    }
     new_body.push(PyStmt::WhileTrue { body: g_rest });
     *g_body = new_body;
+    if let PyStmt::FuncDef {
+        params: g_params, ..
+    } = &mut rest[n - 2]
+    {
+        *g_params = params.to_vec();
+    }
+    rest[n - 1] = PyStmt::Return(PyExpr::Call {
+        func: Box::new(PyExpr::Name("_pf_Async".to_string())),
+        args: std::iter::once(PyExpr::Name(g_name))
+            .chain(params.iter().map(|p| PyExpr::Name(p.clone())))
+            .collect(),
+    });
     Outcome::kept(join(decls, rest))
 }
 

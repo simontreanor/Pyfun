@@ -525,9 +525,9 @@ map_build 1.64× vs hand-written.
   `tests/native_parity.py` (the `native` CI job) diffs every runnable lesson, the offline examples
   and the programs in `tests/native/` against `pyfun run`, so a native-only miscompile fails the PR.
   Two it found are fixed: `==` on a compared sum type (explicit comparison methods, §5.6) and an
-  async self tail call, whose parameters a coroutine rebinds through `nonlocal`. mypyc copied such
-  a parameter into the closure unboxed when it was annotated `int` (python/mypy#22221), so those
-  parameters stay unannotated (#173).
+  async self tail call, whose parameters a coroutine rebound through `nonlocal`, which mypyc copied
+  into the closure unboxed when they were annotated `int` (python/mypy#22221, #173). Since `Async`
+  went cold, that loop runs over the coroutine's own parameters and needs no `nonlocal` at all.
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed

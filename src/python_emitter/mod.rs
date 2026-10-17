@@ -146,6 +146,9 @@ pub enum PyStmt {
         body: Vec<PyStmt>,
         is_async: bool,
     },
+    /// `class name: body`: a plain class whose body is ordinary statements. The
+    /// runtime's cold `_pf_Async` uses it; ADTs and records use [`PyStmt::ClassDef`].
+    Class { name: String, body: Vec<PyStmt> },
     /// `yield value`
     Yield(PyExpr),
     /// `yield from value`
@@ -522,6 +525,10 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         } => {
             let kw = if *is_async { "async def" } else { "def" };
             line(out, depth, &format!("{kw} {name}({}):", params.join(", ")));
+            emit_block(body, depth + 1, out);
+        }
+        PyStmt::Class { name, body } => {
+            line(out, depth, &format!("class {name}:"));
             emit_block(body, depth + 1, out);
         }
         PyStmt::TypedFuncDef {
@@ -914,7 +921,21 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             emit_expr(lower, 0),
             emit_expr(upper, 0)
         ),
-        PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
+        // Awaiting a cold `_pf_Async(f, *args)` the moment it is built is exactly
+        // `await f(*args)`, which reads as the Python it is (`await inbox.get()`).
+        PyExpr::Await(inner) => match inner.as_ref() {
+            PyExpr::Call { func, args }
+                if matches!(func.as_ref(), PyExpr::Name(n) if n == "_pf_Async")
+                    && !args.is_empty() =>
+            {
+                let direct = PyExpr::Call {
+                    func: Box::new(args[0].clone()),
+                    args: args[1..].to_vec(),
+                };
+                format!("await {}", emit_expr(&direct, 100))
+            }
+            _ => format!("await {}", emit_expr(inner, 100)),
+        },
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.
         PyExpr::Not(inner) => format!("not {}", emit_expr(inner, 4)),
