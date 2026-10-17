@@ -3929,6 +3929,36 @@ fn a_truncated_fit_list_says_how_many_it_left_out() {
 }
 
 #[test]
+fn a_truncated_refinement_list_says_how_many_it_left_out() {
+    // Same string->string hole as the truncated direct-fit case: many functions
+    // refine into it (String.lower ?, String.upper ?, …), so the refinement
+    // shortlist is capped and must say how many it left out.
+    let module =
+        pyfun::parse("let r = [\"a\"] |> List.map ?f |> String.join \",\"").expect("parse");
+    let (_e, _t, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
+    let hole = &holes[0];
+    assert_eq!(hole.refinements.len(), 4);
+    assert!(hole.more_refinements > 0);
+    // The "and N more" for refinements sits on the `or:` clause; pin that the
+    // message reports the leftover count (the try: clause also has one for fits).
+    assert!(
+        hole.message()
+            .contains(&format!("or: {}", hole.refinements.join(", "))),
+        "{}",
+        hole.message()
+    );
+    assert!(
+        hole.message().contains(&format!(
+            "or: {}, and {} more",
+            hole.refinements.join(", "),
+            hole.more_refinements
+        )),
+        "{}",
+        hole.message()
+    );
+}
+
+#[test]
 fn an_unconstrained_hole_lists_no_fits() {
     // A bare, fully-polymorphic hole (`'a`) would match everything — unhelpful, so
     // no fits are listed.
@@ -3970,6 +4000,18 @@ fn refinement_fits_suggest_functions_whose_result_matches() {
 // ---------- error-quality: guiding messages ----------
 
 #[test]
+fn a_python_builtin_name_points_at_its_pyfun_module() {
+    assert_error_contains("let n = len [1, 2, 3]", "`List.len` for a list");
+    assert_error_contains("let s = str 5", "`String.fromInt`");
+    assert_error_contains("let t = sum [1, 2]", "Pyfun spells this `List.sum`");
+    // Any other unbound name keeps the plain message.
+    assert_eq!(
+        errors("let z = frobnicate 3"),
+        ["unbound name `frobnicate`"]
+    );
+}
+
+#[test]
 fn plus_on_strings_hints_at_string_concat() {
     // `+` is numeric; the error should point at the concatenation path.
     assert_error_contains("let s = \"a\" + \"b\"", "String.concat");
@@ -3980,17 +4022,31 @@ fn plus_on_strings_hints_at_string_concat() {
 
 #[test]
 fn plus_on_lists_hints_at_list_concat() {
-    assert_error_contains("let xs = [1, 2] + [3]", "List.concat [a] [b]");
+    assert_error_contains("let xs = [1, 2] + [3]", "use `List.concat xs ys`");
+    assert_error_contains("let xs = 1 + [3]", "use `List.concat xs ys`");
+}
+
+#[test]
+fn multiply_on_strings_hints_at_string_repeat() {
+    // `*` is numeric; the hint shows count-first String.repeat syntax.
+    assert_error_contains("let line = \"-\" * 20", "`String.repeat count string`");
+    assert_error_contains("let line = 20 * \"-\"", "`String.repeat count string`");
 }
 
 #[test]
 fn a_plain_numeric_mismatch_keeps_its_message() {
-    // A non-string numeric mismatch must NOT gain a spurious concat hint.
-    let msgs = errors("let bad = 1 + true");
+    // Non-string numeric mismatches must not gain string operator hints.
+    let add_msgs = errors("let bad = 1 + true");
     assert!(
-        msgs.iter()
+        add_msgs
+            .iter()
             .all(|m| !m.contains("String.concat") && !m.contains("List.concat")),
-        "unexpected concat hint: {msgs:?}"
+        "unexpected concat hint: {add_msgs:?}"
+    );
+    let mul_msgs = errors("let bad = 1 * true");
+    assert!(
+        mul_msgs.iter().all(|m| !m.contains("String.repeat")),
+        "unexpected repeat hint: {mul_msgs:?}"
     );
 }
 

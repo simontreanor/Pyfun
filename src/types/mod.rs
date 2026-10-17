@@ -1668,6 +1668,29 @@ pub fn qualified_name(expr: &Expr) -> Option<String> {
     }
 }
 
+/// Where a Python builtin lives in Pyfun, for the "unbound name" message: Pyfun's
+/// prelude is module-qualified, so `len [1, 2]` names nothing. Only consulted when
+/// the name really is unbound, so a program's own `len` is untouched.
+fn python_builtin_spelling(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "len" => "`List.len` for a list, `String.len` for a string",
+        "str" => "`String.fromInt` or `String.fromFloat` (or an f-string)",
+        "int" => "`String.toInt`, which returns an `Option`",
+        "float" => "`String.toFloat`, which returns an `Option`",
+        "sum" => "`List.sum`",
+        "sorted" => "`List.sort`",
+        "reversed" => "`List.rev`",
+        "range" => "`List.range`",
+        "map" => "`List.map`",
+        "filter" => "`List.filter`",
+        "zip" => "`List.zip`",
+        "enumerate" => "`List.indexed`",
+        "any" => "`List.exists`",
+        "all" => "`List.forall`",
+        _ => return None,
+    })
+}
+
 /// Classic Levenshtein edit distance (insert/delete/substitute), over `char`s so a
 /// case slip counts as one substitution. Powers the "did you mean" member hint.
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -1752,6 +1775,8 @@ pub struct Hole {
     /// more arguments) unifies with the hole's type — shown applied to further holes
     /// (`String.upper ?`, `String.concat ? ?`). Fewest-holes-first, capped.
     pub refinements: Vec<String>,
+    /// How many further refinement fits the cap left out of `refinements`.
+    pub more_refinements: usize,
     pub span: Span,
 }
 
@@ -1771,7 +1796,11 @@ impl Hole {
             parts.push(format!("try: {}{more}", self.fits.join(", ")));
         }
         if !self.refinements.is_empty() {
-            parts.push(format!("or: {}", self.refinements.join(", ")));
+            let more = match self.more_refinements {
+                0 => String::new(),
+                n => format!(", and {n} more"),
+            };
+            parts.push(format!("or: {}{more}", self.refinements.join(", ")));
         }
         parts.join(" — ")
     }
@@ -2458,13 +2487,15 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         .map(|(span, name, ty, env)| {
             let (fits, more_fits) = inf.hole_fits(&env, &ty, name.as_deref());
             let direct: std::collections::HashSet<String> = fits.iter().cloned().collect();
-            let refinements = inf.hole_refinements(&env, &ty, &direct, name.as_deref());
+            let (refinements, more_refinements) =
+                inf.hole_refinements(&env, &ty, &direct, name.as_deref());
             Hole {
                 name,
                 ty: show(&inf.apply(&ty)),
                 fits,
                 more_fits,
                 refinements,
+                more_refinements,
                 span,
             }
         })
@@ -6602,11 +6633,11 @@ impl Infer {
         let lt = self.infer_expr(lhs, env)?;
         let (lb, lu) = self
             .expect_num(&lt, lhs.span())
-            .map_err(|e| self.addition_hint(op, &lt, e))?;
+            .map_err(|e| self.operator_hint(op, &lt, e))?;
         let rt = self.infer_expr(rhs, env)?;
         let (rb, ru) = self
             .expect_num(&rt, rhs.span())
-            .map_err(|e| self.addition_hint(op, &rt, e))?;
+            .map_err(|e| self.operator_hint(op, &rt, e))?;
         let base_clash = |this: &Self| {
             mismatch(
                 &this.num_ty(lb, this.apply_unit(&lu)),
@@ -6635,24 +6666,24 @@ impl Infer {
         }
     }
 
-    /// Turn generic numeric type errors into guidance when `+` is used for
-    /// string or list concatenation. Every other numeric mismatch keeps its message.
-    fn addition_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
-        if op == BinOp::Add {
-            match self.apply(operand) {
-                Ty::Str => {
-                    err.message =
-                        "`+` is numeric and does not concatenate strings — use `String.concat a b`"
-                            .to_string();
-                }
-                Ty::Con(name, _) if name == "List" => {
-                    err.message =
-                        "`+` is numeric and does not concatenate lists — use `List.concat [a] [b]`"
-                            .to_string();
-                }
-                _ => {}
+    /// Turn a generic numeric operand error into guidance when a Python habit
+    /// reaches for an operator Pyfun keeps numeric: `+` does not concatenate
+    /// strings or lists, and `*` does not repeat strings. Every other operand and
+    /// operator keeps the original error.
+    fn operator_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
+        let hint = match (op, self.apply(operand)) {
+            (BinOp::Add, Ty::Str) => {
+                "`+` is numeric and does not concatenate strings — use `String.concat a b`"
             }
-        }
+            (BinOp::Mul, Ty::Str) => {
+                "`*` is numeric and does not repeat strings — use `String.repeat count string`"
+            }
+            (BinOp::Add, Ty::Con(name, _)) if name == "List" => {
+                "`+` is numeric and does not concatenate lists — use `List.concat xs ys`"
+            }
+            _ => return err,
+        };
+        err.message = hint.to_string();
         err
     }
 
@@ -7450,7 +7481,12 @@ impl Infer {
                     })
                 }
                 None => Err(TypeError {
-                    message: format!("unbound name `{name}`"),
+                    message: match python_builtin_spelling(name) {
+                        Some(spelling) => {
+                            format!("unbound name `{name}` (Pyfun spells this {spelling})")
+                        }
+                        None => format!("unbound name `{name}`"),
+                    },
                     span,
                 }),
             },
@@ -9584,16 +9620,17 @@ impl Infer {
     /// keeps out trivially-general combinators (`id`, `const`) that would otherwise
     /// "refine" into every hole. `direct` is the set already reported as direct fits.
     /// Fewest-holes-first, then fewest generalized vars, then unqualified, then name.
+    /// Returns the shortlist and how many further refinements the cap left out.
     fn hole_refinements(
         &mut self,
         env: &Env,
         target: &Ty,
         direct: &std::collections::HashSet<String>,
         hole: Option<&str>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, usize) {
         let target = self.apply(target);
         if matches!(target, Ty::Var(_)) {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let snap = self.subst_snapshot();
         let mut out: Vec<(u8, usize, usize, bool, usize, String)> = Vec::new();
@@ -9641,10 +9678,13 @@ impl Infer {
             }
         }
         out.sort();
-        out.into_iter()
+        let more = out.len().saturating_sub(REFINE_CAP);
+        let shown = out
+            .into_iter()
             .map(|(_, _, _, _, _, s)| s)
             .take(REFINE_CAP)
-            .collect()
+            .collect();
+        (shown, more)
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
