@@ -4021,6 +4021,12 @@ fn plus_on_strings_hints_at_string_concat() {
 }
 
 #[test]
+fn plus_on_lists_hints_at_list_concat() {
+    assert_error_contains("let xs = [1, 2] + [3]", "use `List.concat xs ys`");
+    assert_error_contains("let xs = 1 + [3]", "use `List.concat xs ys`");
+}
+
+#[test]
 fn multiply_on_strings_hints_at_string_repeat() {
     // `*` is numeric; the hint shows count-first String.repeat syntax.
     assert_error_contains("let line = \"-\" * 20", "`String.repeat count string`");
@@ -4032,7 +4038,9 @@ fn a_plain_numeric_mismatch_keeps_its_message() {
     // Non-string numeric mismatches must not gain string operator hints.
     let add_msgs = errors("let bad = 1 + true");
     assert!(
-        add_msgs.iter().all(|m| !m.contains("String.concat")),
+        add_msgs
+            .iter()
+            .all(|m| !m.contains("String.concat") && !m.contains("List.concat")),
         "unexpected concat hint: {add_msgs:?}"
     );
     let mul_msgs = errors("let bad = 1 * true");

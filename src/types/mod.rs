@@ -6633,11 +6633,11 @@ impl Infer {
         let lt = self.infer_expr(lhs, env)?;
         let (lb, lu) = self
             .expect_num(&lt, lhs.span())
-            .map_err(|e| self.string_operator_hint(op, &lt, e))?;
+            .map_err(|e| self.operator_hint(op, &lt, e))?;
         let rt = self.infer_expr(rhs, env)?;
         let (rb, ru) = self
             .expect_num(&rt, rhs.span())
-            .map_err(|e| self.string_operator_hint(op, &rt, e))?;
+            .map_err(|e| self.operator_hint(op, &rt, e))?;
         let base_clash = |this: &Self| {
             mismatch(
                 &this.num_ty(lb, this.apply_unit(&lu)),
@@ -6666,25 +6666,24 @@ impl Infer {
         }
     }
 
-    /// Turn generic numeric operand errors into string operator hints.
-    /// `+` is numeric and does not concatenate strings; `*` does not repeat them.
-    /// Other operands and operators retain the original error.
-    fn string_operator_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
-        if !matches!(self.apply(operand), Ty::Str) {
-            return err;
-        }
-
-        err.message = match op {
-            BinOp::Add => {
+    /// Turn a generic numeric operand error into guidance when a Python habit
+    /// reaches for an operator Pyfun keeps numeric: `+` does not concatenate
+    /// strings or lists, and `*` does not repeat strings. Every other operand and
+    /// operator keeps the original error.
+    fn operator_hint(&self, op: BinOp, operand: &Ty, mut err: TypeError) -> TypeError {
+        let hint = match (op, self.apply(operand)) {
+            (BinOp::Add, Ty::Str) => {
                 "`+` is numeric and does not concatenate strings — use `String.concat a b`"
-                    .to_string()
             }
-            BinOp::Mul => {
+            (BinOp::Mul, Ty::Str) => {
                 "`*` is numeric and does not repeat strings — use `String.repeat count string`"
-                    .to_string()
+            }
+            (BinOp::Add, Ty::Con(name, _)) if name == "List" => {
+                "`+` is numeric and does not concatenate lists — use `List.concat xs ys`"
             }
             _ => return err,
         };
+        err.message = hint.to_string();
         err
     }
 
