@@ -115,7 +115,7 @@ note: hole `?` has type `int -> int -> int` — try: min, max, const — or: fli
 3 | let total = List.fold ? 0 ns
   |                       ^
 
-note: hole `?` has type `int` — try: total — or: List.sum ?, Seq.sum ?, String.len ?, round ?
+note: hole `?` has type `int` — try: total — or: List.sum ?, Seq.sum ?, String.len ?, round ?, and 13 more
  --> 4:32
   |
 4 | let atTen = Option.withDefault ? (List.get 10 ns)

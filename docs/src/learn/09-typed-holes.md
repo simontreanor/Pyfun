@@ -18,7 +18,7 @@ names |> headline |> print
 Running `pyfun check` reports the gap rather than a failure:
 
 ```console
-note: hole `?upper` has type `'a -> string` — try: String.upper, input, String.trimStart, String.trimEnd, String.rev, String.ofList, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.withDefault ?
+note: hole `?upper` has type `'a -> string` — try: String.upper, input, String.trimStart, String.trimEnd, String.rev, String.ofList, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.withDefault ?, and 18 more
  --> 5:15
   |
 5 |   |> List.map ?upper
@@ -27,7 +27,7 @@ note: hole `?upper` has type `'a -> string` — try: String.upper, input, String
 
 The hole needs a function producing a string, and `String.upper` is first under `try:`. It comes first because of the hole's name: a fit whose name matches the hole's goes to the front of the list, so naming a hole after what you want is a way of asking for it. The `or:` list names functions that would also fit if you filled their own holes. Replace `?upper` with `String.upper` and the program compiles and prints `ADA, GRACE, ALAN`.
 
-The `try:` list shows six fits, and `and 9 more` says how many it left out. Hovering the module in your editor, or `:type` in the REPL, gives you the full surface.
+The `try:` list shows six fits and the `or:` list shows four. The `and 9 more` and `and 18 more` at their ends say how many each one left out. Hovering the module in your editor, or `:type` in the REPL, gives you the full surface.
 
 This is the workflow: sketch the whole pipeline with holes, let the compiler name each gap's type, and fill inward from the types and the suggested fits. You never have to guess a function's signature, because the hole reports it for you, and a hole blocks compilation by design, so nothing runs until every blank is filled.
 
@@ -36,7 +36,7 @@ This is the workflow: sketch the whole pipeline with holes, let the compiler nam
 Fill both holes. `report` looks a score up in a map, supplies a fallback when the name is absent, and turns the number into a string. `pyfun check` reports each hole with a `try:` value that fits. The first report is:
 
 ```console
-note: hole `?render` has type `int -> 'a` — try: List.range, Seq.range, String.get, String.repeat, String.fromInt, String.fromFloat, and 59 more — or: String.slice ?, List.replicate ?, List.updateAt ?, List.insertAt ?
+note: hole `?render` has type `int -> 'a` — try: List.range, Seq.range, String.get, String.repeat, String.fromInt, String.fromFloat, and 59 more — or: String.slice ?, List.replicate ?, List.updateAt ?, List.insertAt ?, and 16 more
 ```
 
 ```pyfun
