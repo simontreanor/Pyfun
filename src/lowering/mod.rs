@@ -812,7 +812,11 @@ impl Lowerer {
             return lowered
                 .map(any_for_object_fields)
                 .map(native_classes)
-                .map(|py| self.annotate_functions(module, py));
+                .map(|py| self.annotate_functions(module, py))
+                .map(|mut py| {
+                    unannotate_nonlocal_params(&mut py.body);
+                    py
+                });
         }
         lowered
     }
@@ -6663,6 +6667,59 @@ fn native_classes(mut module: PyModule) -> PyModule {
         }
     }
     module
+}
+
+/// Native mode: a parameter that a nested function rebinds through `nonlocal`
+/// stays unannotated. mypyc copies an annotated `int` parameter into the
+/// closure environment unboxed when the nested function sees the name as
+/// another type, which gcc rejects and an MSVC build turns into a segfault
+/// (python/mypy#22221). An async or `seq` self tail call rebinds its parameters
+/// this way. A local the nested function rebinds is unaffected.
+fn unannotate_nonlocal_params(stmts: &mut [PyStmt]) {
+    for stmt in stmts {
+        if let PyStmt::TypedFuncDef { params, body, .. } = stmt {
+            let mut rebound = HashSet::new();
+            collect_nonlocals(body, &mut rebound);
+            // A function's own `nonlocal` names an enclosing binding, never one
+            // of its parameters (Python rejects that), so every name collected
+            // from its body is rebound by a function nested inside it.
+            for (name, ty) in params.iter_mut() {
+                if rebound.contains(name) {
+                    *ty = None;
+                }
+            }
+        }
+        for block in child_blocks(stmt) {
+            unannotate_nonlocal_params(block);
+        }
+    }
+}
+
+/// Every name a `nonlocal` declares anywhere in `stmts`, nested functions included.
+fn collect_nonlocals(stmts: &mut [PyStmt], out: &mut HashSet<String>) {
+    for stmt in stmts {
+        if let PyStmt::Nonlocal(names) = stmt {
+            out.extend(names.iter().cloned());
+        }
+        for block in child_blocks(stmt) {
+            collect_nonlocals(block, out);
+        }
+    }
+}
+
+/// The statement blocks directly inside `stmt`.
+fn child_blocks(stmt: &mut PyStmt) -> Vec<&mut Vec<PyStmt>> {
+    match stmt {
+        PyStmt::WhileTrue { body }
+        | PyStmt::For { body, .. }
+        | PyStmt::AsyncWith { body, .. }
+        | PyStmt::FuncDef { body, .. }
+        | PyStmt::TypedFuncDef { body, .. } => vec![body],
+        PyStmt::If { body, orelse, .. } => vec![body, orelse],
+        PyStmt::Try { body, handler, .. } => vec![body, handler],
+        PyStmt::Match { cases, .. } => cases.iter_mut().map(|c| &mut c.body).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The Python spelling of each non-generic local user type for native

@@ -438,12 +438,16 @@ from their inferred types where Python can spell them: `int`, `float`, `bool`, `
 record's class, and a union alias per user sum type (`Expr = Num | Add | Mul | Neg`, emitted after
 its classes). A type variable, a function type or an async result stays unannotated, so the
 annotations never claim more than the checker proved, and so does a `unit` result, since Pyfun
-returns a unit call's value (`return f(x)`), which mypy rejects under `-> None`. Data class fields follow suit: a field
-declared as a user sum type or record names it (`_0: "Expr"`, a string because the alias comes
-later), and any other field without a Python class of its own is `typing.Any`, since mypyc cannot
-build a dataclass with an `object` field. The output is written for mypy's newer redefinition rule
-(`--allow-redefinition-new --local-partial-types`): a Python local reused across match arms can hold
-differently narrowed types in different arms, which the default first-assignment rule rejects. A
+returns a unit call's value (`return f(x)`), which mypy rejects under `-> None`. A parameter
+that a nested function rebinds through `nonlocal` (an async self tail call's, §5.4) stays
+unannotated too: mypyc copies an annotated `int` parameter into the closure environment without
+boxing it, which gcc rejects and an MSVC build turns into a segfault (python/mypy#22221). Data
+class fields follow suit: a field declared as a user sum type or record names it (`_0: "Expr"`,
+a string because the alias comes later), and any other field without a Python class of its own
+is `typing.Any`, since mypyc cannot build a dataclass with an `object` field. The output is
+written for mypy's newer redefinition rule (`--allow-redefinition-new --local-partial-types`): a
+Python local reused across match arms can hold differently narrowed types in different arms, which
+the default first-assignment rule rejects. A
 build also turns off three of mypy's error codes that only restate the Python boundary:
 `func-returns-value` (Pyfun binds a unit call's result, `_ = f(x)`), and `var-annotated` and
 `union-attr` (a module-level value mypy cannot infer, a typeshed union at an `extern` call), where

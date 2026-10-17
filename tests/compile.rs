@@ -4148,6 +4148,35 @@ fn native_spells_out_the_comparisons_of_an_ordered_sum_type() {
 }
 
 #[test]
+fn native_leaves_a_parameter_rebound_through_nonlocal_unannotated() {
+    // An async self tail call rebinds its parameters from the coroutine. mypyc
+    // copies an annotated `int` parameter into the closure unboxed there
+    // (python/mypy#22221), so those parameters stay unannotated; a `mut` local
+    // rebound by a closure is unaffected and keeps the function's annotations.
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let finished count = async { return count }\n\
+               let countdown n acc =\n  \
+                 async {\n    \
+                   return! (if n == 0 then finished acc else countdown (n - 1) (acc + n))\n  \
+                 }\n\
+               let tally xs =\n  \
+                 let mut total = 0\n  \
+                 let add x = total <- total + x\n  \
+                 List.iter add xs\n  \
+                 total\n\
+               print (runAsync (countdown 4 0))\n\
+               print (tally [1, 2, 3])";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(py.contains("def countdown(n, acc):"), "{py}");
+    assert!(py.contains("nonlocal n, acc"), "{py}");
+    assert!(py.contains("def tally(xs: list[int]) -> int:"), "{py}");
+    assert_eq!(out, ["10", "6"]);
+}
+
+#[test]
 fn e2e_a_start_joins_the_innermost_open_scope() {
     // Each start belongs to the scope open where it runs: the inner scope joins
     // its own task before the outer body carries on, and the outer scope's

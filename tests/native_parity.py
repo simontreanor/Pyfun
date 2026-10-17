@@ -1,9 +1,10 @@
 """Check that a native build prints what the plain build prints.
 
-Every runnable program in the lessons (docs/src/learn), plus the examples that
-need no network or local files, is run with `pyfun run` and then built with
-`pyfun build --native` (mypyc) and run again. The two outputs must match, and a
-program that runs plainly must also build natively.
+Every runnable program in the lessons (docs/src/learn), the examples that need
+no network or local files, and the regression programs in tests/native/ is run
+with `pyfun run`, then built with `pyfun build --native` (mypyc) and run again.
+The two outputs must match, and a program that runs plainly must also build
+natively.
 
 Usage: python tests/native_parity.py [-j N]
 Needs `pip install mypy setuptools` and a C compiler. The compiler it runs is
@@ -29,11 +30,7 @@ EXAMPLES = [
 ]
 # Programs known to fail natively, each with its reason (ROADMAP: Typed-emit +
 # mypyc AOT). One that starts passing fails the run until it leaves this list.
-KNOWN = {
-    "examples/interop/structured_concurrency.pyfun": "under --allow-redefinition-new, mypyc "
-    "stores an unboxed int into an object slot for a rebound `nonlocal`: gcc rejects the C, "
-    "and an MSVC build segfaults",
-}
+KNOWN: dict[str, str] = {}
 PYFUN = Path(
     os.environ.get("PYFUN_BIN")
     or next(
@@ -67,6 +64,9 @@ def corpus(work: Path):
             yield f"{md.stem} block {i}", path
     for example in EXAMPLES:
         yield example, REPO / example
+    # Regression programs for shapes the lessons and examples barely reach.
+    for program in sorted((REPO / "tests" / "native").glob("*.pyfun")):
+        yield program.relative_to(REPO).as_posix(), program
 
 
 def compare(item, work: Path):
