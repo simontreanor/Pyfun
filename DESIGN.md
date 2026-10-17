@@ -450,9 +450,17 @@ build also turns off three of mypy's error codes that only restate the Python bo
 the `extern` declarations are the contract and Pyfun's checker has already held the program to
 them.
 
+**Comparisons.** A sum type the program compares writes `__eq__`, `__lt__`, `__le__`, `__gt__` and
+`__ge__` out over its `_pf_order_key`, where the default output lets `@functools.total_ordering`
+derive the last three from `__lt__` (§7.1). mypyc compiles `==` between two values of a class that
+defines `__lt__` without its own `__eq__` as an identity test, so `Some 1 == Some 1` came out
+`false`, and mypy cannot see the methods `total_ordering` derives, so `<=` and `>=` did not
+type-check. The dataclass still generates `__hash__`.
+
 **Building.** `pyfun build --native <file> -o <dir>` does the whole trip: it compiles natively, runs
 mypyc with those flags, and leaves the extension and a `__main__.py` in `<dir>`, so the program runs
-as `python <dir>`. It needs `mypy` and a C compiler in the environment. A project builds the same
+as `python <dir>`. It needs `mypy`, `setuptools` (which a fresh Python 3.12+ venv lacks) and a C
+compiler in the environment. A project builds the same
 way: every module is annotated from its own types and compiled by mypyc, and the shared
 `_pyfun_rt.py` stays Python, imported by the compiled modules like any other. `bench/mypyc_run.py`
 builds every benchmark this way and finds the mypyc build 1.3x to 13x faster than the same program

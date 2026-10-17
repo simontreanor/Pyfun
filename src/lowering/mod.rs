@@ -275,7 +275,7 @@ pub fn runtime_module() -> PyModule {
 /// rather than `object`, so a payload unwrapped from an `Option`/`Result` keeps
 /// a type mypy will pass on (`DESIGN.md` §5.6).
 pub fn runtime_module_native() -> PyModule {
-    any_for_object_fields(runtime_module())
+    native_classes(any_for_object_fields(runtime_module()))
 }
 
 /// `_pf_scope = contextvars.ContextVar("_pf_scope")`: where the innermost
@@ -811,6 +811,7 @@ impl Lowerer {
         if self.native {
             return lowered
                 .map(any_for_object_fields)
+                .map(native_classes)
                 .map(|py| self.annotate_functions(module, py));
         }
         lowered
@@ -1086,6 +1087,7 @@ impl Lowerer {
                         field_types: vec!["object".to_string(); arity],
                         order: None,
                         record: false,
+                        native: false,
                     });
                 }
             }
@@ -1107,6 +1109,7 @@ impl Lowerer {
                                 field_types: variant.fields.iter().map(py_annotation).collect(),
                                 order: ordered.then_some(index),
                                 record: false,
+                                native: false,
                             });
                             // A field-less variant has one possible value, so it is
                             // built once (`_Red = Red()`) and every use loads it.
@@ -1123,6 +1126,7 @@ impl Lowerer {
                             field_types: fields.iter().map(|f| py_annotation(&f.ty)).collect(),
                             order: ordered.then_some(0),
                             record: true,
+                            native: false,
                         });
                     }
                     // An opaque handle type erases — it emits no Python class.
@@ -6650,6 +6654,17 @@ fn any_for_object_fields(mut module: PyModule) -> PyModule {
     module
 }
 
+/// Native mode: every class spells its comparisons out for mypyc (see
+/// `PyStmt::ClassDef::native`).
+fn native_classes(mut module: PyModule) -> PyModule {
+    for stmt in &mut module.body {
+        if let PyStmt::ClassDef { native, .. } = stmt {
+            *native = true;
+        }
+    }
+    module
+}
+
 /// The Python spelling of each non-generic local user type for native
 /// annotations: a record is its class, and a sum type its union alias (which
 /// `annotate_functions` emits after the classes), unless a constructor shares
@@ -6783,6 +6798,7 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             field_types: vec!["object".to_string()],
             order: ordered.then_some(0),
             record: false,
+            native: false,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
@@ -6790,6 +6806,7 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             field_types: vec!["object".to_string()],
             order: ordered.then_some(1),
             record: false,
+            native: false,
         },
     ]
 }
@@ -6805,6 +6822,7 @@ fn exception_prelude() -> Vec<PyStmt> {
         field_types: vec!["str".to_string(), "str".to_string()],
         order: None,
         record: false,
+        native: false,
     }]
 }
 
@@ -6823,6 +6841,7 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             field_types: vec!["object".to_string()],
             order: ordered.then_some(1),
             record: false,
+            native: false,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
@@ -6830,6 +6849,7 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             field_types: vec![],
             order: ordered.then_some(0),
             record: false,
+            native: false,
         },
     ];
     if singleton {
