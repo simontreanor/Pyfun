@@ -771,7 +771,21 @@ impl<'a> Lexer<'a> {
     /// is valid UTF-8; pushing `b as char` per byte instead would turn every
     /// non-ASCII byte into its own Latin-1 codepoint, and re-encoding on emit would
     /// double-UTF-8-encode the text (`"café"` → mojibake).
+    /// Push one source character of a string literal's content. A line break is
+    /// `\n` whatever the file's line endings, as Python reads source with
+    /// universal newlines: a multi-line string in a file saved on Windows would
+    /// otherwise carry a `\r` before every `\n` (`\r\n` and a lone `\r` both
+    /// become `\n`).
     fn push_char(&mut self, out: &mut String) {
+        if self.src[self.pos] == b'\r' {
+            self.pos += if self.src.get(self.pos + 1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+            out.push('\n');
+            return;
+        }
         let start = self.pos;
         let end = (start + utf8_len(self.src[start])).min(self.src.len());
         match std::str::from_utf8(&self.src[start..end]) {
@@ -1566,6 +1580,34 @@ mod tests {
         };
         assert_eq!(parts.len(), 1);
         assert!(matches!(parts[0], FStrPart::Hole(_)));
+    }
+
+    #[test]
+    fn a_windows_line_break_in_a_string_is_a_newline() {
+        // A file saved with `\r\n` line endings gives the same strings as one
+        // with `\n`, as Python's universal newlines do, in every string form; an
+        // escaped `\r` is still a carriage return.
+        assert_eq!(
+            kinds("\"\"\"a\r\nb\"\"\""),
+            vec![Tok::Str("a\nb".to_string()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("r\"\"\"a\r\nb\"\"\""),
+            vec![Tok::Str("a\nb".to_string()), Tok::Eof]
+        );
+        let toks = kinds("f\"\"\"{x}\r\nb\"\"\"");
+        let Tok::FStr(parts) = &toks[0] else {
+            panic!("expected FStr, got {:?}", toks[0]);
+        };
+        assert_eq!(parts[1], FStrPart::Lit("\nb".to_string()));
+        assert_eq!(
+            kinds("\"\"\"a\rb\"\"\""),
+            vec![Tok::Str("a\nb".to_string()), Tok::Eof]
+        );
+        assert_eq!(
+            kinds("\"a\\rb\""),
+            vec![Tok::Str("a\rb".to_string()), Tok::Eof]
+        );
     }
 
     #[test]
