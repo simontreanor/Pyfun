@@ -888,3 +888,13 @@ fn an_active_pattern_is_top_level_only() {
         err.message()
     );
 }
+
+#[test]
+fn return_outside_computation_expression_suggests_dropping_return() {
+    let err = parse("let double x = return x * 2").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("a function's value is its last expression, so drop `return`"),
+        "unexpected message: {message}"
+    );
+}
