@@ -11,7 +11,9 @@ You need two things.
 - **Rust.** The repository pins its toolchain in `rust-toolchain.toml`, and `rustup` selects it
   automatically inside the repo. The crate has no dependencies, so the first build is quick.
 - **Python 3.12 or newer** on your `PATH` as `python` or `python3`. The end-to-end tests run the
-  emitted Python, and emitted code uses `match` statements and PEP 701 f-strings.
+  emitted Python, and emitted code uses `match` statements and PEP 701 f-strings. CI runs them on
+  3.12 on all three systems and on 3.14 on Linux, so a difference between the two ends of the
+  supported range fails there even when your local run passes.
 
 Then:
 
