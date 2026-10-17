@@ -265,6 +265,48 @@ fn e2e_a_task_started_in_one_module_joins_a_scope_opened_in_another() {
 }
 
 #[test]
+fn e2e_an_imported_async_extern_is_cold_and_its_argument_starts() {
+    // A dependent module knows only an imported extern's arity, so the exporting
+    // module's binding adapts it: the result is a cold `_pf_Async` (awaited twice,
+    // the Python function runs twice) and an `Async` argument reaches Python as a
+    // real coroutine (`asyncio.run` on Python 3.12 rejects anything else).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Main",
+                "import Clock\n\
+                 let tick = Clock.pause 0.0\n\
+                 let twice = async {\n  \
+                   do! tick\n  \
+                   do! tick\n  \
+                   return 2\n\
+                 }\n\
+                 print (Clock.runAsync twice)",
+            ),
+            (
+                "Clock",
+                "extern runAsync: Async a -> a = asyncio.run\n\
+                 extern pause: float -> Async unit = asyncio.sleep",
+            ),
+        ],
+    );
+    let clock = file(&files, "clock.py");
+    assert!(
+        clock.contains("runAsync = lambda _pf_p0: asyncio.run(_pf_run(_pf_p0))"),
+        "{clock}"
+    );
+    assert!(
+        clock.contains("pause = lambda _pf_p0: _pf_Async(asyncio.sleep, _pf_p0)"),
+        "{clock}"
+    );
+    let dir = Scratch::new("e2e_cold_async_extern");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "2");
+    }
+}
+
+#[test]
 fn an_import_resolves_from_a_vendored_facade_after_the_siblings() {
     // `pyfun add` vendors a façade's .pyfun files into .pyfun/facades/<dist>/;
     // the loader looks there once no sibling file has the module.

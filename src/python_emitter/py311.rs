@@ -57,7 +57,9 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         PyStmt::Return(e) | PyStmt::Expr(e) | PyStmt::Yield(e) | PyStmt::YieldFrom(e) => {
             rewrite_expr(e)
         }
-        PyStmt::FuncDef { body, .. } | PyStmt::TypedFuncDef { body, .. } => {
+        PyStmt::FuncDef { body, .. }
+        | PyStmt::TypedFuncDef { body, .. }
+        | PyStmt::Class { body, .. } => {
             for s in body {
                 rewrite_stmt(s);
             }

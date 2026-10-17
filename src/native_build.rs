@@ -75,7 +75,8 @@ fn build(path: &Path, out: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let Some(module) = pyfun::project::module_name_from_path(path).map(|m| m.to_lowercase()) else {
+    let Some(module) = pyfun::project::module_name_from_path(path).map(|m| python_module_name(&m))
+    else {
         return fail("the file needs a name");
     };
     if let Err(e) = std::fs::create_dir_all(out) {
@@ -161,7 +162,7 @@ fn finish(path: &Path, out: &Path, entry: &str, modules: &[String]) -> ExitCode 
         Ok(_) => {
             return fail(
                 "mypyc could not build the program (see its output above); \
-                 `pip install mypy` provides it, and it needs a C compiler",
+                 it needs `pip install mypy setuptools` and a C compiler",
             );
         }
         Err(e) => return fail(&format!("cannot run {interpreter}: {e}")),
@@ -184,6 +185,22 @@ fn finish(path: &Path, out: &Path, entry: &str, modules: &[String]) -> ExitCode 
         out.display()
     );
     ExitCode::SUCCESS
+}
+
+/// The module a single file builds as. Nothing imports it but the generated
+/// `__main__.py`, so a file name Python cannot import (`01-intro.pyfun`) only
+/// needs to become one it can (`_pf_01_intro`).
+fn python_module_name(stem: &str) -> String {
+    let lower = stem.to_lowercase();
+    let starts_ok = lower.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_');
+    if starts_ok && lower.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return lower;
+    }
+    let cleaned: String = lower
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    format!("_pf_{cleaned}")
 }
 
 fn fail(msg: &str) -> ExitCode {

@@ -146,6 +146,9 @@ pub enum PyStmt {
         body: Vec<PyStmt>,
         is_async: bool,
     },
+    /// `class name: body`: a plain class whose body is ordinary statements. The
+    /// runtime's cold `_pf_Async` uses it; ADTs and records use [`PyStmt::ClassDef`].
+    Class { name: String, body: Vec<PyStmt> },
     /// `yield value`
     Yield(PyExpr),
     /// `yield from value`
@@ -192,6 +195,12 @@ pub enum PyStmt {
         /// (Python compares the field tuple); variants need a cross-variant
         /// ordering key, so they use `@functools.total_ordering` + `_pf_order_key`.
         record: bool,
+        /// Native mode (`DESIGN.md` §5.6): an ordered variant spells out `__eq__`
+        /// and all four orderings instead of using `@total_ordering`. mypyc compiles
+        /// `==` between two values of such a class as an identity test when the
+        /// class defines `__lt__` without its own `__eq__`, and mypy cannot see the
+        /// `__le__`/`__ge__` that `total_ordering` derives.
+        native: bool,
     },
 }
 
@@ -421,6 +430,7 @@ pub fn emit(module: &PyModule) -> String {
                 PyStmt::ClassDef {
                     order: Some(_),
                     record: false,
+                    native: false,
                     ..
                 }
             )
@@ -517,6 +527,10 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             line(out, depth, &format!("{kw} {name}({}):", params.join(", ")));
             emit_block(body, depth + 1, out);
         }
+        PyStmt::Class { name, body } => {
+            line(out, depth, &format!("class {name}:"));
+            emit_block(body, depth + 1, out);
+        }
         PyStmt::TypedFuncDef {
             name,
             params,
@@ -607,7 +621,17 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             field_types,
             order,
             record,
-        } => emit_class(name, fields, field_types, *order, *record, depth, out),
+            native,
+        } => emit_class(
+            name,
+            fields,
+            field_types,
+            *order,
+            *record,
+            *native,
+            depth,
+            out,
+        ),
     }
 }
 
@@ -623,13 +647,16 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
 /// cross-variant key `(index, fields…)`, so it defines `_pf_order_key` + `__lt__` and
 /// lets `@functools.total_ordering` derive the other three. The checker gates
 /// comparison to a single orderable type, so `other` is always a sibling — no
-/// `isinstance` guard needed.
+/// `isinstance` guard needed. A `native` ordered variant writes `__eq__` and the
+/// four orderings out instead (see `PyStmt::ClassDef::native`).
+#[allow(clippy::too_many_arguments)]
 fn emit_class(
     name: &str,
     fields: &[String],
     field_types: &[String],
     order: Option<usize>,
     record: bool,
+    native: bool,
     depth: usize,
     out: &mut String,
 ) {
@@ -637,7 +664,7 @@ fn emit_class(
     // gets ordering directly from the dataclass.
     let variant_ordered = order.is_some() && !record;
 
-    if variant_ordered {
+    if variant_ordered && !native {
         line(out, depth, "@total_ordering");
     }
     // `slots=True` drops the per-instance `__dict__`: construction and attribute
@@ -681,12 +708,31 @@ fn emit_class(
 
     if variant_ordered {
         let variant_index = order.unwrap();
-        line(out, depth + 1, "def __lt__(self, other):");
-        line(
-            out,
-            depth + 2,
-            "return self._pf_order_key() < other._pf_order_key()",
-        );
+        if native {
+            // The dataclass keeps generating `__hash__`: a frozen class whose
+            // `__eq__` is written in the body still gets the field hash.
+            line(out, depth + 1, "def __eq__(self, other):");
+            line(
+                out,
+                depth + 2,
+                &format!(
+                    "return type(other) is {name} and self._pf_order_key() == other._pf_order_key()"
+                ),
+            );
+        }
+        let ops: &[(&str, &str)] = if native {
+            &[("lt", "<"), ("le", "<="), ("gt", ">"), ("ge", ">=")]
+        } else {
+            &[("lt", "<")]
+        };
+        for (method, op) in ops {
+            line(out, depth + 1, &format!("def __{method}__(self, other):"));
+            line(
+                out,
+                depth + 2,
+                &format!("return self._pf_order_key() {op} other._pf_order_key()"),
+            );
+        }
         let key = std::iter::once(variant_index.to_string())
             .chain(fields.iter().map(|f| format!("self.{f}")))
             .collect::<Vec<_>>()
@@ -875,7 +921,21 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
             emit_expr(lower, 0),
             emit_expr(upper, 0)
         ),
-        PyExpr::Await(inner) => format!("await {}", emit_expr(inner, 100)),
+        // Awaiting a cold `_pf_Async(f, *args)` the moment it is built is exactly
+        // `await f(*args)`, which reads as the Python it is (`await inbox.get()`).
+        PyExpr::Await(inner) => match inner.as_ref() {
+            PyExpr::Call { func, args }
+                if matches!(func.as_ref(), PyExpr::Name(n) if n == "_pf_Async")
+                    && !args.is_empty() =>
+            {
+                let direct = PyExpr::Call {
+                    func: Box::new(args[0].clone()),
+                    args: args[1..].to_vec(),
+                };
+                format!("await {}", emit_expr(&direct, 100))
+            }
+            _ => format!("await {}", emit_expr(inner, 100)),
+        },
         // Emit the operand at `not`'s own level so comparisons stay bare
         // (`not a == b`) while looser `and`/`or` get parenthesized.
         PyExpr::Not(inner) => format!("not {}", emit_expr(inner, 4)),

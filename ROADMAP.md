@@ -515,10 +515,19 @@ map_build 1.64× vs hand-written.
   **The real-program audit (the Scrabble game, locally):** its native output passes plain mypy with
   the build's flags (64 errors down to 0 after the shared runtime's fields became `Any`, unit
   returns went bare, and three boundary error codes were disabled), and every replay prints the same.
-  mypyc itself still stops on **"Cannot determine type" for module-level values another module reads
-  at import time** (nullary singletons like `board._QW`, layout tables): that is the next native
-  blocker. **Remaining:** that, or-patterns whose alternatives bind names, and the closure/`seq`
-  audit under mypyc.
+  mypyc now compiles the whole game: module-level values are annotated (another module's reads were
+  "Cannot determine type"; a generalized value like `Map.empty` spells its type variables `Any`),
+  and a unit match in statement position runs its arms in place (a temp assigned only unit calls was
+  "inferred type None"). Compiled on Windows (MSVC, CPython 3.14), every replay prints the same, and
+  its move-generation bench runs about **1.5x** faster than plain Python (generation up to 2x on
+  the heaviest position). The replays themselves gain only 1.1–1.2x, since loading the dictionary
+  takes most of each run. **Remaining:** or-patterns whose alternatives bind names.
+  `tests/native_parity.py` (the `native` CI job) diffs every runnable lesson, the offline examples
+  and the programs in `tests/native/` against `pyfun run`, so a native-only miscompile fails the PR.
+  Two it found are fixed: `==` on a compared sum type (explicit comparison methods, §5.6) and an
+  async self tail call, whose parameters a coroutine rebound through `nonlocal`, which mypyc copied
+  into the closure unboxed when they were annotated `int` (python/mypy#22221, #173). Since `Async`
+  went cold, that loop runs over the coroutine's own parameters and needs no `nonlocal` at all.
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed
@@ -577,27 +586,27 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **PyPI** — `pyfun-lang` at **0.8.1** (2026-08-31, published by the tag and verified by installing
-  `pyfun-lang[jupyter]==0.8.1` into a clean venv and running the two fixed shapes from that release
-  — a leading/mid-list `unit` extern parameter and a `mut` assigned inside a CE block — against it;
-  the index lags the tag build by a few minutes, so a first `No matching distribution` is a retry,
+- **PyPI** — `pyfun-lang` at **0.9.0** (2026-10-17, published by the tag and verified by installing
+  `pyfun-lang[jupyter]==0.9.0` into a clean venv and running the new `String.repeat` hint, the
+  `Task.scope` cookbook example and a `pyfun build --native` against it; a fresh venv on Python
+  3.12+ has no `setuptools`, which mypyc needs beside `mypy`; the index lags the tag build by a few minutes, so a first `No matching distribution` is a retry,
   not a failure). Rides the tag; no manual step.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.8.1** (2026-08-31, verified against the registry API; the first check after publishing can
+  At **0.9.0** (2026-10-17, verified against the registry API; the first check after publishing can
   read "published but not active" for a couple of minutes before the API reflects the new version,
   which is indexing lag, not a failed publish). Every release: `ovsx publish <vsix> -p <token>`
   (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.8.1**, uploaded 2026-08-31 and **awaiting moderation**; the
-  plugins API reports 0.8.0, so that one cleared (verified against the plugins API — check the API,
-  not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
+  mode + legacy CE, 2024.2+). At **0.9.0**, uploaded 2026-10-17 and approved (the plugins API
+  lists it, as it does 0.8.1, whose rejection over an unresolved LSP4IJ cleared on a verifier re-run;
+  check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
   (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this
   machine and two releases running lost time rediscovering that before reaching for a bare `gradle`.
   Approval is not instant: the plugins API lists approved versions only, so it reads the previous
   one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.8.1** (vsix uploaded through
-  the publisher web UI 2026-08-31, verified against the gallery API). The **only surface that cannot
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.9.0** (verified against the
+  gallery API 2026-10-17). The **only surface that cannot
   be scripted**: the vsix is uploaded by hand through the publisher web UI at
   `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI auth path is broken — see
   `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls

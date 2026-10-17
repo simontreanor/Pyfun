@@ -459,7 +459,7 @@ typed Python into a C extension: every `match` becomes an `if`/`isinstance` ladd
 functions carry annotations taken from their inferred types, so the annotations can't be wrong.
 
 ```bash
-pip install mypy                                   # mypyc ships with mypy; it needs a C compiler
+pip install mypy setuptools                        # mypyc ships with mypy; it needs a C compiler
 pyfun build --native collatz.pyfun -o collatz_native
 python collatz_native                              # runs the compiled program
 ```

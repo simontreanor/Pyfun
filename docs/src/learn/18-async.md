@@ -22,28 +22,63 @@ print (runAsync fetchScore)
 ```
 
 The key idea carries straight over from Python. An `async { }` block does not run when you write it.
-It builds a coroutine, exactly like calling an `async def` in Python hands you an awaitable rather
-than a result. Nothing happens until something drives that coroutine. Here `let! x = async { return
-20 }` awaits an inner block and binds `20` to `x`, then `return x + 1` produces the final `21`, but
-only once the coroutine is run.
+It describes work to do later, much as calling an `async def` in Python hands you something to await
+rather than a result. Nothing happens until something awaits it. Here `let! x = async { return 20 }`
+awaits an inner block and binds `20` to `x`, then `return x + 1` produces the final `21`, but only
+once the whole block is run.
 
 The emitted Python shows the mapping directly. Each `async { }` becomes a nested `async def`, each
-`let!` becomes an `await`, and the whole value is a coroutine object:
+`let!` becomes an `await`, and the value itself is a small `_pf_Async` that remembers which function
+to run. (Two short helpers, `_pf_Async` and `_pf_run`, sit at the top of the file and are left out
+here.)
 
 ```python
-import asyncio
 async def _pf_fn1():
     async def _pf_fn0():
         return 20
     x = await _pf_fn0()
     return x + 1
-fetchScore = _pf_fn1()
-print(asyncio.run(fetchScore))
+fetchScore = _pf_Async(_pf_fn1)
+print(asyncio.run(_pf_run(fetchScore)))
 ```
+
+## Awaiting a value twice
+
+Here is one place where Pyfun goes further than Python. Try awaiting the same value twice:
+
+```pyfun
+extern runAsync: Async a -> a = asyncio.run
+
+let roll =
+  async {
+    print "rolling"
+    return 6
+  }
+
+let twice =
+  async {
+    let! a = roll
+    let! b = roll
+    return a + b
+  }
+
+print (runAsync twice)
+```
+
+```console
+rolling
+rolling
+12
+```
+
+The block runs twice, once for each `let!`. A Python coroutine can only be awaited once, and a second
+`await` of it raises an error. A Pyfun `Async` value can be awaited as often as you like, and each
+await runs it again from the start. F# calls this a *cold* async. It means you can keep an `Async` in
+a variable, pass it to a function that retries it, or put the same one in a list twice.
 
 ## Running one at the top level
 
-A coroutine has to be awaited somewhere, and at the top level there is no enclosing `async`
+An `Async` value has to be awaited somewhere, and at the top level there is no enclosing `async`
 function to await it in. Python solves this with `asyncio.run(main())`, and Pyfun makes the same
 move through `extern` (lesson 12). The line
 
@@ -52,7 +87,8 @@ extern runAsync: Async a -> a = asyncio.run
 ```
 
 names Python's `asyncio.run` and gives it the Pyfun type `Async a -> a`: hand it an `Async a` and it
-drives the coroutine to completion and returns the `a`. So `fetchScore |> runAsync` turns the
+runs it to completion and returns the `a`. `asyncio.run` wants a Python coroutine, so Pyfun hands it
+a fresh one made from the value, which is the `_pf_run(fetchScore)` you saw in the output. So `fetchScore |> runAsync` turns the
 `Async int` into a plain `int` you can `print`.
 
 ## Async is an inferred effect
@@ -82,7 +118,9 @@ purity cannot be claimed over it.
 
 An async Python function returns a coroutine when you call it, and nothing happens until that
 coroutine is awaited. The Pyfun type says exactly that: the result is `Async a`, and `let!` (or
-`do!` when there is no value) inside an `async { }` block is where the await happens.
+`do!` when there is no value) inside an `async { }` block is where the await happens. Pyfun saves
+the call itself for the await, so awaiting the result twice calls the Python function twice, just as
+it runs an `async { }` block twice.
 
 ```pyfun
 extern runAsync: Async a -> a = asyncio.run
@@ -226,7 +264,7 @@ effect system tracks it for you.
 
 Fill the hole so `combined` awaits two async blocks and returns their sum. The hole has type `int`
 (the value the second block returns), so any integer literal works. The runner bridge over
-`asyncio.run` is already in place, and `runAsync combined` drives the coroutine to a value.
+`asyncio.run` is already in place, and `runAsync combined` runs it to a value.
 
 ```pyfun
 extern runAsync: Async a -> a = asyncio.run
@@ -266,5 +304,5 @@ print (runAsync combined)
 ```
 
 `let!` awaits each inner block and binds its result, so `a` is `10` and `b` is `20`, and `return a +
-b` produces `30` once `runAsync` drives the coroutine.
+b` produces `30` once `runAsync` runs the block.
 </details>

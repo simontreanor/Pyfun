@@ -3,6 +3,14 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.9.0
+
+- Version aligned to the compiler's 0.9.0 release. No client changes; the compiler it drives adds
+  native builds (`pyfun build --native`, compiled with mypyc), façade packages (`pyfun add`,
+  `pyfun install`, `pyfun remove`), cross-file rename for type names, and clearer errors for
+  `return` outside a computation expression and `*` on a string. Two breaking changes:
+  `Task.scope` and `Task.start` lose the `Scope` argument, and a capitalized `let` name is an error.
+
 ## 0.8.1
 
 - Version aligned to the compiler's 0.8.1 release. No client changes; the compiler it drives fixes a
