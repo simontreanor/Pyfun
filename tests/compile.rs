@@ -3805,15 +3805,23 @@ fn an_ordinary_function_says_nothing() {
 
 #[test]
 fn an_async_self_tail_call_becomes_a_loop_in_the_coroutine() {
-    // §5.4's async form: the awaited tail call rebinds the outer parameters
-    // through a `nonlocal` and loops inside the one coroutine.
+    // §5.4's async form: the coroutine takes the parameters as its own, and the
+    // awaited tail call rebinds them and loops inside it. No `nonlocal`: since an
+    // `Async` is cold, each await starts again from the arguments it was built with.
     let py = pyfun::compile(
         "let finished acc = async { return acc }\n\
          let loop n acc =\n  async {\n    return! (if n == 0 then finished acc else loop (n - 1) (acc + n))\n  }",
     )
     .unwrap();
-    assert!(py.contains("nonlocal n, acc"), "{py}");
-    assert!(py.contains("while True:"), "{py}");
+    assert!(!py.contains("nonlocal"), "{py}");
+    assert!(
+        py.contains(
+            "(n, acc):
+        while True:"
+        ),
+        "{py}"
+    );
+    assert!(py.contains(", n, acc)"), "{py}");
     assert!(py.contains("n, acc = (n - 1, acc + n)"), "{py}");
     assert!(!py.contains("return await loop("), "{py}");
 }
@@ -4148,11 +4156,11 @@ fn native_spells_out_the_comparisons_of_an_ordered_sum_type() {
 }
 
 #[test]
-fn native_leaves_a_parameter_rebound_through_nonlocal_unannotated() {
-    // An async self tail call rebinds its parameters from the coroutine. mypyc
-    // copies an annotated `int` parameter into the closure unboxed there
-    // (python/mypy#22221), so those parameters stay unannotated; a `mut` local
-    // rebound by a closure is unaffected and keeps the function's annotations.
+fn native_annotates_an_async_tail_call_that_needs_no_nonlocal() {
+    // An async self tail call loops over the coroutine's own parameters, so no
+    // parameter is rebound through `nonlocal`: the shape mypyc mishandled when
+    // the parameter was annotated `int` (python/mypy#22221) no longer arises,
+    // and the function keeps its annotations like any other.
     let src = "extern import asyncio\n\
                extern runAsync: Async a -> a = asyncio.run\n\
                let finished count = async { return count }\n\
@@ -4170,8 +4178,8 @@ fn native_leaves_a_parameter_rebound_through_nonlocal_unannotated() {
     let Some((py, out)) = run_native(src) else {
         return;
     };
-    assert!(py.contains("def countdown(n, acc):"), "{py}");
-    assert!(py.contains("nonlocal n, acc"), "{py}");
+    assert!(py.contains("def countdown(n: int, acc: int):"), "{py}");
+    assert!(!py.contains("nonlocal n"), "{py}");
     assert!(py.contains("def tally(xs: list[int]) -> int:"), "{py}");
     assert_eq!(out, ["10", "6"]);
 }
@@ -4208,6 +4216,106 @@ fn e2e_a_start_joins_the_innermost_open_scope() {
 }
 
 #[test]
+fn e2e_an_async_value_is_cold_and_runs_again_on_every_await() {
+    // F#'s `Async` semantics: building runs nothing, and each await (or each
+    // element of `Async.parallel`, even the same value twice) is a fresh run.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               let job = async {\n  \
+                 print \"run\"\n  \
+                 return 1\n\
+               }\n\
+               print \"built\"\n\
+               let twice = async {\n  \
+                 let! a = job\n  \
+                 let! b = job\n  \
+                 let! both = Async.parallel [job, job]\n  \
+                 return a + b + List.sum both\n\
+               }\n\
+               print (runAsync twice)";
+    let py = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &py);
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        ["built", "run", "run", "run", "run", "4"],
+        "{py}"
+    );
+}
+
+#[test]
+fn e2e_an_async_extern_passed_by_name_or_partially_applied_stays_cold() {
+    // `List.map pause xs` and `List.map (sleepThen 0.0) xs` build values through
+    // the extern's adapting lambda, so each can be awaited twice, as a saturated
+    // call's can.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               extern pause: float -> Async unit = asyncio.sleep\n\
+               extern sleepThen: float -> a -> Async a = asyncio.sleep\n\
+               let pauses = [0.0, 0.0] |> List.map pause\n\
+               let values = [1, 2] |> List.map (sleepThen 0.0)\n\
+               let main = async {\n  \
+                 for p in pauses:\n    \
+                   do! p\n    \
+                   do! p\n  \
+                 for v in values:\n    \
+                   let! a = v\n    \
+                   let! b = v\n    \
+                   print (a + b)\n  \
+                 return ()\n\
+               }\n\
+               runAsync main";
+    let py = pyfun::compile(src).unwrap();
+    let out = run_python(&python, &py);
+    assert_eq!(out.lines().collect::<Vec<_>>(), ["2", "4"], "{py}");
+}
+
+#[test]
+fn e2e_an_async_callback_handed_to_python_runs() {
+    // `asyncio.start_server` schedules a handler's result only if it is a real
+    // coroutine; handed a cold `_pf_Async` it would silently never run, and the
+    // client would read an empty line instead of the reply.
+    let Some(python) = python_cmd() else { return };
+    let src = "extern import asyncio\n\
+               extern runAsync: Async a -> a = asyncio.run\n\
+               extern type Reader\n\
+               extern type Writer\n\
+               extern type Server\n\
+               extern type Bytes\n\
+               extern startServer: (Reader -> Writer ->{io, async} Async unit) -> string -> int -> Async Server = asyncio.start_server\n\
+               extern openConnection: string -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
+               extern readline: Reader -> Async Bytes = .readline()\n\
+               extern write: Writer -> Bytes -> unit = .write\n\
+               extern drain: Writer -> Async unit = .drain()\n\
+               extern closeWriter: Writer -> unit = .close()\n\
+               extern closeServer: Server -> unit = .close()\n\
+               extern encode: string -> Bytes = .encode()\n\
+               extern decode: Bytes -> string = .decode()\n\
+               let shout reader writer = async {\n  \
+                 let! line = readline reader\n  \
+                 write writer (encode (String.upper (decode line)))\n  \
+                 do! drain writer\n  \
+                 closeWriter writer\n\
+               }\n\
+               let main = async {\n  \
+                 let! server = startServer shout \"127.0.0.1\" 47321\n  \
+                 let! (reader, writer) = openConnection \"127.0.0.1\" 47321\n  \
+                 write writer (encode \"hello\\n\")\n  \
+                 do! drain writer\n  \
+                 let! reply = Async.timeout 5.0 (readline reader)\n  \
+                 print (reply |> Option.map (fun b -> String.strip (decode b)))\n  \
+                 closeWriter writer\n  \
+                 closeServer server\n\
+               }\n\
+               runAsync main";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("lambda *_pf_a: _pf_run(shout(*_pf_a))"), "{py}");
+    let out = run_python(&python, &py);
+    assert_eq!(out.trim(), "Some('HELLO')", "{py}");
+}
+
+#[test]
 fn the_cookbook_agent_loops_instead_of_recursing() {
     // The finding that forced the async form: the agent must outlive the stack.
     let path = format!(
@@ -4216,7 +4324,11 @@ fn the_cookbook_agent_loops_instead_of_recursing() {
     );
     let source = std::fs::read_to_string(&path).unwrap();
     let py = pyfun::compile(&source).unwrap();
-    assert!(py.contains("nonlocal inbox, count"), "{py}");
+    assert!(!py.contains("nonlocal"), "{py}");
+    assert!(
+        py.contains("return _pf_Async(_pf_fn1, inbox, count)"),
+        "{py}"
+    );
     assert!(py.contains("while True:"), "{py}");
     assert!(!py.contains("return await agentLoop("), "{py}");
 }
@@ -4719,7 +4831,8 @@ fn e2e_async_ce_produces_a_coroutine() {
     let mut program =
         pyfun::compile("let twice = async { let! x = async { return 21 }  return (x + x) }")
             .unwrap();
-    program.push_str("\nimport asyncio\nprint(asyncio.run(twice))\n");
+    // Python runs a Pyfun `Async` by calling it, as it would an `async def`.
+    program.push_str("\nimport asyncio\nprint(asyncio.run(twice()))\n");
     assert_eq!(run_python(&python, &program).trim(), "42");
 }
 
@@ -4794,7 +4907,7 @@ fn e2e_async_module_members_run_over_asyncio() {
                runAsync main";
     let program = pyfun::compile(src).unwrap();
     assert!(
-        program.contains("return list(await asyncio.gather(*xs))"),
+        program.contains("return list(await asyncio.gather(*map(_pf_run, xs)))"),
         "{program}"
     );
     assert!(program.contains("except TimeoutError:"), "{program}");
@@ -8402,7 +8515,7 @@ fn e2e_an_async_bind_shadowing_an_outer_name_is_renamed() {
     let mut program = pyfun::compile(src).unwrap();
     assert!(program.contains("_n = await "), "{program}");
     assert!(program.contains("return _n + m"), "{program}");
-    program.push_str("\nimport asyncio\nprint(asyncio.run(r))\n");
+    program.push_str("\nimport asyncio\nprint(asyncio.run(r()))\n");
     assert_eq!(run_python(&python, &program).trim(), "8");
 }
 

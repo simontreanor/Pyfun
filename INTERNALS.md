@@ -417,9 +417,7 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
   `_X: X = X()`, and the first assignment of a top-level value bound once.
 - **Comparisons and closures.** `native_classes` sets `PyStmt::ClassDef::native`, so an ordered
   variant emits `__eq__` and all four orderings instead of `@total_ordering` (mypyc compiled `==` as
-  identity on a class with `__lt__` alone). After `annotate_functions`, `unannotate_nonlocal_params`
-  clears the annotation of any `TypedFuncDef` parameter a nested function names in a `nonlocal`
-  (python/mypy#22221).
+  identity on a class with `__lt__` alone).
 - **Discarded matches.** `Lowerer::push_discarded` emits a statement-position expression. In
   native mode, when its value is a temp set by an `if` ladder, `discard_temp` turns each assignment
   of the temp into a bare evaluation, since mypyc rejects a local whose every assignment is a unit
@@ -607,6 +605,22 @@ top-level evaluation's performed effect (value bindings, expressions, module val
 `top_effects` and reports any that still contain `spawn` once inference is done. Lowering routes
 `Task.scope`/`Task.start` to `_pf_task_scope`/`_pf_task_start` (`async_prelude`) and
 `note_task_scope_var` defines or imports `_pf_scope`.
+
+**Cold async (DESIGN §8).** `lower_async` returns `Lowerer::cold_async([g])`, a
+`_pf_Async(g)` call, and records `_pf_Async` in `needed_async_helpers`; `async_prelude` emits the
+class as a `PyStmt::Class` (the plain-class IR node) and adds `_pf_Async`/`_pf_run` whenever a helper
+that needs them is used. Every `Async`/`Task` helper is a plain `def` returning `_pf_Async(run)`
+around an inner `async def run()`. At the boundary, `Lowerer::new` records each extern's
+`async_param_slots` (`AsyncSlot::Value`/`Callback`/`Thunk`) and whether it `returns_async`;
+`wrap_async_args` runs after `wrap_thunk_args` at every extern call site, and `lower_application`
+wraps a saturated `Async`-returning extern call with `cold_extern_result` (`_pf_Async(f, *args)`,
+or a `functools.partial` for pinned keywords). In a project, `async_extern_binding` gives such an
+extern an adapting lambda, since a dependent knows only its arity; `lower_var_value` uses the same
+lambda for a bare reference, and `lower_application` a `functools.partial` over it for a partial
+application. `_pf_Async.__call__` gives Python code a fresh coroutine (`asyncio.run(job())`). The emitter prints
+`await _pf_Async(f, *args)` as `await f(*args)`. The async self-tail-call rewrite
+(`rewrite_async_wrapper`) matches `return _pf_Async(g)`, gives `g` the parameters and returns
+`_pf_Async(g, *params)`.
 
 ## Solving effect equations (`Infer::unify_eff`) — implements DESIGN §4
 

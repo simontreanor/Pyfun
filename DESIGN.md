@@ -314,12 +314,15 @@ language changes — this is a property of the emitted code, and the recursive d
 only way to write it.
 
 The **async form** is the same rewrite one wrapper in. `let f a = async { … }` lowers to
-`def f(a): async def g(): …; return g()`, and its self tail call is `return await f(…)` inside `g` —
+`def f(a): async def g(): …; return _pf_Async(g)`, and its self tail call is `return await f(…)`
+inside `g` —
 each message of an agent loop then awaits a fresh coroutine *on the same stack*, so CPython's limit
 is the loop's lifetime cap (measured: ~1,000 messages), which is fatal for exactly the thing an
-agent is written to be: long-lived. When a body ends in that wrapper shape, the awaited tail calls
-rebind the outer parameters (they are `g`'s closure, so a `nonlocal` declaration makes them
-writable) and go round a `while True:` inside the one coroutine. For the tail call to be *visible*,
+agent is written to be: long-lived. When a body ends in that wrapper shape, `g` takes the
+parameters as its own (`async def g(a): while True: …`, returned as `_pf_Async(g, a)`), and the
+awaited tail calls rebind them and go round the loop inside the one coroutine. Because an `Async` is
+cold (§8), every await of `f(…)` starts again from the arguments it was built with, and no
+`nonlocal` is needed. For the tail call to be *visible*,
 `return!` of a `match`/`if` in an `async { }` block lowers with a return per arm (`return await
 loop(inbox, n)` in the arm) rather than assigning a temp and awaiting it once — the same descent a
 sync function's tail `match` gets. The preconditions below apply to `g`'s body unchanged; the
@@ -438,11 +441,11 @@ from their inferred types where Python can spell them: `int`, `float`, `bool`, `
 record's class, and a union alias per user sum type (`Expr = Num | Add | Mul | Neg`, emitted after
 its classes). A type variable, a function type or an async result stays unannotated, so the
 annotations never claim more than the checker proved, and so does a `unit` result, since Pyfun
-returns a unit call's value (`return f(x)`), which mypy rejects under `-> None`. A parameter
-that a nested function rebinds through `nonlocal` (an async self tail call's, §5.4) stays
-unannotated too: mypyc copies an annotated `int` parameter into the closure environment without
-boxing it, which gcc rejects and an MSVC build turns into a segfault (python/mypy#22221). Data
-class fields follow suit: a field declared as a user sum type or record names it (`_0: "Expr"`,
+returns a unit call's value (`return f(x)`), which mypy rejects under `-> None`. Pyfun never
+rebinds a parameter through `nonlocal` (the async self tail call loops over the coroutine's own
+parameters, §5.4), which matters to mypyc: it copies an annotated `int` parameter into a closure
+environment without boxing it, which gcc rejects and an MSVC build turns into a segfault
+(python/mypy#22221). Data class fields follow suit: a field declared as a user sum type or record names it (`_0: "Expr"`,
 a string because the alias comes later), and any other field without a Python class of its own
 is `typing.Any`, since mypyc cannot build a dataclass with an `object` field. The output is
 written for mypy's newer redefinition rule (`--allow-redefinition-new --local-partial-types`): a
@@ -840,8 +843,30 @@ lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a n
 from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
 Python `datetime` `extern`).
 
-**Async combinators — the `Async` module.** `Async a` is the type of a coroutine and `async { }`
-builds one; the module is the rest of what F#'s `Async` offers that `asyncio` can supply, typed once
+**Cold async.** An `Async a` is **cold**, as F#'s `Async` is: building one runs nothing, and every
+await is a fresh run, so the same value can be awaited twice, retried, or passed to
+`Async.parallel` twice and run twice. A Python coroutine is single-shot (a second `await` raises
+`RuntimeError: cannot reuse already awaited coroutine`), so the value is not one. It is a small
+emitted `_pf_Async(fn, *args)` whose `__await__` calls `fn(*args)` afresh: `let job = async { … }`
+lowers to `job = _pf_Async(_pf_fn0)`, and a saturated call of an `extern` whose result is `Async`
+to `_pf_Async(f, a, b)` (function and arguments evaluated at once; pinned keywords ride a
+`functools.partial`). Awaiting one where it is built prints as the direct call (`await
+inbox.get()`). Where Python insists on a real coroutine, a value passes through `_pf_run(x)` (`async
+def _pf_run(a): return await a`), a fresh coroutine of any awaitable: an `extern` parameter typed
+`Async a`, a callback parameter returning `Async` (wrapped so each call Python makes returns one:
+`asyncio.start_server` schedules a handler's result only if it is a coroutine, and would otherwise
+drop it silently), a `unit -> Async a` thunk, and every element `Async.parallel`/`race` start. In a
+project the exporting module's binding for such an extern does the adapting, since a dependent
+knows only its arity, and a bare or partially applied reference is the same adapting lambda
+(`lambda p0: _pf_Async(asyncio.sleep, p0)`, under a `functools.partial` for supplied arguments), so
+`urls |> List.map fetch` builds cold values too. Python code handed a Pyfun `Async` can `await` it
+any number of times, or call it for a fresh coroutine, as it would a zero-argument `async def`
+(`asyncio.run(job())`): `_pf_Async.__call__` is `async def __call__(self): return await self`.
+Python 3.14's `asyncio.run` accepts any awaitable, but 3.12 and 3.13 want a coroutine, so code that
+must run on them calls the value.
+
+**Async combinators — the `Async` module.** `async { }` builds an `Async a`; the module is the rest
+of what F#'s `Async` offers that `asyncio` can supply, typed once
 (single source of truth `types::ASYNC_PRELUDE` + `seed_async_prelude`): `Async.sleep secs`,
 `Async.timeout secs c : Async (Option a)` (`asyncio.wait_for`, `None` on the deadline),
 `Async.toThread thunk` (a blocking call off the event loop, `asyncio.to_thread`), `Async.parallel
@@ -852,9 +877,10 @@ partial member) and `Async.catch c : Async (Result a Exception)`, the await-time
 catches at *call* time, and an async extern does not throw when called, it returns a coroutine that
 throws when awaited, so `try` would wrap the coroutine and the `TimeoutError` would escape at the
 `let!`. `catch` catches `Exception`, not `BaseException`, so `asyncio.CancelledError` passes through
-and structured cancellation keeps working. Building any of these is pure (a coroutine is a value);
+and structured cancellation keeps working. Building any of these is pure (an `Async` is a value);
 the `async` effect is attributed where the value is awaited, except `toThread`, whose arrow carries
-the thunk's effect. `sleep` is `asyncio.sleep` itself; the rest are emitted `_pf_async_*` helpers,
+the thunk's effect. Each is an emitted helper returning a `_pf_Async` (a fully applied
+`Async.sleep secs` builds `_pf_Async(asyncio.sleep, secs)` directly),
 because `gather(*xs)` spreads a list the extern syntax cannot, `wait` returns task sets, and two of
 them build `Option`/`Result` values. **Deliberately absent:** `Async.start` and `Async.cancel`. A task
 should only start inside a scope that will join or cancel it, which is the structured-concurrency

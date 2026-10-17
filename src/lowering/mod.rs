@@ -360,6 +360,12 @@ struct Lowerer {
     /// no arguments, so the call site wraps it as `lambda: f(None)` (`DESIGN.md`
     /// §6, issue #107).
     extern_thunk_slots: std::collections::HashMap<String, Vec<usize>>,
+    /// `extern` name → its parameters that carry a Pyfun `Async` into Python, and
+    /// how each crosses (`DESIGN.md` §8): Python receives a real coroutine.
+    extern_async_slots: std::collections::HashMap<String, Vec<(usize, AsyncSlot)>>,
+    /// The `extern`s whose result is `Async`: a saturated call is wrapped cold,
+    /// `_pf_Async(f, *args)`, so awaiting it twice calls Python twice.
+    extern_async_results: HashSet<String>,
     /// `extern` name → its Python keyword arguments (literals already lowered to
     /// `PyExpr`, `...` slots left to be filled from the call), appended to every
     /// emitted call (`open(path, encoding="utf-8")`). Under-application routes
@@ -551,6 +557,8 @@ impl Lowerer {
         let mut receiver_externs = std::collections::HashMap::new();
         let mut extern_unit_slots = std::collections::HashMap::new();
         let mut extern_thunk_slots = std::collections::HashMap::new();
+        let mut extern_async_slots = std::collections::HashMap::new();
+        let mut extern_async_results = HashSet::new();
         let mut extern_kwargs: std::collections::HashMap<String, Vec<(String, KwSource)>> =
             std::collections::HashMap::new();
         let mut user_defs = HashSet::new();
@@ -573,6 +581,13 @@ impl Lowerer {
                     let units = unit_param_slots(&decl.ty);
                     if !units.is_empty() {
                         extern_unit_slots.insert(decl.name.clone(), units);
+                    }
+                    let async_slots = async_param_slots(&decl.ty);
+                    if !async_slots.is_empty() {
+                        extern_async_slots.insert(decl.name.clone(), async_slots);
+                    }
+                    if returns_async(&decl.ty) {
+                        extern_async_results.insert(decl.name.clone());
                     }
                     let slots = thunk_param_slots(&decl.ty);
                     if !slots.is_empty() {
@@ -754,6 +769,8 @@ impl Lowerer {
             receiver_externs,
             extern_unit_slots,
             extern_thunk_slots,
+            extern_async_slots,
+            extern_async_results,
             extern_kwargs,
             needed_imports: BTreeSet::new(),
             user_defs,
@@ -812,11 +829,7 @@ impl Lowerer {
             return lowered
                 .map(any_for_object_fields)
                 .map(native_classes)
-                .map(|py| self.annotate_functions(module, py))
-                .map(|mut py| {
-                    unannotate_nonlocal_params(&mut py.body);
-                    py
-                });
+                .map(|py| self.annotate_functions(module, py));
         }
         lowered
     }
@@ -1202,6 +1215,7 @@ impl Lowerer {
                                 )
                             }
                         };
+                        let value = self.async_extern_binding(&decl.name, k, value);
                         code.push(PyStmt::Assign {
                             target: py_value_name(&decl.name),
                             value,
@@ -2175,7 +2189,7 @@ impl Lowerer {
             ExprKind::Str(s) => Ok((vec![], PyExpr::Str(s.clone()))),
             ExprKind::Bool(b) => Ok((vec![], PyExpr::Bool(*b))),
             ExprKind::Unit => Ok((vec![], PyExpr::NoneLit)),
-            ExprKind::Var(name) => Ok((vec![], self.lower_var(name, locals))),
+            ExprKind::Var(name) => Ok((vec![], self.lower_var_value(name, locals))),
 
             ExprKind::Binary { op, lhs, rhs } => {
                 let (mut stmts, left) = self.lower_value(lhs, locals)?;
@@ -2741,6 +2755,63 @@ impl Lowerer {
     fn lower_application(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
+        // `Async.sleep secs` builds `_pf_Async(asyncio.sleep, secs)` directly, so an
+        // immediate `do!` reads `await asyncio.sleep(secs)`; a bare `Async.sleep`
+        // passed as a value keeps its helper.
+        if args_ast.len() == 1
+            && crate::types::qualified_name(head).is_some_and(|q| q == "Async.sleep")
+        {
+            let (stmts, secs) = self.lower_value(args_ast[0], locals)?;
+            self.needed_imports.insert("asyncio".to_string());
+            let sleep = PyExpr::Attribute {
+                value: Box::new(PyExpr::Name("asyncio".to_string())),
+                attr: "sleep".to_string(),
+            };
+            return Ok((stmts, self.cold_async(vec![sleep, secs])));
+        }
+        // A partial application of an `extern` that carries `Async` closes over
+        // its adapting lambda, so each later call still yields a cold value and
+        // gives Python real coroutines (`urls |> List.map (fetch session)`).
+        if let ExprKind::Var(name) = &head.kind
+            && self.is_async_extern(name, locals)
+            && let Some(&k) = self.arities.get(name)
+            && !args_ast.is_empty()
+            && args_ast.len() < k
+        {
+            let mut stmts = Vec::new();
+            let mut args = Vec::with_capacity(args_ast.len());
+            for arg in &args_ast {
+                let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                stmts.extend(arg_stmts);
+                args.push(arg_val);
+            }
+            let bare = self.lower_var(name, locals);
+            let adapter = self.async_extern_binding(name, k, bare);
+            self.needs_functools = true;
+            let partial = PyExpr::Call {
+                func: Box::new(PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name("functools".to_string())),
+                    attr: "partial".to_string(),
+                }),
+                args: std::iter::once(adapter).chain(args).collect(),
+            };
+            return Ok((stmts, partial));
+        }
+        let (stmts, value) = self.lower_application_inner(expr, locals)?;
+        if let ExprKind::Var(name) = &head.kind
+            && !locals.contains(name)
+            && !self.user_defs.contains(name)
+            && self.extern_async_results.contains(name)
+            && self.arities.get(name) == Some(&args_ast.len())
+        {
+            return Ok((stmts, self.cold_extern_result(value)));
+        }
+        Ok((stmts, value))
+    }
+
+    fn lower_application_inner(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
+        let mut args_ast = Vec::new();
+        let head = flatten_app(expr, &mut args_ast);
 
         // Tier-1 in-place linear accumulation (`DESIGN.md` §5): a qualifying
         // fully-applied `Seq.fold`/`List.fold` inlines to a `for`-loop over a
@@ -2820,6 +2891,7 @@ impl Lowerer {
                 arg_vals.push(arg_val);
             }
             self.wrap_thunk_args(name, &mut arg_vals);
+            self.wrap_async_args(name, &mut arg_vals);
             // A bare (unapplied) reference becomes a receiver-taking lambda (which
             // pins any kwargs itself, `lambda r, a: r.write_text(a, encoding=…)`).
             if arg_vals.is_empty() {
@@ -2919,6 +2991,7 @@ impl Lowerer {
                 arg_vals.push(arg_val);
             }
             self.wrap_thunk_args(name, &mut arg_vals);
+            self.wrap_async_args(name, &mut arg_vals);
             let call =
                 self.build_call_units(dotted_path(&target), k, &units, arg_vals, spec, &mut stmts);
             return Ok((stmts, call));
@@ -2945,6 +3018,7 @@ impl Lowerer {
                 arg_vals.push(arg_val);
             }
             self.wrap_thunk_args(name, &mut arg_vals);
+            self.wrap_async_args(name, &mut arg_vals);
             let mut hoist = Vec::new();
             let call =
                 self.build_call_kw(dotted_path(&target), arity, arg_vals, kwargs, &mut hoist);
@@ -3012,7 +3086,12 @@ impl Lowerer {
             _ => None,
         };
 
-        let (mut stmts, head_val) = self.lower_value(head, locals)?;
+        // A variable head lowers bare: the call itself is adapted where it is
+        // built, so an `Async`-touching extern is not first wrapped as a value.
+        let (mut stmts, head_val) = match &head.kind {
+            ExprKind::Var(name) => (Vec::new(), self.lower_var(name, locals)),
+            _ => self.lower_value(head, locals)?,
+        };
         let mut arg_vals = Vec::with_capacity(args_ast.len());
         for arg in &args_ast {
             let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
@@ -3024,6 +3103,7 @@ impl Lowerer {
             && !locals.contains(name)
         {
             self.wrap_thunk_args(name, &mut arg_vals);
+            self.wrap_async_args(name, &mut arg_vals);
         }
 
         Ok((stmts, self.build_call(head_val, arity, arg_vals)))
@@ -3590,13 +3670,7 @@ impl Lowerer {
             // `asyncio.sleep` itself; the rest are `_pf_async_*` helpers, since
             // `gather(*xs)` spreads a list, `wait` returns task sets, and
             // `timeout`/`catch` build `Option`/`Result` values.
-            "Async.sleep" => {
-                self.needed_imports.insert("asyncio".to_string());
-                PyExpr::Attribute {
-                    value: Box::new(bare("asyncio")),
-                    attr: "sleep".to_string(),
-                }
-            }
+            "Async.sleep" => asy(self, "_pf_async_sleep"),
             "Async.timeout" => {
                 self.needs_option = true;
                 asy(self, "_pf_async_timeout")
@@ -5039,7 +5113,8 @@ impl Lowerer {
         out
     }
 
-    /// `async { ... }` → an `async def` returning a coroutine.
+    /// `async { ... }` → an `async def` wrapped in a cold `_pf_Async`: nothing runs
+    /// until it is awaited, and each await runs it afresh (`DESIGN.md` §8).
     fn lower_async(&mut self, items: &[CeItem], locals: &HashSet<String>) -> Lowered {
         let mut body = Vec::new();
         let mut locals = locals.clone();
@@ -5057,7 +5132,27 @@ impl Lowerer {
             body: full,
             is_async: true,
         };
-        Ok((vec![def], call0(&name)))
+        Ok((vec![def], self.cold_async(vec![PyExpr::Name(name)])))
+    }
+
+    /// `_pf_Async(fn, *args)`: a cold async value whose every await calls
+    /// `fn(*args)` for a fresh run. Records that the runtime class is needed.
+    fn cold_async(&mut self, args: Vec<PyExpr>) -> PyExpr {
+        self.needed_async_helpers.insert("_pf_Async");
+        PyExpr::Call {
+            func: Box::new(PyExpr::Name("_pf_Async".to_string())),
+            args,
+        }
+    }
+
+    /// `_pf_run(value)`: a fresh coroutine of any awaitable, for a Python API
+    /// that insists on a real one. Records that the helper is needed.
+    fn run_async(&mut self, value: PyExpr) -> PyExpr {
+        self.needed_async_helpers.insert("_pf_run");
+        PyExpr::Call {
+            func: Box::new(PyExpr::Name("_pf_run".to_string())),
+            args: vec![value],
+        }
     }
 
     /// One level of `async` items into `body`; a `for` item nests a level inside
@@ -5333,6 +5428,142 @@ impl Lowerer {
     /// Python with no arguments, so it becomes `lambda: f(None)`, and a literal
     /// `fun _ -> body` collapses to `lambda: body`. Only the slots the extern's
     /// declared type marks are touched; every other argument passes as it is.
+    /// Adapt the arguments of an `extern` call that carry a Pyfun `Async` into
+    /// Python (`DESIGN.md` §8). A Pyfun `Async` is a cold `_pf_Async`, but Python
+    /// APIs want a real coroutine: `create_task` rejects anything else, and
+    /// `asyncio.start_server` schedules a handler's result only if it is one, so
+    /// a handler returning `_pf_Async` would silently never run. An `Async`
+    /// argument passes as `_pf_run(x)`, and a callback returning `Async` is wrapped
+    /// so every call Python makes returns `_pf_run(...)`.
+    fn wrap_async_args(&mut self, name: &str, args: &mut [PyExpr]) {
+        let Some(slots) = self.extern_async_slots.get(name).cloned() else {
+            return;
+        };
+        for (i, slot) in slots {
+            if i < args.len() {
+                let arg = std::mem::replace(&mut args[i], PyExpr::NoneLit);
+                args[i] = self.adapt_async_arg(slot, arg);
+            }
+        }
+    }
+
+    /// One argument of [`Self::wrap_async_args`]. A thunk slot has already become
+    /// `lambda: body` through [`Self::wrap_thunk_args`]; its body is what runs.
+    fn adapt_async_arg(&mut self, slot: AsyncSlot, arg: PyExpr) -> PyExpr {
+        match slot {
+            AsyncSlot::Value => self.run_async(arg),
+            AsyncSlot::Thunk => match arg {
+                PyExpr::Lambda { params, body } if params.is_empty() => PyExpr::Lambda {
+                    params,
+                    body: Box::new(self.run_async(*body)),
+                },
+                f => {
+                    let call = PyExpr::Call {
+                        func: Box::new(f),
+                        args: vec![PyExpr::NoneLit],
+                    };
+                    PyExpr::Lambda {
+                        params: vec![],
+                        body: Box::new(self.run_async(call)),
+                    }
+                }
+            },
+            AsyncSlot::Callback => {
+                let call = PyExpr::Call {
+                    func: Box::new(arg),
+                    args: vec![PyExpr::Starred(Box::new(PyExpr::Name("_pf_a".to_string())))],
+                };
+                PyExpr::Lambda {
+                    params: vec!["*_pf_a".to_string()],
+                    body: Box::new(self.run_async(call)),
+                }
+            }
+        }
+    }
+
+    /// A project's binding for an `extern` that carries `Async` across the
+    /// boundary. A dependent module calls the binding n-ary and knows only its
+    /// arity, so the binding itself adapts: `lambda p0, p1: _pf_Async(f, _pf_run(p0),
+    /// p1)` for an `Async` argument and result. Any other extern binds unchanged.
+    fn async_extern_binding(&mut self, name: &str, k: usize, value: PyExpr) -> PyExpr {
+        let slots = self
+            .extern_async_slots
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
+        let cold = self.extern_async_results.contains(name);
+        if k == 0 || (slots.is_empty() && !cold) {
+            return value;
+        }
+        let params: Vec<String> = (0..k).map(|i| format!("_pf_p{i}")).collect();
+        let mut args: Vec<PyExpr> = params.iter().map(|p| PyExpr::Name(p.clone())).collect();
+        for (i, slot) in slots {
+            if i < args.len() {
+                let arg = std::mem::replace(&mut args[i], PyExpr::NoneLit);
+                args[i] = self.adapt_async_arg(slot, arg);
+            }
+        }
+        let body = if cold {
+            self.cold_async(std::iter::once(value).chain(args).collect())
+        } else {
+            PyExpr::Call {
+                func: Box::new(value),
+                args,
+            }
+        };
+        PyExpr::Lambda {
+            params,
+            body: Box::new(body),
+        }
+    }
+
+    /// Whether `name` here is an `extern` that carries `Async` across the boundary
+    /// (an `Async` result or parameter), rather than a local or user binding.
+    fn is_async_extern(&self, name: &str, locals: &HashSet<String>) -> bool {
+        !locals.contains(name)
+            && !self.user_defs.contains(name)
+            && (self.extern_async_results.contains(name)
+                || self.extern_async_slots.contains_key(name))
+    }
+
+    /// A variable in value position. A bare `extern` that carries `Async` is its
+    /// adapting lambda (see [`Self::async_extern_binding`]), so `List.map fetch
+    /// urls` builds cold values and Python receives coroutines.
+    fn lower_var_value(&mut self, name: &str, locals: &HashSet<String>) -> PyExpr {
+        let bare = self.lower_var(name, locals);
+        match self.arities.get(name).copied() {
+            Some(k) if self.is_async_extern(name, locals) => {
+                self.async_extern_binding(name, k, bare)
+            }
+            _ => bare,
+        }
+    }
+
+    /// A saturated call of an `extern` whose result is `Async`, made cold: the
+    /// Python call runs on each await, with the function and arguments evaluated
+    /// now. Pinned keyword arguments ride a `functools.partial`. Any other shape
+    /// (a property read) keeps the awaitable Python returned.
+    fn cold_extern_result(&mut self, value: PyExpr) -> PyExpr {
+        match value {
+            PyExpr::Call { func, args } => {
+                self.cold_async(std::iter::once(*func).chain(args).collect())
+            }
+            PyExpr::CallKw { func, args, kwargs } => {
+                self.needs_functools = true;
+                let partial = PyExpr::CallKw {
+                    func: Box::new(PyExpr::Attribute {
+                        value: Box::new(PyExpr::Name("functools".to_string())),
+                        attr: "partial".to_string(),
+                    }),
+                    args: std::iter::once(*func).chain(args).collect(),
+                    kwargs,
+                };
+                self.cold_async(vec![partial])
+            }
+            other => other,
+        }
+    }
+
     fn wrap_thunk_args(&self, name: &str, args: &mut [PyExpr]) {
         let Some(slots) = self.extern_thunk_slots.get(name) else {
             return;
@@ -6112,6 +6343,56 @@ fn unit_param_slots(ty: &TypeExpr) -> Vec<usize> {
     out
 }
 
+/// How an `extern` parameter carries a Pyfun `Async` into Python (`DESIGN.md` §8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AsyncSlot {
+    /// An `Async a` argument: Python receives a fresh coroutine, `_pf_run(x)`.
+    Value,
+    /// A callback returning `Async` (`a -> Async b`): every call Python makes
+    /// returns a real coroutine, `lambda *_pf_a: _pf_run(f(*_pf_a))`.
+    Callback,
+    /// `unit -> Async a`: `lambda: _pf_run(f(None))`.
+    Thunk,
+}
+
+/// `Async a`.
+fn is_async_type(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Con(name, _, _) if name == "Async")
+}
+
+/// Whether `ty`, after all its arrows, is `Async`: an extern's result, or a
+/// callback parameter's.
+fn returns_async(ty: &TypeExpr) -> bool {
+    let mut cur = ty;
+    while let TypeExpr::Fun(_, ret, _) = cur {
+        cur = ret;
+    }
+    is_async_type(cur)
+}
+
+/// The positions (0-based, along the curried parameter list) of an extern's
+/// parameters that carry a Pyfun `Async`, each with how it crosses.
+fn async_param_slots(ty: &TypeExpr) -> Vec<(usize, AsyncSlot)> {
+    let mut out = Vec::new();
+    let mut cur = ty;
+    let mut i = 0;
+    while let TypeExpr::Fun(domain, ret, _) = cur {
+        if is_async_type(domain) {
+            out.push((i, AsyncSlot::Value));
+        } else if matches!(domain.as_ref(), TypeExpr::Fun(..)) && returns_async(domain) {
+            let slot = if is_unit_domain(domain) {
+                AsyncSlot::Thunk
+            } else {
+                AsyncSlot::Callback
+            };
+            out.push((i, slot));
+        }
+        i += 1;
+        cur = ret;
+    }
+    out
+}
+
 /// The positions (0-based, along the curried parameter list) of an extern's
 /// `unit -> a` parameters: callbacks Python calls with no arguments.
 fn thunk_param_slots(ty: &TypeExpr) -> Vec<usize> {
@@ -6669,59 +6950,6 @@ fn native_classes(mut module: PyModule) -> PyModule {
     module
 }
 
-/// Native mode: a parameter that a nested function rebinds through `nonlocal`
-/// stays unannotated. mypyc copies an annotated `int` parameter into the
-/// closure environment unboxed when the nested function sees the name as
-/// another type, which gcc rejects and an MSVC build turns into a segfault
-/// (python/mypy#22221). An async or `seq` self tail call rebinds its parameters
-/// this way. A local the nested function rebinds is unaffected.
-fn unannotate_nonlocal_params(stmts: &mut [PyStmt]) {
-    for stmt in stmts {
-        if let PyStmt::TypedFuncDef { params, body, .. } = stmt {
-            let mut rebound = HashSet::new();
-            collect_nonlocals(body, &mut rebound);
-            // A function's own `nonlocal` names an enclosing binding, never one
-            // of its parameters (Python rejects that), so every name collected
-            // from its body is rebound by a function nested inside it.
-            for (name, ty) in params.iter_mut() {
-                if rebound.contains(name) {
-                    *ty = None;
-                }
-            }
-        }
-        for block in child_blocks(stmt) {
-            unannotate_nonlocal_params(block);
-        }
-    }
-}
-
-/// Every name a `nonlocal` declares anywhere in `stmts`, nested functions included.
-fn collect_nonlocals(stmts: &mut [PyStmt], out: &mut HashSet<String>) {
-    for stmt in stmts {
-        if let PyStmt::Nonlocal(names) = stmt {
-            out.extend(names.iter().cloned());
-        }
-        for block in child_blocks(stmt) {
-            collect_nonlocals(block, out);
-        }
-    }
-}
-
-/// The statement blocks directly inside `stmt`.
-fn child_blocks(stmt: &mut PyStmt) -> Vec<&mut Vec<PyStmt>> {
-    match stmt {
-        PyStmt::WhileTrue { body }
-        | PyStmt::For { body, .. }
-        | PyStmt::AsyncWith { body, .. }
-        | PyStmt::FuncDef { body, .. }
-        | PyStmt::TypedFuncDef { body, .. } => vec![body],
-        PyStmt::If { body, orelse, .. } => vec![body, orelse],
-        PyStmt::Try { body, handler, .. } => vec![body, handler],
-        PyStmt::Match { cases, .. } => cases.iter_mut().map(|c| &mut c.body).collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// The Python spelling of each non-generic local user type for native
 /// annotations: a record is its class, and a sum type its union alias (which
 /// `annotate_functions` emits after the classes), unless a constructor shares
@@ -7000,9 +7228,15 @@ fn combinator_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
 /// primitives are strict — `_pf_dec_int` rejects a JSON bool (a Python `bool` is an
 /// `int` subclass) and `_pf_dec_float` accepts an int — so "parse, don't validate"
 /// actually validates. Built from the IR, emitted in sorted helper-name order.
-/// The `Async`-module helpers referenced by the program (`DESIGN.md` §8.1): each
-/// an `async def` over `asyncio`, except `toThread`, which returns the awaitable
-/// `asyncio.to_thread` builds. `catch` deliberately catches `Exception`, not
+/// The `Async`-module runtime referenced by the program (`DESIGN.md` §8). An
+/// `Async a` is **cold**: a `_pf_Async` holds the coroutine function and its
+/// arguments, and every `await` of it starts a fresh run, as F#'s `Async` does,
+/// so one value can be awaited twice, retried or raced against itself. `_pf_run`
+/// turns any awaitable into a real coroutine for the `asyncio` APIs that insist on
+/// one (`create_task`, `gather`, `wait_for`), and gives each element of a list its
+/// own run (`gather` would otherwise await a repeated value once). Each helper is a
+/// plain function returning a `_pf_Async`, so building one is pure and nothing
+/// runs until it is awaited. `catch` deliberately catches `Exception`, not
 /// `BaseException`, so `asyncio.CancelledError` passes through and structured
 /// cancellation keeps working.
 fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyStmt> {
@@ -7017,40 +7251,142 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
     };
     let asyncio = |m: &str| attr(name("asyncio"), m);
     let await_ = |e: PyExpr| PyExpr::Await(Box::new(e));
-    let adef = |fn_name: &str, params: &[&str], body: Vec<PyStmt>| PyStmt::FuncDef {
+    let run_of = |e: PyExpr| call(name("_pf_run"), vec![e]);
+    let def = |fn_name: &str, params: &[&str], body: Vec<PyStmt>, is_async: bool| PyStmt::FuncDef {
         name: fn_name.to_string(),
         params: params.iter().map(|p| p.to_string()).collect(),
         body,
-        is_async: true,
+        is_async,
     };
+    let cold = |args: Vec<PyExpr>| PyStmt::Return(call(name("_pf_Async"), args));
+    // `def helper(params): async def run(): body; return _pf_Async(run)`.
+    let cold_helper = |helper: &str, params: &[&str], body: Vec<PyStmt>| {
+        def(
+            helper,
+            params,
+            vec![def("run", &[], body, true), cold(vec![name("run")])],
+            false,
+        )
+    };
+    let mut used = used.clone();
+    if used
+        .iter()
+        .any(|h| h.starts_with("_pf_async_") || h.starts_with("_pf_task_"))
+    {
+        used.insert("_pf_Async");
+    }
+    if used.iter().any(|h| {
+        matches!(
+            *h,
+            "_pf_async_parallel" | "_pf_async_race" | "_pf_async_timeout" | "_pf_task_start"
+        )
+    }) {
+        used.insert("_pf_run");
+    }
     used.iter()
         .map(|&helper| match helper {
-            // Async.toThread(f) -> asyncio.to_thread(f, None): the thunk takes the unit value.
-            "_pf_async_to_thread" => PyStmt::FuncDef {
-                name: helper.to_string(),
-                params: vec!["f".to_string()],
-                body: vec![PyStmt::Return(call(
-                    asyncio("to_thread"),
-                    vec![name("f"), PyExpr::NoneLit],
-                ))],
-                is_async: false,
-            },
-            // Async.parallel(xs) -> list(await asyncio.gather(*xs))
-            "_pf_async_parallel" => adef(
+            // class _pf_Async:
+            //     __slots__ = ("fn", "args")
+            //     def __init__(self, fn, *args): self.fn = fn; self.args = args
+            //     def __await__(self): return self.fn(*self.args).__await__()
+            //     async def __call__(self): return await self
+            "_pf_Async" => {
+                let this = |a: &str| attr(name("self"), a);
+                PyStmt::Class {
+                    name: helper.to_string(),
+                    body: vec![
+                        PyStmt::Assign {
+                            target: "__slots__".to_string(),
+                            value: PyExpr::Tuple(vec![
+                                PyExpr::Str("fn".to_string()),
+                                PyExpr::Str("args".to_string()),
+                            ]),
+                        },
+                        def(
+                            "__init__",
+                            &["self", "fn", "*args"],
+                            vec![
+                                PyStmt::Assign {
+                                    target: "self.fn".to_string(),
+                                    value: name("fn"),
+                                },
+                                PyStmt::Assign {
+                                    target: "self.args".to_string(),
+                                    value: name("args"),
+                                },
+                            ],
+                            false,
+                        ),
+                        def(
+                            "__await__",
+                            &["self"],
+                            vec![PyStmt::Return(call(
+                                attr(
+                                    call(this("fn"), vec![PyExpr::Starred(Box::new(this("args")))]),
+                                    "__await__",
+                                ),
+                                vec![],
+                            ))],
+                            false,
+                        ),
+                        // Python code runs a Pyfun value by calling it, as it would
+                        // a zero-argument `async def`: `asyncio.run(job())`.
+                        def(
+                            "__call__",
+                            &["self"],
+                            vec![PyStmt::Return(await_(name("self")))],
+                            true,
+                        ),
+                        def(
+                            "__repr__",
+                            &["self"],
+                            vec![PyStmt::Return(PyExpr::Str("<Async>".to_string()))],
+                            false,
+                        ),
+                    ],
+                }
+            }
+            // async def _pf_run(a): return await a
+            "_pf_run" => def(
+                helper,
+                &["a"],
+                vec![PyStmt::Return(await_(name("a")))],
+                true,
+            ),
+            // Async.sleep(secs) -> _pf_Async(asyncio.sleep, secs)
+            "_pf_async_sleep" => def(
+                helper,
+                &["secs"],
+                vec![cold(vec![asyncio("sleep"), name("secs")])],
+                false,
+            ),
+            // Async.toThread(f) -> _pf_Async(asyncio.to_thread, f, None): the thunk
+            // takes the unit value.
+            "_pf_async_to_thread" => def(
+                helper,
+                &["f"],
+                vec![cold(vec![asyncio("to_thread"), name("f"), PyExpr::NoneLit])],
+                false,
+            ),
+            // Async.parallel(xs): list(await asyncio.gather(*map(_pf_run, xs)))
+            "_pf_async_parallel" => cold_helper(
                 helper,
                 &["xs"],
                 vec![PyStmt::Return(call(
                     name("list"),
                     vec![await_(call(
                         asyncio("gather"),
-                        vec![PyExpr::Starred(Box::new(name("xs")))],
+                        vec![PyExpr::Starred(Box::new(call(
+                            name("map"),
+                            vec![name("_pf_run"), name("xs")],
+                        )))],
                     ))],
                 ))],
             ),
             // Async.race(xs): the first to finish wins and the rest are cancelled.
             // Racing nothing would wait forever, so an empty list raises a clear
             // error rather than asyncio's ValueError about an empty set.
-            "_pf_async_race" => adef(
+            "_pf_async_race" => cold_helper(
                 helper,
                 &["xs"],
                 vec![
@@ -7070,7 +7406,10 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                             name("list"),
                             vec![call(
                                 name("map"),
-                                vec![asyncio("ensure_future"), name("xs")],
+                                vec![
+                                    asyncio("ensure_future"),
+                                    call(name("map"), vec![name("_pf_run"), name("xs")]),
+                                ],
                             )],
                         ),
                     },
@@ -7096,8 +7435,9 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                     )),
                 ],
             ),
-            // Async.timeout(secs, c) -> Some(await wait_for(c, secs)); None on TimeoutError.
-            "_pf_async_timeout" => adef(
+            // Async.timeout(secs, c): Some(await wait_for(_pf_run(c), secs)); None on
+            // TimeoutError.
+            "_pf_async_timeout" => cold_helper(
                 helper,
                 &["secs", "c"],
                 vec![PyStmt::Try {
@@ -7105,7 +7445,7 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                         name("Some"),
                         vec![await_(call(
                             asyncio("wait_for"),
-                            vec![name("c"), name("secs")],
+                            vec![run_of(name("c")), name("secs")],
                         ))],
                     ))],
                     exc_type: Some("TimeoutError".to_string()),
@@ -7113,8 +7453,8 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                     handler: vec![PyStmt::Return(none_value(none_singleton))],
                 }],
             ),
-            // Async.catch(c) -> Ok(await c); Error(_Exception(kind, message)) on Exception.
-            "_pf_async_catch" => adef(
+            // Async.catch(c): Ok(await c); Error(_Exception(kind, message)) on Exception.
+            "_pf_async_catch" => cold_helper(
                 helper,
                 &["c"],
                 vec![PyStmt::Try {
@@ -7136,18 +7476,20 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
             // Task.scope(body) runs the body in its own task, whose copy of the
             // context holds the scope's TaskGroup in `_pf_scope` without leaking
             // it to the caller once the scope ends:
-            //   async def _pf_task_scope(body):
+            //   def _pf_task_scope(body):
             //       async def run():
-            //           async with asyncio.TaskGroup() as tg:
-            //               _pf_scope.set(tg)
-            //               return await body
-            //       return await asyncio.create_task(run())
-            "_pf_task_scope" => adef(
+            //           async def scoped():
+            //               async with asyncio.TaskGroup() as tg:
+            //                   _pf_scope.set(tg)
+            //                   return await body
+            //           return await asyncio.create_task(scoped())
+            //       return _pf_Async(run)
+            "_pf_task_scope" => cold_helper(
                 helper,
                 &["body"],
                 vec![
-                    adef(
-                        "run",
+                    def(
+                        "scoped",
                         &[],
                         vec![PyStmt::AsyncWith {
                             context: call(asyncio("TaskGroup"), vec![]),
@@ -7160,26 +7502,27 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                                 PyStmt::Return(await_(name("body"))),
                             ],
                         }],
+                        true,
                     ),
                     PyStmt::Return(await_(call(
                         asyncio("create_task"),
-                        vec![call(name("run"), vec![])],
+                        vec![call(name("scoped"), vec![])],
                     ))),
                 ],
             ),
-            // Task.start(c): the enclosing scope's TaskGroup owns the task.
-            "_pf_task_start" => PyStmt::FuncDef {
-                name: helper.to_string(),
-                params: vec!["c".to_string()],
-                body: vec![
+            // Task.start(c): the enclosing scope's TaskGroup owns a fresh run of `c`.
+            "_pf_task_start" => def(
+                helper,
+                &["c"],
+                vec![
                     PyStmt::Expr(call(
                         attr(call(attr(name("_pf_scope"), "get"), vec![]), "create_task"),
-                        vec![name("c")],
+                        vec![run_of(name("c"))],
                     )),
                     PyStmt::Return(PyExpr::NoneLit),
                 ],
-                is_async: false,
-            },
+                false,
+            ),
             other => unreachable!("unknown Async helper {other}"),
         })
         .collect()
