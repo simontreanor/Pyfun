@@ -4120,6 +4120,34 @@ fn native_leaves_active_patterns_to_their_own_lowering() {
 }
 
 #[test]
+fn native_spells_out_the_comparisons_of_an_ordered_sum_type() {
+    // mypyc compiles `==` on a class with `__lt__` but no `__eq__` of its own as
+    // an identity test, and mypy cannot see what `total_ordering` derives, so a
+    // compared sum type writes all five methods out in native mode.
+    let src = "type Shape = Circle float | Square float\n\
+               let answer = 42\n\
+               print (Some 42 == Some answer)\n\
+               print (Some 1 != Some 1)\n\
+               print (Some 1 <= Some 2)\n\
+               print (Circle 1.0 == Circle 1.0)\n\
+               print (Circle 1.0 >= Square 0.0)\n\
+               print (Set.ofList [Some 1, Some 1] |> Set.len)";
+    let Some((py, out)) = run_native(src) else {
+        return;
+    };
+    assert!(!py.contains("total_ordering"), "{py}");
+    assert!(
+        py.contains(
+            "def __eq__(self, other):\n        \
+             return type(other) is Circle and self._pf_order_key() == other._pf_order_key()"
+        ),
+        "{py}"
+    );
+    assert!(py.contains("def __ge__(self, other):"), "{py}");
+    assert_eq!(out, ["True", "False", "True", "True", "False", "1"]);
+}
+
+#[test]
 fn e2e_a_start_joins_the_innermost_open_scope() {
     // Each start belongs to the scope open where it runs: the inner scope joins
     // its own task before the outer body carries on, and the outer scope's

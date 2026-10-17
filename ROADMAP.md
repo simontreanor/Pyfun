@@ -522,7 +522,15 @@ map_build 1.64× vs hand-written.
   its move-generation bench runs about **1.5x** faster than plain Python (generation up to 2x on
   the heaviest position). The replays themselves gain only 1.1–1.2x, since loading the dictionary
   takes most of each run. **Remaining:** or-patterns whose alternatives
-  bind names, and the closure/`seq` audit under mypyc.
+  bind names, and **a crash in any nested function that rebinds a `nonlocal`** (found 2026-10-17
+  by `tests/native_parity.py`, the CI gate that diffs every runnable lesson and offline example
+  against `pyfun run`). mypyc segfaults on such a function when mypy runs with
+  `--allow-redefinition-new`, in eight lines of plain Python, closure, generator and coroutine
+  alike, so an async or `seq` self tail call and a `mut` captured by a closure all crash a native
+  build (`examples/interop/structured_concurrency.pyfun` is the gate's one known failure). Dropping
+  the flag removes the crash but fails six programs, each a `try` temporary assigned `Ok` then
+  `Error`; annotating that temporary with the union is the likely fix, if nothing else needs the
+  flag. Not yet reported upstream.
   The original reasoning, kept for the record:
   the checker knows every binding's inferred type, so the emitter could produce fully annotated
   Python whose annotations cannot lie, then compile it with mypyc into a C extension — native speed

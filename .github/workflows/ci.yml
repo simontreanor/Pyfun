@@ -73,6 +73,24 @@ jobs:
       - run: python docs/verify_lessons.py
       - run: python docs/build_notebooks.py --check
 
+  # A native build must print what the plain build prints. Every runnable lesson
+  # program and the offline examples go through `pyfun build --native` (mypyc)
+  # and are diffed against `pyfun run`.
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.0'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build
+      - run: pip install mypy setuptools
+      - run: python tests/native_parity.py
+
   # MELPA builds pyfun-mode.el straight from main, so it gets the checks MELPA
   # reviewers run (byte-compile, checkdoc, package-lint) on every change. 29.1
   # is the floor the file's Package-Requires declares.
