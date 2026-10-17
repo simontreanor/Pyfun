@@ -30,8 +30,9 @@ EXAMPLES = [
 # Programs known to fail natively, each with its reason (ROADMAP: Typed-emit +
 # mypyc AOT). One that starts passing fails the run until it leaves this list.
 KNOWN = {
-    "examples/interop/structured_concurrency.pyfun": "a coroutine rebinding a `nonlocal` "
-    "crashes when mypyc builds it under --allow-redefinition-new",
+    "examples/interop/structured_concurrency.pyfun": "under --allow-redefinition-new, mypyc "
+    "stores an unboxed int into an object slot for a rebound `nonlocal`: gcc rejects the C, "
+    "and an MSVC build segfaults",
 }
 PYFUN = Path(
     os.environ.get("PYFUN_BIN")

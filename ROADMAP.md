@@ -524,9 +524,10 @@ map_build 1.64× vs hand-written.
   takes most of each run. **Remaining:** or-patterns whose alternatives
   bind names, and **a crash in any nested function that rebinds a `nonlocal`** (found 2026-10-17
   by `tests/native_parity.py`, the CI gate that diffs every runnable lesson and offline example
-  against `pyfun run`). mypyc segfaults on such a function when mypy runs with
-  `--allow-redefinition-new`, in eight lines of plain Python, closure, generator and coroutine
-  alike, so an async or `seq` self tail call and a `mut` captured by a closure all crash a native
+  against `pyfun run`). Under mypy's `--allow-redefinition-new`, mypyc generates C that stores an
+  unboxed `int` into an object slot for the rebound name: gcc rejects it (`-Werror=int-conversion`)
+  and an MSVC build segfaults at run time. Eight lines of plain Python reproduce it, closure,
+  generator and coroutine alike, so an async or `seq` self tail call and a `mut` captured by a closure all crash a native
   build (`examples/interop/structured_concurrency.pyfun` is the gate's one known failure). Dropping
   the flag removes the crash but fails six programs, each a `try` temporary assigned `Ok` then
   `Error`; annotating that temporary with the union is the likely fix, if nothing else needs the
