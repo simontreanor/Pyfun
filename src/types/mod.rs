@@ -1668,6 +1668,29 @@ pub fn qualified_name(expr: &Expr) -> Option<String> {
     }
 }
 
+/// Where a Python builtin lives in Pyfun, for the "unbound name" message: Pyfun's
+/// prelude is module-qualified, so `len [1, 2]` names nothing. Only consulted when
+/// the name really is unbound, so a program's own `len` is untouched.
+fn python_builtin_spelling(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "len" => "`List.len` for a list, `String.len` for a string",
+        "str" => "`String.fromInt` or `String.fromFloat` (or an f-string)",
+        "int" => "`String.toInt`, which returns an `Option`",
+        "float" => "`String.toFloat`, which returns an `Option`",
+        "sum" => "`List.sum`",
+        "sorted" => "`List.sort`",
+        "reversed" => "`List.rev`",
+        "range" => "`List.range`",
+        "map" => "`List.map`",
+        "filter" => "`List.filter`",
+        "zip" => "`List.zip`",
+        "enumerate" => "`List.indexed`",
+        "any" => "`List.exists`",
+        "all" => "`List.forall`",
+        _ => return None,
+    })
+}
+
 /// Classic Levenshtein edit distance (insert/delete/substitute), over `char`s so a
 /// case slip counts as one substitution. Powers the "did you mean" member hint.
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -7459,7 +7482,12 @@ impl Infer {
                     })
                 }
                 None => Err(TypeError {
-                    message: format!("unbound name `{name}`"),
+                    message: match python_builtin_spelling(name) {
+                        Some(spelling) => {
+                            format!("unbound name `{name}` (Pyfun spells this {spelling})")
+                        }
+                        None => format!("unbound name `{name}`"),
+                    },
                     span,
                 }),
             },

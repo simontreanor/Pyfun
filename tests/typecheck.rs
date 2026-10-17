@@ -4000,6 +4000,18 @@ fn refinement_fits_suggest_functions_whose_result_matches() {
 // ---------- error-quality: guiding messages ----------
 
 #[test]
+fn a_python_builtin_name_points_at_its_pyfun_module() {
+    assert_error_contains("let n = len [1, 2, 3]", "`List.len` for a list");
+    assert_error_contains("let s = str 5", "`String.fromInt`");
+    assert_error_contains("let t = sum [1, 2]", "Pyfun spells this `List.sum`");
+    // Any other unbound name keeps the plain message.
+    assert_eq!(
+        errors("let z = frobnicate 3"),
+        ["unbound name `frobnicate`"]
+    );
+}
+
+#[test]
 fn plus_on_strings_hints_at_string_concat() {
     // `+` is numeric; the error should point at the concatenation path.
     assert_error_contains("let s = \"a\" + \"b\"", "String.concat");
