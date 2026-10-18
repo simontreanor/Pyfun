@@ -600,8 +600,8 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
   (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.10.0**, uploaded 2026-10-18 and **awaiting moderation**; the
-  plugins API lists 0.9.0, the last approved (check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
+  mode + legacy CE, 2024.2+). At **0.10.0**, uploaded and approved 2026-10-18 (verified against the
+  plugins API; check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
   (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this
   machine and two releases running lost time rediscovering that before reaching for a bare `gradle`.
   Approval is not instant: the plugins API lists approved versions only, so it reads the previous
