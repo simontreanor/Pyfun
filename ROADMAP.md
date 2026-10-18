@@ -586,27 +586,28 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
 
 ## Distribution (marketplace/registry presence — post-launch except where noted)
 
-- **PyPI** — `pyfun-lang` at **0.9.0** (2026-10-17, published by the tag and verified by installing
-  `pyfun-lang[jupyter]==0.9.0` into a clean venv and running the new `String.repeat` hint, the
-  `Task.scope` cookbook example and a `pyfun build --native` against it; a fresh venv on Python
-  3.12+ has no `setuptools`, which mypyc needs beside `mypy`; the index lags the tag build by a few minutes, so a first `No matching distribution` is a retry,
-  not a failure). Rides the tag; no manual step.
+- **PyPI** — `pyfun-lang` at **0.10.0** (2026-10-18, published by the tag and verified by installing
+  `pyfun-lang[jupyter]==0.10.0` into a clean venv and running sixteen checks of the release's headline
+  features against it: cold re-runs, an `asyncio.start_server` callback, each new hint and native
+  builds that match plain runs. A wheel built from the release branch passed the same checks before
+  the tag, and every e2e program ran under Python 3.12 in Docker. A fresh venv on Python 3.12+ has no
+  `setuptools`, which mypyc needs beside `mypy`; the index lags the tag build by a few minutes, so a
+  first `No matching distribution` is a retry, not a failure, and the JSON API lags the index). Rides the tag; no manual step.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
-  At **0.9.0** (2026-10-17, verified against the registry API; the first check after publishing can
+  At **0.10.0** (2026-10-18, verified against the registry API; the first check after publishing can
   read "published but not active" for a couple of minutes before the API reflects the new version,
   which is indexing lag, not a failed publish). Every release: `ovsx publish <vsix> -p <token>`
   (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). At **0.9.0**, uploaded 2026-10-17 and approved (the plugins API
-  lists it, as it does 0.8.1, whose rejection over an unresolved LSP4IJ cleared on a verifier re-run;
-  check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
+  mode + legacy CE, 2024.2+). At **0.10.0**, uploaded 2026-10-18 and **awaiting moderation**; the
+  plugins API lists 0.9.0, the last approved (check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
   (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this
   machine and two releases running lost time rediscovering that before reaching for a bare `gradle`.
   Approval is not instant: the plugins API lists approved versions only, so it reads the previous
   one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.9.0** (verified against the
-  gallery API 2026-10-17). The **only surface that cannot
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.10.0** (vsix uploaded through
+  the publisher web UI, verified against the gallery API 2026-10-18). The **only surface that cannot
   be scripted**: the vsix is uploaded by hand through the publisher web UI at
   `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI auth path is broken — see
   `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls
