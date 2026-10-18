@@ -3,6 +3,14 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.10.0
+
+- Version aligned to the compiler's 0.10.0 release. No client changes; the compiler it drives makes
+  `async { }` values cold (each await runs them again, as in F#), checks native builds against plain
+  ones on every change, and gives clearer errors for `def`, Python builtins, `&&`/`||`, `+` on lists
+  and a callback that misses an extern's closed effect arrow. One breaking change: Python code
+  handed a Pyfun async value calls it for a coroutine (`asyncio.run(job())`).
+
 ## 0.9.0
 
 - Version aligned to the compiler's 0.9.0 release. No client changes; the compiler it drives adds
