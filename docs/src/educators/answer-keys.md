@@ -196,7 +196,7 @@ ada: 10, alan: 9
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 
 let report name =
-  Map.tryFind name scores
+  Map.find name scores
   |> Option.withDefault 0
   |> String.fromInt
 

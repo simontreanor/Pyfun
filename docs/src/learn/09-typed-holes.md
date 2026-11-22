@@ -43,7 +43,7 @@ note: hole `?render` has type `int -> 'a` — try: List.range, Seq.range, String
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 
 let report name =
-  Map.tryFind name scores
+  Map.find name scores
   |> Option.withDefault ?missing
   |> ?render
 
@@ -58,7 +58,7 @@ Expected output:
 0
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IHNjb3JlcyA9IE1hcC5hZGQgImFkYSIgMTAgKE1hcC5hZGQgImFsYW4iIDkgTWFwLmVtcHR5KQoKbGV0IHJlcG9ydCBuYW1lID0KICBNYXAudHJ5RmluZCBuYW1lIHNjb3JlcwogIHw-IE9wdGlvbi53aXRoRGVmYXVsdCA_bWlzc2luZwogIHw-ID9yZW5kZXIKCnByaW50IChyZXBvcnQgImFkYSIpCnByaW50IChyZXBvcnQgImN5IikK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IHNjb3JlcyA9IE1hcC5hZGQgImFkYSIgMTAgKE1hcC5hZGQgImFsYW4iIDkgTWFwLmVtcHR5KQoKbGV0IHJlcG9ydCBuYW1lID0KICBNYXAuZmluZCBuYW1lIHNjb3JlcwogIHw-IE9wdGlvbi53aXRoRGVmYXVsdCA_bWlzc2luZwogIHw-ID9yZW5kZXIKCnByaW50IChyZXBvcnQgImFkYSIpCnByaW50IChyZXBvcnQgImN5IikK)
 
 <details>
 <summary>Show solution</summary>
@@ -67,7 +67,7 @@ Expected output:
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 
 let report name =
-  Map.tryFind name scores
+  Map.find name scores
   |> Option.withDefault 0
   |> String.fromInt
 

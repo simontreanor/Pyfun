@@ -34,7 +34,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 
 | File | Library | Runs offline | Shows |
 |------|---------|:---:|-------|
-| [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | ✅ | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.tryFind` lookup |
+| [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | ✅ | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.find` lookup |
 | [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `Decode` (built-in) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, with the Elm-style built-in `Decode` module (`Decode.map3` + `Decode.field`); the whole pipeline is *pure* |
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |

@@ -2778,10 +2778,7 @@ let n = max 1",
             labels.contains(&"List.map"),
             "qualified list member missing"
         );
-        assert!(
-            labels.contains(&"Map.tryFind"),
-            "qualified map member missing"
-        );
+        assert!(labels.contains(&"Map.find"), "qualified map member missing");
         assert!(labels.contains(&"print"), "prelude missing");
         assert!(labels.contains(&"match"), "keyword missing");
         assert!(labels.contains(&"List"), "builtin type missing");

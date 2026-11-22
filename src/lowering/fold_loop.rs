@@ -938,7 +938,7 @@ fn is_var(e: &Expr, name: &str) -> bool {
 fn read_op_arity(q: &str) -> Option<usize> {
     Some(match q {
         "Map.len" | "Map.keys" | "Map.values" | "Map.toList" => 1,
-        "Map.tryFind" | "Map.contains" => 2,
+        "Map.find" | "Map.contains" => 2,
         "Map.findOr" => 3,
         "Set.len" | "Set.toList" => 1,
         "Set.contains" => 2,

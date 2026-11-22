@@ -338,7 +338,7 @@ let errorKindOf s =
 
 # Lists: the eager `List a` collection (lowers to a Python list). Literals are
 # comma-separated `[a, b, c]`. Collection functions are module-qualified
-# (`List.map`, `Set.add`, `Map.tryFind`) — the module disambiguates a shared name
+# (`List.map`, `Set.add`, `Map.find`) — the module disambiguates a shared name
 # like `len`, so no overloading is needed. The higher-order list ops are
 # effect-polymorphic (mapping an impure function makes the call impure).
 let ns = [1, 2, 3, 4, 5]
@@ -370,25 +370,25 @@ let redFirst = Red < Green                       # True
 let sortedOpts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
 let firstBig = List.find (fun x -> x > 3) ns # Some 4
 
-# Sets and maps lower to Python `set` / `dict`; `Map.tryFind` returns the built-in
+# Sets and maps lower to Python `set` / `dict`; `Map.find` returns the built-in
 # `Option`, consumed with the `Option` module.
 let uniq = Set.ofList [1, 1, 2, 3]           # {1, 2, 3}
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
-let ada = Option.withDefault 0 (Map.tryFind "ada" scores)   # 10
-let nobody = Option.withDefault 0 (Map.tryFind "x" scores)  # 0
+let ada = Option.withDefault 0 (Map.find "ada" scores)   # 10
+let nobody = Option.withDefault 0 (Map.find "x" scores)  # 0
 
 # The `Option` module chains lookups: `bind` sequences Option-returning steps,
 # `filter` keeps a value only if it passes, `toResult` bridges to `Result`.
-let doubled = Option.bind (fun n -> Some (n * 2)) (Map.tryFind "ada" scores)  # Some 20
-let bigScore = Option.filter (fun n -> n > 9) (Map.tryFind "alan" scores)     # None (9 <= 9)
-let adaOrErr = Option.toResult "no ada" (Map.tryFind "ada" scores)           # Ok 10
+let doubled = Option.bind (fun n -> Some (n * 2)) (Map.find "ada" scores)  # Some 20
+let bigScore = Option.filter (fun n -> n > 9) (Map.find "alan" scores)     # None (9 <= 9)
+let adaOrErr = Option.toResult "no ada" (Map.find "ada" scores)           # Ok 10
 
 # `List.zip` pairs two lists into a list of tuples; `Map.ofList` builds a map from
 # that pair list (and `Map.toList` is its inverse) — both ride on tuples.
 let names = ["ada", "alan"]
 let ages = [36, 41]
 let byName = Map.ofList (List.zip names ages)
-let adaAge = Option.withDefault 0 (Map.tryFind "ada" byName)  # 36
+let adaAge = Option.withDefault 0 (Map.find "ada" byName)  # 36
 let entries = Map.toList byName               # [("ada", 36), ("alan", 41)]
 
 # Strings: the `String` module over the built-in `str` type. All pure; there is
@@ -398,10 +398,10 @@ let title = String.concat "Hello, " "World"   # "Hello, World"
 let loud = String.upper title                 # "HELLO, WORLD"
 let words = String.split ", " title           # ["Hello", "World"]
 let csv = String.join "," words               # "Hello,World"
-# `slice` is total Python slicing (clamps out of range); `tryIndexOf` returns an
+# `slice` is total Python slicing (clamps out of range); `indexOf` returns an
 # Option (None when absent), so neither can raise.
 let sub = String.slice 0 5 title              # "Hello"
-let commaAt = Option.withDefault (0 - 1) (String.tryIndexOf "," title)  # 5
+let commaAt = Option.withDefault (0 - 1) (String.indexOf "," title)  # 5
 let parsed = Option.withDefault 0 (String.toInt "41")   # 41
 let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
 # Non-ASCII string literals are real UTF-8 (not one Latin-1 byte per char), so
@@ -565,7 +565,7 @@ print nobody                          # 0
 print doubled                         # Some(20)  (Option.bind)
 print bigScore                        # None_     (Option.filter, 9 <= 9)
 print adaOrErr                        # Ok(10)    (Option.toResult)
-print adaAge                          # 36   (zip -> Map.ofList -> tryFind)
+print adaAge                          # 36   (zip -> Map.ofList -> find)
 print entries                         # [('ada', 36), ('alan', 41)]
 
 # Strings in action.
@@ -573,7 +573,7 @@ print loud                            # HELLO, WORLD
 print words                           # ['Hello', 'World']
 print csv                             # Hello,World
 print sub                             # Hello  (String.slice, total)
-print commaAt                         # 5      (String.tryIndexOf -> Option int)
+print commaAt                         # 5      (String.indexOf -> Option int)
 print (String.len title)             # 12
 print parsed                          # 41   (total parse of "41")
 print unparsed                        # 0    (String.toInt "x" -> None)

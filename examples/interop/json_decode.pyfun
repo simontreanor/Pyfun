@@ -17,11 +17,11 @@ let sumJson s =
     case Ok xs: List.fold (+) 0.0 xs
     case Error e: 0.0
 
-# Object lookup stays total, too: `Map.tryFind` returns `Option`, so a missing key
+# Object lookup stays total, too: `Map.find` returns `Option`, so a missing key
 # is `None`, not a `KeyError`.
 let scores = parseScores """{"ada": 9.5, "alan": 8.0}"""
 
 print (sumJson "[1.0, 2.0, 3.5]")                             # 6.5
 print (sumJson "[1.0, oops]")                                 # 0.0  (JSONDecodeError caught)
-print (Option.withDefault 0.0 (Map.tryFind "ada" scores))    # 9.5
-print (Option.withDefault 0.0 (Map.tryFind "grace" scores))  # 0.0
+print (Option.withDefault 0.0 (Map.find "ada" scores))    # 9.5
+print (Option.withDefault 0.0 (Map.find "grace" scores))  # 0.0

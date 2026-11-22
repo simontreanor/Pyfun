@@ -809,11 +809,11 @@ fn map_remove_lowers_to_a_copy_and_pop() {
 }
 
 #[test]
-fn try_find_lowers_to_an_option_and_pulls_in_the_option_prelude() {
-    let py = pyfun::compile("let v = Map.tryFind \"a\" Map.empty").unwrap();
+fn map_find_lowers_to_an_option_and_pulls_in_the_option_prelude() {
+    let py = pyfun::compile("let v = Map.find \"a\" Map.empty").unwrap();
     assert!(py.contains("class Some:"), "{py}");
     assert!(py.contains("class None_:"), "{py}");
-    assert!(py.contains("def _pf_map_try_find(k, m):"), "{py}");
+    assert!(py.contains("def _pf_map_find(k, m):"), "{py}");
     assert!(py.contains("return Some(m.get(k))"), "{py}");
     assert!(py.contains("return _None_"), "{py}");
 }
@@ -839,7 +839,7 @@ fn e2e_zip_into_a_map_and_back() {
     run_and_check(
         "
         let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])
-        let a = Option.withDefault 0 (Map.tryFind \"a\" m)
+        let a = Option.withDefault 0 (Map.find \"a\" m)
         let n = Map.len m
         let pairs = Map.toList m
         ",
@@ -1032,8 +1032,8 @@ fn e2e_string_slice_and_index_of() {
         let s = \"hello world\"
         let a = String.slice 0 5 s
         let b = String.slice 6 100 s
-        let c = Option.withDefault (0 - 1) (String.tryIndexOf \"world\" s)
-        let d = Option.withDefault (0 - 1) (String.tryIndexOf \"zzz\" s)
+        let c = Option.withDefault (0 - 1) (String.indexOf \"world\" s)
+        let d = Option.withDefault (0 - 1) (String.indexOf \"zzz\" s)
         ",
         &[
             ("a", "hello"),
@@ -1285,10 +1285,10 @@ fn e2e_eq_section_specialization_matches_the_helper() {
 // ---------- match-consumed lookups (DESIGN §5.2) ----------
 
 #[test]
-fn match_on_map_try_find_lowers_to_a_membership_test() {
+fn match_on_map_find_lowers_to_a_membership_test() {
     let py = pyfun::compile(
         "let allows checks rc l =
-           match Map.tryFind rc checks:
+           match Map.find rc checks:
              case None: True
              case Some s: Set.contains l s",
     )
@@ -1299,7 +1299,7 @@ fn match_on_map_try_find_lowers_to_a_membership_test() {
         ),
         "{py}"
     );
-    assert!(!py.contains("_pf_map_try_find"), "no Option helper: {py}");
+    assert!(!py.contains("_pf_map_find"), "no Option helper: {py}");
     assert!(!py.contains("match "), "no match statement: {py}");
     // Nothing constructs an `Option`, so the prelude is not pulled in either.
     assert!(!py.contains("class Some"), "no Option prelude: {py}");
@@ -1315,7 +1315,7 @@ fn match_on_lookups_covers_head_and_get_in_both_positions() {
          let g i xs = 1 + (match List.get (i + 1) xs:
            case Some (a, b): a + b
            case None: 0)
-         let w m = match Map.tryFind 1 m:
+         let w m = match Map.find 1 m:
            case Some _: 1
            case None: 0",
     )
@@ -1347,12 +1347,12 @@ fn match_on_lookups_covers_head_and_get_in_both_positions() {
 fn match_on_lookups_falls_through_for_other_shapes() {
     let py = pyfun::compile(
         "let a k m =
-           match Map.tryFind k m:
+           match Map.find k m:
              case Some 0: \"zero\"
              case Some _: \"other\"
              case None: \"none\"
          let b k m =
-           match Map.tryFind k m:
+           match Map.find k m:
              case Some v if v > 0: v
              case _: 0
          let c f = match f 1:
@@ -1366,14 +1366,14 @@ fn match_on_lookups_falls_through_for_other_shapes() {
     // `match`; the other two take the `isinstance` ladder (`DESIGN.md` §5.5).
     assert!(
         py.contains(
-            "    match _pf_map_try_find(k, m):
+            "    match _pf_map_find(k, m):
         case Some(0):"
         ),
         "{py}"
     );
     assert!(
         py.contains(
-            "    _pf_t0 = _pf_map_try_find(k, m)
+            "    _pf_t0 = _pf_map_find(k, m)
     if isinstance(_pf_t0, Some):"
         ),
         "{py}"
@@ -1393,7 +1393,7 @@ fn e2e_match_on_lookups_matches_the_helper() {
     run_and_check(
         "
         let look k m =
-          match Map.tryFind k m:
+          match Map.find k m:
             case Some v: v
             case None: \"absent\"
         let m = Map.ofList [(1, \"one\"), (2, \"\")]
@@ -1412,7 +1412,7 @@ fn e2e_match_on_lookups_matches_the_helper() {
         let g = get 1 [0]
         let h = get (0 - 1) [0]
         let ok = Map.ofList [(\"k\", [])]
-        let i = match Map.tryFind \"k\" ok:
+        let i = match Map.find \"k\" ok:
           case Some xs: List.len xs
           case None: -1
         ",
@@ -5336,8 +5336,8 @@ fn e2e_map_functions() {
          let mc = Map.contains \"b\" m\n\
          let rm = Map.len (Map.remove \"b\" m)\n\
          let ks = List.len (Map.keys m)\n\
-         let hit = Option.withDefault 0 (Map.tryFind \"a\" m)\n\
-         let miss = Option.withDefault 0 (Map.tryFind \"z\" m)",
+         let hit = Option.withDefault 0 (Map.find \"a\" m)\n\
+         let miss = Option.withDefault 0 (Map.find \"z\" m)",
         &[
             ("found", "1"),
             ("dflt", "99"),
@@ -5362,7 +5362,7 @@ fn e2e_adts_and_records_as_keys_and_elements() {
          let ncolors = Set.len cs\n\
          let hasGreen = Set.contains Green cs\n\
          let m = Map.add (Some 1) \"one\" Map.empty\n\
-         let v = Option.withDefault \"?\" (Map.tryFind (Some 1) m)\n\
+         let v = Option.withDefault \"?\" (Map.find (Some 1) m)\n\
          let pts = Set.ofList [Point { x = 1, y = 2 }, Point { x = 1, y = 2 }, Point { x = 3, y = 4 }]\n\
          let npts = Set.len pts",
         &[
@@ -6567,7 +6567,7 @@ fn fold_local_named_folder_block_lowers_to_loop() {
 fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
     // The dedupLegs shape (examples/interop/network-rail/chippenham.pyfun): a
     // block-local tuple-accumulator folder whose arm opens a block with a plain
-    // value `let k = …` (a whitelisted read of `seen` via `Map.tryFind`), storing
+    // value `let k = …` (a whitelisted read of `seen` via `Map.find`), storing
     // the fresh element into the list slot.
     let src = "type Leg = { depMin: int, dest: str }\n\
                let dedupLegs legs =\n  \
@@ -6575,7 +6575,7 @@ fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
                    match acc:\n      \
                      case (seen, out):\n        \
                        let k = f\"{leg.depMin}|{leg.dest}\"\n        \
-                       match Map.tryFind k seen:\n          \
+                       match Map.find k seen:\n          \
                          case Some _: (seen, out)\n          \
                          case None: (Map.add k True seen, List.concat out [leg])\n  \
                  match List.fold step (Map.empty, []) legs:\n    \
@@ -7384,12 +7384,11 @@ fn a_nullary_singleton_falls_back_when_its_name_is_taken() {
 
 #[test]
 fn none_loads_the_prelude_singleton_unless_its_name_is_taken() {
-    let py = pyfun::compile("let n = None\nlet o = Map.tryFind 1 Map.empty").unwrap();
+    let py = pyfun::compile("let n = None\nlet o = Map.find 1 Map.empty").unwrap();
     assert!(py.contains("_None_ = None_()"), "{py}");
     assert!(py.contains("n = _None_"), "{py}");
     assert!(py.contains("return _None_"), "{py}");
-    let py =
-        pyfun::compile("let _None_ = 1\nlet n = None\nlet o = Map.tryFind 1 Map.empty").unwrap();
+    let py = pyfun::compile("let _None_ = 1\nlet n = None\nlet o = Map.find 1 Map.empty").unwrap();
     assert!(!py.contains("_None_ = None_()"), "{py}");
     assert!(py.contains("n = None_()"), "{py}");
     assert!(py.contains("return None_()"), "{py}");
@@ -7777,13 +7776,13 @@ fn e2e_a_value_position_capture_is_renamed() {
 
 #[test]
 fn e2e_a_lookup_peephole_capture_is_renamed() {
-    // `match Map.tryFind` lowers to `if k in m:` and binds the payload directly;
+    // `match Map.find` lowers to `if k in m:` and binds the payload directly;
     // the binder goes through the same rename.
     let src = "
         let f m k =
           let v = 100
           let found =
-            match Map.tryFind k m:
+            match Map.find k m:
               case Some v: v
               case None: 0
           found + v
