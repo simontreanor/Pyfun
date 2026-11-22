@@ -490,7 +490,8 @@ after the release.
     the empty `Map`, each lowering to the Python display it is spelled as (`DESIGN.md` §8.3).
 13. ~~**`x in xs` and `x not in xs`**~~ **DONE 2026-11-22** (#198): typed by what the right side holds (an
     element of a `List`, `Set` or `Seq`, a key of a `Map`, a substring of a `str`) and lowered to
-    Python's own operators. Resolved, not generalized (`DESIGN.md` §7.1).
+    Python's own operators (`DESIGN.md` §7.1). Generalized in #200: `let has x xs = x in xs` is
+    polymorphic in what it searches.
 14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`
     today.
 

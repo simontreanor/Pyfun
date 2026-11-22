@@ -355,6 +355,11 @@ struct Scheme {
     /// assignment made at the same depth is in the declaring function's own
     /// body, where the mutation cannot be observed from outside (`DESIGN.md` §4).
     mut_frame: u32,
+    /// Membership constraints the binding is generalized over: `(elem, container)`
+    /// pairs from `elem in container` tests whose container is one of the
+    /// scheme's own variables (`let has x xs = x in xs`). Each use poses them
+    /// again against its own instance (`DESIGN.md` §7.1).
+    members: Vec<(Ty, Ty)>,
     ty: Ty,
 }
 
@@ -368,6 +373,7 @@ impl Scheme {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty,
         }
     }
@@ -2509,7 +2515,16 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
             },
             Item::Expr(expr) => {
                 let outer = std::mem::replace(&mut inf.cur_eff, Effect::pure());
-                if let Err(e) = inf.infer_expr(expr, &env) {
+                match inf.infer_expr(expr, &env) {
+                    // A test over a variable of the expression's own type is not
+                    // ambiguous, just polymorphic (`fun x xs -> x in xs`, as the
+                    // REPL's `:type` asks about); nothing is left to settle.
+                    Ok(ty) => inf.release_members_of(&ty),
+                    Err(e) => errors.push(e),
+                }
+                // A top-level expression is not inside a binding, so a membership
+                // test it posed (`has 1 [1]`) is settled here.
+                if let Err(e) = inf.resolve_pending_members() {
                     errors.push(e);
                 }
                 let performed = std::mem::replace(&mut inf.cur_eff, outer);
@@ -3285,6 +3300,7 @@ fn build_decls(
                         eff_vars: vec![],
                         mutable: false,
                         mut_frame: 0,
+                        members: Vec::new(),
                         ty: ctor_ty,
                     };
                     env.insert(variant.name.clone(), scheme.clone());
@@ -3332,6 +3348,7 @@ fn build_decls(
                             eff_vars: vec![],
                             mutable: false,
                             mut_frame: 0,
+                            members: Vec::new(),
                             ty: ctor_ty,
                         };
                         env.insert(decl.name.clone(), scheme.clone());
@@ -3517,6 +3534,7 @@ fn build_decls(
                         eff_vars: (0..eff_map.len() as u32).collect(),
                         mutable: false,
                         mut_frame: 0,
+                        members: Vec::new(),
                         ty,
                     },
                 );
@@ -3549,6 +3567,7 @@ fn seed_async_prelude(env: &mut Env) {
         eff_vars,
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, s: Scheme| {
@@ -3599,6 +3618,7 @@ fn seed_task_prelude(env: &mut Env) {
         eff_vars,
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // Task.scope : Async a -> Async a
@@ -4323,6 +4343,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit), Effect::io()),
         },
     );
@@ -4341,6 +4362,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(Box::new(Ty::Str), Box::new(Ty::Str), Effect::io()),
         },
     );
@@ -4353,6 +4375,7 @@ fn seed_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // sign : num 'a => 'a<'u> -> int   (pure) — -1, 0 or 1. The unit erases: the
@@ -4399,6 +4422,7 @@ fn seed_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty: Ty::Fun(
             Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
             Box::new(Ty::Int(Unit::var(PRELUDE_UVAR))),
@@ -4426,6 +4450,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(2))),
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
@@ -4449,6 +4474,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(3))),
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
@@ -4468,6 +4494,7 @@ fn seed_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
@@ -4505,6 +4532,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![e],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: pure_fn(
                 // f : a -> b ->{e} c
                 pure_fn(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(2))),
@@ -4528,6 +4556,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(0)), Effect::pure()),
         },
     );
@@ -4541,6 +4570,7 @@ fn seed_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(1)), Effect::pure()),
         },
     );
@@ -4565,6 +4595,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // List.len : List a -> int   (pure)
@@ -4645,6 +4676,7 @@ fn seed_list_prelude(env: &mut Env) {
             eff_vars: vec![],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: pure_fn(list(Ty::Var(0)), list(Ty::Var(0))),
         },
     );
@@ -4659,6 +4691,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let arrow_e = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::var(e));
@@ -4744,6 +4777,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let ord_eff_scheme = |vars: Vec<u32>, ord_vars: Vec<u32>, ty: Ty| Scheme {
@@ -4754,6 +4788,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
@@ -4764,6 +4799,7 @@ fn seed_list_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // List.head : List a -> Option a
@@ -5103,6 +5139,7 @@ fn seed_set_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, ty: Ty| {
@@ -5131,6 +5168,7 @@ fn seed_set_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let b = || Ty::Var(1);
@@ -5213,6 +5251,7 @@ fn seed_set_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     env.insert(
@@ -5253,6 +5292,7 @@ fn seed_string_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, ty: Ty| {
@@ -5330,6 +5370,7 @@ fn seed_format_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // A closed scheme (no quantified vars) — the `str`-only padding ops.
@@ -5341,6 +5382,7 @@ fn seed_format_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // Format.fixed n x -> n decimal places, no grouping (`n` first, curry-friendly).
@@ -5394,6 +5436,7 @@ fn seed_decode_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, s: Scheme| {
@@ -5502,6 +5545,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mv = || map(k(), v());
@@ -5534,6 +5578,7 @@ fn seed_map_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let w = || Ty::Var(2);
@@ -5637,6 +5682,7 @@ fn seed_option_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -5655,6 +5701,7 @@ fn seed_option_prelude(env: &mut Env) {
             eff_vars: vec![e],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: pure_fn(arrow_e(a(), b()), arrow_e(opt(a()), opt(b()))),
         },
     );
@@ -5669,6 +5716,7 @@ fn seed_option_prelude(env: &mut Env) {
             eff_vars: vec![e],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: pure_fn(arrow_e(a(), opt(b())), arrow_e(opt(a()), opt(b()))),
         },
     );
@@ -5683,6 +5731,7 @@ fn seed_option_prelude(env: &mut Env) {
             eff_vars: vec![e],
             mutable: false,
             mut_frame: 0,
+            members: Vec::new(),
             ty: pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), opt(a()))),
         },
     );
@@ -5709,6 +5758,7 @@ fn seed_option_prelude(env: &mut Env) {
         eff_vars: vec![e],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // Option.map2 : (a ->{e} b ->{e} c) -> Option a -> Option b ->{e} Option c
@@ -5786,6 +5836,7 @@ fn seed_result_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -5801,6 +5852,7 @@ fn seed_result_prelude(env: &mut Env) {
         eff_vars: vec![ev],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // Result.map : (a ->{e} m) -> Result a e -> Result m e   (maps the Ok value)
@@ -5926,6 +5978,7 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let ev = 0u32;
@@ -5938,6 +5991,7 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_vars: vec![ev],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -6126,6 +6180,7 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
@@ -6136,6 +6191,7 @@ fn seed_seq_prelude(env: &mut Env) {
         eff_vars: vec![ev],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty,
     };
     // Seq.empty : Seq a
@@ -6232,6 +6288,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty: Ty::Fun(
             Box::new(Ty::Var(0)),
             Box::new(result_ty.clone()),
@@ -6246,6 +6303,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty), Effect::pure()),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -6275,6 +6333,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty: Ty::Fun(
             Box::new(Ty::Var(0)),
             Box::new(option_ty.clone()),
@@ -6289,6 +6348,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         eff_vars: vec![],
         mutable: false,
         mut_frame: 0,
+        members: Vec::new(),
         ty: option_ty,
     };
     env.insert("Some".to_string(), some.clone());
@@ -6524,6 +6584,8 @@ struct SubstSnapshot {
     num_subst: HashMap<u32, NumRef>,
     ord: HashSet<u32>,
     eff_subst: HashMap<u32, Effect>,
+    /// A trial instantiation may pose membership constraints; they go with it.
+    pending_members: usize,
 }
 
 #[derive(Default)]
@@ -6558,6 +6620,9 @@ struct Infer {
     /// `in` tests whose right operand was still an unsolved variable where they
     /// were written. Settled with the deferred field accesses.
     pending_members: Vec<PendingMember>,
+    /// The expression being inferred, so a constraint posed by instantiating a
+    /// scheme can point at the use that posed it.
+    cur_span: Option<Span>,
     /// How many `let` bindings deep inference currently is. Obligations float up to
     /// the outermost one: an inner binding cannot resolve them (that is the whole
     /// point) and must not generalize over them either.
@@ -7001,6 +7066,21 @@ impl Infer {
         binding: &LetBinding,
         env: &Env,
     ) -> Result<(Vec<(String, Scheme)>, Effect), TypeError> {
+        let bound = self.infer_binding_body(binding, env)?;
+        // Membership tests are settled after generalization, not before it: a test
+        // over one of the binding's own variables has by now moved into its scheme
+        // (`Infer::generalize`), and whatever is left has nowhere else to go.
+        if self.binding_depth == 0 {
+            self.resolve_pending_members()?;
+        }
+        Ok(bound)
+    }
+
+    fn infer_binding_body(
+        &mut self,
+        binding: &LetBinding,
+        env: &Env,
+    ) -> Result<(Vec<(String, Scheme)>, Effect), TypeError> {
         let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
         // Obligations float up to the outermost binding: an inner one cannot settle
         // a base that a *later* statement pins down, which is the whole point.
@@ -7058,7 +7138,6 @@ impl Infer {
         self.binding_depth -= 1;
         if self.binding_depth == 0 {
             self.resolve_pending_fields()?;
-            self.resolve_pending_members()?;
         }
 
         // `let pure` asserts the binding introduces no concrete effect of its own
@@ -7634,6 +7713,7 @@ impl Infer {
 
     fn infer_expr_inner(&mut self, expr: &Expr, env: &Env) -> Result<Ty, TypeError> {
         let span = expr.span();
+        self.cur_span = Some(span);
         match &expr.kind {
             // A typed hole `?` / `?name`: a fresh type variable that unifies freely
             // (so it never causes a spurious error and takes whatever type the
@@ -7742,12 +7822,9 @@ impl Infer {
                     let elem = self.infer_expr(lhs, env)?;
                     let container = self.infer_expr(rhs, env)?;
                     if !self.settle_member(&elem, &container, lhs.span(), rhs.span())? {
-                        // Not known yet. Inside a binding a later statement may
-                        // still say (the same wait a field access gets); at the
-                        // top level nothing will.
-                        if self.binding_depth == 0 {
-                            return Err(unknown_container(rhs.span()));
-                        }
+                        // Not known yet: a later statement may say (the same wait
+                        // a field access gets), or the binding may be generalized
+                        // over the container and its test with it.
                         self.pending_members.push(PendingMember {
                             elem,
                             container,
@@ -8133,6 +8210,27 @@ impl Infer {
             }
         }
         Ok(true)
+    }
+
+    /// Drop the membership tests that wait on a variable of `ty`: they belong to
+    /// a polymorphic value, not to an undecided one.
+    fn release_members_of(&mut self, ty: &Ty) {
+        let mut vars: HashSet<u32> = HashSet::new();
+        free_type_vars(&self.apply(ty), &mut |v| {
+            vars.insert(v);
+        });
+        let pending = std::mem::take(&mut self.pending_members);
+        let mut kept = Vec::with_capacity(pending.len());
+        for p in pending {
+            let polymorphic = match self.apply(&p.container) {
+                Ty::Var(v) => vars.contains(&v),
+                _ => false,
+            };
+            if !polymorphic {
+                kept.push(p);
+            }
+        }
+        self.pending_members = kept;
     }
 
     /// Settle every deferred `in` test, now that the enclosing binding is fully
@@ -10089,10 +10187,12 @@ impl Infer {
             num_subst: self.num_subst.clone(),
             ord: self.ord.clone(),
             eff_subst: self.eff_subst.clone(),
+            pending_members: self.pending_members.len(),
         }
     }
 
     fn subst_restore(&mut self, snap: &SubstSnapshot) {
+        self.pending_members.truncate(snap.pending_members);
         self.subst = snap.subst.clone();
         self.unit_subst = snap.unit_subst.clone();
         self.num_subst = snap.num_subst.clone();
@@ -10248,6 +10348,17 @@ impl Infer {
                 self.ord.insert(*fresh);
             }
         }
+        // A membership constraint is posed again for this instance, to be settled
+        // when the use says what its container is.
+        let at = self.cur_span.unwrap_or(Span::new(0, 0));
+        for (elem, container) in &scheme.members {
+            self.pending_members.push(PendingMember {
+                elem: subst_all(elem, &tmap, &umap, &nmap, &emap),
+                container: subst_all(container, &tmap, &umap, &nmap, &emap),
+                elem_span: at,
+                span: at,
+            });
+        }
         subst_all(&scheme.ty, &tmap, &umap, &nmap, &emap)
     }
 
@@ -10300,22 +10411,29 @@ impl Infer {
         let rename = |ids: &[u32], map: &HashMap<u32, u32>| -> Vec<u32> {
             ids.iter().map(|v| *map.get(v).unwrap_or(v)).collect()
         };
-        let ty = subst_all(
-            &scheme.ty,
-            &tmap
-                .iter()
-                .map(|(old, new)| (*old, Ty::Var(*new)))
-                .collect(),
-            &umap
-                .iter()
-                .map(|(old, new)| (*old, Unit::var(*new)))
-                .collect(),
-            &nmap,
-            &emap
-                .iter()
-                .map(|(old, new)| (*old, Effect::var(*new)))
-                .collect(),
-        );
+        let t_sub: HashMap<u32, Ty> = tmap
+            .iter()
+            .map(|(old, new)| (*old, Ty::Var(*new)))
+            .collect();
+        let u_sub: HashMap<u32, Unit> = umap
+            .iter()
+            .map(|(old, new)| (*old, Unit::var(*new)))
+            .collect();
+        let e_sub: HashMap<u32, Effect> = emap
+            .iter()
+            .map(|(old, new)| (*old, Effect::var(*new)))
+            .collect();
+        let ty = subst_all(&scheme.ty, &t_sub, &u_sub, &nmap, &e_sub);
+        let members = scheme
+            .members
+            .iter()
+            .map(|(elem, container)| {
+                (
+                    subst_all(elem, &t_sub, &u_sub, &nmap, &e_sub),
+                    subst_all(container, &t_sub, &u_sub, &nmap, &e_sub),
+                )
+            })
+            .collect();
         Scheme {
             vars: rename(&scheme.vars, &tmap),
             uvars: rename(&scheme.uvars, &umap),
@@ -10324,11 +10442,35 @@ impl Infer {
             eff_vars: rename(&scheme.eff_vars, &emap),
             mutable: scheme.mutable,
             mut_frame: scheme.mut_frame,
+            members,
             ty,
         }
     }
 
-    fn generalize(&self, env: &Env, ty: &Ty) -> Scheme {
+    /// Generalize a binding's type, and take with it every membership test that
+    /// waits on one of the variables being generalized: the binding becomes
+    /// polymorphic in its container, and the test moves from this binding's
+    /// obligations into its scheme, where each use poses it again.
+    fn generalize(&mut self, env: &Env, ty: &Ty) -> Scheme {
+        let scheme = self.generalize_ty(env, ty);
+        if !scheme.members.is_empty() {
+            let pending = std::mem::take(&mut self.pending_members);
+            let mut kept = Vec::with_capacity(pending.len());
+            for p in pending {
+                let taken = match self.apply(&p.container) {
+                    Ty::Var(v) => scheme.vars.contains(&v),
+                    _ => false,
+                };
+                if !taken {
+                    kept.push(p);
+                }
+            }
+            self.pending_members = kept;
+        }
+        scheme
+    }
+
+    fn generalize_ty(&self, env: &Env, ty: &Ty) -> Scheme {
         let ty = self.apply(ty);
         let (env_t, env_u, env_n, env_e) = self.env_free_vars(env);
         // A variable a deferred field access still depends on stays monomorphic:
@@ -10343,15 +10485,39 @@ impl Infer {
                 deferred.insert(v);
             });
         }
-        // The same holds for an `in` test still waiting on its container.
+        // An `in` test still waiting on its container holds its variables back
+        // the same way, with one exception: a container that is itself a variable
+        // of this binding's type is generalized *with* its test, which is what
+        // makes `let has x xs = x in xs` polymorphic in what it searches.
+        let mut ty_vars: HashSet<u32> = HashSet::new();
+        free_type_vars(&ty, &mut |v| {
+            ty_vars.insert(v);
+        });
+        let mut captured: Vec<(Ty, Ty)> = Vec::new();
+        let mut member_held: HashSet<u32> = HashSet::new();
         for p in &self.pending_members {
-            free_type_vars(&self.apply(&p.container), &mut |v| {
-                deferred.insert(v);
-            });
-            free_type_vars(&self.apply(&p.elem), &mut |v| {
-                deferred.insert(v);
-            });
+            let (elem, container) = (self.apply(&p.elem), self.apply(&p.container));
+            match container {
+                Ty::Var(v) if ty_vars.contains(&v) && !env_t.contains(&v) => {
+                    captured.push((elem, Ty::Var(v)));
+                }
+                _ => {
+                    free_type_vars(&container, &mut |v| {
+                        member_held.insert(v);
+                    });
+                    free_type_vars(&elem, &mut |v| {
+                        member_held.insert(v);
+                    });
+                }
+            }
         }
+        // A variable some other obligation holds back stays monomorphic, and a
+        // test over it stays an obligation of this binding.
+        captured.retain(|(_, c)| match c {
+            Ty::Var(v) => !deferred.contains(v) && !member_held.contains(v),
+            _ => false,
+        });
+        deferred.extend(member_held);
         // Likewise a variable a `Decode.auto` site still decodes into: the codec is
         // derived from the resolved type after inference, so the site's variable
         // stays weak (OCaml's `'_a`) and a later use pins it rather than each use
@@ -10399,6 +10565,7 @@ impl Infer {
             eff_vars,
             mutable: false,
             mut_frame: 0,
+            members: captured,
             ty,
         }
     }
