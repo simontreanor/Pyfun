@@ -4863,3 +4863,41 @@ fn a_member_from_another_language_points_at_the_pyfun_one() {
         assert_error_contains(source, hint);
     }
 }
+
+#[test]
+fn collection_literals_type_as_the_collections_they_build() {
+    let analysis = pyfun::analyze(
+        "let ages = {\"Ada\": 36}\nlet primes = {2, 3}\nlet nested = {\"evens\": {2, 4}}",
+    );
+    for ty in ["Map str int", "Set int", "Map str (Set int)"] {
+        assert!(
+            analysis.types.iter().any(|t| t.ty == ty),
+            "no `{ty}` in {:?}",
+            analysis.types
+        );
+    }
+    // `{}` is the empty Map, pinned by how it is used.
+    assert!(
+        pyfun::check(
+            "let empty = {}\n\
+             let one = Map.add \"a\" 1 empty\n\
+             let n = Map.len {} + Set.len {1, 2}\n\
+             let hit = Map.find 2 {1: \"one\", 2: \"two\"}\n\
+             let has = Set.contains \"b\" {\"a\", \"b\"}"
+        )
+        .is_ok()
+    );
+    // The entries of a map share a key type and a value type, the elements of
+    // a set one type; the error points at the item that breaks it.
+    assert_error_contains(
+        "let bad = {\"a\": 1, \"b\": \"two\"}",
+        "expected int, found str",
+    );
+    assert_error_contains(
+        "let bad = {1: \"a\", \"2\": \"b\"}",
+        "expected int, found str",
+    );
+    assert_error_contains("let bad = {1, \"two\"}", "expected int, found str");
+    // A literal is the collection it builds, not a list.
+    assert_error_contains("let bad = List.len {1, 2}", "expected List");
+}

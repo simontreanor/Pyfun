@@ -7,9 +7,9 @@
 //! later phase (`DESIGN.md` §10).
 
 use crate::parser::ast::{
-    ActivePatternDecl, BlockStmt, CeItem, Expr, ExprKind, ExternArg, ExternDecl, FieldDecl,
-    FieldInit, InterpPart, Item, LetBinding, MatchArm, Module, Param, Pattern, Receiver, TypeDecl,
-    TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
+    ActivePatternDecl, BlockStmt, CeItem, CollectionForm, Expr, ExprKind, ExternArg, ExternDecl,
+    FieldDecl, FieldInit, InterpPart, Item, LetBinding, MatchArm, Module, Param, Pattern, Receiver,
+    TypeDecl, TypeDeclKind, TypeExpr, UnitExpr, VariantDecl,
 };
 
 /// Render a whole module, one item per line.
@@ -487,6 +487,18 @@ pub fn print_expr(expr: &Expr) -> String {
         ExprKind::List { elems } => {
             let elems: Vec<String> = elems.iter().map(print_expr).collect();
             format!("[{}]", elems.join(", "))
+        }
+        ExprKind::Collection { form, expansion } => {
+            let items: Vec<String> = crate::parser::ast::collection_items(expansion)
+                .iter()
+                .map(|item| match (&item.kind, form) {
+                    (ExprKind::Tuple { elems }, CollectionForm::Map) if elems.len() == 2 => {
+                        format!("{}: {}", print_expr(&elems[0]), print_expr(&elems[1]))
+                    }
+                    _ => print_expr(item),
+                })
+                .collect();
+            format!("{{{}}}", items.join(", "))
         }
         ExprKind::Tuple { elems } => {
             let elems: Vec<String> = elems.iter().map(print_expr).collect();

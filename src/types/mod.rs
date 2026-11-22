@@ -3955,6 +3955,7 @@ fn scan_ap_body(
             scan_ap_body(else_, cases, found)
         }
         ExprKind::Try { body } => scan_ap_body(body, cases, found),
+        ExprKind::Collection { expansion, .. } => scan_ap_body(expansion, cases, found),
         ExprKind::Match { scrutinee, arms } => {
             scan_ap_body(scrutinee, cases, found)?;
             for arm in arms {
@@ -4099,6 +4100,7 @@ pub(crate) fn collect_free(expr: &Expr, bound: &HashSet<String>, out: &mut HashS
             collect_free(else_, bound, out);
         }
         ExprKind::Try { body } => collect_free(body, bound, out),
+        ExprKind::Collection { expansion, .. } => collect_free(expansion, bound, out),
         ExprKind::Match { scrutinee, arms } => {
             collect_free(scrutinee, bound, out);
             for arm in arms {
@@ -7725,6 +7727,10 @@ impl Infer {
             // `try body : Result <body> Exception`. The body's own effect still
             // propagates (the call is performed — `try` catches a *thrown*
             // exception, it does not suppress the `io`), so nothing is discharged.
+            // A `{…}` literal types as the expression it means (`Map.of_list […]`,
+            // `Set.of_list […]`, `Map.empty`), so it has no rules of its own.
+            ExprKind::Collection { expansion, .. } => self.infer_expr(expansion, env),
+
             ExprKind::Try { body } => {
                 let inner = self.infer_expr(body, env)?;
                 Ok(Ty::Con(

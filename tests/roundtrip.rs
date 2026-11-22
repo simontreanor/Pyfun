@@ -1056,3 +1056,61 @@ fn python_words_stay_ordinary_names() {
         assert!(parse(source).is_ok(), "{source}: {:?}", parse(source).err());
     }
 }
+
+#[test]
+fn collection_literals_print_as_written() {
+    // `{k: v}` is a Map, `{a, b}` a Set, `{}` the empty Map, and a bare brace
+    // with `with` is still a record update. Each prints back in its own form.
+    for (source, printed) in [
+        (
+            "let ages = {\"Ada\": 36, \"Alan\": 41}",
+            "let ages = {\"Ada\": 36, \"Alan\": 41}",
+        ),
+        ("let primes = {2, 3, 5}", "let primes = {2, 3, 5}"),
+        ("let one = {1}", "let one = {1}"),
+        ("let empty = {}", "let empty = {}"),
+        // A trailing comma and line breaks are layout only.
+        (
+            "let ages = {\n  \"Ada\": 36,\n  \"Alan\": 41,\n}",
+            "let ages = {\"Ada\": 36, \"Alan\": 41}",
+        ),
+        ("let s = {\n  1,\n  2,\n}", "let s = {1, 2}"),
+        (
+            "let nested = {\"evens\": {2, 4}}",
+            "let nested = {\"evens\": {2, 4}}",
+        ),
+        ("let moved = {p with x = 3}", "let moved = { p with x = 3 }"),
+    ] {
+        let module = parse(source).unwrap_or_else(|e| panic!("{source}: {}", e.message()));
+        let out = pyfun::ast::print_module(&module);
+        assert_eq!(out.trim_end(), printed, "{source}");
+        assert_eq!(parse(&out).unwrap(), module, "{out}");
+    }
+}
+
+#[test]
+fn a_malformed_collection_literal_says_which_forms_exist() {
+    for (source, expected) in [
+        (
+            "let bad = {1, \"a\": 2}",
+            "a `{…}` literal is a `Map` (every entry `key: value`) or a `Set` (no `:`), not a mix",
+        ),
+        ("let bad = {\"a\": 1, 2}", "expected `:` after a map key"),
+        (
+            "let bad = {p x = 1}",
+            "expected `:` (a `Map` literal), `,` (a `Set` literal) or `with` (a record update)",
+        ),
+        // The old bare record literal keeps its own migration message.
+        (
+            "let bad = {x = 1}",
+            "record literals are now constructor-tagged",
+        ),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message().contains(expected),
+            "{source}\n-> {}",
+            err.message()
+        );
+    }
+}

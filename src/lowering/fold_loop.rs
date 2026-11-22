@@ -977,6 +977,7 @@ fn value_ok(e: &Expr, sensitive: &HashSet<String>) -> bool {
             value_ok(cond, sensitive) && value_ok(then, sensitive) && value_ok(else_, sensitive)
         }
         ExprKind::Try { body } => value_ok(body, sensitive),
+        ExprKind::Collection { expansion, .. } => value_ok(expansion, sensitive),
         ExprKind::Match { scrutinee, arms } => {
             value_ok(scrutinee, sensitive)
                 && arms.iter().all(|a| {
@@ -1059,6 +1060,7 @@ fn mentions_sensitive(e: &Expr, sensitive: &HashSet<String>) -> bool {
                 || mentions_sensitive(else_, sensitive)
         }
         ExprKind::Try { body } => mentions_sensitive(body, sensitive),
+        ExprKind::Collection { expansion, .. } => mentions_sensitive(expansion, sensitive),
         ExprKind::Match { scrutinee, arms } => {
             mentions_sensitive(scrutinee, sensitive)
                 || arms.iter().any(|a| {
@@ -1177,6 +1179,9 @@ pub(super) fn collect_frame_binders(e: &Expr, out: &mut HashSet<String>) {
         }
         ExprKind::Unary { expr, .. }
         | ExprKind::Annot { value: expr, .. }
+        | ExprKind::Collection {
+            expansion: expr, ..
+        }
         | ExprKind::Try { body: expr }
         | ExprKind::Assign { value: expr, .. } => collect_frame_binders(expr, out),
         ExprKind::Compare { first, rest } => {
@@ -1322,6 +1327,7 @@ pub(super) fn collect_free(e: &Expr, bound: &HashSet<String>, out: &mut HashSet<
             collect_free(expr, bound, out)
         }
         ExprKind::Try { body } => collect_free(body, bound, out),
+        ExprKind::Collection { expansion, .. } => collect_free(expansion, bound, out),
         ExprKind::Compare { first, rest } => {
             collect_free(first, bound, out);
             for (_, o) in rest {

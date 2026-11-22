@@ -20,6 +20,8 @@
   (record_expression)
   (record_declaration)
   (record_update_expression)
+  (map_expression)
+  (set_expression)
   (list_expression)
   (tuple_expression)
   (parenthesized_expression)

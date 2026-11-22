@@ -573,6 +573,7 @@ impl Resolver {
                 self.walk_expr(else_);
             }
             ExprKind::Try { body } => self.walk_expr(body),
+            ExprKind::Collection { expansion, .. } => self.walk_expr(expansion),
             ExprKind::Match { scrutinee, arms } => {
                 self.walk_expr(scrutinee);
                 for MatchArm {

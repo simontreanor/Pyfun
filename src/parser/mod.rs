@@ -37,10 +37,10 @@ pub mod ast;
 
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
-    ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternArg,
-    ExternDecl, FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item, LetBinding,
-    MatchArm, Module, NodeSpan, Param, Pattern, Receiver, TypeDecl, TypeDeclKind, TypeExpr, UnOp,
-    UnitExpr, VariantDecl,
+    ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, CollectionForm, Expr, ExprKind,
+    ExternArg, ExternDecl, FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item,
+    LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, Receiver, TypeDecl, TypeDeclKind,
+    TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -2028,11 +2028,18 @@ impl Parser {
         ))
     }
 
-    /// Parse a functional record update `{ base with x = 3 }`. Record *literals*
-    /// are constructor-tagged (`Point { … }`, parsed in `parse_atom`), so a bare
-    /// `{` in expression position is always an update (`DESIGN.md` §8.3).
+    /// Parse a bare `{` in expression position. Record *literals* are
+    /// constructor-tagged (`Point { … }`, parsed in `parse_atom`), which leaves
+    /// the bare brace for the three forms Python gives it plus the update
+    /// (`DESIGN.md` §8.3), told apart by what follows the first expression:
+    /// `with` is a record update `{ base with x = 3 }`, `:` a `Map` literal
+    /// `{"a": 1}`, and `,` or `}` a `Set` literal `{1, 2}`. `{}` is the empty
+    /// `Map`, as it is the empty dict in Python.
     fn parse_record(&mut self, start: usize) -> Result<Expr, ParseError> {
         self.expect(&Tok::LBrace, "`{`")?;
+        if self.eat(&Tok::RBrace) {
+            return Ok(self.collection(start, CollectionForm::Map, Vec::new()));
+        }
         // A targeted migration error for the old bare record literal `{ x = 1 }`.
         if matches!(self.peek(), Tok::Ident(_)) && matches!(self.peek2(), Tok::Eq) {
             return Err(self.error(
@@ -2040,11 +2047,101 @@ impl Parser {
                  naming the record type (DESIGN.md §8.3)",
             ));
         }
-        let base = Box::new(self.parse_expr()?);
-        self.expect(&Tok::With, "`with`")?;
-        let fields = self.parse_field_updates()?;
-        self.expect(&Tok::RBrace, "`}`")?;
-        Ok(self.mk(start, ExprKind::RecordUpdate { base, fields }))
+        let first = self.parse_expr()?;
+        match self.peek() {
+            Tok::With => {
+                self.bump();
+                let fields = self.parse_field_updates()?;
+                self.expect(&Tok::RBrace, "`}`")?;
+                Ok(self.mk(
+                    start,
+                    ExprKind::RecordUpdate {
+                        base: Box::new(first),
+                        fields,
+                    },
+                ))
+            }
+            Tok::Colon => {
+                let mut entries = Vec::new();
+                let mut key = first;
+                loop {
+                    self.expect(&Tok::Colon, "`:` after a map key")?;
+                    let value = self.parse_expr()?;
+                    let span = Span::new(key.span().start, value.span().end);
+                    entries.push(Expr::new(
+                        ExprKind::Tuple {
+                            elems: vec![key, value],
+                        },
+                        span,
+                    ));
+                    if !self.eat(&Tok::Comma) || matches!(self.peek(), Tok::RBrace) {
+                        break;
+                    }
+                    key = self.parse_expr()?;
+                }
+                self.expect(&Tok::RBrace, "`}`")?;
+                Ok(self.collection(start, CollectionForm::Map, entries))
+            }
+            Tok::Comma | Tok::RBrace => {
+                let mut elems = vec![first];
+                while self.eat(&Tok::Comma) && !matches!(self.peek(), Tok::RBrace) {
+                    elems.push(self.parse_expr()?);
+                    if matches!(self.peek(), Tok::Colon) {
+                        return Err(ParseError {
+                            message: "a `{…}` literal is a `Map` (every entry `key: value`) \
+                                      or a `Set` (no `:`), not a mix"
+                                .to_string(),
+                            span: self.span(),
+                        });
+                    }
+                }
+                self.expect(&Tok::RBrace, "`}`")?;
+                Ok(self.collection(start, CollectionForm::Set, elems))
+            }
+            _ => Err(self.error(
+                "expected `:` (a `Map` literal), `,` (a `Set` literal) or `with` (a record update)",
+            )),
+        }
+    }
+
+    /// Build a `{…}` collection literal over the expression it means: the
+    /// module's `of_list` applied to the list of its items (a map's items being
+    /// `(key, value)` tuples), or `Map.empty` for `{}`. Only the literal itself
+    /// carries its source span; the nodes made up here are zero-width, so a
+    /// hover or a diagnostic lands on the literal or on an item the user wrote.
+    fn collection(&self, start: usize, form: CollectionForm, items: Vec<Expr>) -> Expr {
+        let here = Span::new(start, start);
+        let module = match form {
+            CollectionForm::Map => "Map",
+            CollectionForm::Set => "Set",
+        };
+        let member = |name: &str| {
+            Expr::new(
+                ExprKind::Field {
+                    base: Box::new(Expr::new(ExprKind::Var(module.to_string()), here)),
+                    name: name.to_string(),
+                },
+                here,
+            )
+        };
+        let expansion = if items.is_empty() {
+            member("empty")
+        } else {
+            Expr::new(
+                ExprKind::App {
+                    func: Box::new(member("of_list")),
+                    arg: Box::new(Expr::new(ExprKind::List { elems: items }, here)),
+                },
+                here,
+            )
+        };
+        self.mk(
+            start,
+            ExprKind::Collection {
+                form,
+                expansion: Box::new(expansion),
+            },
+        )
     }
 
     /// Parse `path = expr (, path = expr)*` record-update assignments up to `}`,

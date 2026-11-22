@@ -455,6 +455,8 @@ module.exports = grammar({
       $.list_expression,
       $.record_expression,
       $.record_update_expression,
+      $.map_expression,
+      $.set_expression,
       $.ce_expression,
       $.operator_section,
     ),
@@ -501,6 +503,27 @@ module.exports = grammar({
       field('record', $._expression),
       'with',
       sep1($.field_update, ','),
+      '}',
+    ),
+
+    // The bare brace as Python reads it (DESIGN.md §8.3): `{"a": 1}` is a Map,
+    // `{1, 2}` a Set, and `{}` the empty Map.
+    map_expression: $ => seq(
+      '{',
+      optional(seq(sep1($.map_entry, ','), optional(','))),
+      '}',
+    ),
+
+    map_entry: $ => seq(
+      field('key', $._expression),
+      ':',
+      field('value', $._expression),
+    ),
+
+    set_expression: $ => seq(
+      '{',
+      sep1($._expression, ','),
+      optional(','),
       '}',
     ),
 

@@ -34,9 +34,9 @@ mod self_tail_call;
 use crate::lexer::Span;
 
 use crate::parser::ast::{
-    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, ExternArg, FieldInit,
-    FieldUpdate, InterpPart, Item, LetBinding, Module, Param, Pattern, Receiver, TypeDeclKind,
-    TypeExpr,
+    ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, CollectionForm, Expr, ExprKind,
+    ExternArg, FieldInit, FieldUpdate, InterpPart, Item, LetBinding, Module, Param, Pattern,
+    Receiver, TypeDeclKind, TypeExpr,
 };
 use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPattern, PyStmt};
 
@@ -2392,6 +2392,39 @@ impl Lowerer {
                     vals.push(v);
                 }
                 Ok((stmts, PyExpr::List(vals)))
+            }
+
+            // A `{…}` literal is the Python display it is spelled as: a `Map` is a
+            // dict (`{"a": 1}`, or `{}` when empty) and a `Set` a set (`{1, 2}`),
+            // which is what `Map.of_list`/`Set.of_list` over the same items builds.
+            ExprKind::Collection { form, expansion } => {
+                let items = crate::parser::ast::collection_items(expansion);
+                let mut stmts = Vec::new();
+                match form {
+                    CollectionForm::Map => {
+                        let mut pairs = Vec::with_capacity(items.len());
+                        for item in items {
+                            let ExprKind::Tuple { elems } = &item.kind else {
+                                unreachable!("a map literal's items are key/value tuples")
+                            };
+                            let (s, k) = self.lower_value(&elems[0], locals)?;
+                            stmts.extend(s);
+                            let (s, v) = self.lower_value(&elems[1], locals)?;
+                            stmts.extend(s);
+                            pairs.push((k, v));
+                        }
+                        Ok((stmts, PyExpr::Dict(pairs)))
+                    }
+                    CollectionForm::Set => {
+                        let mut vals = Vec::with_capacity(items.len());
+                        for item in items {
+                            let (s, v) = self.lower_value(item, locals)?;
+                            stmts.extend(s);
+                            vals.push(v);
+                        }
+                        Ok((stmts, PyExpr::Set(vals)))
+                    }
+                }
             }
 
             ExprKind::Tuple { elems } => {
@@ -11019,6 +11052,7 @@ fn scan_scope(expr: &Expr, assigned: &mut HashSet<String>, bound: &mut HashSet<S
             }
         }
         ExprKind::Try { body } => scan_scope(body, assigned, bound),
+        ExprKind::Collection { expansion, .. } => scan_scope(expansion, assigned, bound),
         ExprKind::Annot { value, .. } => scan_scope(value, assigned, bound),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {
@@ -11172,6 +11206,7 @@ fn collect_binders(expr: &Expr, out: &mut HashSet<String>) {
             }
         }
         ExprKind::Try { body } => collect_binders(body, out),
+        ExprKind::Collection { expansion, .. } => collect_binders(expansion, out),
         ExprKind::Annot { value, .. } => collect_binders(value, out),
         ExprKind::List { elems } | ExprKind::Tuple { elems } => {
             for e in elems {

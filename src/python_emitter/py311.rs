@@ -160,7 +160,7 @@ fn rewrite_expr(e: &mut PyExpr) {
         PyExpr::Await(inner) | PyExpr::Not(inner) | PyExpr::Neg(inner) | PyExpr::Starred(inner) => {
             rewrite_expr(inner)
         }
-        PyExpr::List(elems) | PyExpr::Tuple(elems) => {
+        PyExpr::List(elems) | PyExpr::Tuple(elems) | PyExpr::Set(elems) => {
             for el in elems {
                 rewrite_expr(el);
             }

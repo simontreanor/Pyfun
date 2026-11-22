@@ -4,7 +4,7 @@ A `List a` is a Python list, written with the same square brackets: `[1, 2, 3]`.
 work over lists live in a `List` module, so you call them as `List.map`, `List.filter`,
 `List.fold`. Keeping them behind a module name means a shared word like `len` can belong to every
 collection without clashing. `Set` and `Map` follow the same pattern and lower to Python's `set` and
-`dict`.
+`dict`. You write them the way Python does too: `{1, 2, 3}` is a set, and `{"ada": 10}` is a map.
 
 ```pyfun
 let ns = [1, 2, 3, 4, 5]
@@ -17,8 +17,8 @@ let doubled = List.map ((*) 2) ns
 let third = Option.with_default 0 (List.get 2 ns)
 let missing = Option.with_default 0 (List.get 9 ns)
 
-let uniq = Set.of_list [1, 1, 2, 3]
-let scores = Map.add "ada" 10 Map.empty
+let uniq = {1, 1, 2, 3}
+let scores = {"ada": 10, "alan": 9}
 
 print squares
 print bigs
@@ -27,6 +27,7 @@ print doubled
 print third
 print missing
 uniq |> Set.len |> print
+scores |> Map.find "ada" |> print
 ```
 
 ```console
@@ -37,6 +38,7 @@ uniq |> Set.len |> print
 3
 0
 3
+Some(10)
 ```
 
 `fun x -> x * x` is a lambda, the same anonymous function you met in lesson 2 written inline. Where
