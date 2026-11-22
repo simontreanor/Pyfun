@@ -458,7 +458,7 @@ after the release.
    or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
    `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`
    is answered with `Map.find`, `List.append` with `List.concat`). Still to come, each with the item
-   that settles its form: `x in xs` (item 13). A call written `f(a, b)` and the ternary
+   that settles its form (`x in xs` is now the language, item 13). A call written `f(a, b)` and the ternary
    `a if c else b` were answered in #197.
 5. ~~**Guards in the exhaustiveness message**~~ **DONE 2026-11-22** (#197): when the arms would cover the
    type if their guards always held, the message says a guarded arm does not count.
@@ -487,8 +487,9 @@ after the release.
 
 12. ~~**`{"a": 1}` and `{1, 2}` literals**~~ **DONE 2026-11-22** (#195): a `Map`, a `Set`, and `{}` for
     the empty `Map`, each lowering to the Python display it is spelled as (`DESIGN.md` §8.3).
-13. **`x in xs` and `x not in xs`**, lowering to the same Python operators, typed by a closed
-    container constraint in the manner of `num` and `comparison`.
+13. ~~**`x in xs` and `x not in xs`**~~ **DONE 2026-11-22** (#198): typed by what the right side holds (an
+    element of a `List`, `Set` or `Seq`, a key of a `Map`, a substring of a `str`) and lowered to
+    Python's own operators. Resolved, not generalized (`DESIGN.md` §7.1).
 14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`
     today.
 

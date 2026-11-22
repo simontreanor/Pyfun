@@ -1237,3 +1237,38 @@ fn an_if_that_opens_a_line_in_a_block_is_the_next_item() {
     let source = "let job = async {\n  print 1\n  if ready then print 2 else ()\n}";
     assert!(parse(source).is_ok(), "{:?}", parse(source).err());
 }
+
+#[test]
+fn membership_parses_at_comparison_precedence_and_prints_back() {
+    for (source, printed) in [
+        ("let a = 2 in xs", "let a = (2 in xs)"),
+        ("let b = x not in {1, 2}", "let b = (x not in {1, 2})"),
+        // Looser than arithmetic and application, tighter than `not`/`and`.
+        ("let c = f x + 1 in ys", "let c = (((f x) + 1) in ys)"),
+        (
+            "let d = not 1 in xs and ok",
+            "let d = ((not (1 in xs)) and ok)",
+        ),
+    ] {
+        let module = parse(source).unwrap_or_else(|e| panic!("{source}: {}", e.message()));
+        let out = pyfun::ast::print_module(&module);
+        assert_eq!(out.trim_end(), printed, "{source}");
+        assert_eq!(parse(&out).unwrap(), module, "{out}");
+    }
+    // It does not chain with another comparison.
+    for source in [
+        "let bad = 1 < 2 in [True]",
+        "let bad = a in b in c",
+        "let bad = a in b == c",
+    ] {
+        let err = parse(source).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "`in` does not chain with another comparison: join the two tests with `and`",
+            "{source}"
+        );
+    }
+    // `in` is a keyword now, and a computation expression's `for` still takes it.
+    assert!(parse("let s = seq { for x in xs: yield x }").is_ok());
+    assert!(parse("let in = 3").is_err());
+}
