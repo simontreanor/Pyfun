@@ -1259,10 +1259,16 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   **stack-safe path is the `List`/`Seq` combinators** (they lower to Python's iterative `reduce`/`map`).
 
 **Module identity.** Source files are lowercase (`geometry.pyfun`), avoiding case-insensitive-filesystem
-pitfalls; the **module name is the stem with its first letter uppercased** (`Geometry`), per Pyfun's
-uppercase-identifier rule for types/modules; the emitted file keeps the lowercase stem (`geometry.py`).
-Resolution maps `import Geometry` → `geometry.pyfun` by lowercasing. (Multi-word/snake_case stems and
-nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
+pitfalls, and a multi-word one is snake_case (`train_times.pyfun`), the way PEP 8 names a module. The
+**module name is the stem in PascalCase**, each underscore-separated word capitalized (`Geometry`,
+`TrainTimes`), per Pyfun's uppercase-identifier rule for types/modules. Resolution maps a name to its
+stem with the same snake_case rule every value name follows (§6), so `import TrainTimes` reads
+`train_times.pyfun`, emits `train_times.py` and lowers a reference to `train_times.next_departure`.
+One function (`project::module_stem`) serves all three, so the source file, the emitted file and the
+Python `import` cannot disagree. An underscore before a digit is kept in the name (`day_1.pyfun` is
+`Day_1`), which keeps the mapping reversible. Before 0.11 the stem was only lowercased, so
+`import TrainTimes` read `traintimes.pyfun`; a missing-module error names the file it looked for.
+(Nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
 
 **Resolution & ordering.** A multi-file **driver**: from an entry file,
 parse it, follow `import` edges (resolved relative to the entry's directory = the source root), and build

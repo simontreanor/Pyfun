@@ -1901,3 +1901,39 @@ fn a_value_named_after_a_python_builtin_crosses_a_module_boundary() {
         assert_eq!(out.replace("\r\n", "\n").trim(), "42\n2");
     }
 }
+
+#[test]
+fn e2e_a_multi_word_module_is_a_snake_case_file() {
+    // `import TrainTimes` reads `train_times.pyfun`, emits `train_times.py` and
+    // imports it under that name: one stem for the source, the output and the
+    // Python `import`, spelled the way PEP 8 names a module.
+    let dir = Scratch::new("multi_word_module");
+    dir.write("train_times.pyfun", "let next_departure after = after + 15");
+    dir.write(
+        "main.pyfun",
+        "import TrainTimes\nprint (TrainTimes.next_departure 30)",
+    );
+    let project = project::build_from_path(&dir.path("main.pyfun")).unwrap();
+    let modules: Vec<&str> = project.modules.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(modules, ["TrainTimes", "Main"]);
+    let files = project::compile(&project).unwrap().files;
+    assert_eq!(names(&files), ["train_times.py", "main.py"]);
+    let main = file(&files, "main.py");
+    assert!(main.contains("import train_times"), "{main}");
+    assert!(main.contains("train_times.next_departure(30)"), "{main}");
+    let out_dir = Scratch::new("multi_word_module_out");
+    if let Some(out) = run_project(&out_dir, &files, "main.py") {
+        assert_eq!(out.trim(), "45");
+    }
+}
+
+#[test]
+fn a_missing_multi_word_module_names_the_snake_case_file() {
+    // The run-together stem of releases before 0.11 is no longer where the
+    // import looks, so the error has to say which file it wanted.
+    let dir = Scratch::new("missing_multi_word");
+    dir.write("traintimes.pyfun", "let x = 1");
+    dir.write("main.pyfun", "import TrainTimes\nlet y = 1");
+    let err = project::build_from_path(&dir.path("main.pyfun")).unwrap_err();
+    assert!(err.to_string().contains("train_times.pyfun"), "{err}");
+}

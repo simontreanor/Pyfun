@@ -58,7 +58,8 @@ Running the whole project with `pyfun run examples/modules/main.pyfun` prints:
 ```
 
 `import Geometry` refers to `geometry.pyfun` by its capitalized name, and the import graph must be
-acyclic. A `Some` built in `Store` is the same `Option` type `main` inspects, because the runtime
+acyclic. A file with two words in its name is spelled the way Python spells a module, so
+`import TrainTimes` reads `train_times.pyfun`. A `Some` built in `Store` is the same `Option` type `main` inspects, because the runtime
 classes are shared. Compiling with `pyfun compile examples/modules/main.pyfun -o out` writes a
 readable Python file tree, one `.py` per module plus a shared `_pyfun_rt.py`:
 
