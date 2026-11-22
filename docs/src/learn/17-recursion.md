@@ -24,8 +24,8 @@ needs no special form either, and the order you write them in does not matter, b
 are in scope across the pair:
 
 ```pyfun
-let isEven n = if n == 0 then true else isOdd (n - 1)
-let isOdd n = if n == 0 then false else isEven (n - 1)
+let isEven n = if n == 0 then True else isOdd (n - 1)
+let isOdd n = if n == 0 then False else isEven (n - 1)
 
 print (isEven 10)
 print (isOdd 7)

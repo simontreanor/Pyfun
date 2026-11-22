@@ -1617,7 +1617,7 @@ const BUILTIN_TYPES: &[&str] = &[
 /// Pyfun keywords (and contextual builder/CE words) offered as completions.
 const KEYWORDS: &[&str] = &[
     "let", "mut", "pure", "type", "measure", "extern", "if", "then", "else", "match", "with",
-    "fun", "and", "or", "not", "true", "false", "return", "in", "async", "seq", "result", "option",
+    "fun", "and", "or", "not", "True", "False", "return", "in", "async", "seq", "result", "option",
 ];
 
 /// The `initialize` result advertising our capabilities (full document sync +
@@ -1991,7 +1991,7 @@ let n = max 1",
     fn did_open_publishes_diagnostics_for_a_type_error() {
         let mut server = Server::default();
         let uri = "file:///bad.pyfun";
-        let out = server.handle(&json::parse(&open_msg(uri, "let r = 1 + true")).unwrap());
+        let out = server.handle(&json::parse(&open_msg(uri, "let r = 1 + True")).unwrap());
         let diags = out[0]
             .get("params")
             .unwrap()

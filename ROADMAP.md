@@ -454,7 +454,7 @@ after the release.
 3. **Tracebacks in `.pyfun` lines** (M). A runtime error under `pyfun run`, the REPL and the kernel
    names `_pyfun_main.py` in a temp directory. Map frames back to source spans.
 4. **Hints for Python habits** (S). `def` and `len` already get a tailored message. The same
-   treatment for `True`/`False`, `lambda x:`, `if c:`, `x = 5`, a top-level `for`, `import math`,
+   treatment for `lambda x:`, `if c:`, `x = 5`, a top-level `for`, `import math`,
    `"abc".upper()`, `x in xs`, `xs[0]`, `{"a": 1}`, `{1, 2}`, a `{x:>10}` format spec and an
    `if` with no `else`. A synonym table consulted before edit distance fixes the member
    suggestions (`Map.get` suggests `Map.len` today, and `List.item` suggests `List.iter`).
@@ -472,8 +472,8 @@ after the release.
 8. **Block openers.** `match e:`, `case p:` and a CE's `for x in xs:` open a block with a colon.
    `if` takes `then`, while `elif` is already Python's word. Accept `if c:` / `elif c:` / `else:`
    for the block form and keep `then` for the one-line form.
-9. **`True` and `False`.** Every other constructor is capitalized, Python's are capitalized, and the
-   emitted code is capitalized. `true` and `false` are the exception.
+9. ~~**`True` and `False`.**~~ **DONE 2026-11-22** (#188). The lowercase spellings stay reserved
+   and are an error naming the capitalized one (`DESIGN.md` §7).
 10. **`str` for `string`.** The emitted annotation is already `str`.
 11. **snake_case, one rule.** Every value name is snake_case with an underscore at every word
     boundary: 68 of the 241 standard library names change (`sort_by`, `of_list`, `is_empty`,

@@ -65,7 +65,7 @@ hljs.registerLanguage("pyfun", function (hljs) {
       keyword:
         "let pure fun type opaque measure module import as match case with if then " +
         "elif else and or not try do return yield async seq result option",
-      literal: "true false",
+      literal: "True False",
       built_in: "print",
     },
     contains: [
@@ -86,7 +86,9 @@ hljs.registerLanguage("pyfun", function (hljs) {
         className: "number",
         begin: /\b\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?(?:<[^<>\n]+>)?/,
       },
-      { className: "type", begin: /\b[A-Z][A-Za-z0-9_']*/ },
+      // `True`/`False` are capitalized like a constructor but are the `literal`
+      // keywords above, so the type rule steps over them.
+      { className: "type", begin: /\b(?!(?:True|False)\b)[A-Z][A-Za-z0-9_']*/ },
     ],
   };
 });

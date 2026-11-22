@@ -308,7 +308,7 @@ fn a_unit_extern_combines_with_a_kwarg_slot_and_a_thunk() {
     let py = pyfun::compile(
         "extern import threading\n\
          extern type Thread\n\
-         extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = true, target = ...)\n\
+         extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
          let t = newThread () (fun _ -> print \"hi\")",
     )
     .unwrap();
@@ -352,7 +352,7 @@ fn e2e_a_unit_extern_thread_runs_its_pyfun_target() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import threading\n\
                extern type Thread\n\
-               extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = true, target = ...)\n\
+               extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
                extern start: Thread -> unit = .start()\n\
                extern join: Thread -> unit = .join()\n\
                let t = newThread () (fun _ -> print \"from the thread\")\n\
@@ -550,7 +550,7 @@ fn receiver_method_extern_kwargs_follow_the_positional_args() {
 #[test]
 fn extern_kwargs_support_int_negative_bool_and_float_values() {
     let py = pyfun::compile(
-        "extern g : string -> a = gzip.open(compresslevel=9, buffering=-1, text=true, ratio=2.5)\n\
+        "extern g : string -> a = gzip.open(compresslevel=9, buffering=-1, text=True, ratio=2.5)\n\
          let f path = g path",
     )
     .unwrap();
@@ -733,7 +733,7 @@ fn list_literal_lowers_to_a_python_list() {
 
 #[test]
 fn map_filter_lower_to_emitted_helpers() {
-    let py = pyfun::compile("let r = List.map (fun x -> x) (List.filter (fun x -> true) [1, 2])")
+    let py = pyfun::compile("let r = List.map (fun x -> x) (List.filter (fun x -> True) [1, 2])")
         .unwrap();
     assert!(py.contains("def _pf_map(f, xs):"), "{py}");
     assert!(py.contains("return list(map(f, xs))"), "{py}");
@@ -968,8 +968,8 @@ fn e2e_mutual_recursion() {
     // at call time, so no reordering is needed) and run.
     run_and_check(
         "
-        let isEven = fun n -> if n == 0 then true else isOdd (n - 1)
-        let isOdd = fun n -> if n == 0 then false else isEven (n - 1)
+        let isEven = fun n -> if n == 0 then True else isOdd (n - 1)
+        let isOdd = fun n -> if n == 0 then False else isEven (n - 1)
         let a = isEven 10
         let b = isOdd 10
         ",
@@ -1292,7 +1292,7 @@ fn match_on_map_try_find_lowers_to_a_membership_test() {
     let py = pyfun::compile(
         "let allows checks rc l =
            match Map.tryFind rc checks:
-             case None: true
+             case None: True
              case Some s: Set.contains l s",
     )
     .unwrap();
@@ -2269,7 +2269,7 @@ fn seq_map_filter_lower_to_pythons_lazy_builtins() {
     // Unlike `List.map` (eager, wrapped in `_pf_map`), `Seq.map`/`filter` route to
     // Python's own lazy builtins with no wrapper.
     let py =
-        pyfun::compile("let r = Seq.map (fun x -> x) (Seq.filter (fun x -> true) (Seq.range 0 3))")
+        pyfun::compile("let r = Seq.map (fun x -> x) (Seq.filter (fun x -> True) (Seq.range 0 3))")
             .unwrap();
     assert!(py.contains("map(lambda x: x"), "{py}");
     assert!(py.contains("filter(lambda x: True"), "{py}");
@@ -2320,7 +2320,7 @@ fn result_to_option_pulls_in_both_preludes() {
 
 #[test]
 fn if_in_value_position_is_a_conditional_expression() {
-    let py = pyfun::compile("let r = if true then 1 else 2").unwrap();
+    let py = pyfun::compile("let r = if True then 1 else 2").unwrap();
     assert!(py.contains("r = 1 if True else 2"), "{py}");
 }
 
@@ -2761,7 +2761,7 @@ fn e2e_a_deferred_field_reads_the_right_attribute() {
             let l = c.letter
             let flag = c.blank
             f\"{l}/{flag}\"
-        let out = describe (Cell { row = 1, col = 2, letter = \"A\", blank = false })
+        let out = describe (Cell { row = 1, col = 2, letter = \"A\", blank = False })
         ",
         &[("out", "A/False")],
     );
@@ -3174,7 +3174,7 @@ fn e2e_fst_and_snd() {
 
 #[test]
 fn tuple_literal_lowers_to_python_tuple() {
-    let py = pyfun::compile("let pair = (1, 2)\nlet triple = (1, true, 3)").unwrap();
+    let py = pyfun::compile("let pair = (1, 2)\nlet triple = (1, True, 3)").unwrap();
     assert!(py.contains("pair = (1, 2)"), "{py}");
     assert!(py.contains("triple = (1, True, 3)"), "{py}");
 }
@@ -3447,12 +3447,12 @@ fn e2e_nested_record_and_constructor_pattern() {
         type Box = { item: Option int, tag: bool }
         let f b =
           match b:
-            case Box { item = Some n, tag = true }: n
+            case Box { item = Some n, tag = True }: n
             case Box { item = Some n }: n + 100
             case _: 0
-        let a = f (Box { item = Some 5, tag = true })
-        let b = f (Box { item = Some 5, tag = false })
-        let c = f (Box { item = None, tag = true })
+        let a = f (Box { item = Some 5, tag = True })
+        let b = f (Box { item = Some 5, tag = False })
+        let c = f (Box { item = None, tag = True })
         ",
         &[("a", "5"), ("b", "105"), ("c", "0")],
     );
@@ -3465,11 +3465,11 @@ fn e2e_deep_exhaustive_match_without_wildcard() {
         "
         let f o =
           match o:
-            case Some true: 1
-            case Some false: 2
+            case Some True: 1
+            case Some False: 2
             case None: 3
-        let a = f (Some true)
-        let b = f (Some false)
+        let a = f (Some True)
+        let b = f (Some False)
         let c = f None
         ",
         &[("a", "1"), ("b", "2"), ("c", "3")],
@@ -3600,17 +3600,17 @@ fn boolean_operators_lower_to_python_keywords_with_precedence() {
     // `and`/`or`/`not` lower to the same Python keywords. Precedence mirrors
     // Python, so no redundant parentheses, but looser operands under `not` get them.
     assert!(
-        pyfun::compile("let r = true and false")
+        pyfun::compile("let r = True and False")
             .unwrap()
             .contains("r = True and False")
     );
     assert!(
-        pyfun::compile("let r = true or false")
+        pyfun::compile("let r = True or False")
             .unwrap()
             .contains("r = True or False")
     );
     assert!(
-        pyfun::compile("let r = not true")
+        pyfun::compile("let r = not True")
             .unwrap()
             .contains("r = not True")
     );
@@ -3620,9 +3620,9 @@ fn boolean_operators_lower_to_python_keywords_with_precedence() {
             .unwrap()
             .contains("r = not 1 == 2")
     );
-    // `(not true) == false` does need them.
+    // `(not True) == False` does need them.
     assert!(
-        pyfun::compile("let r = (not true) == false")
+        pyfun::compile("let r = (not True) == False")
             .unwrap()
             .contains("r = (not True) == False")
     );
@@ -3713,10 +3713,10 @@ fn mutual_recursion_is_left_alone() {
     let py = pyfun::compile(
         "
         let evens n =
-          if n == 0 then true
+          if n == 0 then True
           else odds (n - 1)
         let odds n =
-          if n == 0 then false
+          if n == 0 then False
           else evens (n - 1)
         ",
     )
@@ -3910,8 +3910,8 @@ fn native_compiles_nested_tuple_record_literal_and_as_patterns() {
                      case Point { x = 0 }: \"y axis\"\n      \
                      case Point { x, y } as whole: f\"{x},{y} {whole.x}\"\n  \
                  q\n\
-               let name i = match (i, true):\n  \
-                 case (Id \"root\", true): \"admin\"\n  \
+               let name i = match (i, True):\n  \
+                 case (Id \"root\", True): \"admin\"\n  \
                  case (Id s, _): s\n\
                print (simp (Add (Num 0) (Num 7)))\n\
                print (simp (Add (Num 5) (Num 0)))\n\
@@ -4368,8 +4368,8 @@ fn a_mut_assigned_in_an_async_block_declares_global() {
     // #122: a CE body is its own coroutine frame, so without the declaration
     // the assignment silently bound a local and the flag never flipped.
     let py = pyfun::compile(
-        "let mut flag = false\n\
-         let raiseFlag _ =\n  async {\n    flag <- true\n    return ()\n  }",
+        "let mut flag = False\n\
+         let raiseFlag _ =\n  async {\n    flag <- True\n    return ()\n  }",
     )
     .unwrap();
     assert!(py.contains("global flag"), "{py}");
@@ -4404,8 +4404,8 @@ fn e2e_a_mut_assigned_in_an_async_block_reaches_the_module_binding() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
                extern runAsync: Async a -> a = asyncio.run\n\
-               let mut flag = false\n\
-               let raiseFlag _ =\n  async {\n    flag <- true\n    return ()\n  }\n\
+               let mut flag = False\n\
+               let raiseFlag _ =\n  async {\n    flag <- True\n    return ()\n  }\n\
                runAsync (raiseFlag ())\n\
                print flag";
     let program = pyfun::compile(src).unwrap();
@@ -4559,7 +4559,7 @@ fn e2e_if_and_match() {
             case _: \"many\"
         let r1 = classify 0
         let r2 = classify 7
-        let r3 = if true then 10 else 20
+        let r3 = if True then 10 else 20
         ",
         &[("r1", "zero"), ("r2", "many"), ("r3", "10")],
     );
@@ -4809,8 +4809,8 @@ fn e2e_result_ce_binds_and_short_circuits() {
         "
         let safe ok v = result { let! x = if ok then Ok v else Error 9  return (x + 1) }
         let unwrap r = match r: case Ok n: n case Error e: e
-        let r1 = unwrap (safe true 10)
-        let r2 = unwrap (safe false 10)
+        let r1 = unwrap (safe True 10)
+        let r2 = unwrap (safe False 10)
         ",
         &[("r1", "11"), ("r2", "9")],
     );
@@ -4848,7 +4848,7 @@ fn e2e_expression_items_and_a_trailing_do_bang_in_an_async_block() {
                  let! _ = sleep 0.001\n  \
                  print \"napped\"\n  \
                  match 1:\n    case 1: print \"one\"\n    case _: print \"other\"\n  \
-                 if true then print \"yes\" else ()\n  \
+                 if True then print \"yes\" else ()\n  \
                  do! sleep 0.001\n\
                }\n\
                print (runAsync nap)";
@@ -5194,7 +5194,7 @@ fn e2e_boolean_logic() {
     };
     let program = pyfun::compile(
         "let between lo hi x = lo <= x and x <= hi\n\
-         print (true and not false)\n\
+         print (True and not False)\n\
          print (1 < 2 or 5 < 3)\n\
          print (not (1 == 2))\n\
          print (between 0 10 5)\n\
@@ -5301,7 +5301,7 @@ fn e2e_int_literal_unified_to_float_prints_as_float() {
     run_and_check(
         "let xs = [1.0, 2, 3.0]\n\
          let pick b = if b then 1 else 1.5\n\
-         let r = pick true",
+         let r = pick True",
         &[("xs", "[1.0, 2.0, 3.0]"), ("r", "1.0")],
     );
 }
@@ -6580,7 +6580,7 @@ fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
                        let k = f\"{leg.depMin}|{leg.dest}\"\n        \
                        match Map.tryFind k seen:\n          \
                          case Some _: (seen, out)\n          \
-                         case None: (Map.add k true seen, List.concat out [leg])\n  \
+                         case None: (Map.add k True seen, List.concat out [leg])\n  \
                  match List.fold step (Map.empty, []) legs:\n    \
                    case (_, out): out\n\
                let out = List.map (fun l -> l.depMin) (dedupLegs [Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 2, dest = \"b\" }])";
@@ -7298,7 +7298,7 @@ fn guarded_option_arms_fall_through_in_return_position() {
 #[test]
 fn a_guarded_catch_all_falls_through_to_the_arms_after_it() {
     let py = pyfun::compile(
-        "let g o =\n  match o:\n    case Some x if x > 10: 1\n    case _ if false: 2\n    case None: 3\n    case Some _: 4",
+        "let g o =\n  match o:\n    case Some x if x > 10: 1\n    case _ if False: 2\n    case None: 3\n    case Some _: 4",
     )
     .unwrap();
     assert!(py.contains("    if False:\n        return 2\n"), "{py}");
@@ -7333,7 +7333,7 @@ fn a_tuple_payload_unpacks_from_the_some_payload() {
 #[test]
 fn a_refutable_payload_keeps_the_match() {
     let py =
-        pyfun::compile("let z o =\n  match o:\n    case Some 0: true\n    case _: false").unwrap();
+        pyfun::compile("let z o =\n  match o:\n    case Some 0: True\n    case _: False").unwrap();
     assert!(py.contains("case Some(0):"), "{py}");
 }
 
@@ -7432,7 +7432,7 @@ fn e2e_option_ladders_and_singletons_agree_with_the_match_semantics() {
         let only o =
           match o:
             case Some x if x > 0: x
-            case _ if false: 1
+            case _ if False: 1
             case None: 2
             case Some _: 3
         let a = g (Some 11)
@@ -7916,7 +7916,7 @@ fn e2e_a_let_in_an_if_branch_does_not_rebind_the_outer_binding() {
               x + 1
             else 0
           x + y
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("        _x = 10\n"), "{py}");
@@ -7981,7 +7981,7 @@ fn e2e_a_nested_function_let_shadowing_an_outer_function_is_renamed() {
               go n
             else 0
           y + go 1
-        let r = f true 3
+        let r = f True 3
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("def _go(k):"), "{py}");
@@ -8004,7 +8004,7 @@ fn e2e_a_nested_let_mut_with_assignment_keeps_the_outer_binding() {
               total
             else 0
           total + y
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("        _total = 0\n"), "{py}");
@@ -8029,7 +8029,7 @@ fn e2e_a_closure_assigning_a_renamed_nested_mut_declares_the_fresh_name() {
               count
             else 0
           count + y
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("nonlocal _count"), "{py}");
@@ -8048,7 +8048,7 @@ fn e2e_a_nested_let_shadowing_a_parameter_read_later_is_renamed() {
               x
             else 0
           x + y
-        let r = f 1 true
+        let r = f 1 True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("_x = 10"), "{py}");
@@ -8083,7 +8083,7 @@ fn a_nested_let_with_no_occurrence_outside_its_block_is_not_renamed() {
               t + 1
             else 0
           y
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("        t = 10\n"), "{py}");
@@ -8103,7 +8103,7 @@ fn e2e_a_destructuring_nested_let_renames_each_colliding_name() {
               a + b
             else 0
           a + y
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("_a, b = (10, 20)"), "{py}");
@@ -8124,7 +8124,7 @@ fn e2e_a_nested_let_fresh_name_bumps_past_a_name_in_use() {
               x + 1
             else 0
           x + y + _x
-        let r = f true
+        let r = f True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("_x2 = 10"), "{py}");
@@ -8178,7 +8178,7 @@ fn a_let_reused_across_sequential_branches_keeps_its_name() {
               t + 1
             else 0
           x + y
-        let r = f true true
+        let r = f True True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("        t = 1\n"), "{py}");
@@ -8227,7 +8227,7 @@ fn e2e_a_nested_let_reading_the_parameter_it_shadows_is_renamed() {
               x * 2
             else 0
           y
-        let r = f 5 true
+        let r = f 5 True
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("_x = x + 1"), "{py}");

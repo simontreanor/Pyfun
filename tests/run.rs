@@ -226,7 +226,7 @@ fn run_forwards_arguments_that_look_like_flags() {
 fn run_refuses_to_execute_ill_typed_code() {
     // The compiler is the gatekeeper: a type error stops `run` before any Python
     // executes. Needs no interpreter, so this always runs.
-    let file = write_temp("ill_typed", "let add a b = a + b\nlet r = add 1 true");
+    let file = write_temp("ill_typed", "let add a b = a + b\nlet r = add 1 True");
     let output = Command::new(pyfun_bin())
         .arg("run")
         .arg(&file)

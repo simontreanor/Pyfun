@@ -58,7 +58,7 @@ class PyfunLexer(RegexLexer):
             include("numbers"),
             # `let!`, `return!`, `yield!`, `do!`: the binding forms of a CE.
             (r"\b(let|return|yield|do)!", Keyword),
-            (words(("true", "false"), prefix=r"\b", suffix=r"\b"), Keyword.Constant),
+            (words(("True", "False"), prefix=r"\b", suffix=r"\b"), Keyword.Constant),
             (words(OPERATOR_WORDS, prefix=r"\b", suffix=r"\b"), Operator.Word),
             (r"\bpure\b", Keyword.Declaration),
             (words(KEYWORDS, prefix=r"\b", suffix=r"\b"), Keyword),

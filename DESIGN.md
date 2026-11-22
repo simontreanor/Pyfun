@@ -368,7 +368,7 @@ lowers to what a person writes:
 ```python
 def allowsLetter(checks, rc, l):      # match Map.tryFind rc checks:
     _pf_t0 = _pf_map_try_find(rc, checks)
-    if isinstance(_pf_t0, None_):     #   case None: true
+    if isinstance(_pf_t0, None_):     #   case None: True
         return True
     else:                             #   case Some s: Set.contains l s
         s = _pf_t0._0
@@ -776,7 +776,7 @@ parenthesized element in all three positions (expression, pattern, type). Tuples
 tuples** (`PyExpr::Tuple` → `(a, b)`; `Pattern::Tuple` → a sequence pattern `case (a, b):` via
 `PyPattern::Sequence`). A tuple is a **single-constructor** type, so a tuple pattern of variables is
 exhaustive on its own, and **deep exhaustiveness recurses into the element columns** (`Tag::Tuple(arity)`
-in the Maranget matrix), reporting witnesses like `` `(false, _)` is not matched ``. Tuples unblock
+in the Maranget matrix), reporting witnesses like `` `(False, _)` is not matched ``. Tuples unblock
 multi-value return and pair lists; the stdlib follow-ons that need them — `List.zip : List a -> List b ->
 List (a, b)` and `Map.ofList`/`Map.toList` (to/from a `List (k, v)`) (see the list and map
 sections above).
@@ -1502,6 +1502,16 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
+**Booleans are `True` and `False`.** They are spelled as Python spells them, which is also how
+Pyfun's own rule spells them: `bool` is a type with two constructors, and every constructor is
+capitalized. Source, the emitted Python, a printed value and a witness in a diagnostic
+(`` `Some False` is not matched ``) all read the same. They are keywords, so a `type` cannot declare a
+constructor called `True`. The lowercase `true`/`false` of releases before 0.11 stay reserved and are
+an error that names the fix (``Pyfun spells this `True`, as Python does``). Reserving them matters in
+a pattern: were `true` an ordinary name, `case true:` would bind a variable and match everything.
+The recovering lexer the editor uses reports the old spelling once and still yields the boolean, so
+the rest of the file is checked as written.
+
 **Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
 declaration (joined with newlines, the conventional single space after `##` stripped) and surface
@@ -1787,7 +1797,7 @@ and Python IR (both are genuine new pattern power, not just spelling):
   coverage) and `Pattern::Or` (same-variables-same-types check; expanded for exhaustiveness).
 - **Lowering / IR.** `PyCase` gained an optional guard; `PyPattern::Or` emits `a | b`. Arms still lower to
   a Python `match`/`case` statement — now an even closer 1:1 — with the defensive `case _: raise` guard.
-  Witnesses still print in Pyfun pattern syntax (`` `Some false` ``, `` `Point { x = _ } ` ``).
+  Witnesses still print in Pyfun pattern syntax (`` `Some False` ``, `` `Point { x = _ } ` ``).
 
 **Migration.** This **replaces** `match … with | … ->`; the two spellings are not both supported (avoid
 two ways to write one thing in an MVP). `->` is retained for lambdas (`fun x -> …`) and function types
@@ -2327,7 +2337,7 @@ catch-all for exhaustiveness.
 **Exhaustiveness is deep** and is **entirely unaffected** by this revision — the check operates on the
 `Pattern` AST (Maranget usefulness, matrix specialization), which is unchanged; only the surface spelling
 of construction and record patterns moves. `Point { item = Some n } | Point { item = None }` is still
-recognized as complete without a `_`, and witnesses print in the tagged form (`` `Point { x = _, y = true
+recognized as complete without a `_`, and witnesses print in the tagged form (`` `Point { x = _, y = True
 } ` ``). Infinite types (`int`, `string`) and types without matchable constructors are exhaustive only via
 a wildcard arm.
 

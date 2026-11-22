@@ -9,7 +9,7 @@ change, so the program reads as a set of definitions rather than a sequence of u
 let name = "Ada"
 let age = 36
 let pi = 3.14
-let isAdmin = true
+let isAdmin = True
 
 print (f"{name} is {age}")
 print (f"pi is about {pi}")

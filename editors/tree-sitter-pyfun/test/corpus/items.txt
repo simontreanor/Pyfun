@@ -165,7 +165,7 @@ extern slurp : string ->{io} string = builtins.open
 extern pure with kwargs target
 ================================================================================
 
-extern pure loads : string -> Json = json.loads(strict=true, offset=-2, sep=", ")
+extern pure loads : string -> Json = json.loads(strict=True, offset=-2, sep=", ")
 
 --------------------------------------------------------------------------------
 

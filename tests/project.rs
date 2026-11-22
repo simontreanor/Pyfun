@@ -1374,7 +1374,7 @@ fn a_direct_record_wins_a_field_name_over_a_carried_one() {
                 "import Middle\n\
                  type Local = { cSize: bool, other: int }\n\
                  let get w = w.cSize\n\
-                 let v = get (Local { cSize = true, other = 1 })",
+                 let v = get (Local { cSize = True, other = 1 })",
             ),
         ],
     );
@@ -1405,7 +1405,7 @@ fn e2e_a_carried_record_cannot_break_a_working_field_access() {
                 "import Middle\n\
                  type Local = { size: bool }\n\
                  let f p = p.size\n\
-                 print (f (Local { size = true }))",
+                 print (f (Local { size = True }))",
             ),
         ],
     );

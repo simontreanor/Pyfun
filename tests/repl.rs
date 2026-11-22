@@ -46,7 +46,7 @@ fn repl_echoes_definition_types() {
 #[test]
 fn repl_reports_type_errors_without_committing() {
     // A type error is shown and the bad binding is not remembered.
-    let out = repl("let x = 5\nlet y = x + true\ny\n:quit\n");
+    let out = repl("let x = 5\nlet y = x + True\ny\n:quit\n");
     assert!(out.contains("found bool"), "type error shown:\n{out}");
     assert!(out.contains("unbound name `y`"), "y not committed:\n{out}");
 }
@@ -72,8 +72,8 @@ fn repl_multiline_block_enables_mutual_recursion() {
     // they type-check as a group; then `isEven 10` evaluates to True.
     let out = repl(
         ":{\n\
-         let isEven n = if n == 0 then true else isOdd (n - 1)\n\
-         let isOdd n = if n == 0 then false else isEven (n - 1)\n\
+         let isEven n = if n == 0 then True else isOdd (n - 1)\n\
+         let isOdd n = if n == 0 then False else isEven (n - 1)\n\
          :}\n\
          isEven 10\n\
          :quit\n",
@@ -176,7 +176,7 @@ fn repl_rejected_definition_does_not_poison_session() {
         return;
     }
     // An ill-typed definition is rejected outright; the session keeps working.
-    let out = repl("let bad = 1 + true\nlet ok = 2\nok + 40\n:quit\n");
+    let out = repl("let bad = 1 + True\nlet ok = 2\nok + 40\n:quit\n");
     assert!(out.contains("found bool"), "type error shown:\n{out}");
     assert!(out.contains("42"), "session still evaluates:\n{out}");
 }

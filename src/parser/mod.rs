@@ -22,13 +22,13 @@
 //! multiplicative := application (("*"|"/"|"//") application)*
 //! application := postfix postfix*    // juxtaposition; curried, left-assoc
 //! postfix     := atom ("." ident)*   // record field access, binds tightest
-//! atom        := int | float | string | "true" | "false" | ident | "(" expr ")"
+//! atom        := int | float | string | "True" | "False" | ident | "(" expr ")"
 //!              | record
 //! record      := "{" ident "=" expr ("," ident "=" expr)* "}"   // literal
 //!              | "{" expr "with" ident "=" expr ("," ...)* "}"   // update
 //! pattern     := ctor | atom_pattern
 //! ctor        := UpperIdent atom_pattern*
-//! atom_pattern:= "_" | ident | int | "true" | "false" | "(" pattern ")"
+//! atom_pattern:= "_" | ident | int | "True" | "False" | "(" pattern ")"
 //! ```
 //! Operator precedence, lowest to highest:
 //! `|>` < `or` < `and` < `not` < comparison/equality < `+ -` < `* / //` < application.
@@ -2685,8 +2685,8 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::RBrace => "}",
         Tok::LBracket => "[",
         Tok::RBracket => "]",
-        Tok::True => "true",
-        Tok::False => "false",
+        Tok::True => "True",
+        Tok::False => "False",
         Tok::Eq => "=",
         Tok::EqEq => "==",
         Tok::BangEq => "!=",

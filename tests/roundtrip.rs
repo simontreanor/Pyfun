@@ -18,7 +18,7 @@ const PROGRAMS: &[&str] = &[
     "let small = 2.5e-3",
     "let grav = 6.674e-11",
     "let greeting = \"hello\\nworld\"",
-    "let yes = true",
+    "let yes = True",
     // The unit value `()`.
     "let nothing = ()",
     "let noop x = ()",
@@ -226,7 +226,7 @@ const PROGRAMS: &[&str] = &[
     // Tuple literals (2+ elements), nesting, compound elements; `()` stays unit and
     // `(x)` stays grouping (no 0- or 1-tuples).
     "let pair = (1, 2)",
-    "let triple = (1, \"a\", true)",
+    "let triple = (1, \"a\", True)",
     "let nested = ((1, 2), 3)",
     "let mixed = (f a, x + 1, [1, 2])",
     "let grouped = (x + 1)",
@@ -302,7 +302,7 @@ const PROGRAMS: &[&str] = &[
     // clause to print even when the Python name equals the Pyfun name.
     "extern openText: string -> Seq string = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
     "extern writeText: a -> string -> int = .write_text(encoding=\"utf-8\")",
-    "extern connect: string -> a = sqlite3.connect(timeout=5, check_same_thread=false)",
+    "extern connect: string -> a = sqlite3.connect(timeout=5, check_same_thread=False)",
     "extern gzipOpen: string -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
     "extern open: string -> a = open(mode=\"rt\")",
     // A `...` slot takes its value from the caller instead of the declaration, and
@@ -914,6 +914,51 @@ fn an_active_pattern_is_top_level_only() {
         "unexpected message: {}",
         err.message()
     );
+}
+
+#[test]
+fn booleans_print_capitalized_in_every_position() {
+    // Expression, pattern, and a pinned extern keyword argument.
+    for source in [
+        "let yes = True",
+        "let f b =\n  match b:\n    case True: 1\n    case False: 0",
+        "extern connect: string -> a = sqlite3.connect(check_same_thread=False)",
+    ] {
+        let printed = pyfun::ast::print_module(&parse(source).unwrap());
+        assert_eq!(
+            parse(&printed).unwrap(),
+            parse(source).unwrap(),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("True") || printed.contains("False"),
+            "{printed}"
+        );
+        assert!(
+            !printed.contains("true") && !printed.contains("false"),
+            "{printed}"
+        );
+    }
+}
+
+#[test]
+fn a_lowercase_boolean_names_the_capitalized_spelling() {
+    // `case true:` must never parse as a variable pattern, which would match
+    // everything and leave the `false` arm silently dead.
+    for (source, expected) in [
+        ("let ok = true", "Pyfun spells this `True`, as Python does"),
+        (
+            "let f b =\n  match b:\n    case true: 1\n    case false: 0",
+            "Pyfun spells this `True`, as Python does",
+        ),
+        (
+            "let ok = not false",
+            "Pyfun spells this `False`, as Python does",
+        ),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert_eq!(err.message(), expected, "{source}");
+    }
 }
 
 #[test]
