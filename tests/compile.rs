@@ -8728,3 +8728,165 @@ fn e2e_membership_lowers_to_pythons_own_in() {
         "(True, True, True, True, False)\n[1]"
     );
 }
+
+/// A sum type whose constructors name their fields; `name` is on all three.
+const NAMED_SHAPES_SRC: &str = "type Shape =\n  | Circle { name: str, radius: float }\n  | Rect { name: str, width: float, height: float }\n  | Dot { name: str }\n\
+let area s =\n  match s:\n    case Circle { radius }: 3.0 * radius * radius\n    case Rect { width, height = h }: width * h\n    case Dot {}: 0.0\n\
+let c = Circle { name = \"c\", radius = 1.0 }\n\
+let r = Rect { height = 3.0, name = \"r\", width = 2.0 }\n\
+let shapes = [c, r, Dot { name = \"d\" }]\n";
+
+#[test]
+fn a_record_bodied_constructor_lowers_to_a_keyword_only_dataclass() {
+    let py = pyfun::compile(&format!(
+        "{NAMED_SHAPES_SRC}let rename s n = {{ s with name = n }}\nlet label s = s.name"
+    ))
+    .expect("compiles");
+    // The class names its fields, takes them by keyword, and prints them by name
+    // (the generated repr), so no positional `__repr__` is written out.
+    assert!(
+        py.contains(
+            "@dataclass(frozen=True, slots=True, kw_only=True)\nclass Rect:\n    name: str\n    width: float\n    height: float\n"
+        ),
+        "{py}"
+    );
+    assert!(!py.contains("def __repr__"), "{py}");
+    // Built by keyword, in the order the source wrote the fields.
+    assert!(py.contains("c = Circle(name=\"c\", radius=1.0)"), "{py}");
+    assert!(
+        py.contains("r = Rect(height=3.0, name=\"r\", width=2.0)"),
+        "{py}"
+    );
+    // Matched by keyword; `Dot {}` is the bare class pattern.
+    assert!(py.contains("case Circle(radius=radius):"), "{py}");
+    assert!(py.contains("case Rect(width=width, height=h):"), "{py}");
+    assert!(py.contains("case Dot():"), "{py}");
+    // A shared field is an attribute, and its update a copy of whichever
+    // constructor the value is.
+    assert!(py.contains("return s.name"), "{py}");
+    assert!(py.contains("return dataclasses.replace(s, name=n)"), "{py}");
+    assert!(py.contains("import dataclasses"), "{py}");
+    // A positional constructor beside a named one keeps its positional class.
+    let mixed =
+        pyfun::compile("type T = A int | B { n: int }\nlet xs = [A 1, B { n = 2 }]\nprint xs")
+            .expect("compiles");
+    assert!(
+        mixed.contains("@dataclass(frozen=True, slots=True, repr=False)\nclass A:\n    _0: int\n"),
+        "{mixed}"
+    );
+    assert!(
+        mixed.contains("@dataclass(frozen=True, slots=True, kw_only=True)\nclass B:\n    n: int\n"),
+        "{mixed}"
+    );
+    assert!(mixed.contains("xs = [A(1), B(n=2)]"), "{mixed}");
+}
+
+#[test]
+fn e2e_record_bodied_constructors_build_match_read_and_update() {
+    let src = format!(
+        "{NAMED_SHAPES_SRC}\
+         shapes |> List.map area |> print\n\
+         shapes |> List.map (fun s -> s.name) |> print\n\
+         let rename s n = {{ s with name = n }}\n\
+         print (rename r \"big\")\n\
+         print (rename c \"round\")\n\
+         print (c == Circle {{ radius = 1.0, name = \"c\" }}, c == r)\n\
+         let describe s =\n  match s:\n    case Circle {{ name = \"c\" }}: \"the c circle\"\n    case Circle {{ name }}: f\"circle {{name}}\"\n    case Rect {{ name }} | Dot {{ name }}: name\n\
+         [c, rename c \"x\", r] |> List.map describe |> print\n\
+         print (List.sort [Dot {{ name = \"z\" }}, r, c])\n\
+         print (Set.len {{c, c, r}})"
+    );
+    let expected = "[3.0, 6.0, 0.0]\n\
+                    ['c', 'r', 'd']\n\
+                    Rect(name='big', width=2.0, height=3.0)\n\
+                    Circle(name='round', radius=1.0)\n\
+                    (True, False)\n\
+                    ['the c circle', 'circle x', 'r']\n\
+                    [Circle(name='c', radius=1.0), Rect(name='r', width=2.0, height=3.0), Dot(name='z')]\n\
+                    2";
+    if let Some(out) = run_source(&src) {
+        assert_eq!(out.trim(), expected);
+    }
+    // The native lowering reads the same fields off an `isinstance` ladder.
+    if let Some((py, lines)) = run_native(&src) {
+        assert!(py.contains("if isinstance(s, Circle):"), "{py}");
+        assert!(py.contains("radius = s.radius"), "{py}");
+        assert_eq!(lines.join("\n").trim(), expected);
+    }
+}
+
+#[test]
+fn e2e_a_shared_field_updates_through_a_dotted_path() {
+    // `at` is a record on every constructor: a path through it rebuilds the
+    // record and copies the value around it. A base that is not a plain name is
+    // evaluated once.
+    let src = "type Pos = { x: int, y: int }\n\
+               type Shape =\n  | Circle { at: Pos, radius: int }\n  | Rect { at: Pos, width: int, height: int }\n\
+               type Scene = { main: Shape, title: str }\n\
+               let mut calls = 0\n\
+               let make _ =\n  calls <- calls + 1\n  Circle { at = Pos { x = 0, y = 0 }, radius = 1 }\n\
+               let r = Rect { at = Pos { x = 1, y = 2 }, width = 3, height = 4 }\n\
+               print { r with at.x = 9 }\n\
+               print { r with at.x = 9, at.y = 8 }\n\
+               print { make () with at.y = 5, at.x = 3 }\n\
+               print calls\n\
+               let scene = Scene { main = r, title = \"t\" }\n\
+               print { scene with main.at.x = 6 }\n\
+               print { scene with main.at = Pos { x = 0, y = 0 }, title = \"u\" }";
+    if let Some(out) = run_source(src) {
+        assert_eq!(
+            out.trim(),
+            "Rect(at=Pos(x=9, y=2), width=3, height=4)\n\
+             Rect(at=Pos(x=9, y=8), width=3, height=4)\n\
+             Circle(at=Pos(x=3, y=5), radius=1)\n\
+             1\n\
+             Scene(main=Rect(at=Pos(x=6, y=2), width=3, height=4), title='t')\n\
+             Scene(main=Rect(at=Pos(x=0, y=0), width=3, height=4), title='u')"
+        );
+    }
+}
+
+#[test]
+fn e2e_record_bodied_constructors_travel_as_json_with_named_fields() {
+    // The derived codec keeps the case tag and writes `fields` as an object,
+    // where a positional constructor writes a list. A field named after a Python
+    // keyword is `class_` on the class and `class` on the wire.
+    let src = "type Pos = { x: int, y: int }\n\
+               type Shape =\n  | Circle { at: Pos, radius: float }\n  | Tagged { class: str, of: Option Shape }\n  | Line float float\n  | Dot\n\
+               let shapes = [\n  Circle { at = Pos { x = 1, y = 2 }, radius = 1.5 },\n  Tagged { class = \"big\", of = Some (Line 1.0 2.0) },\n  Tagged { class = \"none\", of = None },\n  Dot,\n]\n\
+               let wire = Encode.auto shapes\n\
+               print wire\n\
+               match Decode.decode_string Decode.auto wire:\n  case Ok back: print (back == shapes)\n  case Error e: print e\n\
+               let check text =\n  match Decode.decode_string Decode.auto text:\n    case Ok (Circle { radius }): print radius\n    case Ok _: print \"other\"\n    case Error e: print e.error_message\n\
+               check \"{\\\"type\\\": \\\"Circle\\\", \\\"fields\\\": {\\\"radius\\\": 2, \\\"at\\\": {\\\"x\\\": 0, \\\"y\\\": 0}}}\"\n\
+               check \"{\\\"type\\\": \\\"Circle\\\", \\\"fields\\\": [1.0]}\"\n\
+               check \"{\\\"type\\\": \\\"Circle\\\", \\\"fields\\\": {\\\"radius\\\": \\\"wide\\\", \\\"at\\\": {\\\"x\\\": 0, \\\"y\\\": 0}}}\"";
+    if let Some(out) = run_source(src) {
+        assert_eq!(
+            out.trim(),
+            "[{\"type\": \"Circle\", \"fields\": {\"at\": {\"x\": 1, \"y\": 2}, \"radius\": 1.5}}, \
+             {\"type\": \"Tagged\", \"fields\": {\"class\": \"big\", \"of\": {\"type\": \"Line\", \"fields\": [1.0, 2.0]}}}, \
+             {\"type\": \"Tagged\", \"fields\": {\"class\": \"none\", \"of\": null}}, \
+             {\"type\": \"Dot\"}]\n\
+             True\n\
+             2.0\n\
+             case Circle takes its fields by name\n\
+             expected a float, got str"
+        );
+    }
+}
+
+#[test]
+fn e2e_a_single_named_constructor_destructures_in_a_binding() {
+    // With no other constructor the pattern cannot fail, so it is allowed in a
+    // parameter and a `let`, where it reads the named attributes.
+    let src = "type Wrapper = Wrap { value: int, note: str }\n\
+               let unwrap (Wrap { value }) = value\n\
+               let w = Wrap { value = 41, note = \"n\" }\n\
+               let Wrap { note, value = v } = w\n\
+               print (unwrap w + 1, note, v)\n\
+               [w, { w with value = 1 }] |> List.map (fun (Wrap { value }) -> value) |> print";
+    if let Some(out) = run_source(src) {
+        assert_eq!(out.trim(), "(42, 'n', 41)\n[41, 1]");
+    }
+}

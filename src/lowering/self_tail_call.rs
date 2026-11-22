@@ -695,7 +695,11 @@ fn walk_children(expr: &PyExpr, f: &mut impl FnMut(&PyExpr)) {
             f(lower);
             f(upper);
         }
-        PyExpr::Await(e) | PyExpr::Not(e) | PyExpr::Neg(e) | PyExpr::Starred(e) => f(e),
+        PyExpr::Await(e)
+        | PyExpr::Not(e)
+        | PyExpr::Neg(e)
+        | PyExpr::Starred(e)
+        | PyExpr::DoubleStarred(e) => f(e),
         PyExpr::List(es) | PyExpr::Tuple(es) | PyExpr::Set(es) => {
             for e in es {
                 f(e);

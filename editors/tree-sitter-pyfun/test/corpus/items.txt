@@ -424,3 +424,48 @@ let tile_score (t, sq) = t * sq
     (multiplicative_expression
       (identifier)
       (identifier))))
+
+================================================================================
+type ADT, variants with named fields
+================================================================================
+
+type Shape =
+  | Circle { radius: float }
+  | Rect { width: float, height: float }
+  | Dot
+
+type Wrapper = Wrap { value: int } | Bare int
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_definition
+    (type_identifier)
+    (variant
+      (constructor_identifier)
+      (record_declaration
+        (field_declaration
+          (identifier)
+          (type_variable))))
+    (variant
+      (constructor_identifier)
+      (record_declaration
+        (field_declaration
+          (identifier)
+          (type_variable))
+        (field_declaration
+          (identifier)
+          (type_variable))))
+    (variant
+      (constructor_identifier)))
+  (type_definition
+    (type_identifier)
+    (variant
+      (constructor_identifier)
+      (record_declaration
+        (field_declaration
+          (identifier)
+          (type_variable))))
+    (variant
+      (constructor_identifier)
+      (type_variable))))

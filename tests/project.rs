@@ -2047,3 +2047,93 @@ fn e2e_a_membership_helper_keeps_its_constraint_across_modules() {
         );
     }
 }
+
+#[test]
+fn e2e_record_bodied_constructors_cross_a_module_boundary() {
+    // A consumer builds, matches, reads and updates another module's named
+    // constructors through qualified tags, and derives a codec over them. The
+    // emitted Python uses the exporting module's classes by keyword.
+    let shapes = "type Pos = { x: int, y: int }\n\
+                  type Shape =\n  | Circle { at: Pos, radius: float }\n  | Rect { at: Pos, width: float, height: float }\n\
+                  type Wrapper = Wrap { value: int, class: str }\n\
+                  let origin = Pos { x = 0, y = 0 }\n\
+                  let unit = Circle { at = origin, radius = 1.0 }\n\
+                  let area s =\n  match s:\n    case Circle { radius }: 3.0 * radius * radius\n    case Rect { width, height }: width * height";
+    let files = compile(
+        "Main",
+        &[
+            ("Shapes", shapes),
+            (
+                "Main",
+                "import Shapes\n\
+                 let r = Shapes.Rect { at = Shapes.origin, width = 2.0, height = 4.0 }\n\
+                 let moved = { r with at.x = 5 }\n\
+                 let far = { Shapes.unit with at = Shapes.Pos { x = 9, y = 9 } }\n\
+                 let describe s =\n  match s:\n    case Shapes.Circle { radius, at = Shapes.Pos { x } }: f\"circle r={radius} x={x}\"\n    case Shapes.Rect { width }: f\"rect w={width}\"\n\
+                 print (Shapes.area r, moved, far.at.x)\n\
+                 [r, moved, far] |> List.map describe |> print\n\
+                 let w = Shapes.Wrap { value = 1, class = \"a\" }\n\
+                 let unwrap (Shapes.Wrap { value }) = value\n\
+                 print (unwrap w, w.class, { w with class = \"b\" })\n\
+                 let wire = Encode.auto [r, far]\n\
+                 print wire\n\
+                 match Decode.decode_string Decode.auto wire:\n  case Ok back: print (back == [r, far])\n  case Error e: print e",
+            ),
+        ],
+    );
+    let main = file(&files, "main.py");
+    assert!(
+        main.contains("r = shapes.Rect(at=shapes.origin, width=2.0, height=4.0)"),
+        "{main}"
+    );
+    assert!(main.contains("case shapes.Rect(width=width):"), "{main}");
+    assert!(main.contains("dataclasses.replace("), "{main}");
+    let dir = Scratch::new("e2e_named_ctors_across_modules");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(
+            out.replace("\r\n", "\n").trim(),
+            "(8.0, Rect(at=Pos(x=5, y=0), width=2.0, height=4.0), 9)\n\
+             ['rect w=2.0', 'rect w=2.0', 'circle r=1.0 x=9']\n\
+             (1, 'a', Wrap(value=1, class_='b'))\n\
+             [{\"type\": \"Rect\", \"fields\": {\"at\": {\"x\": 0, \"y\": 0}, \"width\": 2.0, \"height\": 4.0}}, \
+             {\"type\": \"Circle\", \"fields\": {\"at\": {\"x\": 9, \"y\": 9}, \"radius\": 1.0}}]\n\
+             True"
+        );
+    }
+    // The rules hold across the boundary too.
+    for (body, needle) in [
+        (
+            "let bad = Shapes.Rect Shapes.origin 1.0 2.0",
+            "built by name",
+        ),
+        (
+            "let bad = Shapes.Rect { at = Shapes.origin, width = 1.0 }",
+            "is missing field(s) `height`",
+        ),
+        (
+            "let bad = Shapes.unit.radius",
+            "is not available on a `Shape`",
+        ),
+        (
+            "let f s =\n  match s:\n    case Shapes.Circle { radius }: radius",
+            "non-exhaustive match",
+        ),
+        (
+            "let f (Shapes.Circle { radius }) = radius",
+            "can fail to match here",
+        ),
+    ] {
+        let project = build_mem(
+            "Main",
+            &[
+                ("Shapes", shapes),
+                ("Main", &format!("import Shapes\n{body}")),
+            ],
+        );
+        let errors = project::check(&project);
+        assert!(
+            errors.iter().any(|e| format!("{e:?}").contains(needle)),
+            "expected an error containing {needle:?} for `{body}`, got {errors:?}"
+        );
+    }
+}

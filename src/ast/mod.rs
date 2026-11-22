@@ -228,6 +228,14 @@ fn print_field_decl(field: &FieldDecl) -> String {
 
 fn print_variant(variant: &VariantDecl) -> String {
     let mut s = variant.name.clone();
+    if let Some(names) = &variant.field_names {
+        let fields: Vec<String> = names
+            .iter()
+            .zip(&variant.fields)
+            .map(|(name, ty)| format!("{name}: {}", print_type(ty)))
+            .collect();
+        return format!("{s} {{ {} }}", fields.join(", "));
+    }
     for field in &variant.fields {
         s.push(' ');
         s.push_str(&print_type_atom(field));
@@ -663,7 +671,12 @@ pub fn print_pattern(pattern: &Pattern) -> String {
                     p => format!("{} = {}", f.name, print_pattern(p)),
                 })
                 .collect();
-            format!("{ty} {{ {} }}", parts.join(", "))
+            if parts.is_empty() {
+                // `Rect {}`: any value the constructor built.
+                format!("{ty} {{}}")
+            } else {
+                format!("{ty} {{ {} }}", parts.join(", "))
+            }
         }
         Pattern::Tuple { elems } => {
             let elems: Vec<String> = elems.iter().map(print_pattern).collect();

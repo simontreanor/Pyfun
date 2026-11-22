@@ -216,6 +216,20 @@ pub fn type_references(module: &Module) -> Vec<TypeRef> {
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
+    // Constructor names first: a record-shaped literal or pattern tagged with
+    // one (`Rect { width = 2.0 }`) is a use of the constructor, not of a type.
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && let TypeDeclKind::Sum(variants) = &decl.kind
+        {
+            r.ctors.extend(
+                variants
+                    .iter()
+                    .filter(|v| v.field_names.is_some())
+                    .map(|v| v.name.clone()),
+            );
+        }
+    }
     for item in &module.items {
         match item {
             Item::Let(binding) => r.walk_binding(binding),
@@ -314,6 +328,10 @@ struct Resolver {
     quals: Vec<QualRef>,
     /// Type-name occurrences in annotations, for in-file type find-references/rename.
     type_refs: Vec<TypeRef>,
+    /// The module's record-bodied constructor names, so a record-shaped tag can be told apart:
+    /// a record type's is a type-name occurrence, a constructor's is a reference
+    /// to that constructor.
+    ctors: std::collections::HashSet<String>,
 }
 
 /// A qualified `Module.member` reference: the module name, the member name, and
@@ -406,6 +424,10 @@ impl Resolver {
                         module: module.to_string(),
                         member: member.to_string(),
                         span: ty_span.span(),
+                    }),
+                    None if self.ctors.contains(ty) => self.refs.push(Reference {
+                        span: ty_span.span(),
+                        target: Target::Module(ty.clone()),
                     }),
                     None => self.type_refs.push(TypeRef {
                         name: ty.clone(),
@@ -640,6 +662,10 @@ impl Resolver {
                         module: module.to_string(),
                         member: member.to_string(),
                         span: ty_span.span(),
+                    }),
+                    None if self.ctors.contains(ty) => self.refs.push(Reference {
+                        span: ty_span.span(),
+                        target: Target::Module(ty.clone()),
                     }),
                     None => self.type_refs.push(TypeRef {
                         name: ty.clone(),
@@ -895,5 +921,27 @@ mod tests {
             Target::Module(n) => n != "x",
             Target::Local(_) => true,
         }));
+    }
+
+    #[test]
+    fn a_record_bodied_constructor_is_found_where_it_is_built_and_matched() {
+        // `Rect { … }` is a use of the constructor `Rect`, in a literal and in a
+        // pattern alike; `Point { … }` stays a use of the record type.
+        let src = "type Point = { x: int }\n\
+                   type Shape = Circle { r: int } | Rect { w: int, h: int }\n\
+                   let a = Rect { w = 1, h = 2 }\n\
+                   let p = Point { x = 1 }\n\
+                   let f s =\n  match s:\n    case Rect { w }: w\n    case Circle {}: 0";
+        let m = module(src);
+        let decl = src.find("Rect {").unwrap() + 1;
+        let (_, sym) = symbol_at(&m, decl).unwrap();
+        assert_eq!(sym, Target::Module("Rect".to_string()));
+        // Declaration, literal, pattern.
+        assert_eq!(find_references(&m, &sym, true).len(), 3);
+        // From the pattern, the same symbol.
+        let in_pattern = src.rfind("Rect {").unwrap() + 1;
+        assert_eq!(symbol_at(&m, in_pattern).unwrap().1, sym);
+        assert!(type_use_references(&m, "Rect").is_empty());
+        assert_eq!(type_use_references(&m, "Point").len(), 1);
     }
 }

@@ -5220,3 +5220,262 @@ fn membership_settled_by_a_later_statement_holds_nothing_back() {
         "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`",
     );
 }
+
+/// Three shapes, one field (`name`) on every constructor.
+const NAMED_SHAPES: &str = "type Shape =\n  | Circle { name: str, radius: float }\n  | Rect { name: str, width: float, height: float }\n  | Dot { name: str }\n";
+
+#[test]
+fn a_record_bodied_constructor_is_built_and_matched_by_name() {
+    // The fields are written by name, in any order, and the value is the sum
+    // type's. A pattern names the fields it needs; `Dot {}` needs none.
+    assert!(
+        pyfun::check(&format!(
+            "{NAMED_SHAPES}\
+             let c = Circle {{ name = \"c\", radius = 1.0 }}\n\
+             let r = Rect {{ height = 3.0, name = \"r\", width = 2.0 }}\n\
+             let shapes = [c, r, Dot {{ name = \"d\" }}]\n\
+             let area s =\n  match s:\n    case Circle {{ radius }}: 3.0 * radius * radius\n    case Rect {{ width, height = h }}: width * h\n    case Dot {{}}: 0.0\n\
+             let total = shapes |> List.map area |> List.fold (fun acc a -> acc + a) 0.0\n\
+             let pure check = total + 1.0"
+        ))
+        .is_ok()
+    );
+    // A type parameter flows through a named field as through a positional one.
+    assert!(
+        pyfun::check(
+            "type Tree a = Leaf | Node { left: Tree a, value: a, right: Tree a }\n\
+             let one = Node { left = Leaf, value = 1, right = Leaf }\n\
+             let rec_sum t =\n  match t:\n    case Leaf: 0\n    case Node { left, value, right }: rec_sum left + value + rec_sum right\n\
+             let n = rec_sum one + 1"
+        )
+        .is_ok()
+    );
+    assert_error_contains(
+        "type Tree a = Leaf | Node { left: Tree a, value: a, right: Tree a }\n\
+         let bad = Node { left = Leaf, value = 1, right = Node { left = Leaf, value = \"s\", right = Leaf } }",
+        "type mismatch",
+    );
+    // The literal is checked like a record's, and says it is a constructor.
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let a = Circle {{ name = \"c\", radius = 1.0, colour = \"red\" }}"),
+        "constructor `Circle` has no field `colour`",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let a = Rect {{ name = \"r\", width = 1.0 }}"),
+        "constructor `Rect` is missing field(s) `height`",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let a = Dot {{ name = \"d\", name = \"e\" }}"),
+        "field `name` is set twice",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let a = Dot {{ name = 1 }}"),
+        "expected `str`, found `int`",
+    );
+    assert_error_contains(
+        "type Shape = Circle { radius: float, radius: int }",
+        "field `radius` is declared twice in constructor `Circle`",
+    );
+}
+
+#[test]
+fn a_constructor_has_one_spelling() {
+    // A named constructor is not a function: it cannot be applied, passed, or
+    // matched by position. The message shows the form to write.
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let bad = Dot \"d\""),
+        "constructor `Dot` has named fields, so it is built by name, not applied like a function: `Dot { name = … }`",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let bad = List.map Dot [\"a\", \"b\"]"),
+        "built by name",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let f s =\n  match s:\n    case Dot n: n\n    case _: \"\""),
+        "constructor `Dot` has named fields, so it is matched by name: `Dot { name }`",
+    );
+    // And a positional one is not built or matched by name.
+    assert_error_contains(
+        "type Shape = Circle float | Square float\nlet a = Circle { radius = 1.0 }",
+        "constructor `Circle` takes its fields by position, not by name: apply it like a function (`Circle …`)",
+    );
+    assert_error_contains(
+        "type Shape = Circle float | Square float\n\
+         let f s =\n  match s:\n    case Circle { radius }: radius\n    case Square w: w",
+        "constructor `Circle` takes its fields by position, not by name: match it as `Circle _`",
+    );
+    // A constructor and a record type cannot share a name: each is a Python
+    // class of that name. A sum type may share its own constructor's.
+    assert_error_contains(
+        "type Rect = { w: int }\ntype Shape = Rect { width: int } | Dot",
+        "constructor `Rect` shares its name with the record type `Rect`",
+    );
+    assert_error_contains(
+        "type P = { x: int }\ntype S = P int | Q",
+        "constructor `P` shares its name with the record type `P`",
+    );
+    assert!(
+        pyfun::check(
+            "type User = User { name: str }\n\
+             let u = User { name = \"a\" }\n\
+             let n = String.len u.name + 1"
+        )
+        .is_ok()
+    );
+    // The two kinds mix freely in one type.
+    assert!(
+        pyfun::check(
+            "type Shape = Circle float | Rect { width: float, height: float } | Dot\n\
+             let area s =\n  match s:\n    case Circle r: 3.0 * r * r\n    case Rect { width, height }: width * height\n    case Dot: 0.0\n\
+             let a = area (Rect { width = 1.0, height = 2.0 }) + area (Circle 1.0) + area Dot"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_named_constructor_pattern_counts_toward_exhaustiveness() {
+    // A missing constructor is named the way it is written.
+    assert_error_contains(
+        &format!(
+            "{NAMED_SHAPES}let f s =\n  match s:\n    case Circle {{ radius }}: radius\n    case Dot {{}}: 0.0"
+        ),
+        "non-exhaustive match: `Rect { name = _, width = _, height = _ }` is not matched",
+    );
+    // A literal in a field leaves the rest of that constructor uncovered.
+    assert_error_contains(
+        "type W = Wrap { value: int, tag: bool }\n\
+         let g w =\n  match w:\n    case Wrap { tag = True }: 1",
+        "non-exhaustive match: `Wrap { value = _, tag = False }` is not matched",
+    );
+    assert!(
+        pyfun::check(
+            "type W = Wrap { value: int, tag: bool }\n\
+             let g w =\n  match w:\n    case Wrap { tag = True, value }: value\n    case Wrap { tag = False }: 0\n\
+             let n = g (Wrap { value = 1, tag = True }) + 1"
+        )
+        .is_ok()
+    );
+    // Or-patterns and nested patterns work through the names.
+    assert!(
+        pyfun::check(&format!(
+            "{NAMED_SHAPES}\
+             let label s =\n  match s:\n    case Circle {{ name = \"unit\" }}: \"the unit circle\"\n    case Circle {{ name }} | Rect {{ name }} | Dot {{ name }}: name\n\
+             let l = String.len (label (Dot {{ name = \"d\" }})) + 1"
+        ))
+        .is_ok()
+    );
+    // `Point {}` says nothing about a record, so it is not a pattern there.
+    assert_error_contains(
+        "type P = { x: int }\nlet f p =\n  match p:\n    case P {}: 1",
+        "a record pattern needs at least one field",
+    );
+}
+
+#[test]
+fn a_named_constructor_in_a_binding_must_be_the_only_one() {
+    // A parameter or a `let` has nowhere to go when the pattern fails, so a
+    // constructor pattern is allowed there only when the type has no other.
+    assert!(
+        pyfun::check(
+            "type W = Wrap { value: int, tag: bool }\n\
+             let unwrap (Wrap { value }) = value\n\
+             let w = Wrap { value = 1, tag = True }\n\
+             let Wrap { tag } = w\n\
+             let n = unwrap w + (if tag then 1 else 0)"
+        )
+        .is_ok()
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let f (Circle {{ radius }}) = radius"),
+        "a `Circle` pattern can fail to match here: a `Shape` may also be `Rect` or `Dot`. Take the value whole and `match` on it",
+    );
+    assert_error_contains(
+        "type Shape = Circle float | Square float\nlet f (Circle { r }) = r",
+        "`Circle` is a constructor, not a record type",
+    );
+}
+
+#[test]
+fn a_field_every_constructor_shares_is_read_and_updated_on_the_whole_type() {
+    // `name` is on every constructor at one type, so a `Shape` has it.
+    assert!(
+        pyfun::check(&format!(
+            "{NAMED_SHAPES}\
+             let label s = s.name\n\
+             let rename s n = {{ s with name = n }}\n\
+             let c = Circle {{ name = \"c\", radius = 1.0 }}\n\
+             let l = String.len (label (rename c \"big\")) + 1\n\
+             let pure shout s = String.upper s.name"
+        ))
+        .is_ok()
+    );
+    // The update keeps the type, and the field keeps its type.
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let f s = {{ s with name = 1 }}"),
+        "type mismatch",
+    );
+    // A field some constructors lack belongs to no whole value.
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let c = Circle {{ name = \"c\", radius = 1.0 }}\nlet r = c.radius"),
+        "field `radius` is not available on a `Shape` without a `match`: `Rect`, `Dot` do not declare it",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let f s = s.width"),
+        "unknown record field `width`: constructor `Rect` declares it",
+    );
+    assert_error_contains(
+        &format!(
+            "{NAMED_SHAPES}let c = Circle {{ name = \"c\", radius = 1.0 }}\nlet d = {{ c with radius = 2.0 }}"
+        ),
+        "field `radius` is not available on a `Shape` without a `match`",
+    );
+    // So does one whose type differs between constructors.
+    assert_error_contains(
+        "type T = A { size: float } | B { size: int }\nlet a = A { size = 1.0 }\nlet n = a.size",
+        "its type differs between constructors (`float` in `A`, `int` in `B`)",
+    );
+    // One positional constructor and nothing is shared.
+    assert_error_contains(
+        "type T = A { size: int } | B int\nlet a = A { size = 1 }\nlet n = a.size",
+        "field `size` is not available on a `T` without a `match`: `B` does not declare it",
+    );
+    // A shared field with a parameter's type follows the instance.
+    assert!(
+        pyfun::check(
+            "type Box a = Full { item: a, note: str } | Marked { item: a }\n\
+             let get b = b.item\n\
+             let n = get (Full { item = 1, note = \"n\" }) + 1\n\
+             let s = String.len (get (Marked { item = \"s\" })) + 1"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_shared_field_and_a_record_field_resolve_by_type() {
+    // A record declares `name` too. Where the value's type is known, it decides;
+    // where it is not yet, a later statement may say; where nothing does, the
+    // error names both owners and a way out that fits.
+    let both = format!("{NAMED_SHAPES}type Pet = {{ name: str, age: int }}\n");
+    assert!(
+        pyfun::check(&format!(
+            "{both}\
+             let c = Circle {{ name = \"c\", radius = 1.0 }}\n\
+             let p = Pet {{ name = \"p\", age = 3 }}\n\
+             let names = String.len c.name + String.len p.name\n\
+             let f x =\n  let n = x.name\n  match x:\n    case Circle {{ radius }}: f\"{{n}} {{radius}}\"\n    case _: n"
+        ))
+        .is_ok()
+    );
+    assert_error_contains(
+        &format!("{both}let f x = x.name"),
+        "`name` is declared by types `Shape` and `Pet`. Name the record where the value arrives — in a parameter (`fun (Pet { name }) -> …`)",
+    );
+    assert_error_contains(
+        &format!(
+            "{NAMED_SHAPES}type Tool = Saw {{ name: str }} | Drill {{ name: str, bits: int }}\nlet f x = x.name"
+        ),
+        "`name` is declared by types `Shape` and `Tool`. Say which by matching on the value first (`case Circle { name }:`)",
+    );
+}

@@ -492,8 +492,10 @@ after the release.
     element of a `List`, `Set` or `Seq`, a key of a `Map`, a substring of a `str`) and lowered to
     Python's own operators (`DESIGN.md` §7.1). Generalized in #200: `let has x xs = x in xs` is
     polymorphic in what it searches.
-14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`
-    today.
+14. ~~**Named constructor fields**~~ **DONE 2026-11-22** (#202): a constructor may declare a record
+    body (`Rect { width: float, height: float }`), built and matched by name, with fields shared by
+    every constructor readable and updatable on the whole type; the emitted class names its fields,
+    so a Python caller reads `node.left` (`DESIGN.md` §8.3).
 
 **Tooling**
 

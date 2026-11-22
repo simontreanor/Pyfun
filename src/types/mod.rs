@@ -1989,6 +1989,10 @@ pub struct Codecs {
     /// when a path goes through it); the value is the tag lowering resolves to
     /// a class, as on [`Codec::Record`].
     pub update_owners: HashMap<(Span, Vec<String>), String>,
+    /// The updates (same key) whose value is of a sum type, changing a field
+    /// every constructor shares: lowering copies the value with the field
+    /// replaced instead of rebuilding one known class.
+    pub sum_updates: HashSet<(Span, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2033,6 +2037,11 @@ impl std::fmt::Display for TypeError {
 struct CtorInfo {
     scheme: Scheme,
     arity: usize,
+    /// The field names of a record-bodied constructor (`Rect { width: float,
+    /// height: float }`), in declared order and parallel to the scheme's
+    /// arguments; `None` for a positional one. A named constructor is built and
+    /// matched by name only (`DESIGN.md` §8.3).
+    field_names: Option<Vec<String>>,
 }
 
 /// Information about one (nominal) record type: how many type parameters it has,
@@ -2131,6 +2140,59 @@ struct Decls {
     /// Newtypes in scope (`opaque type UserId = str`), local and imported:
     /// erased at lowering, so a derived codec reads through to the underlying type.
     newtypes: HashSet<String>,
+    /// Sum types whose constructors are all record-bodied, by type name, with the
+    /// fields **every** constructor declares at the same type (`DESIGN.md` §8.3).
+    /// Such a field can be read (`s.name`) and updated (`{ s with name = … }`) on
+    /// a value of the type without a `match`, since whichever constructor built
+    /// the value has it. Shaped like a record's entry so field access, update and
+    /// the by-name owner lookup treat the two alike; the type also joins
+    /// `field_owner` for these fields.
+    sum_fields: HashMap<String, RecordInfo>,
+}
+
+/// The fields every constructor of sum type `name` declares at the same type, in
+/// the first constructor's order, or `None` when some constructor is positional
+/// or nothing is shared. Constructor schemes index the type's parameters as
+/// `Ty::Var(i)`, the convention [`RecordInfo`] uses, so the field types carry
+/// over as they are.
+fn common_ctor_fields(decls: &Decls, name: &str) -> Option<RecordInfo> {
+    let ctors = decls.type_ctors.get(name)?;
+    let mut per_ctor: Vec<Vec<(String, Ty)>> = Vec::with_capacity(ctors.len());
+    for ctor in ctors {
+        let info = decls.ctors.get(ctor)?;
+        let names = info.field_names.as_ref()?;
+        let (tys, _) = split_fun(&info.scheme.ty, info.arity);
+        per_ctor.push(names.iter().cloned().zip(tys).collect());
+    }
+    let (first, others) = per_ctor.split_first()?;
+    let fields: Vec<(String, Ty)> = first
+        .iter()
+        .filter(|(n, t)| {
+            others
+                .iter()
+                .all(|c| c.iter().any(|(m, u)| m == n && u == t))
+        })
+        .cloned()
+        .collect();
+    (!fields.is_empty()).then(|| RecordInfo {
+        params_count: decls.type_arity.get(name).copied().unwrap_or(0),
+        fields,
+    })
+}
+
+/// Register sum type `name`'s shared constructor fields, if it has any.
+fn register_sum_fields(decls: &mut Decls, name: &str) {
+    let Some(info) = common_ctor_fields(decls, name) else {
+        return;
+    };
+    for (field, _) in &info.fields {
+        decls
+            .field_owner
+            .entry(field.clone())
+            .or_default()
+            .push(name.to_string());
+    }
+    decls.sum_fields.insert(name.to_string(), info);
 }
 
 /// Type-check a whole module, returning every independent error found.
@@ -2665,9 +2727,13 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         }
     }
 
-    // Each record update's class, as the tag lowering knows the record by.
+    // Each record update's class, as the tag lowering knows the record by. An
+    // update of a sum type's shared field has no one class: the value keeps
+    // whichever constructor built it.
     for (span, path, owner) in std::mem::take(&mut inf.update_owners) {
-        if let Some(tag) = inf.record_lowering_tag(&owner) {
+        if inf.decls.sum_fields.contains_key(&owner) {
+            codecs.sum_updates.insert((span, path));
+        } else if let Some(tag) = inf.record_lowering_tag(&owner) {
             codecs.update_owners.insert((span, path), tag);
         }
     }
@@ -3064,6 +3130,16 @@ fn merge_imported_types(
             }
         }
     }
+    // An imported sum type's shared fields, after every import's constructors
+    // are in (and after the local records and sum types, which lead the field
+    // multimap).
+    for module_name in &module_names {
+        for ty in &imports[*module_name].types {
+            if accepted.contains(&((*module_name).clone(), ty.name.clone())) {
+                register_sum_fields(decls, &ty.name);
+            }
+        }
+    }
     // Directly imported records first, then transitively carried ones, so the
     // field multimap keeps a stable order: local records (from `build_decls`),
     // then direct imports by module name, then carried records. A carried record
@@ -3285,6 +3361,21 @@ fn build_decls(
                     }
                     let mut field_tys = Vec::with_capacity(variant.fields.len());
                     let mut ok = true;
+                    if let Some(names) = &variant.field_names {
+                        let mut seen = HashSet::new();
+                        for field in names {
+                            if !seen.insert(field.as_str()) {
+                                errors.push(TypeError {
+                                    message: format!(
+                                        "field `{field}` is declared twice in constructor `{}`",
+                                        variant.name
+                                    ),
+                                    span,
+                                });
+                                ok = false;
+                            }
+                        }
+                    }
                     for field in &variant.fields {
                         // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
                         match resolve(field, &param_map, &decls.type_arity, span, &HashMap::new()) {
@@ -3318,12 +3409,22 @@ fn build_decls(
                         ty: ctor_ty,
                     };
                     env.insert(variant.name.clone(), scheme.clone());
-                    decls
-                        .ctors
-                        .insert(variant.name.clone(), CtorInfo { scheme, arity });
+                    decls.ctors.insert(
+                        variant.name.clone(),
+                        CtorInfo {
+                            scheme,
+                            arity,
+                            field_names: variant.field_names.clone(),
+                        },
+                    );
                     if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
                         list.push(variant.name.clone());
                     }
+                }
+                // Only when every variant registered: a variant dropped for an
+                // error above would make the others' fields look shared.
+                if decls.type_ctors.get(&decl.name).map(Vec::len) == Some(variants.len()) {
+                    register_sum_fields(&mut decls, &decl.name);
                 }
             }
             // A newtype (`opaque type UserId = str`) checks exactly like a
@@ -3366,9 +3467,14 @@ fn build_decls(
                             ty: ctor_ty,
                         };
                         env.insert(decl.name.clone(), scheme.clone());
-                        decls
-                            .ctors
-                            .insert(decl.name.clone(), CtorInfo { scheme, arity: 1 });
+                        decls.ctors.insert(
+                            decl.name.clone(),
+                            CtorInfo {
+                                scheme,
+                                arity: 1,
+                                field_names: None,
+                            },
+                        );
                         if let Some(list) = decls.type_ctors.get_mut(&decl.name) {
                             list.push(decl.name.clone());
                         }
@@ -3434,6 +3540,29 @@ fn build_decls(
             // An opaque handle type has no constructors or fields — its name and
             // arity were registered in pass 1, and nothing more is needed here.
             TypeDeclKind::Opaque => {}
+        }
+    }
+
+    // A constructor and a record type cannot share a name: each lowers to a
+    // Python class of that name, and the second would replace the first. For a
+    // record-bodied constructor the source is ambiguous as well, since both are
+    // written `Name { … }`.
+    for item in &module.items {
+        let Item::Type(decl) = item else { continue };
+        let TypeDeclKind::Sum(variants) = &decl.kind else {
+            continue;
+        };
+        for variant in variants {
+            if decls.local_records.contains(&variant.name) {
+                errors.push(TypeError {
+                    message: format!(
+                        "constructor `{0}` shares its name with the record type `{0}`: both \
+                         would be the Python class `{0}`; rename one",
+                        variant.name
+                    ),
+                    span: variant.name_span.span(),
+                });
+            }
         }
     }
 
@@ -6327,6 +6456,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         CtorInfo {
             scheme: ok,
             arity: 1,
+            field_names: None,
         },
     );
     decls.ctors.insert(
@@ -6334,6 +6464,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         CtorInfo {
             scheme: err,
             arity: 1,
+            field_names: None,
         },
     );
 
@@ -6372,6 +6503,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         CtorInfo {
             scheme: some,
             arity: 1,
+            field_names: None,
         },
     );
     decls.ctors.insert(
@@ -6379,6 +6511,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         CtorInfo {
             scheme: none,
             arity: 0,
+            field_names: None,
         },
     );
 
@@ -6659,6 +6792,12 @@ struct Infer {
     /// Every `Decode.auto` reference with its instantiated `Decoder a`, resolved
     /// after inference into a [`Codec`] (or an error when `a` is still open).
     auto_sites: Vec<(Span, Ty)>,
+    /// Whether the pattern being bound may fail to match: true in a `match` arm,
+    /// false in a parameter or a `let` target. The parser rejects every shape
+    /// that is refutable by its syntax; a record pattern tagged with a
+    /// constructor is refutable only when its type has other constructors,
+    /// which the checker sees here.
+    refutable_ok: bool,
     /// The record each update rebuilds, by identity name: the update's span,
     /// the path walked so far, and the record found there. Becomes
     /// [`Codecs::update_owners`] once inference is done.
@@ -7385,6 +7524,7 @@ impl Infer {
                     CtorInfo {
                         scheme,
                         arity: *arity,
+                        field_names: None,
                     },
                 );
             }
@@ -7768,6 +7908,9 @@ impl Infer {
             ExprKind::Unit => Ok(Ty::Unit),
 
             ExprKind::Var(name) => match env.get(name) {
+                Some(_) if self.named_ctor_fields(name).is_some() => {
+                    Err(self.named_ctor_as_function(name, span))
+                }
                 Some(scheme) => Ok(self.instantiate(scheme)),
                 None if MODULES.contains(&name.as_str()) || self.decls.modules.contains(name) => {
                     Err(TypeError {
@@ -7979,7 +8122,11 @@ impl Infer {
                 let result = self.fresh();
                 for arm in arms {
                     let mut arm_env = env.clone();
-                    self.bind_pattern(&arm.pattern, &scrut_ty, scrutinee.span(), &mut arm_env)?;
+                    let was = std::mem::replace(&mut self.refutable_ok, true);
+                    let bound =
+                        self.bind_pattern(&arm.pattern, &scrut_ty, scrutinee.span(), &mut arm_env);
+                    self.refutable_ok = was;
+                    bound?;
                     // A guard is checked in the arm's pattern-bound scope and must be
                     // `bool` (`DESIGN.md` §7.2).
                     if let Some(guard) = &arm.guard {
@@ -8024,6 +8171,9 @@ impl Infer {
                 // qualified env; otherwise it is ordinary record-field access.
                 if let Some(q) = qualified_name(expr) {
                     return match env.get(&q) {
+                        Some(_) if self.named_ctor_fields(&q).is_some() => {
+                            Err(self.named_ctor_as_function(&q, span))
+                        }
                         Some(scheme) => {
                             let ty = self.instantiate(scheme);
                             if q == "Decode.auto" {
@@ -8152,13 +8302,35 @@ impl Infer {
             .map(|r| format!("`{r}`"))
             .collect::<Vec<_>>()
             .join(" and ");
-        let first = owners.first().map(String::as_str).unwrap_or("Record");
+        // The way out is to name the type where the value arrives. A record is
+        // named by its tag, in a parameter or a pattern; a sum type that shares
+        // the field has no tag of its own, only its constructors', and those
+        // belong in a `match`.
+        let record = owners.iter().find(|o| self.decls.records.contains_key(*o));
+        let kinds = if owners.iter().all(|o| self.decls.records.contains_key(o)) {
+            "records"
+        } else {
+            "types"
+        };
+        let way_out = match record {
+            Some(first) => format!(
+                "Name the record where the value arrives — in a parameter (`fun ({first} {{ {field} }}) -> …`) or in a pattern (`case {first} {{ {field} }}:`) — or give it a type some other way"
+            ),
+            None => {
+                let ctor = owners
+                    .first()
+                    .and_then(|o| self.decls.type_ctors.get(o))
+                    .and_then(|cs| cs.first())
+                    .map(String::as_str)
+                    .unwrap_or("Constructor");
+                format!(
+                    "Say which by matching on the value first (`case {ctor} {{ {field} }}:`), or give it a type some other way"
+                )
+            }
+        };
         TypeError {
             message: format!(
-                "field `{field}` is ambiguous here: nothing says what this value is, and \
-                 `{field}` is declared by records {names}. Name the record where the value \
-                 arrives — in a parameter (`fun ({first} {{ {field} }}) -> …`) or in a pattern \
-                 (`case {first} {{ {field} }}:`) — or give it a type some other way",
+                "field `{field}` is ambiguous here: nothing says what this value is, and `{field}` is declared by {kinds} {names}. {way_out}",
             ),
             span,
         }
@@ -8307,20 +8479,14 @@ impl Infer {
         for p in pending {
             let base = self.apply(&p.base);
             let owner = if let Ty::Con(record, _) = &base {
-                let Some(info) = self.decls.records.get(record) else {
+                if self.field_bearer(record).is_none() {
                     return Err(self.ambiguous_field(
                         &p.field,
                         &self.field_owner_tier(&p.field),
                         p.span,
                     ));
-                };
-                if !info.fields.iter().any(|(n, _)| *n == p.field) {
-                    return Err(TypeError {
-                        message: format!("record `{record}` has no field `{}`", p.field),
-                        span: p.span,
-                    });
                 }
-                record.clone()
+                self.record_of_field_on(&base, &p.field, p.span)?
             } else {
                 self.record_of_field(&p.field, p.span)?
             };
@@ -8351,6 +8517,17 @@ impl Infer {
         field: &str,
         span: Span,
     ) -> Result<String, TypeError> {
+        if let Ty::Con(rec, _) = base_ty
+            && let Some(info) = self.decls.sum_fields.get(rec)
+            && info.fields.iter().any(|(n, _)| n == field)
+        {
+            return Ok(rec.clone());
+        }
+        if let Ty::Con(sum, _) = base_ty
+            && let Some(message) = self.unshared_field(sum, field)
+        {
+            return Err(TypeError { message, span });
+        }
         if let Ty::Con(rec, _) = base_ty
             && let Some(info) = self.decls.records.get(rec)
         {
@@ -8392,6 +8569,31 @@ impl Infer {
                 if !hidden.is_empty() {
                     return Err(TypeError {
                         message: format!("unknown record field `{field}`{hidden}"),
+                        span,
+                    });
+                }
+                // A constructor declares it, but its sum type does not share it,
+                // so nothing by that name is readable on a whole value.
+                let mut in_ctors: Vec<&String> = self
+                    .decls
+                    .ctors
+                    .iter()
+                    .filter(|(_, info)| {
+                        info.field_names
+                            .as_ref()
+                            .is_some_and(|names| names.iter().any(|n| n == field))
+                    })
+                    .map(|(name, _)| name)
+                    .collect();
+                in_ctors.sort();
+                if let Some(ctor) = in_ctors.first() {
+                    return Err(TypeError {
+                        message: format!(
+                            "unknown record field `{field}`: constructor `{ctor}` declares it, \
+                             but a field is readable on a whole value only when every \
+                             constructor of the type declares it at the same type; `match` on \
+                             the value to reach it"
+                        ),
                         span,
                     });
                 }
@@ -8675,11 +8877,99 @@ impl Infer {
         })
     }
 
-    fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
-        let info = self
-            .decls
+    /// The fields readable on a value of type `name` without a `match`: a
+    /// record's fields, or the ones every constructor of a sum type shares.
+    fn field_bearer(&self, name: &str) -> Option<&RecordInfo> {
+        self.decls
             .records
             .get(name)
+            .or_else(|| self.decls.sum_fields.get(name))
+    }
+
+    /// The constructor a record-shaped tag (`Rect { … }`) names, if it names
+    /// one. A positional constructor may share its name with a record type
+    /// (`type P = { … }` beside `… | P int`); braces then mean the record, as
+    /// they always have, so only a tag that is not a record's reaches the
+    /// "takes its fields by position" error.
+    fn ctor_tag(&self, tag: &str) -> Option<CtorInfo> {
+        let info = self.decls.ctors.get(tag)?;
+        let is_record =
+            self.decls.local_records.contains(tag) || self.decls.record_aliases.contains_key(tag);
+        (info.field_names.is_some() || !is_record).then(|| info.clone())
+    }
+
+    /// The field names of constructor `name` (bare or `Module.Ctor`) when it is
+    /// record-bodied.
+    fn named_ctor_fields(&self, name: &str) -> Option<&Vec<String>> {
+        self.decls.ctors.get(name)?.field_names.as_ref()
+    }
+
+    /// `Rect { width = …, height = … }`, as the hint for building or matching
+    /// constructor `name`; `binder` writes one field (`width = …` to build,
+    /// `width` to match).
+    fn named_ctor_form(&self, name: &str, binder: impl Fn(&str) -> String) -> String {
+        let fields = self
+            .named_ctor_fields(name)
+            .map(|names| names.iter().map(|n| binder(n)).collect::<Vec<_>>())
+            .unwrap_or_default();
+        format!("{name} {{ {} }}", fields.join(", "))
+    }
+
+    /// The error for a record-bodied constructor used as a function (`Rect 2.0
+    /// 3.0`, or `Rect` passed as a value): its fields are given by name.
+    fn named_ctor_as_function(&self, name: &str, span: Span) -> TypeError {
+        TypeError {
+            message: format!(
+                "constructor `{name}` has named fields, so it is built by name, not applied like a function: `{}`",
+                self.named_ctor_form(name, |f| format!("{f} = …"))
+            ),
+            span,
+        }
+    }
+
+    /// Why `field` cannot be read on a value of sum type `sum`, when some of its
+    /// constructors declare it but not all of them at one type. `None` when the
+    /// type is not a sum type or no constructor has the field.
+    fn unshared_field(&self, sum: &str, field: &str) -> Option<String> {
+        let ctors = self.decls.type_ctors.get(sum)?;
+        let has = |c: &String| {
+            self.decls.ctors.get(c).and_then(|info| {
+                let i = info.field_names.as_ref()?.iter().position(|n| n == field)?;
+                Some(split_fun(&info.scheme.ty, info.arity).0[i].clone())
+            })
+        };
+        let with: Vec<&String> = ctors.iter().filter(|c| has(c).is_some()).collect();
+        if with.is_empty() {
+            return None;
+        }
+        let without: Vec<String> = ctors
+            .iter()
+            .filter(|c| has(c).is_none())
+            .map(|c| format!("`{c}`"))
+            .collect();
+        let why = if without.is_empty() {
+            format!(
+                "its type differs between constructors ({})",
+                with.iter()
+                    .map(|c| format!("`{}` in `{c}`", show(&has(c).expect("has the field"))))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        } else {
+            format!(
+                "{} {} not declare it",
+                without.join(", "),
+                if without.len() == 1 { "does" } else { "do" }
+            )
+        };
+        Some(format!(
+            "field `{field}` is not available on a `{sum}` without a `match`: {why}. A field belongs to the whole type only when every constructor declares it at the same type"
+        ))
+    }
+
+    fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
+        let info = self
+            .field_bearer(name)
             .cloned()
             .expect("record type registered");
         let fresh: Vec<Ty> = (0..info.params_count).map(|_| self.fresh()).collect();
@@ -8709,8 +8999,30 @@ impl Infer {
         span: Span,
         env: &Env,
     ) -> Result<Ty, TypeError> {
-        let owner = self.resolve_record_tag(ty, ty_span, "construct")?;
-        let (record_ty, field_tys) = self.instantiate_record(&owner);
+        // A record-bodied constructor is built with the same literal: the tag is
+        // the constructor, the fields are its own, and the value is the sum type's.
+        let (what, owner, record_ty, field_tys) = match self.ctor_tag(ty) {
+            Some(info) => {
+                let Some(names) = info.field_names.clone() else {
+                    return Err(TypeError {
+                        message: format!(
+                            "constructor `{ty}` takes its fields by position, not by name: apply it like a function (`{ty}{}`)",
+                            " …".repeat(info.arity)
+                        ),
+                        span: ty_span,
+                    });
+                };
+                let cty = self.instantiate(&info.scheme);
+                let (tys, result) = split_fun(&cty, info.arity);
+                let fields: Vec<(String, Ty)> = names.into_iter().zip(tys).collect();
+                ("constructor", ty.to_string(), result, fields)
+            }
+            None => {
+                let owner = self.resolve_record_tag(ty, ty_span, "construct")?;
+                let (record_ty, field_tys) = self.instantiate_record(&owner);
+                ("record", owner, record_ty, field_tys)
+            }
+        };
 
         let mut seen: HashSet<String> = HashSet::new();
         for init in fields {
@@ -8722,7 +9034,7 @@ impl Infer {
             }
             if !field_tys.iter().any(|(n, _)| n == &init.name) {
                 return Err(TypeError {
-                    message: format!("record `{owner}` has no field `{}`", init.name),
+                    message: format!("{what} `{owner}` has no field `{}`", init.name),
                     span: init.value.span(),
                 });
             }
@@ -8739,7 +9051,7 @@ impl Infer {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(TypeError {
-                message: format!("record `{owner}` is missing field(s) {names}"),
+                message: format!("{what} `{owner}` is missing field(s) {names}"),
                 span,
             });
         }
@@ -8801,7 +9113,9 @@ impl Infer {
             for (i, seg) in fu.path.iter().enumerate() {
                 let Some((_, fty)) = cur_fields.iter().find(|(n, _)| n == seg) else {
                     return Err(TypeError {
-                        message: format!("record `{cur_owner}` has no field `{seg}`"),
+                        message: self.unshared_field(&cur_owner, seg).unwrap_or_else(|| {
+                            format!("record `{cur_owner}` has no field `{seg}`")
+                        }),
                         span: fu.value.span(),
                     });
                 };
@@ -8819,7 +9133,7 @@ impl Infer {
                             span: fu.value.span(),
                         });
                     };
-                    if !self.decls.records.contains_key(rec) {
+                    if self.field_bearer(rec).is_none() {
                         return Err(TypeError {
                             message: format!(
                                 "field `{seg}` (type `{rec}`) is not a record type, so `.{}` cannot be updated",
@@ -9512,6 +9826,15 @@ impl Infer {
                         span,
                     });
                 };
+                if info.field_names.is_some() {
+                    return Err(TypeError {
+                        message: format!(
+                            "constructor `{name}` has named fields, so it is matched by name: `{}` (name only the fields you need; `{name} {{}}` matches any)",
+                            self.named_ctor_form(name, str::to_string)
+                        ),
+                        span,
+                    });
+                }
                 if args.len() != info.arity {
                     return Err(TypeError {
                         message: format!(
@@ -9535,8 +9858,70 @@ impl Infer {
                 ty_span,
                 fields,
             } => {
-                let owner = self.resolve_record_tag(ty, ty_span.span(), "match")?;
-                let (record_ty, field_tys) = self.instantiate_record(&owner);
+                // A record-bodied constructor is matched with the same pattern:
+                // the tag is the constructor and the fields are its own.
+                let (what, owner, record_ty, field_tys) = match self.ctor_tag(ty) {
+                    Some(info) => {
+                        let Some(names) = info.field_names.clone() else {
+                            // In a `match` the fix is the positional form; in a
+                            // parameter or a `let` no constructor pattern fits.
+                            let message = if self.refutable_ok {
+                                format!(
+                                    "constructor `{ty}` takes its fields by position, not by \
+                                     name: match it as `{ty}{}`",
+                                    " _".repeat(info.arity)
+                                )
+                            } else {
+                                format!(
+                                    "`{ty}` is a constructor, not a record type: a parameter \
+                                     or a `let` takes a pattern that always matches, so take \
+                                     the value whole and `match` on it"
+                                )
+                            };
+                            return Err(TypeError {
+                                message,
+                                span: ty_span.span(),
+                            });
+                        };
+                        let cty = self.instantiate(&info.scheme);
+                        let (tys, result) = split_fun(&cty, info.arity);
+                        // In a parameter or a `let` there is nowhere to go when
+                        // the value was built by another constructor.
+                        if !self.refutable_ok
+                            && let Ty::Con(sum, _) = &result
+                            && let Some(all) = self.decls.type_ctors.get(sum)
+                            && all.len() > 1
+                        {
+                            let others: Vec<String> = all
+                                .iter()
+                                .filter(|c| *c != ty)
+                                .map(|c| format!("`{c}`"))
+                                .collect();
+                            return Err(TypeError {
+                                message: format!(
+                                    "a `{ty}` pattern can fail to match here: a `{sum}` may also be {}. Take the value whole and `match` on it",
+                                    others.join(" or ")
+                                ),
+                                span: ty_span.span(),
+                            });
+                        }
+                        let fields: Vec<(String, Ty)> = names.into_iter().zip(tys).collect();
+                        ("constructor", ty.clone(), result, fields)
+                    }
+                    None => {
+                        let owner = self.resolve_record_tag(ty, ty_span.span(), "match")?;
+                        if fields.is_empty() {
+                            return Err(TypeError {
+                                message: format!(
+                                    "a record pattern needs at least one field: every `{owner}` matches `{owner} {{}}`, so write `_` or a name instead"
+                                ),
+                                span: ty_span.span(),
+                            });
+                        }
+                        let (record_ty, field_tys) = self.instantiate_record(&owner);
+                        ("record", owner, record_ty, field_tys)
+                    }
+                };
                 self.unify(&record_ty, scrut_ty, span)?;
                 let mut seen: HashSet<String> = HashSet::new();
                 for fp in fields {
@@ -9548,7 +9933,7 @@ impl Infer {
                     }
                     let Some((_, fty)) = field_tys.iter().find(|(n, _)| n == &fp.name) else {
                         return Err(TypeError {
-                            message: format!("record `{owner}` has no field `{}`", fp.name),
+                            message: format!("{what} `{owner}` has no field `{}`", fp.name),
                             span,
                         });
                     };
@@ -9811,6 +10196,10 @@ impl Infer {
             Pattern::Int(n) => Some(Tag::Int(*n)),
             Pattern::Str(s) => Some(Tag::Str(s.clone())),
             Pattern::Ctor { name, .. } => Some(Tag::Sum(name.clone())),
+            // A record pattern tagged with a constructor is that constructor's.
+            Pattern::Record { ty, .. } if self.named_ctor_fields(ty).is_some() => {
+                Some(Tag::Sum(ty.clone()))
+            }
             Pattern::Record { ty, .. } => Some(Tag::Record(self.canonical_record(ty))),
             Pattern::Tuple { elems } => Some(Tag::Tuple(elems.len())),
             // A list pattern's head constructor: a non-empty prefix *or suffix*
@@ -9944,14 +10333,25 @@ impl Infer {
             Pattern::Ctor { name, args, .. } => {
                 single((*tag == Tag::Sum(name.clone())).then(|| args.clone()))
             }
-            Pattern::Record { fields, .. } => {
-                let Tag::Record(rname) = tag else {
-                    return Vec::new();
+            Pattern::Record { ty, fields, .. } => {
+                // The declared field order, for a record or for the named
+                // constructor this pattern is tagged with (which must be the one
+                // being specialized by, or the row drops out).
+                let order: Vec<&String> = match tag {
+                    Tag::Record(rname) => self.decls.records[rname]
+                        .fields
+                        .iter()
+                        .map(|(n, _)| n)
+                        .collect(),
+                    Tag::Sum(cname) if cname == ty => match self.named_ctor_fields(cname) {
+                        Some(names) => names.iter().collect(),
+                        None => return Vec::new(),
+                    },
+                    _ => return Vec::new(),
                 };
-                let order = &self.decls.records[rname].fields;
                 let mut slots = vec![Pattern::Wildcard; order.len()];
                 for fp in fields {
-                    if let Some(idx) = order.iter().position(|(n, _)| n == &fp.name) {
+                    if let Some(idx) = order.iter().position(|n| **n == fp.name) {
                         slots[idx] = fp.pattern.clone();
                     }
                 }
@@ -10028,6 +10428,17 @@ impl Infer {
             Wit::Con(Tag::Bool(b), _) => crate::ast::print_bool(*b).to_string(),
             Wit::Con(Tag::Int(n), _) => n.to_string(),
             Wit::Con(Tag::Str(s), _) => format!("{s:?}"),
+            Wit::Con(Tag::Sum(name), args) if self.named_ctor_fields(name).is_some() => {
+                let parts = self
+                    .named_ctor_fields(name)
+                    .expect("checked")
+                    .iter()
+                    .zip(args)
+                    .map(|(f, a)| format!("{f} = {}", self.render_witness(a, false)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{name} {{ {parts} }}")
+            }
             Wit::Con(Tag::Sum(name), args) => {
                 if args.is_empty() {
                     name.clone()
