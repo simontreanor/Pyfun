@@ -31,6 +31,7 @@ mod decode_spec;
 mod fold_loop;
 mod newtype_patterns;
 mod self_tail_call;
+mod typed;
 
 use crate::lexer::Span;
 
@@ -173,6 +174,24 @@ pub fn lower_native_typed_tracing(
     lowerer.codecs = codecs.clone();
     let py = lowerer.lower_module(module)?;
     Ok((py, lowerer.notes))
+}
+
+/// Typed output (`--typed`, `DESIGN.md` §5.7): annotate `py`, the lowering of
+/// `module`, from the type the checker recorded at each binding's target.
+/// `imported` is each module whose types this one can name, with its Python
+/// module name; empty for a single file.
+pub fn annotate_typed(
+    module: &Module,
+    py: PyModule,
+    binding_types: &HashMap<Span, crate::types::Ty>,
+    imported: &[(String, &Module)],
+) -> PyModule {
+    typed::annotate(module, py, binding_types, imported)
+}
+
+/// Typed output for a project's shared runtime module (`_pyfun_rt.py`).
+pub fn annotate_typed_runtime(py: PyModule) -> PyModule {
+    typed::annotate_runtime(py)
 }
 
 /// The constructors of the newtypes `module` declares (`opaque type UserId =
@@ -922,6 +941,8 @@ impl Lowerer {
         self.frames.push(captures::Frame::of_items(&module.items));
         let lowered = self.lower_module_items(module);
         self.frames.pop();
+        // A `##` comment becomes its function's docstring in every mode.
+        let lowered = lowered.map(|py| typed::docstrings(module, py));
         if self.native {
             return lowered
                 .map(any_for_object_fields)
@@ -1173,6 +1194,7 @@ impl Lowerer {
             };
             *stmt = PyStmt::TypedFuncDef {
                 name: name.clone(),
+                type_params: Vec::new(),
                 params: anns,
                 returns,
                 body: std::mem::take(body),
@@ -1203,6 +1225,8 @@ impl Lowerer {
                         record: false,
                         native: false,
                         named: false,
+                        type_params: Vec::new(),
+                        doc: None,
                     });
                 }
             }
@@ -1232,6 +1256,8 @@ impl Lowerer {
                                 record: false,
                                 native: false,
                                 named: variant.field_names.is_some(),
+                                type_params: Vec::new(),
+                                doc: None,
                             });
                             // A field-less variant has one possible value, so it is
                             // built once (`_Red = Red()`) and every use loads it.
@@ -1250,6 +1276,8 @@ impl Lowerer {
                             record: true,
                             native: false,
                             named: false,
+                            type_params: Vec::new(),
+                            doc: None,
                         });
                     }
                     // An opaque handle type erases — it emits no Python class.
@@ -2059,6 +2087,7 @@ impl Lowerer {
             {
                 out.push(PyStmt::TypedFuncDef {
                     name: py_name,
+                    type_params: Vec::new(),
                     params,
                     returns,
                     body,
@@ -7428,6 +7457,8 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             record: false,
             native: false,
             named: false,
+            type_params: Vec::new(),
+            doc: None,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
@@ -7437,6 +7468,8 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             record: false,
             native: false,
             named: false,
+            type_params: Vec::new(),
+            doc: None,
         },
     ]
 }
@@ -7454,6 +7487,8 @@ fn exception_prelude() -> Vec<PyStmt> {
         record: false,
         native: false,
         named: false,
+        type_params: Vec::new(),
+        doc: None,
     }]
 }
 
@@ -7474,6 +7509,8 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             record: false,
             native: false,
             named: false,
+            type_params: Vec::new(),
+            doc: None,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
@@ -7483,6 +7520,8 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             record: false,
             native: false,
             named: false,
+            type_params: Vec::new(),
+            doc: None,
         },
     ];
     if singleton {

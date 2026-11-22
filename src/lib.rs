@@ -211,7 +211,22 @@ pub fn compile_with(
     target: python_emitter::PyTarget,
     native: bool,
 ) -> Result<(String, Vec<String>), CompileError> {
-    compile_mapped(source, target, native, false).map(|(py, notes, _)| (py, notes))
+    compile_mapped(source, target, native, false, false).map(|(py, notes, _)| (py, notes))
+}
+
+/// [`compile_collecting`] with **typed output** (`--typed`, `DESIGN.md` §5.7):
+/// every top-level function, value and class carries its inferred type as an
+/// annotation a Python type checker reads. The annotations use Python 3.12's
+/// type parameter syntax.
+pub fn compile_typed(source: &str) -> Result<(String, Vec<String>), CompileError> {
+    compile_mapped(
+        source,
+        python_emitter::PyTarget::default(),
+        false,
+        false,
+        true,
+    )
+    .map(|(py, notes, _)| (py, notes))
 }
 
 /// Where each line of an emitted Python file came from: `(python line, source
@@ -238,7 +253,13 @@ pub fn compile_with_line_map(source: &str) -> Result<(String, Option<LineMap>), 
 pub fn compile_traced(
     source: &str,
 ) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
-    compile_mapped(source, python_emitter::PyTarget::default(), false, true)
+    compile_mapped(
+        source,
+        python_emitter::PyTarget::default(),
+        false,
+        true,
+        false,
+    )
 }
 
 fn compile_mapped(
@@ -246,6 +267,7 @@ fn compile_mapped(
     target: python_emitter::PyTarget,
     native: bool,
     want_map: bool,
+    typed: bool,
 ) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
@@ -281,6 +303,12 @@ fn compile_mapped(
         binding_types.clone(),
     )
     .map_err(CompileError::Lower)?;
+    let py = if typed {
+        let all_types = types.iter().map(|t| (t.span, t.raw.clone())).collect();
+        lowering::annotate_typed(&module, py, &all_types, &[])
+    } else {
+        py
+    };
     let python = python_emitter::emit_for(&py, target);
     let map = if want_map {
         lowering::lower_native_typed_tracing(

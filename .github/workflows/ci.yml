@@ -97,6 +97,8 @@ jobs:
       - run: cargo build
       - run: pip install mypy setuptools
       - run: python tests/native_parity.py
+      # Typed output is held to its annotations by the same type checker.
+      - run: python tests/typed_output.py
 
   # MELPA builds pyfun-mode.el straight from main, so it gets the checks MELPA
   # reviewers run (byte-compile, checkdoc, package-lint) on every change. 29.1

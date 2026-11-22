@@ -433,6 +433,28 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
   offline example and `tests/native/` program against `pyfun run`. A file Python cannot import
   (`01-intro.pyfun`) builds as `_pf_01_intro`.
 
+### Typed output (`--typed`) — implements DESIGN §5.7
+
+A pass over the finished Python module, in `lowering/typed.rs`, run by `pyfun::compile_typed` and
+`project::compile_typed` after an ordinary (non-native) lowering. It changes no statement that runs.
+`Speller` turns a checker `Ty` (for a function or a value, from the type recorded at the binding's
+target span) or a declared `TypeExpr` (for a class field) into annotation text, collecting type
+variables into a parameter list as it meets them. A function becomes a `PyStmt::TypedFuncDef` with
+`type_params`; a value's `Assign` target gains its annotation; a `ClassDef` gets `field_types` and
+`type_params`; a sum type's alias is inserted after its last class. Numeric variables that occur in an
+argument position of a function's type become constrained parameters (`A: (int, float)`); the rest
+default to `int`. In a project the pass is handed every module the current one can reach through its
+imports, because type names are one flat namespace and a signature can mention a type declared two
+imports away; such a type is spelled `module.Name` and the module imported. The shared runtime gets
+`annotate_typed_runtime`. The emitter writes a leading `from __future__` import ahead of the imports it
+adds itself.
+
+Docstrings are a second small pass in the same file, `typed::docstrings`, run at the end of
+`Lowerer::lower_module` for every mode: a `PyStmt::Doc` at the head of a documented function's body,
+and `doc` on a documented record's `ClassDef`. It runs last so that no rewrite that reads a function's
+body (the tail-call loop, the fold passes) has to know about it, and it runs for a traced lowering too,
+so the line map still matches.
+
 ### The `--target 3.11` emission pass
 
 Emitted code targets Python 3.12+ for exactly one construct: an f-string hole may carry a nested

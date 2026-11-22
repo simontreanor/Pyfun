@@ -141,11 +141,17 @@ pub enum PyStmt {
     /// types it can spell. `None` leaves a parameter or the return unannotated.
     TypedFuncDef {
         name: String,
+        /// The function's own type parameters (`def pair[A, B](…)`), for typed
+        /// output (`DESIGN.md` §5.7). Empty everywhere else.
+        type_params: Vec<String>,
         params: Vec<(String, Option<String>)>,
         returns: Option<String>,
         body: Vec<PyStmt>,
         is_async: bool,
     },
+    /// A docstring: the first statement of a function's body, from the `##`
+    /// comment above its `let` (`DESIGN.md` §9).
+    Doc(String),
     /// `class name: body`: a plain class whose body is ordinary statements. The
     /// runtime's cold `_pf_Async` uses it; ADTs and records use [`PyStmt::ClassDef`].
     Class { name: String, body: Vec<PyStmt> },
@@ -214,6 +220,11 @@ pub enum PyStmt {
         /// it, and its repr names them (`Rect(width=2.0, height=3.0)`), which is
         /// the one a dataclass generates.
         named: bool,
+        /// The class's type parameters (`class Box[A]:`), for typed output
+        /// (`DESIGN.md` §5.7). Empty everywhere else.
+        type_params: Vec<String>,
+        /// The class's docstring, from the `##` comment above a record's `type`.
+        doc: Option<String>,
     },
 }
 
@@ -444,6 +455,14 @@ pub fn emit(module: &PyModule) -> String {
         .iter()
         .filter(|s| matches!(s, PyStmt::ClassDef { .. }))
         .collect();
+    // A `from __future__` import has to be the first statement of a file, so
+    // it goes out ahead of the imports written here.
+    let future = module
+        .body
+        .iter()
+        .take_while(|s| matches!(s, PyStmt::ImportFrom { module, .. } if module == "__future__"))
+        .count();
+    emit_block_nonempty(&module.body[..future], 0, &mut out);
     if !classes.is_empty() {
         line(&mut out, 0, "from dataclasses import dataclass");
         let needs_total_ordering = classes.iter().any(|s| {
@@ -461,7 +480,7 @@ pub fn emit(module: &PyModule) -> String {
             line(&mut out, 0, "from functools import total_ordering");
         }
     }
-    emit_block(&module.body, 0, &mut out);
+    emit_block(&module.body[future..], 0, &mut out);
     out
 }
 
@@ -497,9 +516,48 @@ pub fn split_line_markers(traced: &str) -> (String, Vec<(usize, u32, u32)>) {
     (text, map)
 }
 
+/// Emit statements as they are, with no `pass` for an empty run.
+fn emit_block_nonempty(stmts: &[PyStmt], depth: usize, out: &mut String) {
+    for stmt in stmts {
+        emit_stmt(stmt, depth, out);
+    }
+}
+
+/// A docstring's text between triple quotes: one line as it is, several lines
+/// indented with the body and closed on a line of their own.
+fn docstring(doc: &str, depth: usize, out: &mut String) {
+    let escaped = doc.replace('\\', "\\\\").replace("\"\"\"", "\\\"\\\"\\\"");
+    // A quote at either end would run into the delimiters.
+    let pad = if escaped.starts_with('"') || escaped.ends_with('"') {
+        " "
+    } else {
+        ""
+    };
+    let mut lines = escaped.lines();
+    let first = lines.next().unwrap_or_default();
+    let rest: Vec<&str> = lines.collect();
+    if rest.is_empty() {
+        line(out, depth, &format!("\"\"\"{pad}{first}{pad}\"\"\""));
+        return;
+    }
+    line(out, depth, &format!("\"\"\"{pad}{first}"));
+    for text in rest {
+        if text.trim().is_empty() {
+            out.push('\n');
+        } else {
+            line(out, depth, text);
+        }
+    }
+    line(out, depth, "\"\"\"");
+}
+
 fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
     // Markers are not statements: a suite that holds nothing else is empty.
-    if stmts.iter().all(|s| matches!(s, PyStmt::Line(..))) {
+    if stmts
+        .iter()
+        .all(|s| matches!(s, PyStmt::Line(..) | PyStmt::Doc(_)))
+        && !stmts.iter().any(|s| matches!(s, PyStmt::Doc(_)))
+    {
         for stmt in stmts {
             emit_stmt(stmt, depth, out);
         }
@@ -589,14 +647,21 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             line(out, depth, &format!("class {name}:"));
             emit_block(body, depth + 1, out);
         }
+        PyStmt::Doc(doc) => docstring(doc, depth, out),
         PyStmt::TypedFuncDef {
             name,
+            type_params,
             params,
             returns,
             body,
             is_async,
         } => {
             let kw = if *is_async { "async def" } else { "def" };
+            let generics = if type_params.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", type_params.join(", "))
+            };
             let params: Vec<String> = params
                 .iter()
                 .map(|(p, ann)| match ann {
@@ -611,7 +676,7 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             line(
                 out,
                 depth,
-                &format!("{kw} {name}({}){returns}:", params.join(", ")),
+                &format!("{kw} {name}{generics}({}){returns}:", params.join(", ")),
             );
             emit_block(body, depth + 1, out);
         }
@@ -693,6 +758,8 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             record,
             native,
             named,
+            type_params,
+            doc,
         } => emit_class(
             name,
             fields,
@@ -701,6 +768,8 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             *record,
             *native,
             *named,
+            type_params,
+            doc.as_deref(),
             depth,
             out,
         ),
@@ -730,6 +799,8 @@ fn emit_class(
     record: bool,
     native: bool,
     named: bool,
+    type_params: &[String],
+    doc: Option<&str>,
     depth: usize,
     out: &mut String,
 ) {
@@ -761,7 +832,18 @@ fn emit_class(
         args.push("repr=False".to_string());
     }
     line(out, depth, &format!("@dataclass({})", args.join(", ")));
-    line(out, depth, &format!("class {name}:"));
+    if type_params.is_empty() {
+        line(out, depth, &format!("class {name}:"));
+    } else {
+        line(
+            out,
+            depth,
+            &format!("class {name}[{}]:", type_params.join(", ")),
+        );
+    }
+    if let Some(doc) = doc {
+        docstring(doc, depth + 1, out);
+    }
 
     // Fields as annotations, so the dataclass recognizes them. The annotation is the
     // field's Python type where it maps to a concrete builtin (`int`/`float`/`str`/

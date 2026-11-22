@@ -31,6 +31,7 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         | PyStmt::RaiseRuntimeError(_)
         | PyStmt::Continue
         | PyStmt::Line(..)
+        | PyStmt::Doc(_)
         | PyStmt::ClassDef { .. } => {}
         PyStmt::WhileTrue { body } => {
             for s in body {

@@ -508,9 +508,11 @@ after the release.
     trivia, which `pyfun parse` drops.
 16. **`pyfun test`** (M). Compile `test_*` functions to `test_*.py` and let pytest run them.
     Follow-ons: checked examples in `##` doc comments, and derived Hypothesis generators.
-17. **Typed default output** (M). Plain `compile` writes `_0: object` and unannotated `def`s, while
-    `--native` already computes annotations. Add `--typed` with `py.typed`, and emit `##` docs as
-    docstrings.
+17. ~~**Typed default output**~~ **DONE 2026-11-22**: `pyfun compile --typed` annotates every top-level
+    function, value and class with its inferred type (type variables as Python 3.12 type parameters, a
+    sum type as an alias over its classes), a typed project carries `py.typed`, and a `##` comment is
+    the docstring of its function or record in every output. Checked with mypy in CI
+    (`tests/typed_output.py`). `DESIGN.md` §5.7.
 18. ~~**LSP: inlay hints, code actions, signature help**~~ **DONE 2026-11-22** (#209, #210 and the PR
     carrying this entry): inlay hints (`total: int`, `shape: Shape` and `-> float` beside each binding,
     in Python's notation), signature help (the function's type while its arguments are written, the

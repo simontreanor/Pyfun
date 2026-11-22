@@ -548,6 +548,62 @@ Native mode is opt-in and applies to every module of a project alike. The defaul
 `match`/`case`, because it reads as the program was written. Every example and the whole
 end-to-end suite produce identical output in both modes.
 
+### 5.7 Typed output (`--typed`): the inferred types as Python annotations
+
+The plain output has the types it needs to run and no more: a `def` with bare parameters, a class whose
+generic field is `object`. A Python program that imports it learns nothing from a type checker. `pyfun
+compile --typed` writes the types the checker inferred into the same output, as annotations Python's
+own type checkers read, and for a project puts the `py.typed` marker (PEP 561) beside the modules so
+that the directory is a typed package. The code that runs is the plain output's: take the annotations
+away and the two files are the same.
+
+```python
+type Shape = Circle | Rect
+
+def area(shape: Shape) -> float: ...
+def pair[A, B](x: A, y: B) -> tuple[A, B]: ...
+def double[A: (int, float)](x: A) -> A: ...
+def first[A](xs: list[A]) -> Some[A] | None_: ...
+origin: Point = Point(0, 0)
+```
+
+Every top-level function has each parameter and its result annotated, every top-level value its type,
+and every class its fields' declared types. The spelling follows what the lowering produces at run
+time:
+
+- **A type variable is a type parameter** of the function or class that is generic in it, in Python
+  3.12's own syntax (`def pair[A, B]`, `class Box[A]`). A generalized *value* has nowhere to declare
+  one, so its variables are `Any` (`nothing: list[Any] = []`).
+- **A number a function is polymorphic in is a type parameter held to `int` and `float`** (`[A: (int,
+  float)]`), so `double(2)` is an `int` and `double(2.5)` a `float`, as they are in Pyfun. `float`
+  alone would accept both and return the wrong one. A number that only comes out is `int`, its default.
+- **A sum type is an alias over its constructors' classes**, `type Shape = Circle | Rect`, generic when
+  the type is (`type Tree[A] = Leaf | Node[A]`); a constructor's class takes the type's parameters its
+  own fields mention. A type whose one constructor has its name is that class. A record is its class.
+- **The built-in types are what they lower to:** `List a` is `list[A]`, `Map k v` is `dict[K, V]`, `Set
+  a` is `set[A]`, a tuple is `tuple[...]`, `Option a` is `Some[A] | None_` and `Result a e` is `Ok[A] |
+  Error[E]` (the prelude's classes become generic), `Seq a` is `Iterable[A]`, `Async a` is
+  `Awaitable[A]`, `unit` is `None`.
+- **A function is a `Callable` of all its arguments at once,** `Callable[[A, B], C]` for `a -> b -> c`,
+  since that is how the emitted code calls it (§5).
+- **What is erased is spelled as what is left:** a unit of measure is gone (`float<m>` is `float`), a
+  newtype is its underlying type, an effect has no spelling. An opaque handle type, about which Pyfun
+  knows nothing, is `Any`.
+- **A type declared in another module of the project** is reached through that module (`geo.Shape`),
+  which the file imports if the code had not already.
+
+A typed file opens with `from __future__ import annotations`, so an annotation may name a class or an
+alias defined further down, and a recursive type can name itself. The type parameter syntax is Python
+3.12's, so `--typed` does not combine with `--target 3.11`; nor with `--native`, which annotates for
+mypyc's needs instead.
+
+What is promised is the surface a caller sees. `tests/typed_output.py` holds it to that with mypy: a
+consumer's correct uses pass and its wrong ones are rejected at their lines, a typed project has
+nothing reported at all, and no annotation in any lesson or example is malformed. The *bodies* of
+emitted functions are not annotated, and a type checker pointed at them finds idioms it would write
+differently (a temporary assigned an `Ok` in one branch and an `Error` in the other); a caller of the
+package never sees those.
+
 ## 6. Python interop — the hard boundary
 
 Every functional guarantee is either enforced *before* lowering or consciously *relaxed* at the
@@ -1677,7 +1733,11 @@ comments:
   (`doc: Option<String>` on `LetBinding`/`TypeDecl`/`ExternDecl` — AST metadata, not free-floating
   trivia, so navigation/analysis are unaffected), and the pretty-printer re-emits `## ` lines
   before the declaration — so docs survive parse→print→parse while every other comment is still
-  dropped by the canonical printer. Docs erase at lowering (no change to emitted Python).
+  dropped by the canonical printer.
+- **A doc comment is the Python docstring** of what it documents, in every output: a function's `##`
+  lines open its `def` in triple quotes, and a record's open its class, so `help(area)` and a Python
+  editor's hover show what the Pyfun author wrote. One line stays on one line; several close on a line
+  of their own. A documented value or sum type has no place in Python for a docstring and keeps none.
 - **MVP scope:** top level only (no local/module-member docs); a doc with nothing documentable
   after it (EOF, or a `measure`/`module`/`import`/expression) is accepted and dropped like a
   comment; no markdown processing — hover shows the text verbatim.
