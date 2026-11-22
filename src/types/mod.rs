@@ -1982,6 +1982,13 @@ pub enum Codec {
 pub struct Codecs {
     pub sites: HashMap<Span, Codec>,
     pub table: std::collections::BTreeMap<String, Codec>,
+    /// The record each `{ base with … }` rebuilds, which only the base's type
+    /// says: two records may share a field name, so the name alone cannot pick
+    /// the class. Keyed by the update's span and the path walked so far (empty
+    /// for the record being updated, `["a"]` for the record in its field `a`
+    /// when a path goes through it); the value is the tag lowering resolves to
+    /// a class, as on [`Codec::Record`].
+    pub update_owners: HashMap<(Span, Vec<String>), String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2655,6 +2662,13 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 codecs.sites.insert(span, codec);
             }
             Err(message) => errors.push(TypeError { message, span }),
+        }
+    }
+
+    // Each record update's class, as the tag lowering knows the record by.
+    for (span, path, owner) in std::mem::take(&mut inf.update_owners) {
+        if let Some(tag) = inf.record_lowering_tag(&owner) {
+            codecs.update_owners.insert((span, path), tag);
         }
     }
 
@@ -6645,6 +6659,10 @@ struct Infer {
     /// Every `Decode.auto` reference with its instantiated `Decoder a`, resolved
     /// after inference into a [`Codec`] (or an error when `a` is still open).
     auto_sites: Vec<(Span, Ty)>,
+    /// The record each update rebuilds, by identity name: the update's span,
+    /// the path walked so far, and the record found there. Becomes
+    /// [`Codecs::update_owners`] once inference is done.
+    update_owners: Vec<(Span, Vec<String>, String)>,
     /// Typed holes (`?` / `?name`) seen while inferring: each hole's span, name,
     /// fresh type variable, and a snapshot of the environment in scope at it (for
     /// **valid hole fits**). Resolved against the final substitution in [`run`] and
@@ -8643,6 +8661,20 @@ impl Infer {
         }
     }
 
+    /// The tag lowering resolves to a record's class wherever the record is
+    /// visible: the bare name for a local record, the `Module.Name` alias for a
+    /// directly imported one, and the declaring module's tag for one carried
+    /// transitively (which has no construction tag, but an update on its value
+    /// still rebuilds it).
+    fn record_lowering_tag(&self, name: &str) -> Option<String> {
+        self.record_surface_tag(name).ok().or_else(|| {
+            self.decls
+                .carried_record_home
+                .get(name)
+                .map(|home| format!("{home}.{name}"))
+        })
+    }
+
     fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
         let info = self
             .decls
@@ -8735,6 +8767,7 @@ impl Infer {
         let owner = self.record_of_field_on(&applied, &fields[0].path[0], span)?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
+        self.update_owners.push((span, Vec::new(), owner.clone()));
 
         // A field may not be updated both wholesale and through a sub-path (`{ p
         // with a = v, a.b = w }`) — one would silently override the other.
@@ -8798,6 +8831,8 @@ impl Infer {
                     let rec = rec.clone();
                     let (inst_ty, inst_fields) = self.instantiate_record(&rec);
                     self.unify(&inst_ty, &fty, fu.value.span())?;
+                    self.update_owners
+                        .push((span, fu.path[..=i].to_vec(), rec.clone()));
                     cur_fields = inst_fields;
                     cur_owner = rec;
                 }

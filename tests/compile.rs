@@ -4699,6 +4699,66 @@ fn e2e_nested_record_update() {
 }
 
 #[test]
+fn e2e_a_record_update_rebuilds_the_record_its_base_is() {
+    // Two records may share a field name, so the name cannot say which class an
+    // update rebuilds: the base's type does. `{ a with x = 5 }` used to rebuild
+    // whichever record declared `x` last, and fail in Python.
+    run_and_check(
+        "
+        type A = { x: int, y: int }
+        type B = { x: int, z: str }
+        let a = A { x = 1, y = 2 }
+        let b = B { x = 1, z = \"z\" }
+        let a2 = { a with x = 5 }
+        let b2 = { b with x = 6 }
+        let bump r = { r with y = r.y + 1 }
+        let ay = (bump a2).y
+        let ax = a2.x
+        let bx = b2.x
+        let bz = b2.z
+        ",
+        &[("ax", "5"), ("ay", "3"), ("bx", "6"), ("bz", "z")],
+    );
+    // The same through a dotted path: each step rebuilds the record found in
+    // that field, whatever other record declares the next segment.
+    run_and_check(
+        "
+        type Inner = { x: int, tag: str }
+        type Other = { x: int, flag: bool }
+        type Outer = { inner: Inner, other: Other, x: int }
+        type Shadow = { inner: Other, x: int }
+        let o = Outer { inner = Inner { x = 1, tag = \"t\" }, other = Other { x = 2, flag = True }, x = 3 }
+        let s = Shadow { inner = Other { x = 7, flag = False }, x = 8 }
+        let o2 = { o with inner.x = 10, other.x = 20, x = 30 }
+        let s2 = { s with inner.x = 70 }
+        let oi = o2.inner.x
+        let ot = o2.inner.tag
+        let oo = o2.other.x
+        let ox = o2.x
+        let si = s2.inner.x
+        let sf = s2.inner.flag
+        let sx = s2.x
+        ",
+        &[
+            ("oi", "10"),
+            ("ot", "t"),
+            ("oo", "20"),
+            ("ox", "30"),
+            ("si", "70"),
+            ("sf", "False"),
+            ("sx", "8"),
+        ],
+    );
+    let py = pyfun::compile(
+        "type A = { x: int, y: int }\n\
+         type B = { x: int, z: str }\n\
+         let f a = { a with y = 0, x = 5 }",
+    )
+    .expect("compiles");
+    assert!(py.contains("A(5, 0)"), "{py}");
+}
+
+#[test]
 fn e2e_polymorphic_record_field() {
     run_and_check(
         "

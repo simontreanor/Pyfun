@@ -2502,7 +2502,7 @@ impl Lowerer {
 
             ExprKind::Record { ty, fields, .. } => self.lower_record(ty, fields, locals),
             ExprKind::RecordUpdate { base, fields } => {
-                self.lower_record_update(base, fields, locals)
+                self.lower_record_update(expr.span(), base, fields, locals)
             }
             ExprKind::Field { base, name } => {
                 // `Module.member` resolves to its builtin/helper; otherwise it is an
@@ -2604,6 +2604,7 @@ impl Lowerer {
     /// update or, failing that, from the temp.
     fn lower_record_update(
         &mut self,
+        span: Span,
         base: &Expr,
         fields: &[FieldUpdate],
         locals: &HashSet<String>,
@@ -2623,11 +2624,26 @@ impl Lowerer {
             stmts.append(&mut s);
             updates.push((fu.path.clone(), v));
         }
-        // The outer record's tag is resolved from the first path's first segment
-        // (the type checker has verified all paths start in the base's record).
-        let tag = self.field_to_record[&fields[0].path[0]].clone();
-        let value = self.build_record_update(PyExpr::Name(tmp.clone()), &tag, updates);
+        let tag = self.update_owner(span, &[], &fields[0].path[0]);
+        let value =
+            self.build_record_update(PyExpr::Name(tmp.clone()), &tag, updates, span, Vec::new());
         Ok((stmts, value))
+    }
+
+    /// The tag of the record an update rebuilds at `path` (empty for the record
+    /// being updated, the fields walked so far for one reached through a dotted
+    /// path). The checker resolved it from the base's type, which is the only
+    /// thing that can: two records may declare the same field. Without the
+    /// checker's table (a module lowered on its own), the owner of `field`, the
+    /// next path segment, is the fallback, and is right whenever the field name
+    /// is unique.
+    fn update_owner(&self, span: Span, path: &[String], field: &str) -> String {
+        self.codecs
+            .update_owners
+            .get(&(span, path.to_vec()))
+            .filter(|tag| self.record_fields.contains_key(*tag))
+            .cloned()
+            .unwrap_or_else(|| self.field_to_record[field].clone())
     }
 
     /// Reconstruct a record value `class(...)` from `base_py` (a pure expression —
@@ -2639,6 +2655,8 @@ impl Lowerer {
         base_py: PyExpr,
         tag: &str,
         updates: Vec<(Vec<String>, PyExpr)>,
+        span: Span,
+        path: Vec<String>,
     ) -> PyExpr {
         let order = self.record_fields[tag].clone();
         let class = self.record_class_name(tag);
@@ -2667,10 +2685,12 @@ impl Lowerer {
                         // field; the checker forbids mixing it with a sub-path update.
                         args.push(group.into_iter().nth(pos).unwrap().1);
                     } else {
-                        // Nested: rebuild the sub-record from `base_py.field`. The
-                        // sub-record's tag is the owner of the next path segment.
-                        let sub_tag = self.field_to_record[&group[0].0[0]].clone();
-                        args.push(self.build_record_update(attr, &sub_tag, group));
+                        // Nested: rebuild the sub-record from `base_py.field`,
+                        // which is the record the checker found in that field.
+                        let mut sub_path = path.clone();
+                        sub_path.push(field.clone());
+                        let sub_tag = self.update_owner(span, &sub_path, &group[0].0[0]);
+                        args.push(self.build_record_update(attr, &sub_tag, group, span, sub_path));
                     }
                 }
             }
