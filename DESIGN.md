@@ -1523,6 +1523,18 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
+**A Python habit is answered with the Pyfun form.** The audience arrives with Python in its
+fingers, and most Python-shaped mistakes are errors anyway, at a token that says little (`expected an
+expression, found =`). So the compiler reads the shape and names the form that replaces it: `x = 5`
+(`let x = …`, or `x <- …` for a `let mut`), `x += 1`, a `for` or `while` statement, `class`, `def`,
+`import math` and `from … import` (`extern import`), `lambda x: …` (`fun x -> …`), a `{x:.2f}` format
+spec (the `Format` module), `xs[0]` (`List.get i xs`), `s.upper()` (`String.upper s`), and a member
+called by another language's word (`Map.get` is answered with `Map.find`, `List.append` with
+`List.concat`). Two rules keep this honest. A hint needs the whole Python shape, so a program that
+merely names something `lambda` or `for` is untouched; and a type-directed hint fires only on a
+program that was already wrong, so `xs[0]` is answered only when `xs` is a collection and the
+application has failed, with the literal hard against it (`f [0]` is an ordinary argument).
+
 **The string type is `str`.** Python's name, and the name the emitted annotations already use, so
 `type User = { name: str }` reads the same on both sides of the boundary. The decoder follows the
 type (`Decode.str`); the module of text operations stays `String`, a module name like `List`. The

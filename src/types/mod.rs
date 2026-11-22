@@ -1745,7 +1745,50 @@ fn renamed_member(module: &str, name: &str, env: &Env) -> Option<String> {
         return Some(new.to_string());
     }
     let snake = to_snake_case(name);
-    (snake != name && env.contains_key(&format!("{module}.{snake}"))).then_some(snake)
+    if snake != name && env.contains_key(&format!("{module}.{snake}")) {
+        return Some(snake);
+    }
+    // A word another language uses for the same operation. Tried in order, so a
+    // word that means different things per module (`get`) finds the member the
+    // module in hand actually has.
+    let synonyms: &[&str] = match snake.as_str() {
+        "get" | "lookup" | "at" | "nth" | "item" | "index" => &["get", "find", "find_index"],
+        "length" | "size" | "count" => &["len"],
+        "append" | "push" | "add" | "extend" | "plus" => &["add", "concat"],
+        "reverse" | "reversed" => &["rev"],
+        "includes" | "has" | "has_key" | "contains_key" | "member" | "mem" | "elem" => {
+            &["contains"]
+        }
+        "first" => &["head"],
+        "rest" => &["tail"],
+        "each" | "for_each" | "foreach" => &["iter"],
+        "flat_map" | "concat_map" | "bind" | "and_then" | "select_many" => &["collect", "bind"],
+        "flatten" | "join" | "concat" => &["concat", "join"],
+        "items" | "entries" | "pairs" => &["to_list"],
+        "from_list" | "from_pairs" | "of_pairs" | "from_entries" => &["of_list"],
+        "trim" => &["strip"],
+        "ltrim" | "trim_left" => &["lstrip"],
+        "rtrim" | "trim_right" => &["rstrip"],
+        "to_upper" | "uppercase" | "to_uppercase" => &["upper"],
+        "to_lower" | "lowercase" | "to_lowercase" => &["lower"],
+        "substring" | "substr" | "sub" => &["slice"],
+        "find" | "index_of" | "search" => &["index_of", "find", "find_index"],
+        "default" | "get_or_else" | "unwrap_or" | "get_or_default" | "or_default" | "value_or" => {
+            &["with_default", "find_or"]
+        }
+        "delete" | "discard" | "pop" => &["remove"],
+        "insert" | "set" | "put" | "update" => &["add", "insert_at", "update_at"],
+        "any" | "some" => &["exists"],
+        "all" | "every" => &["forall"],
+        "enumerate" | "with_index" | "mapi" => &["indexed"],
+        "unique" | "dedup" | "nub" => &["distinct"],
+        "is_some" | "is_just" => &["is_some"],
+        _ => &[],
+    };
+    synonyms
+        .iter()
+        .find(|s| **s != name && env.contains_key(&format!("{module}.{s}")))
+        .map(|s| s.to_string())
 }
 
 /// `sortBy` → `sort_by`: an underscore at every lowercase-to-uppercase word
@@ -8488,6 +8531,9 @@ impl Infer {
             });
             return Ok(result);
         }
+        if let Some(hint) = self.method_hint(&applied, name, span, env) {
+            return Err(hint);
+        }
         let owner = self.record_of_field_on(&applied, name, span)?;
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
@@ -8842,11 +8888,87 @@ impl Infer {
             Box::new(result.clone()),
             latent.clone(),
         );
-        self.unify(&func_ty, &expected, span)
-            .map_err(|e| self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e))?;
+        if let Err(e) = self.unify(&func_ty, &expected, span) {
+            if let Some(hint) = self.indexing_hint(func, arg, &func_ty, env) {
+                return Err(hint);
+            }
+            return Err(self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e));
+        }
         let latent = self.apply_eff(&latent);
         self.perform(&latent);
         Ok(self.apply(&result))
+    }
+
+    /// Python's `xs[0]`, which Pyfun reads as `xs` applied to the list `[0]`. When
+    /// an application fails and a bracketed literal sits hard against a value that
+    /// is a collection, the program meant an index, so name the lookup that does
+    /// it. The literal has to touch what it follows (`f [0]` with a space is an
+    /// ordinary argument), and the value has to be something that cannot be
+    /// applied, so no working program is ever second-guessed.
+    fn indexing_hint(
+        &mut self,
+        func: &Expr,
+        arg: &Expr,
+        func_ty: &Ty,
+        env: &Env,
+    ) -> Option<TypeError> {
+        let ExprKind::List { .. } = &arg.kind else {
+            return None;
+        };
+        // In `print xs[0]` the literal follows `xs`, the last argument so far.
+        let (indexed, ty) = match &func.kind {
+            ExprKind::App { arg: last, .. } if last.span().end == arg.span().start => {
+                let ty = self.infer_expr(last, env).ok()?;
+                (last.as_ref(), self.apply(&ty))
+            }
+            _ if func.span().end == arg.span().start => (func, self.apply(func_ty)),
+            _ => return None,
+        };
+        let write = match &ty {
+            Ty::Con(name, _) if name == "List" => "`List.get i xs`, which returns an `Option`",
+            Ty::Con(name, _) if name == "Seq" => "`Seq.get i xs`, which returns an `Option`",
+            Ty::Con(name, _) if name == "Map" => "`Map.find key m`, which returns an `Option`",
+            Ty::Str => "`String.get i s`, which returns an `Option`",
+            Ty::Tuple(_) => "a destructuring `let (a, b) = pair`",
+            _ => return None,
+        };
+        Some(TypeError {
+            message: format!(
+                "Pyfun has no `[…]` indexing (this reads as a `{}` applied to a list): write {write}",
+                show(&ty)
+            ),
+            span: Span::new(indexed.span().start, arg.span().end),
+        })
+    }
+
+    /// Python's `s.upper()` or `xs.append(x)`: a field access on a value whose
+    /// type has no fields. Its operations are functions in the type's module, so
+    /// name the one the method corresponds to when there is one.
+    fn method_hint(&self, base_ty: &Ty, name: &str, span: Span, env: &Env) -> Option<TypeError> {
+        let module = match base_ty {
+            Ty::Str => "String",
+            Ty::Con(n, _) => ["List", "Set", "Map", "Seq", "Option", "Result"]
+                .into_iter()
+                .find(|m| m == n)?,
+            _ => return None,
+        };
+        let shown = show(base_ty);
+        let member = if env.contains_key(&format!("{module}.{name}")) {
+            Some(name.to_string())
+        } else {
+            closest_member(module, name, env)
+        };
+        let message = match member {
+            Some(m) => format!(
+                "a `{shown}` has no methods: Pyfun spells `.{name}` as the function `{module}.{m}`, \
+                 with the value as its last argument"
+            ),
+            None => format!(
+                "a `{shown}` has no fields or methods: its operations are functions in the \
+                 `{module}` module"
+            ),
+        };
+        Some(TypeError { message, span })
     }
 
     /// Turn an effect mismatch on a callback argument into guidance (#180). An

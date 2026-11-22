@@ -4794,3 +4794,72 @@ fn standard_library_names_are_snake_case_and_old_spellings_point_at_them() {
         .is_ok()
     );
 }
+
+#[test]
+fn indexing_and_method_calls_name_the_module_function() {
+    // `xs[0]` reads as `xs` applied to `[0]`; when that fails on a collection the
+    // message names the lookup instead of the mismatch.
+    assert_error_contains(
+        "let xs = [1, 2, 3]\nlet y = xs[0]",
+        "Pyfun has no `[…]` indexing (this reads as a `List int` applied to a list): \
+         write `List.get i xs`, which returns an `Option`",
+    );
+    assert_error_contains("let xs = [1, 2, 3]\nprint xs[0]", "write `List.get i xs`");
+    assert_error_contains("let s = \"abc\"\nlet c = s[0]", "write `String.get i s`");
+    assert_error_contains(
+        "let m = Map.of_list [(\"a\", 1)]\nlet v = m[\"a\"]",
+        "write `Map.find key m`",
+    );
+    // A list argument with a space before it is an ordinary application, and
+    // keeps its ordinary message when it fails.
+    assert!(pyfun::check("let total = List.sum[1, 2]\nlet same = List.sum [1, 2]").is_ok());
+    let msgs = errors("let xs = [1]\nlet y = xs [0]");
+    assert!(msgs.iter().all(|m| !m.contains("indexing")), "{msgs:?}");
+
+    // `s.upper()`: a value of a built-in type has no methods.
+    assert_error_contains(
+        "let s = \"abc\"\nlet t = s.upper()",
+        "a `str` has no methods: Pyfun spells `.upper` as the function `String.upper`",
+    );
+    assert_error_contains(
+        "let xs = [1, 2]\nlet ys = xs.append(3)",
+        "a `List int` has no methods: Pyfun spells `.append` as the function `List.concat`",
+    );
+    assert_error_contains(
+        "let xs = [1, 2]\nlet n = xs.frobnicate",
+        "a `List int` has no fields or methods: its operations are functions in the `List` module",
+    );
+    // A record still reports its own fields.
+    assert_error_contains(
+        "type P = { x: int }\nlet p = P { x = 1 }\nlet y = p.z",
+        "has no field `z`",
+    );
+}
+
+#[test]
+fn a_member_from_another_language_points_at_the_pyfun_one() {
+    for (source, hint) in [
+        ("let r = Map.get", "did you mean `Map.find`?"),
+        ("let r = List.item", "did you mean `List.get`?"),
+        ("let r = List.length", "did you mean `List.len`?"),
+        ("let r = List.append", "did you mean `List.concat`?"),
+        ("let r = List.reverse", "did you mean `List.rev`?"),
+        ("let r = List.flatMap", "did you mean `List.collect`?"),
+        ("let r = List.forEach", "did you mean `List.iter`?"),
+        ("let r = Map.items", "did you mean `Map.to_list`?"),
+        ("let r = Map.has", "did you mean `Map.contains`?"),
+        ("let r = String.trim", "did you mean `String.strip`?"),
+        ("let r = String.toUpper", "did you mean `String.upper`?"),
+        ("let r = String.substring", "did you mean `String.slice`?"),
+        (
+            "let r = Option.unwrap_or",
+            "did you mean `Option.with_default`?",
+        ),
+        (
+            "let r = Option.getOrElse",
+            "did you mean `Option.with_default`?",
+        ),
+    ] {
+        assert_error_contains(source, hint);
+    }
+}

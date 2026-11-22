@@ -990,3 +990,69 @@ fn return_outside_computation_expression_suggests_dropping_return() {
         "unexpected message: {message}"
     );
 }
+
+#[test]
+fn a_python_shaped_statement_names_the_pyfun_form() {
+    for (source, expected) in [
+        ("x = 5", "Pyfun binds a name with `let`: write `let x = …`"),
+        (
+            "let f n =\n  total = n + 1\n  total",
+            "write `let total = …` (to change a `let mut`, write `total <- …`)",
+        ),
+        (
+            "let mut n = 0\nn += 1",
+            "Pyfun has no `+=`: write `n <- n + …`",
+        ),
+        (
+            "let mut n = 9\nn //= 2",
+            "Pyfun has no `//=`: write `n <- n // …`",
+        ),
+        (
+            "for x in [1, 2]:\n  print x",
+            "Pyfun has no `for` statement",
+        ),
+        ("while True:\n  print 1", "Pyfun has no `while` loop"),
+        ("class Point:\n  x = 1", "Pyfun declares data with `type`"),
+        ("from math import sqrt", "write `extern import module`"),
+        ("import math", "write `extern import math`"),
+        (
+            "let f = lambda x, y: x + y",
+            "Pyfun writes a lambda as `fun x y -> …`",
+        ),
+        ("let g = lambda: 1", "Pyfun writes a lambda as `fun _ -> …`"),
+        ("let h = List.map (lambda x: x + 1) xs", "`fun x -> …`"),
+        (
+            "let s = f\"{pi:.2f}\"",
+            "Pyfun has no `{x:.2f}` format specs. Format the value with the `Format` module",
+        ),
+        (
+            "let s = f\"{name!r}\"",
+            "an f-string hole holds an expression only",
+        ),
+    ] {
+        match parse(source) {
+            Err(err) => assert!(
+                err.message().contains(expected),
+                "{source}\n-> {}",
+                err.message()
+            ),
+            Ok(_) => panic!("{source} should not parse"),
+        }
+    }
+}
+
+#[test]
+fn python_words_stay_ordinary_names() {
+    // Each hint needs the whole Python shape, so a program that only uses one
+    // of these words as a name parses as it always did.
+    for source in [
+        "let lambda = 3",
+        "let for = lambda + 1",
+        "let r = List.map (fun from -> from + while) [class]",
+        "let total = for x",
+        "print (lambda x)",
+        "let s = f\"{a} and {b}\"",
+    ] {
+        assert!(parse(source).is_ok(), "{source}: {:?}", parse(source).err());
+    }
+}
