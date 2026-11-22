@@ -29,6 +29,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 mod captures;
 mod decode_spec;
 mod fold_loop;
+mod newtype_patterns;
 mod self_tail_call;
 
 use crate::lexer::Span;
@@ -133,6 +134,9 @@ pub fn lower_native_typed(
     native: bool,
     binding_types: HashMap<Span, crate::types::Ty>,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
+    // Newtype patterns in binding positions erase first, so every pass below
+    // sees `let raw (UserId s) = s` as the `let raw s = s` it is at run time.
+    let module = &newtype_patterns::erase(module, &local_newtypes(module));
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
     lowerer.binding_types = binding_types;
@@ -144,6 +148,21 @@ pub fn lower_native_typed(
     lowerer.codecs = codecs.clone();
     let py = lowerer.lower_module(module)?;
     Ok((py, lowerer.notes))
+}
+
+/// The constructors of the newtypes `module` declares (`opaque type UserId =
+/// str` declares the constructor `UserId`).
+fn local_newtypes(module: &Module) -> HashSet<String> {
+    module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Type(decl) if matches!(decl.kind, TypeDeclKind::Newtype(_)) => {
+                Some(decl.name.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Per-module context for multi-file lowering (`DESIGN.md` §6.1): the names of
@@ -212,6 +231,11 @@ pub fn lower_in_project(
     native: bool,
     binding_types: HashMap<Span, crate::types::Ty>,
 ) -> Result<LoweredModule, LowerError> {
+    // As in the single-file path, with the imported newtypes' qualified
+    // constructors (`Ids.UserId`) beside this module's own.
+    let mut newtypes = local_newtypes(module);
+    newtypes.extend(ctx.newtype_ctors.iter().cloned());
+    let module = &newtype_patterns::erase(module, &newtypes);
     let mut lowerer = Lowerer::new(module);
     lowerer.native = native;
     lowerer.binding_types = binding_types;
@@ -1639,7 +1663,7 @@ impl Lowerer {
             }
         };
         let base = self.fresh_tmp();
-        unpack_into_as(target, &source, &base, &rename, &self.newtype_ctors, out);
+        unpack_into_as(target, &source, &base, &rename, out);
     }
 
     /// Whether a top-level parameterless binding's value introduces frame-level
@@ -2034,7 +2058,6 @@ impl Lowerer {
         decls.append(&mut destructure_params(
             prelude_params,
             &param_names(prelude_params),
-            &self.newtype_ctors,
         ));
         decls.append(&mut stmts);
         Ok(decls)
@@ -11731,7 +11754,7 @@ fn bind_irrefutable(
             }
             out.push(PyStmt::UnpackAssign { targets, value });
             for (elem, temp) in nested {
-                unpack_into_as(elem, &temp, &temp, rename, &HashSet::new(), out);
+                unpack_into_as(elem, &temp, &temp, rename, out);
             }
         }
         _ => unreachable!("ladder payloads are simple_irrefutable"),
@@ -11793,24 +11816,13 @@ fn param_bindings(params: &[Param]) -> Vec<String> {
 /// since Python 3 removed tuple parameters. A nested tuple unpacks through a temp
 /// (`_pf_arg0_0`), one statement per level, which keeps each emitted line the
 /// obvious Python for that level.
-fn destructure_params(
-    params: &[Param],
-    args: &[String],
-    newtypes: &HashSet<String>,
-) -> Vec<PyStmt> {
+fn destructure_params(params: &[Param], args: &[String]) -> Vec<PyStmt> {
     let mut out = Vec::new();
     for (p, arg) in params.iter().zip(args) {
         if p.name().is_none() {
             // A parameter's source is already a reserved argument name, so it
             // doubles as the base for any nested temps.
-            unpack_into_as(
-                &p.pattern,
-                arg,
-                arg,
-                &|n| py_value_name(n),
-                newtypes,
-                &mut out,
-            );
+            unpack_into_as(&p.pattern, arg, arg, &|n| py_value_name(n), &mut out);
         }
     }
     out
@@ -11826,24 +11838,13 @@ fn unpack_into_as(
     source: &str,
     base: &str,
     rename: &dyn Fn(&str) -> String,
-    newtypes: &HashSet<String>,
     out: &mut Vec<PyStmt>,
 ) {
     match pattern {
-        // A newtype's constructor erases, so its pattern is the payload's, on
-        // the value itself: `let raw (UserId s) = s` binds `s` to the argument.
-        Pattern::Ctor { name, args, .. } if newtypes.contains(name) && args.len() == 1 => {
-            match &args[0] {
-                Pattern::Wildcard => {}
-                Pattern::Var { name, .. } => out.push(PyStmt::Assign {
-                    target: rename(name.as_str()),
-                    value: PyExpr::Name(py_value_name(source)),
-                }),
-                nested => unpack_into_as(nested, source, base, rename, newtypes, out),
-            }
-        }
         // A sole constructor reads its fields by position (`_0`, `_1`, …), one
         // attribute each; the checker has established that it always matches.
+        // (A newtype's constructor never reaches here: its patterns are erased
+        // ahead of lowering, see `newtype_patterns`.)
         Pattern::Ctor { args, .. } => {
             for (i, arg) in args.iter().enumerate() {
                 let value = PyExpr::Attribute {
@@ -11862,7 +11863,7 @@ fn unpack_into_as(
                             target: temp.clone(),
                             value,
                         });
-                        unpack_into_as(nested, &temp, &temp, rename, newtypes, out);
+                        unpack_into_as(nested, &temp, &temp, rename, out);
                     }
                 }
             }
@@ -11887,7 +11888,7 @@ fn unpack_into_as(
                 value: PyExpr::Name(py_value_name(source)),
             });
             for (elem, temp) in nested {
-                unpack_into_as(elem, &temp, &temp, rename, newtypes, out);
+                unpack_into_as(elem, &temp, &temp, rename, out);
             }
         }
         // A record reads the fields it names, one attribute each — the same
@@ -11910,7 +11911,7 @@ fn unpack_into_as(
                             target: temp.clone(),
                             value,
                         });
-                        unpack_into_as(nested, &temp, &temp, rename, newtypes, out);
+                        unpack_into_as(nested, &temp, &temp, rename, out);
                     }
                 }
             }

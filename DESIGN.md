@@ -1563,9 +1563,10 @@ pattern. Python 3 removed tuple parameters, so a destructuring parameter lowers 
 argument name unpacked on the body's first line (`def tile_score(_pf_arg0): t, sq = _pf_arg0`), one
 statement per nesting level; a record parameter reads one attribute per field it names
 (`letter = _pf_arg0.letter`) and nothing for the fields it does not; a constructor parameter reads
-its fields the same way (`n = _pf_arg0._0` for a positional one), and a newtype's, which is erased,
-is the argument itself. A destructuring *lambda*
-therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement.
+its fields the same way (`n = _pf_arg0._0` for a positional one). A destructuring *lambda*
+therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement. A
+newtype's pattern is the exception to all of this: its constructor is erased (§7.3), so the pattern
+is rewritten to its payload before lowering and `let raw (UserId s) = s` is `def raw(s)`.
 
 **A `let` binding may destructure too**, under exactly the rule above and for exactly the same
 reason — `let (r, c) = parse_coord tok`, `let Point { x, y } = origin`, `let (a, (b, c)) = nested`.
@@ -2132,7 +2133,12 @@ ground rules:
   needed care: after erasure `case UserId s:` is an *irrefutable* Python pattern, and Python rejects
   any `case` after an irrefutable one as a SyntaxError — so lowering seals a match's case list by
   truncating at the first unconditional lowered case (judged on the **lowered** pattern, not the
-  source arm) instead of appending the defensive `case _: raise`.
+  source arm) instead of appending the defensive `case _: raise`. In a **binding position** (a
+  parameter, a `let`, a computation expression's `let`/`let!`/`for`; allowed because a newtype has
+  one constructor, §7) the pattern is erased earlier still, by a rewrite of the module ahead of
+  lowering: `let raw (UserId s) = s` reaches every later pass as `let raw s = s`, so it emits
+  `def raw(s)`, a lambda taking `(UserId s)` stays a Python `lambda`, and `let (UserId a, Email b) =
+  pair` is the plain `a, b = pair`.
 - **The interop payoff.** Because the runtime value *is* the underlying value, an `extern` may be
   typed with the newtype directly — `extern save : UserId -> unit` hands Python the bare `str` it
   expects while the Pyfun side enforces the distinction. This is the difference from the single-case
