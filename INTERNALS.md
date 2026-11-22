@@ -522,6 +522,17 @@ stdio. All features reuse the existing front end:
   An item the recovering parser had to drop (an unclosed parenthesis) has no AST and so no help until
   it parses.
 
+- **Code actions** — quick fixes, in `lsp/actions.rs`. For a non-exhaustive `match`, `check_exhaustive`
+  no longer stops at its first witness: it turns the witness back into a pattern
+  (`Infer::witness_pattern`), adds it to the matrix as one more arm and runs `useful` again, until
+  nothing is left out or `MAX_MISSING_CASES` is reached. The rendered witnesses travel beside the error
+  as `types::MissingCases` (the match's span and the cases as source text), through
+  `types::check_for_editor` into `Analysis::missing_cases`. The action finds the `Match` node with that
+  span, reads the arms' indentation from the first arm's line and inserts `case <pattern>: ?` lines
+  after the last arm. The other two fixes need only a warning's kind and span: an unused binding gets
+  `_` inserted ahead of its name, an unused import has its line removed. Each test applies the edit and
+  checks the result again.
+
 **Cross-file navigation** (with file-based modules, DESIGN §6.1): go-to-definition on a qualified
 reference to an imported file module (`Geometry.area`, `Geometry.Circle`) jumps to the definition in
 that module's `.pyfun` (`resolve::qualified_at` records expression-position qualified refs with spans;
