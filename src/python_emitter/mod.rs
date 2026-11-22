@@ -324,6 +324,8 @@ pub enum PyExpr {
     List(Vec<PyExpr>),
     /// A dict display `{k: v, …}`.
     Dict(Vec<(PyExpr, PyExpr)>),
+    /// A set display `{a, b}`. Never empty: `{}` is the empty dict in Python.
+    Set(Vec<PyExpr>),
     /// A tuple display `(a, b, c)` (always two or more elements in Pyfun).
     Tuple(Vec<PyExpr>),
     /// The `None` literal — the unit value (e.g. the result of an assignment).
@@ -950,6 +952,10 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
                 .map(|(k, v)| format!("{}: {}", expr(k), expr(v)))
                 .collect();
             format!("{{{}}}", items.join(", "))
+        }
+        PyExpr::Set(elems) => {
+            let elems: Vec<String> = elems.iter().map(expr).collect();
+            format!("{{{}}}", elems.join(", "))
         }
         PyExpr::List(elems) => {
             let elems: Vec<String> = elems.iter().map(expr).collect();

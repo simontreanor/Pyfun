@@ -413,6 +413,28 @@ pub enum InterpPart {
     Expr(Box<Expr>),
 }
 
+/// Which collection a brace literal builds ([`ExprKind::Collection`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionForm {
+    /// `{"a": 1, "b": 2}`, or `{}` when empty.
+    Map,
+    /// `{1, 2, 3}`.
+    Set,
+}
+
+/// The items of a collection literal, read back out of its expansion: the
+/// elements of the list `of_list` is applied to (for a map, `(key, value)`
+/// tuples), and none for `{}`, whose expansion is `Map.empty`.
+pub fn collection_items(expansion: &Expr) -> &[Expr] {
+    match &expansion.kind {
+        ExprKind::App { arg, .. } => match &arg.kind {
+            ExprKind::List { elems } => elems,
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
+
 /// `f a b` parses to `App(App(f, a), b)` (see `DESIGN.md` §7).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
@@ -537,6 +559,18 @@ pub enum ExprKind {
     /// Python `list`; its element type is inferred by unifying the elements.
     List {
         elems: Vec<Expr>,
+    },
+
+    /// A collection literal written the way Python writes it: `{"a": 1}` is a
+    /// `Map`, `{1, 2}` a `Set`, and `{}` the empty `Map` (`DESIGN.md` §8.3). The
+    /// node records which form was written, for the printer and for lowering to
+    /// a Python dict or set display; `expansion` is the ordinary expression it
+    /// means (`Map.of_list [("a", 1)]`, `Set.of_list [1, 2]`, `Map.empty`), which
+    /// is what inference and every analysis read, so the literal needs no rules
+    /// of its own.
+    Collection {
+        form: CollectionForm,
+        expansion: Box<Expr>,
     },
 
     /// A tuple literal: `(a, b, c)` — a structural (anonymous) product of two or

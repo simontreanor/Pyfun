@@ -308,3 +308,50 @@ let grade x =
           (integer))
         (string))
       (string))))
+
+================================================================================
+map and set literals, beside a record update
+================================================================================
+
+let ages = {"Ada": 36, "Alan": 41,}
+let primes = {2, 3, 5}
+let empty = {}
+let nested = {"evens": {2, 4}}
+let moved = { p with x = 3 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (map_expression
+      (map_entry
+        (string)
+        (integer))
+      (map_entry
+        (string)
+        (integer))))
+  (let_binding
+    (identifier)
+    (set_expression
+      (integer)
+      (integer)
+      (integer)))
+  (let_binding
+    (identifier)
+    (map_expression))
+  (let_binding
+    (identifier)
+    (map_expression
+      (map_entry
+        (string)
+        (set_expression
+          (integer)
+          (integer)))))
+  (let_binding
+    (identifier)
+    (record_update_expression
+      (identifier)
+      (field_update
+        (identifier)
+        (integer)))))

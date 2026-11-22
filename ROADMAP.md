@@ -457,8 +457,8 @@ after the release.
    or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
    `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`
    is answered with `Map.find`, `List.append` with `List.concat`). Still to come, each with the item
-   that settles its form: `x in xs` (item 13), `{"a": 1}` and `{1, 2}` (item 12), and an `if` with
-   no `else` or written `a if c else b` (item 8).
+   that settles its form: `x in xs` (item 13), and an `if` with no `else` or written
+   `a if c else b` (item 8).
 5. **Guards in the exhaustiveness message** (S). When the missing witness has a guarded arm, say that
    a guarded arm does not count.
 6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
@@ -484,8 +484,8 @@ after the release.
 
 **Python-familiar additions**
 
-12. **`{"a": 1}` and `{1, 2}` literals** for `Map` and `Set`. Braces today hold only a record
-    update (`{ p with … }`) and a CE body after a name, so the forms are free.
+12. ~~**`{"a": 1}` and `{1, 2}` literals**~~ **DONE 2026-11-22** (#195): a `Map`, a `Set`, and `{}` for
+    the empty `Map`, each lowering to the Python display it is spelled as (`DESIGN.md` §8.3).
 13. **`x in xs` and `x not in xs`**, lowering to the same Python operators, typed by a closed
     container constraint in the manner of `num` and `comparison`.
 14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`

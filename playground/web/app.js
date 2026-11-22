@@ -44,8 +44,8 @@ let describe m =
     return f"{name} is {age}"
   }
 
-let ada = Map.of_list [("name", "Ada"), ("age", "36")]
-let sparse = Map.of_list [("name", "Bo")]
+let ada = {"name": "Ada", "age": "36"}
+let sparse = {"name": "Bo"}
 
 print (describe ada)
 print (describe sparse)

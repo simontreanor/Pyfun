@@ -8591,3 +8591,42 @@ fn e2e_a_destructuring_ce_bind_renames_only_the_colliding_name() {
     assert!(!py.contains("_k"), "{py}");
     run_and_check(src, &[("r", "Some(11)")]);
 }
+
+#[test]
+fn collection_literals_lower_to_python_displays() {
+    // The literal is spelled as Python spells it, so it lowers 1:1.
+    let py = pyfun::compile(
+        "let ages = {\"Ada\": 36, \"Alan\": 41}\n\
+         let primes = {2, 3, 5}\n\
+         let empty = {}\n\
+         let nested = {\"evens\": {2, 4}}",
+    )
+    .unwrap();
+    assert!(py.contains("ages = {\"Ada\": 36, \"Alan\": 41}"), "{py}");
+    assert!(py.contains("primes = {2, 3, 5}"), "{py}");
+    assert!(py.contains("empty = {}"), "{py}");
+    assert!(py.contains("nested = {\"evens\": {2, 4}}"), "{py}");
+    // No helper is involved: the display is the whole lowering.
+    assert!(!py.contains("dict(") && !py.contains("set("), "{py}");
+}
+
+#[test]
+fn e2e_collection_literals_behave_as_map_and_set() {
+    let src = "type Colour = Red | Green\n\
+               let ages = {\"Ada\": 36, \"Alan\": 41}\n\
+               let primes = {2, 3, 5, 2}\n\
+               let by_colour = {Red: \"stop\", Green: \"go\"}\n\
+               let older = Map.add \"Bo\" 7 {}\n\
+               let label c = Option.with_default \"?\" (Map.find c by_colour)\n\
+               print (Map.find \"Ada\" ages, Map.len ages)\n\
+               print (Set.len primes, Set.contains 3 primes, Set.contains 4 primes)\n\
+               print (label Green, Map.len older)\n\
+               print (List.sort (Set.to_list {3, 1, 2}))";
+    let program = pyfun::compile(src).unwrap();
+    let Some(python) = python_cmd() else { return };
+    let out = run_python(&python, &program);
+    assert_eq!(
+        out.trim().replace("\r\n", "\n"),
+        "(Some(36), 2)\n(3, True, False)\n('go', 1)\n[1, 2, 3]"
+    );
+}

@@ -360,6 +360,9 @@ impl Census {
             }
             ExprKind::Unary { expr, .. }
             | ExprKind::Annot { value: expr, .. }
+            | ExprKind::Collection {
+                expansion: expr, ..
+            }
             | ExprKind::Try { body: expr } => self.expr(expr),
             ExprKind::Compare { first, rest } => {
                 self.expr(first);

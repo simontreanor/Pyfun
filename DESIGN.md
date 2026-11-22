@@ -2236,12 +2236,28 @@ Parameterized records (`type Box a = { item: a }`) are polymorphic.
 
 **Motivation.** A bare literal spelling `{ x = 1, y = 2 }` would be a *false friend*
 to Python readers: it reads as a `dict`, but a Python dict is `{ "x": 1 }` (colons, string keys) and a
-Pyfun record is nominal with `=` and bare field names. Pyfun has no dict/map literal (maps are built
-with `Map.of_list` / `Map.add`), so the collision is only against a reader's Python knowledge — but that
-is exactly the "basic stuff should feel familiar" surface we care about (§7.1). Tagging the literal with
+Pyfun record is nominal with `=` and bare field names. The bare brace instead holds what Python gives
+it (**collection literals**, below), so a record written there would collide with a real form as well
+as with a reader's Python knowledge, which is exactly the "basic stuff should feel familiar" surface
+we care about (§7.1). Tagging the literal with
 its type constructor kills the false friend, is **explicit about nominality** (§ decision 1), matches
 Haskell's record syntax (functional pedigree) *and* Python's dataclass call `Point(x=1, y=2)` (familiar),
 and makes construction **mirror** its pattern (below).
+
+**Collection literals: `{"a": 1}` is a `Map`, `{1, 2}` a `Set`, `{}` the empty `Map`.** The bare
+brace reads as it does in Python, a dict display or a set display, and the empty one is the empty
+dict there and the empty `Map` here (the empty set stays `Set.empty`, as Python's is `set()`). With
+the record literal tagged, the forms a bare `{` can open are told apart by what follows the first
+expression: `with` is a record update (`{ p with x = 3 }`), `:` a map entry, and `,` or `}` a set
+element. A trailing comma is allowed, a mix of entries and bare elements is an error naming both
+forms, and the old bare record `{ x = 1 }` keeps its migration error because `=` is none of the three.
+The literal is **sugar with no rules of its own**: the parser builds an `ExprKind::Collection` that
+records the form and holds the expression it means (`Map.of_list [("a", 1)]`, `Set.of_list [1, 2]`,
+`Map.empty`), inference and every analysis read that expansion, and only the pretty-printer and
+lowering look at the form, so the literal prints back as written and lowers to the Python display it
+is spelled as (`{"a": 1}`, `{1, 2}`, `{}`), 1:1. A key or element may be any expression, and its type
+is whatever `Map`/`Set` accept. `:` inside brackets opens no block (§7), so the entry separator needed
+no layout change.
 
 Decisions:
 

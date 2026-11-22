@@ -372,7 +372,7 @@ let first_big = List.find (fun x -> x > 3) ns # Some 4
 
 # Sets and maps lower to Python `set` / `dict`; `Map.find` returns the built-in
 # `Option`, consumed with the `Option` module.
-let uniq = Set.of_list [1, 1, 2, 3]           # {1, 2, 3}
+let uniq = {1, 1, 2, 3}                       # {1, 2, 3}
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 let ada = Option.with_default 0 (Map.find "ada" scores)   # 10
 let nobody = Option.with_default 0 (Map.find "x" scores)  # 0
