@@ -11,6 +11,7 @@ pub mod ast;
 pub mod desugar;
 pub mod diagnostics;
 pub mod lexer;
+pub mod lint;
 pub mod lowering;
 pub mod lsp;
 pub mod parser;
@@ -69,6 +70,9 @@ pub struct Analysis {
     /// Typed holes (`?` / `?name`) and their inferred types — surfaced by the LSP
     /// at `Information` severity (an intentional blank, not an error).
     pub holes: Vec<types::Hole>,
+    /// Warnings (an unreachable arm, an unused binding or import, a top-level
+    /// name bound twice), surfaced by the LSP at `Warning` severity.
+    pub warnings: Vec<diagnostics::Warning>,
     /// Whether the document lexed and parsed with no syntax errors. Mutating
     /// features (rename) require this — a partial module could hide occurrences.
     pub parse_ok: bool,
@@ -114,7 +118,7 @@ pub fn analyze_with_imports(
     let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
     let imports = resolve(&module);
-    let (type_errors, types, holes) = types::check_collecting_with_imports(&module, &imports);
+    let (type_errors, types, holes, warnings) = types::check_reporting(&module, &imports);
     // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
     // by position so cascading errors read top-to-bottom.
     let mut syntax_errors: Vec<_> = lex_errors
@@ -134,8 +138,33 @@ pub fn analyze_with_imports(
         types,
         // Holes surface only once the file parses clean (like type errors).
         holes: if parse_ok { holes } else { Vec::new() },
+        // So do warnings: a half-typed file has unused names everywhere.
+        warnings: if parse_ok { warnings } else { Vec::new() },
         parse_ok,
     }
+}
+
+/// The warnings for a single-file program that parses (none for one that does
+/// not: its errors are what there is to say). `pyfun run` and `pyfun compile`
+/// print these beside the program they build.
+pub fn warnings(source: &str) -> Vec<diagnostics::Warning> {
+    let analysis = analyze(source);
+    if analysis.parse_ok && analysis.diagnostics.is_empty() {
+        analysis.warnings
+    } else {
+        Vec::new()
+    }
+}
+
+/// The warnings an interactive session shows for the entry that begins at byte
+/// `entry_start` of the analyzed text: the ones inside the entry that stand on
+/// their own ([`diagnostics::WarningKind::within_one_entry`]).
+pub fn entry_warnings(analysis: &Analysis, entry_start: usize) -> Vec<&diagnostics::Warning> {
+    analysis
+        .warnings
+        .iter()
+        .filter(|w| w.span.start >= entry_start && w.kind.within_one_entry())
+        .collect()
 }
 
 /// Compile `source` all the way to Python source text (default 3.12+ target).

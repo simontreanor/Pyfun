@@ -8,6 +8,7 @@
   --muted: #8b949e;
   --accent: #7ee787;
   --err: #ff7b72;
+  --warn: #d29922;
   --info: #79c0ff;
   --run-bg: rgba(126, 231, 135, 0.04);
   --run-err-bg: rgba(255, 123, 114, 0.06);
@@ -25,6 +26,7 @@
     --muted: #59636e;
     --accent: #1a7f37;
     --err: #cf222e;
+    --warn: #9a6700;
     --info: #0969da;
     --run-bg: rgba(26, 127, 55, 0.05);
     --run-err-bg: rgba(207, 34, 46, 0.05);
@@ -197,6 +199,7 @@ main {
 #diagnostics.has-diags { border-top: 1px solid var(--border); }
 .diag { font-family: var(--mono); font-size: 13px; line-height: 1.5; padding: 6px 14px; }
 .diag-error { color: var(--err); }
+.diag-warning { color: var(--warn); }
 .diag-info { color: var(--info); }
 
 footer { padding: 10px 24px 14px; color: var(--muted); font-size: 12px; }

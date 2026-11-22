@@ -14,7 +14,7 @@ use wasm_bindgen::prelude::*;
 /// ```json
 /// { "ok": bool,
 ///   "python": string | null,
-///   "diagnostics": [ { "start": int, "end": int, "severity": "error"|"info", "message": string } ] }
+///   "diagnostics": [ { "start": int, "end": int, "severity": "error"|"warning"|"info", "message": string } ] }
 /// ```
 ///
 /// `start`/`end` are **byte** offsets into `source`. `python` is the emitted Python
@@ -38,6 +38,10 @@ pub fn compile(source: &str) -> String {
             None => format!("hole ? : {}", h.ty),
         };
         diagnostics.push(diag(h.span.start, h.span.end, "info", &label));
+    }
+    // Warnings never stop a compile: the Python below them is still emitted.
+    for w in &analysis.warnings {
+        diagnostics.push(diag(w.span.start, w.span.end, "warning", &w.message));
     }
 
     // Emit Python only when the analysis is clean. A residual compile/lowering error

@@ -730,6 +730,10 @@ pub enum CeItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    /// The span of the pattern as written, for a diagnostic about the arm
+    /// (patterns carry no span of their own). `NodeSpan` compares equal, so it
+    /// is invisible to roundtrip.
+    pub pattern_span: NodeSpan,
     pub guard: Option<Expr>,
     pub body: Expr,
 }

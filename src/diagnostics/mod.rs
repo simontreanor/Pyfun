@@ -14,6 +14,54 @@ pub enum Level {
     Note,
 }
 
+/// A warning: something in a program that compiles and is very likely not what
+/// its author meant (`DESIGN.md` §3). A warning never stops a build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    pub kind: WarningKind,
+    pub message: String,
+    pub span: Span,
+}
+
+/// What a warning is about. The kind decides where it is shown: a session that
+/// grows one entry at a time (the REPL, a notebook) binds a name again and
+/// imports ahead of use as a matter of course, so it shows only the kinds that
+/// are about one entry on its own ([`WarningKind::within_one_entry`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarningKind {
+    /// A `case` arm no value reaches.
+    UnreachableArm,
+    /// A local `let` whose name nothing reads.
+    UnusedBinding,
+    /// An `import` nothing in the file uses.
+    UnusedImport,
+    /// An `extern import` no `extern` is rooted at.
+    UnusedExternImport,
+    /// A top-level `let` binding a name an earlier one bound.
+    Rebound,
+}
+
+impl Warning {
+    /// The span is code that does nothing (an unused binding or import, an arm
+    /// that cannot match), which an editor shows faded.
+    pub fn unnecessary(&self) -> bool {
+        self.kind != WarningKind::Rebound
+    }
+}
+
+impl WarningKind {
+    /// Whether the warning stands whatever is entered next: true of an arm
+    /// that cannot match and of an unused local, false of the kinds a later
+    /// entry may answer (an import used below) or that an interactive session
+    /// does on purpose (binding a name again).
+    pub fn within_one_entry(self) -> bool {
+        matches!(
+            self,
+            WarningKind::UnreachableArm | WarningKind::UnusedBinding
+        )
+    }
+}
+
 impl Level {
     fn label(self) -> &'static str {
         match self {

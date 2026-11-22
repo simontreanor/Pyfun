@@ -4,7 +4,7 @@
 //! `lsp`, …) arrives later — see `DESIGN.md` §10.
 //!
 //! Usage:
-//!   pyfun check   <file.pyfun>                  # type-check, report diagnostics
+//!   pyfun check   <file.pyfun> [--strict]       # type-check, report diagnostics
 //!   pyfun compile <file.pyfun> [-o <out>]       # type-check then lower to Python
 //!   pyfun run     <file.pyfun> [--] [args...]   # compile then execute with Python
 //!   pyfun parse   <file.pyfun>                  # canonical pretty-print
@@ -41,10 +41,15 @@ fn main() -> ExitCode {
             println!("pyfun {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some("check") => match args.get(1) {
-            Some(path) => check(path),
-            None => fail("`check` needs a file path"),
-        },
+        Some("check") => {
+            // `--strict` (either side of the path) makes a warning a failure,
+            // for a CI job that keeps a codebase free of them.
+            let strict = args[1..].iter().any(|a| a == "--strict");
+            match args[1..].iter().find(|a| *a != "--strict") {
+                Some(path) => check(path, strict),
+                None => fail("`check` needs a file path"),
+            }
+        }
         Some("compile") => match parse_compile_args(&args[1..]) {
             Ok((path, out, target, native)) => compile(path, out.as_deref(), target, native),
             Err(msg) => fail(&msg),
@@ -87,7 +92,9 @@ fn help() {
     eprintln!("pyfun {}", env!("CARGO_PKG_VERSION"));
     eprintln!();
     eprintln!("usage:");
-    eprintln!("  pyfun check   <file.pyfun>                type-check, report diagnostics");
+    eprintln!(
+        "  pyfun check   <file.pyfun> [--strict]     type-check; --strict fails on a warning"
+    );
     eprintln!("  pyfun compile <file.pyfun> [-o <out>]     type-check then lower to Python");
     eprintln!(
         "                                            (-o is a file for one module, a dir for a project)"
@@ -142,7 +149,33 @@ fn lsp_server() -> ExitCode {
     }
 }
 
-fn check(path: &str) -> ExitCode {
+/// Print `warnings` against `source`, one rendered diagnostic each.
+fn report_warnings(source: &str, warnings: &[pyfun::diagnostics::Warning]) {
+    for w in warnings {
+        eprintln!(
+            "{}\n",
+            diagnostics::render(source, Level::Warning, &w.message, w.span)
+        );
+    }
+}
+
+/// The outcome of a check that found no errors: success, unless `--strict` was
+/// given and there were warnings.
+fn checked_ok(summary: &str, warnings: usize, strict: bool) -> ExitCode {
+    if strict && warnings > 0 {
+        eprintln!(
+            "{}{}",
+            summary.trim_start_matches("ok: "),
+            warning_count(warnings)
+        );
+        eprintln!("error: `--strict` makes a warning a failure");
+        return ExitCode::FAILURE;
+    }
+    eprintln!("{summary}{}", warning_count(warnings));
+    ExitCode::SUCCESS
+}
+
+fn check(path: &str, strict: bool) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
@@ -158,12 +191,15 @@ fn check(path: &str) -> ExitCode {
     };
     // A file with imports is the entry of a multi-module project.
     if has_imports(&module) {
-        return check_project(path);
+        return check_project(path, strict);
     }
-    let (errors, _types, holes, _ordered, _codecs) = pyfun::types::check_collecting(&module);
+    let (errors, _types, holes, warnings) =
+        pyfun::types::check_reporting(&module, &std::collections::HashMap::new());
+    // Warnings come first and never change the outcome: the program below them
+    // still compiles, or still has the errors that follow.
+    report_warnings(&source, &warnings);
     if errors.is_empty() && holes.is_empty() {
-        eprintln!("ok: no type errors");
-        return ExitCode::SUCCESS;
+        return checked_ok("ok: no type errors", warnings.len(), strict);
     }
     let mut first = true;
     for e in &errors {
@@ -210,6 +246,7 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget, native: bool) -> Exi
     }
     let python = match pyfun::compile_with(&source, target, native) {
         Ok((py, notes)) => {
+            report_warnings(&source, &pyfun::warnings(&source));
             report_notes(&notes);
             py
         }
@@ -262,6 +299,7 @@ fn run(path: &str, prog_args: &[String]) -> ExitCode {
     }
     let python = match pyfun::compile_collecting(&source, PyTarget::default()) {
         Ok((py, notes)) => {
+            report_warnings(&source, &pyfun::warnings(&source));
             report_notes(&notes);
             py
         }
@@ -341,9 +379,43 @@ fn render_project_error(entry: &str, error: &ProjectError) -> ExitCode {
 /// Type-check every module of the project, rendering each module's errors against
 /// its own source. Returns `true` if the project type-checks.
 fn check_project_ok(project: &project::Project) -> bool {
-    let groups = project::check(project);
+    check_project_reporting(project).is_some()
+}
+
+/// ` (2 warnings)`, or nothing when there are none: the tail of `check`'s
+/// closing line.
+fn warning_count(n: usize) -> String {
+    match n {
+        0 => String::new(),
+        1 => " (1 warning)".to_string(),
+        n => format!(" ({n} warnings)"),
+    }
+}
+
+/// Type-check the project, printing each module's warnings and errors against
+/// its own source. `Some(count of warnings)` if it type-checks.
+fn check_project_reporting(project: &project::Project) -> Option<usize> {
+    let (groups, warned) = project::check_reporting(project);
+    let source_of = |name: &str| {
+        project
+            .modules
+            .iter()
+            .find(|m| m.name == name)
+            .map(|m| m.source.as_str())
+            .unwrap_or("")
+    };
+    let mut shown = 0;
+    for group in &warned {
+        eprintln!(
+            "-- module `{}` ({}) --",
+            group.name,
+            project::module_file_name(&group.name)
+        );
+        report_warnings(source_of(&group.name), &group.warnings);
+        shown += group.warnings.len();
+    }
     if groups.is_empty() {
-        return true;
+        return Some(shown);
     }
     let mut total = 0;
     for group in &groups {
@@ -367,19 +439,21 @@ fn check_project_ok(project: &project::Project) -> bool {
         }
     }
     eprintln!("\n{total} error{}", if total == 1 { "" } else { "s" });
-    false
+    None
 }
 
-fn check_project(entry: &str) -> ExitCode {
+fn check_project(entry: &str, strict: bool) -> ExitCode {
     let project = match resolve_project(entry) {
         Ok(p) => p,
         Err(code) => return code,
     };
-    if check_project_ok(&project) {
-        eprintln!("ok: no type errors ({} modules)", project.modules.len());
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    match check_project_reporting(&project) {
+        Some(warnings) => checked_ok(
+            &format!("ok: no type errors ({} modules)", project.modules.len()),
+            warnings,
+            strict,
+        ),
+        None => ExitCode::FAILURE,
     }
 }
 

@@ -445,9 +445,12 @@ after the release.
 
 **Checker and diagnostics**
 
-1. **Warnings** (M). `Level::Warning` exists and nothing emits one. First set: an unreachable `case`
-   arm (the usefulness checker already knows), an unused local binding, an unused `import` or
-   `extern`, and a top-level `let` that rebinds an earlier name.
+1. ~~**Warnings**~~ **DONE 2026-11-22** (#204): an unreachable `case` arm, an unused local `let`, an
+   unused `import` or `extern import`, and a top-level `let` that rebinds an earlier name, shown by
+   `check` (`--strict` makes one a failure), `run`, `compile`, the editor, the REPL, the notebook
+   kernel and the playground (`DESIGN.md` §3). An unused `extern` is left out on purpose: a façade
+   module declares externs for others to import. Not yet: an unused parameter or pattern variable,
+   and an unused top-level `let` in a program's entry module.
 2. ~~**Local mutation stays pure**~~ **DONE 2026-11-22** (#196): a `let mut` assigned in the body of the
    function that declares it performs nothing, so `let pure` covers the accumulator style. A closure
    or a computation-expression body assigning it, and a module-level `let mut`, keep their `io`

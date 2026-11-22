@@ -94,6 +94,7 @@
         ? "running…"
         : "starting the compiler and Python runtime… (the first run on the site downloads ~10 MB; every page then shares the same live runtime)";
       btn.disabled = true;
+      var warned = "";
       plumbing()
         .then(function (r) {
           mod.markRunnerUsed();
@@ -106,6 +107,11 @@
               out.textContent = msgs.length ? msgs.join("\n") : "(nothing to compile)";
               return null;
             }
+            // Warnings do not stop the run; they lead its output.
+            warned = result.diagnostics
+              .filter(function (d) { return d.severity === "warning"; })
+              .map(function (d) { return "warning: " + d.message + "\n"; })
+              .join("");
             return r.run(result.python);
           });
         })
@@ -113,9 +119,9 @@
           if (!res) return;
           if (res.err) {
             out.className = "pyfun-run-out pyfun-run-err";
-            out.textContent = (res.out ? res.out + "\n" : "") + res.err;
+            out.textContent = warned + (res.out ? res.out + "\n" : "") + res.err;
           } else {
-            out.textContent = res.out.length ? res.out : "(ran with no output)";
+            out.textContent = warned + (res.out.length ? res.out : "(ran with no output)");
           }
         })
         .catch(function (e) {

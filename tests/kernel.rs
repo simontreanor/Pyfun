@@ -204,3 +204,36 @@ fn an_unknown_op_is_an_error_and_the_engine_survives() {
     assert_eq!(reply.status, "error");
     assert_eq!(engine.eval("1 + 1").status, "ok");
 }
+
+#[test]
+fn a_cells_warnings_lead_its_output() {
+    let mut engine = Engine::spawn();
+    // An unused local in a definition: the warning, then the type echo.
+    let reply = engine.eval("let f n =\n  let unused = 1\n  n + 1");
+    assert_eq!(reply.status, "ok");
+    assert!(
+        reply.message.starts_with("warning: `unused` is never used"),
+        "{}",
+        reply.message
+    );
+    assert!(
+        reply.message.ends_with("f : int -> int\n"),
+        "{}",
+        reply.message
+    );
+    // An unreachable arm in a trailing expression.
+    let reply = engine.eval("match 1:\n  case 1: \"a\"\n  case 1: \"b\"\n  case _: \"c\"");
+    assert_eq!(reply.status, "ok");
+    assert!(
+        reply
+            .message
+            .contains("warning: this `case` can never match"),
+        "{}",
+        reply.message
+    );
+    // Binding a name again is how a notebook goes: not a warning here, and the
+    // earlier cell's unused local is not repeated.
+    let reply = engine.eval("let f n = n + 2");
+    assert_eq!(reply.status, "ok");
+    assert_eq!(reply.message, "f : int -> int\n");
+}

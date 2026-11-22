@@ -75,6 +75,43 @@ Example diagnostics the compiler must produce (rustc-style, with spans, codes, a
 type mismatch (`add "hello" 5`), non-exhaustive `match` (missing `None` case), reassignment of an
 immutable binding.
 
+**Warnings.** An error is a program the compiler will not build. A warning is a program it builds
+while something in it does nothing, which is very likely not what its author meant. A warning never
+stops a build. The set is small and each member is certain, since a warning that is sometimes wrong
+teaches people to stop reading them:
+
+- **A `case` that can never match**: the arms above it already take every value it would. It is
+  the same usefulness question exhaustiveness asks (§7.2), put to each arm against the unguarded
+  arms before it, so it sees through constructors, tuples, records, lists and or-patterns
+  (`(True, True)` after `(True, _)`, `Some 3` after `Some x`, `_` after every constructor). A
+  guarded arm above takes nothing for certain. A match over an active pattern, or with a list
+  pattern that has elements after its star, is not judged.
+- **A local `let` nothing reads**, in a block or a computation expression. A name beginning with
+  `_` says the binding is unused on purpose. Parameters, pattern variables and loop targets are not
+  reported, because they are often there for the shape and not for the name; neither is a top-level
+  `let`, which another module may import. A program with a typed hole is unfinished on purpose, and
+  the unused name is very likely what the hole is waiting for, so this warning waits until the holes
+  are filled.
+- **An `import` nothing uses.** A use is a `Module.member` anywhere (an expression, a pattern, a
+  record tag, a type, a computation expression's builder) and also what crosses a module boundary
+  without a qualifier: a type named bare, a record's field read by name. A module that exports
+  measures is never reported, since a unit carries no mark of where it came from.
+- **An `extern import` no `extern` in the file is rooted at.**
+- **A top-level `let` that binds a name an earlier one bound.** The later one replaces it for the
+  rest of the file.
+
+An unused `extern` is deliberately not on the list: a module of `extern` declarations is a façade
+written for other modules to import.
+
+**Where they show.** `pyfun check` prints them and still succeeds (`ok: no type errors (2
+warnings)`); `pyfun check --strict` makes any warning a failure, for a CI job. `pyfun run` and
+`pyfun compile` print them on stderr beside the program they build. The language server publishes
+them at `Warning` severity, tagging code that does nothing as `Unnecessary` so an editor fades it.
+The playground and the lessons' runner list them with the output. The REPL and the notebook kernel
+show the two kinds that are about one entry alone (an unreachable arm, an unused local): a session
+binds a name again and imports ahead of use as it goes. Warnings are shown only for a file that
+parses.
+
 ## 4. Effect system — first-class MVP goal
 Unlike F# (which has no real effect system, only computation expressions), Pyfun treats **purity
 and effects as part of the type system from the MVP.** This is a defining feature, not a

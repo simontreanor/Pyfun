@@ -574,6 +574,20 @@ impl Server {
                 ("message", str(h.message())),
             ]));
         }
+        // Warnings at Warning severity (2). Code that does nothing carries the
+        // `Unnecessary` tag (1), which an editor renders faded.
+        for w in &analysis.warnings {
+            let mut fields = vec![
+                ("range", span_range(text, w.span)),
+                ("severity", int(2)), // Warning
+                ("source", str("pyfun")),
+                ("message", str(w.message.clone())),
+            ];
+            if w.unnecessary() {
+                fields.push(("tags", Json::Array(vec![int(1)])));
+            }
+            items.push(obj(fields));
+        }
         publish_diagnostics(uri, Json::Array(items))
     }
 
@@ -2004,6 +2018,41 @@ let n = max 1",
             out[0].get("method").unwrap().as_str(),
             Some("textDocument/publishDiagnostics")
         );
+    }
+
+    #[test]
+    fn warnings_are_published_at_warning_severity_and_dead_code_is_tagged() {
+        let mut server = Server::default();
+        let uri = "file:///warn.pyfun";
+        let src = "let total = 1\nlet f n =\n  let unused = 5\n  n\nlet total = 2";
+        let out = server.handle(&json::parse(&open_msg(uri, src)).unwrap());
+        let diags = out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap();
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        // Severity 2 = Warning, for both.
+        for d in diags {
+            assert_eq!(d.get("severity").unwrap().as_i64(), Some(2));
+        }
+        // The unused local is code that does nothing: tag 1 = Unnecessary,
+        // which an editor fades. A rebound name is live code, so no tag.
+        let message = |d: &Json| d.get("message").unwrap().as_str().unwrap().to_string();
+        let unused = diags
+            .iter()
+            .find(|d| message(d).contains("never used"))
+            .unwrap();
+        let tags = unused.get("tags").unwrap().as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].as_i64(), Some(1));
+        let rebound = diags
+            .iter()
+            .find(|d| message(d).contains("already bound"))
+            .unwrap();
+        assert!(rebound.get("tags").is_none());
     }
 
     #[test]

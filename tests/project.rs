@@ -2137,3 +2137,61 @@ fn e2e_record_bodied_constructors_cross_a_module_boundary() {
         );
     }
 }
+
+/// The warnings `project::check_reporting` gives for module `Main`, as messages.
+fn main_warnings(modules: &[(&str, &str)]) -> Vec<String> {
+    let project = build_mem("Main", modules);
+    let (errors, warned) = project::check_reporting(&project);
+    assert!(errors.is_empty(), "{errors:?}");
+    warned
+        .into_iter()
+        .filter(|m| m.name == "Main")
+        .flat_map(|m| m.warnings)
+        .map(|w| w.message)
+        .collect()
+}
+
+#[test]
+fn an_import_nothing_uses_is_reported() {
+    let lib = (
+        "Lib",
+        "type Shape = Circle float | Dot\n\
+         type Point = { px: int, py: int }\n\
+         extern type Handle\n\
+         let origin = Point { px = 0, py = 0 }\n\
+         let area s =\n  match s:\n    case Circle r: r\n    case Dot: 0.0\n\
+         let bind m f = Option.bind f m\n\
+         let return_ x = Some x",
+    );
+    assert_eq!(
+        main_warnings(&[lib, ("Main", "import Lib\nprint 1")]),
+        ["`import Lib` is never used"]
+    );
+    // Every way a file can use a module without a warning: a value, a
+    // constructor in an expression and in a pattern, a record tag, a type in
+    // an annotation (qualified or bare), a computation expression's builder,
+    // and a record's field read by name.
+    for body in [
+        "print (Lib.area Lib.Dot)",
+        "let d = Lib.Dot",
+        "let f s =\n  match s:\n    case Lib.Circle r: r\n    case _: 0.0",
+        "let p = Lib.Point { px = 1, py = 2 }",
+        "let f p =\n  match p:\n    case Lib.Point { px }: px",
+        "type Holder = { item: Lib.Shape }",
+        "type Holder = Held Point | Empty",
+        "extern use : Handle -> int = lib.use",
+        "let m = Lib {\n  let! x = Some 1\n  return x\n}",
+        "let f p = p.px + 1",
+    ] {
+        let warnings = main_warnings(&[lib, ("Main", &format!("import Lib\n{body}"))]);
+        assert!(
+            !warnings.iter().any(|w| w.contains("import Lib")),
+            "`{body}` uses Lib, but: {warnings:?}"
+        );
+    }
+    // A module that exports measures is never reported: a unit crosses without
+    // a qualifier, so nothing in the file says where `m` came from.
+    let units = ("Units", "measure m\nlet metre = 1.0<m>");
+    assert!(main_warnings(&[units, ("Main", "import Units\nlet d = 5.0<m>")]).is_empty());
+    assert!(main_warnings(&[units, ("Main", "import Units\nprint 1")]).is_empty());
+}
