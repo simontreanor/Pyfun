@@ -71,7 +71,7 @@ desugaring rules live in the internals chapter on
 
 Complete the `Maybe` builder by filling both holes, then `add_three` chains three optional values and
 returns their sum, stopping at the first `None`. The first hole (in the `Some x` arm of `bind`) has
-type `Option 'a`, and the compiler suggests `f` among the fits, so run the continuation `f` on the
+type `Option a`, and the compiler suggests `f` among the fits, so run the continuation `f` on the
 unwrapped `x`. The second hole is the body of `return_`, which must wrap its argument back up as an
 `Option`.
 

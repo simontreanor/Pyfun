@@ -80,7 +80,7 @@ float<'u>`. `cbrt` is the identical mechanism with `pow(3)`.
 The mismatch is a real compile error. `pyfun check` on `3.0<m> + 4.0<s>`:
 
 ```text
-error: type mismatch: expected float<m>, found float<s>
+error: type mismatch: expected `float<m>`, found `float<s>`
  --> 4:11
   |
 4 | let bad = 3.0<m> + 4.0<s>

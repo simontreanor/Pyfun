@@ -39,7 +39,7 @@ Adding quantities with different units is where the checker steps in. Writing `d
 is rejected before any Python is produced:
 
 ```console
-error: type mismatch: expected float<m>, found float<s>
+error: type mismatch: expected `float<m>`, found `float<s>`
 ```
 
 The units exist only during type checking. They erase at lowering, so the emitted Python is plain
@@ -75,7 +75,7 @@ print speed
 The checker reports:
 
 ```console
-error: type mismatch: expected float<m>, found float<s>
+error: type mismatch: expected `float<m>`, found `float<s>`
  --> 8:13
   |
 8 | let speed = distance + elapsed

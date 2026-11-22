@@ -84,7 +84,7 @@ later add-on, and it shapes inference and lowering — so it must be designed in
 [`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, observable mutation via `<-` —,
 `async`, and `spawn`, which `Task.start` performs and only a `Task.scope` discharges, §8) plus effect
 *variables* for polymorphism. Effects are **inferred and never written in
-ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : 'a ->{io}
+ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : a ->{io}
 unit` and impurity **propagate automatically** (calling an impure function makes you impure), and
 labels from different calls **union** (a body that prints and fetches is `->{io, async}`). Defining a
 function is pure — its body's effect is the *latent* effect on its innermost arrow. Effect variables
@@ -532,7 +532,7 @@ emits ordinary `def`s.)
 Treat interop type-mapping and FFI surfaces as load-bearing architecture.
 
 **The prelude (first realized interop surface).** A small set of built-in functions gives programs
-something to call. The MVP prelude is `print : 'a -> unit` and the unit-polymorphic numerics
+something to call. The MVP prelude is `print : a -> unit` and the unit-polymorphic numerics
 `abs`/`min`/`max : int<'u> -> …`, plus the **unit-preserving numeric conversions**
 `round`/`floor`/`ceil`/`truncate : float<'u> -> int<'u>` (`round` is a bare Python builtin; `floor`/`ceil`/
 `truncate` lower to `math.floor`/`ceil`/`trunc` with `import math` — the extern dotted-target path — while
@@ -542,7 +542,7 @@ staying *unqualified* Pyfun names), plus the **unit-aware roots `sqrt : float<'u
 `cbrt` is not correctly rounded, so `cbrt 27.0` prints `3.0000000000000004` on Linux and `3.0` on Windows: the
 last digit of a float maths function can differ between systems), plus a `unit` type whose one value is written `()` (both lower to
 Python `None` — the natural result of an effectful call). It also seeds the **standard combinators**
-`id : 'a -> 'a`, `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, and
+`id : a -> a`, `const : a -> b -> a`, `ignore : a -> unit`, and
 `flip : (a -> b -> c) -> b -> a -> c` (fully type-polymorphic; `id`/`const`/`ignore` are pure, while
 `flip` is **effect-polymorphic** because it calls its function argument — flipping an impure function
 is `io`). Unlike the numeric builtins these can't lower name-for-name (Python's `id` returns a memory
@@ -1552,6 +1552,16 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
+**A type is displayed the way it is written.** Hover, the REPL, a hole's note and every message
+print a type variable bare (`List.map : (a -> b) -> List a -> List b`), which is how an `extern`
+signature and a `type` declaration spell one; the ML quote (`'a`) that releases before 0.11 printed
+was a second notation for the same thing. A **unit** variable keeps its quote (`float<'u^2> ->
+float<'u>`), because that is how a signature writes it: bare, it would read as a measure of that
+name. A type application on the left of an arrow carries no parentheses, since application binds
+tighter than `->` in the type grammar (`Map a b -> Option b`); a function there keeps them. And a
+type inside a message is always in backticks (``expected `List a`, found `int` ``), like every other
+piece of code a message quotes, so a bare `a` is never mistaken for the English word.
+
 **A Python habit is answered with the Pyfun form.** The audience arrives with Python in its
 fingers, and most Python-shaped mistakes are errors anyway, at a token that says little (`expected an
 expression, found =`). So the compiler reads the shape and names the form that replaces it: `x = 5`
@@ -1659,9 +1669,9 @@ down.
    operator, lowering stays purely syntactic — no need to consult inferred types to choose `/` vs
    `//` (the type-directed-lowering problem this would otherwise create disappears).
 2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics)
-   are typed with a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a ->
-   'a`. `int` and `float` (with any units) satisfy `num`; `bool`/`str` do not (→ "expected int,
-   found bool"). Generic functions like `area`/`min`/`max` stay polymorphic over int *and* float
+   are typed with a single compiler-known constraint: `let add a b = a + b : num a => a -> a ->
+   a`. `int` and `float` (with any units) satisfy `num`; `bool`/`str` do not (→ "expected `int`,
+   found `bool`"). Generic functions like `area`/`min`/`max` stay polymorphic over int *and* float
    *and* units — the property a hard-coded int-default would throw away. No type annotations are ever
    required (Pyfun has none anyway). Implemented as a `Ty::Num(var, unit)` variant resolved by a tiny
    `num` union-find, with `num` variables generalized/instantiated alongside type and unit variables.
@@ -1673,7 +1683,7 @@ down.
    the `(-)` operator section, and enables **negative integer literal patterns** (`case -1:`, the sign
    folded into the pattern, as Python's `match` allows). Lowers to Python `-x`.
 3. **Polymorphic numeric literals; default `int`.** An integer literal `1` has type
-   `num 'a => 'a` and adapts to context, so mixed-literal arithmetic just works the Python way:
+   `num a => a` and adapts to context, so mixed-literal arithmetic just works the Python way:
    `1 + 2.0 : float`. Float literals (`1.5`) are concretely `float`, and include **scientific notation**
    (`1e6`, `2.5e-3`, `1E3`, `6.674e-11<m^3 / kg s^2>`): the lexer consumes the exponent (including its
    sign, so `e-3` isn't handed to unary minus), a number carrying an exponent is `float` even with no
@@ -1699,7 +1709,7 @@ down.
 
 6. **Comparison & equality.** `< > <= >=` carry a closed built-in **`comparison`**
    constraint, implemented like `num` (an `ord` constraint set on type variables, propagated through
-   unification and generalized), so `let lt a b = a < b` infers `comparison 'a => 'a -> 'a -> bool`.
+   unification and generalized), so `let lt a b = a < b` infers `comparison a => a -> a -> bool`.
    The constraint is satisfied by `int`/`float`/`str` **and by
    user sum types, records, tuples, the built-in `Option`/`Result`, and `List`, compared structurally**
    (bools and functions are still rejected).
@@ -1710,7 +1720,7 @@ down.
    | Node Tree Tree` orders structurally). `require_ord` recurses into a `Con`'s constructor/record field
    types (its type params substituted by the actual arguments) with a **visiting-set recursion guard**
    (keyed on the full `(name, args)`, so a recursive occurrence terminates while `List a` vs `List (List
-   a)` stay distinct) — and the deferred-var mechanism still flows a late-resolved `comparison 'a` through
+   a)` stay distinct) — and the deferred-var mechanism still flows a late-resolved `comparison a` through
    this path via the `unify` hook. Codegen (§8.3): a **record** derives ordering from
    `@dataclass(order=True)`, which compares its field tuple. A sum **variant** needs a cross-variant key,
    so it defines `_pf_order_key` → `(variant_index, field0, …)` and one `__lt__`, and `@functools.total_ordering`
@@ -1723,7 +1733,7 @@ down.
    A single-file compile sees the whole program, so this is exact and sound; a multi-file project falls back
    to always-on (a type may be compared in another, separately-compiled module).
    **Not orderable:** `Set`/`Map` (no natural element-wise order) and `Async`/`Seq`/`Exception` —
-   comparing them is a type error. `== !=` need **no** constraint — they're `'a -> 'a -> bool` (same type, every type has
+   comparing them is a type error. `== !=` need **no** constraint — they're `a -> a -> bool` (same type, every type has
    equality), and generated ADT classes get a structural `__eq__` so `Some 1 == Some 1`. Both produce
    `bool` and are looser than arithmetic, tighter than `|>`. Surface wrinkle: `<` opens a unit
    annotation only when *adjacent* to a literal (`5<m>`); spaced (`5 < m`) it is less-than — the F#
@@ -2385,7 +2395,7 @@ Decisions:
      `dataclass`/named classes, the readable-Python target). A **non-goal** — and the multimap made it
      unnecessary for the problems it was held in reserve for.
 
-   *(Row polymorphism, for the record: `fun p -> p.x` would type as `{ x : 'a | 'r } -> 'a`, `'r` a row
+   *(Row polymorphism, for the record: `fun p -> p.x` would type as `{ x : a | 'r } -> a`, `'r` a row
    variable standing for "whatever other fields are present," so the function works on any record with an
    `x`. PureScript/Elm build extensible records on it. It stays out of scope.)*
 

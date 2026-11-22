@@ -93,7 +93,7 @@ fn recursive_function_has_the_expected_type() {
     // it on a bool is a type error.
     assert_error_contains(
         "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\nlet bad = fact True",
-        "expected int, found bool",
+        "expected `int`, found `bool`",
     );
 }
 
@@ -333,13 +333,13 @@ fn sqrt_halves_even_mixed_exponents() {
 #[test]
 fn rejects_sqrt_of_an_odd_exponent_unit() {
     // `m^3` is not a square — a dimensional error, not a silently-lost unit.
-    assert_error_contains("measure m\nlet bad = sqrt 2.0<m^3>", "found float<m^3>");
+    assert_error_contains("measure m\nlet bad = sqrt 2.0<m^3>", "found `float<m^3>`");
 }
 
 #[test]
 fn rejects_sqrt_of_a_bare_unit() {
     // `m` is not a square either: there is no unit whose square is `m`.
-    assert_error_contains("measure m\nlet bad = sqrt 2.0<m>", "found float<m>");
+    assert_error_contains("measure m\nlet bad = sqrt 2.0<m>", "found `float<m>`");
     // The expected side names the square, pointing at what sqrt needs.
     assert_error_contains("measure m\nlet bad = sqrt 2.0<m>", "^2>");
 }
@@ -379,10 +379,10 @@ fn cbrt_thirds_a_cube_unit() {
 fn rejects_cbrt_of_a_non_cube_unit() {
     // `m^2`, bare `m`, and `m^4` are not perfect cubes — dimensional errors, not
     // silently-lost units. The expected side names the cube (`'a^3`).
-    assert_error_contains("measure m\nlet bad = cbrt 4.0<m^2>", "found float<m^2>");
+    assert_error_contains("measure m\nlet bad = cbrt 4.0<m^2>", "found `float<m^2>`");
     assert_error_contains("measure m\nlet bad = cbrt 4.0<m^2>", "^3>");
-    assert_error_contains("measure m\nlet bad = cbrt 2.0<m>", "found float<m>");
-    assert_error_contains("measure m\nlet bad = cbrt 2.0<m^4>", "found float<m^4>");
+    assert_error_contains("measure m\nlet bad = cbrt 2.0<m>", "found `float<m>`");
+    assert_error_contains("measure m\nlet bad = cbrt 2.0<m^4>", "found `float<m^4>`");
 }
 
 #[test]
@@ -639,7 +639,7 @@ fn rejects_newtype_where_underlying_expected() {
     // Nominal distinctness: a `UserId` is not a `string`.
     assert_error_contains(
         "opaque type UserId = str\nlet bad = String.len (UserId \"x\")",
-        "expected str, found UserId",
+        "expected `str`, found `UserId`",
     );
 }
 
@@ -650,7 +650,7 @@ fn rejects_underlying_where_newtype_expected() {
         "opaque type UserId = str\n\
          let name u =\n  match u:\n    case UserId s: s\n\
          let bad = name \"raw\"",
-        "expected UserId, found str",
+        "expected `UserId`, found `str`",
     );
 }
 
@@ -688,20 +688,20 @@ fn rejects_opaque_type_clashing_with_an_existing_type() {
 fn rejects_argument_type_mismatch() {
     assert_error_contains(
         "let add a b = a + b\nlet r = add 1 True",
-        "expected int, found bool",
+        "expected `int`, found `bool`",
     );
 }
 
 #[test]
 fn rejects_non_bool_condition() {
-    assert_error_contains("let r = if 1 then 2 else 3", "expected bool, found int");
+    assert_error_contains("let r = if 1 then 2 else 3", "expected `bool`, found `int`");
 }
 
 #[test]
 fn rejects_branch_type_mismatch() {
     assert_error_contains(
         "let r = if True then 1 else \"x\"",
-        "expected int, found str",
+        "expected `int`, found `str`",
     );
 }
 
@@ -720,7 +720,7 @@ fn rejects_infinite_type() {
 fn rejects_match_arm_result_mismatch() {
     assert_error_contains(
         "let f n =\n  match n:\n    case 0: 1\n    case _: \"two\"",
-        "expected int, found str",
+        "expected `int`, found `str`",
     );
 }
 
@@ -987,7 +987,7 @@ fn deep_check_still_requires_wildcard_for_open_inner_type() {
 fn rejects_constructor_used_at_wrong_type() {
     // `Some` produces an `Option`, not an `int`.
     let src = "let r = (Some 1) + 1";
-    assert_error_contains(src, "expected int, found Option");
+    assert_error_contains(src, "expected `int`, found `Option");
 }
 
 #[test]
@@ -1065,7 +1065,7 @@ fn a_for_body_cannot_return_and_a_for_source_must_be_a_collection() {
     );
     assert_error_contains(
         "let s = seq { for x in 3: yield x }",
-        "expected List 'a, found int",
+        "expected `List a`, found `int`",
     );
     assert_error_contains(
         "let s = seq { for x in [1]: yield x  yield \"s\" }",
@@ -1150,7 +1150,7 @@ fn rejects_user_ce_return_before_end() {
 fn rejects_binding_wrong_monad() {
     // `let!` in an async block must bind an Async, not a Seq.
     let src = "let a = async { let! x = (seq { yield 1 })  return x }";
-    assert_error_contains(src, "expected Async");
+    assert_error_contains(src, "expected `Async");
 }
 
 // ---------- units of measure ----------
@@ -1175,7 +1175,7 @@ fn accepts_unit_polymorphic_function() {
 fn rejects_adding_different_units() {
     assert_error_contains(
         "measure m\nmeasure s\nlet bad = 1<m> + 1<s>",
-        "expected int<m>, found int<s>",
+        "expected `int<m>`, found `int<s>`",
     );
 }
 
@@ -1217,7 +1217,7 @@ fn derived_measure_dimension_mismatch_shows_expansion() {
     // The alias displays expanded (no abbreviation tracking in the MVP).
     assert_error_contains(
         "measure kg\nmeasure m\nmeasure s\nmeasure N = kg m / s^2\nlet bad = 1<N> + 1<m>",
-        "expected int<kg m/s^2>, found int<m>",
+        "expected `int<kg m/s^2>`, found `int<m>`",
     );
 }
 
@@ -1240,7 +1240,7 @@ fn rejects_unit_result_used_at_wrong_unit() {
     // speed is m/s, so adding metres is a dimension error. Uses `//` so the
     // result stays `int` (`/` would make it `float`, a different mismatch).
     let src = "measure m\nmeasure s\nlet speed = 100<m> // 10<s>\nlet bad = speed + 1<m>";
-    assert_error_contains(src, "expected int<m/s>, found int<m>");
+    assert_error_contains(src, "expected `int<m/s>`, found `int<m>`");
 }
 
 #[test]
@@ -1266,7 +1266,7 @@ fn rejects_mixing_concrete_int_and_float() {
     // Literals adapt, but two *concrete* numeric bases don't implicitly coerce:
     // `f` is forced to `int` by its int-literal pattern, so `1.0 + f 0` clashes.
     let src = "let f n =\n  match n:\n    case 0: n\n    case _: n\nlet r = 1.0 + f 0";
-    assert_error_contains(src, "found int");
+    assert_error_contains(src, "found `int`");
 }
 
 #[test]
@@ -1301,7 +1301,7 @@ fn accepts_unit_polymorphic_numeric_builtins() {
 fn rejects_min_across_different_units() {
     assert_error_contains(
         "measure m\nmeasure s\nlet bad = min 3<m> 5<s>",
-        "expected int<m>, found int<s>",
+        "expected `int<m>`, found `int<s>`",
     );
 }
 
@@ -1346,7 +1346,7 @@ fn rejects_comparison_of_unorderable_type() {
 #[test]
 fn rejects_equality_across_different_types() {
     // Equality requires both sides to have the same type.
-    assert_error_contains("let r = 1 == \"x\"", "expected int, found str");
+    assert_error_contains("let r = 1 == \"x\"", "expected `int`, found `str`");
 }
 
 #[test]
@@ -1514,9 +1514,9 @@ fn accepts_boolean_operators() {
 
 #[test]
 fn rejects_non_bool_logical_operands() {
-    assert_error_contains("let r = 1 and True", "expected bool, found int");
-    assert_error_contains("let r = True or 2", "expected bool, found int");
-    assert_error_contains("let r = not 5", "expected bool, found int");
+    assert_error_contains("let r = 1 and True", "expected `bool`, found `int`");
+    assert_error_contains("let r = True or 2", "expected `bool`, found `int`");
+    assert_error_contains("let r = not 5", "expected `bool`, found `int`");
 }
 
 #[test]
@@ -1641,7 +1641,7 @@ fn rejects_unknown_field_access_on_an_unknown_base() {
 fn rejects_wrong_record_field_type() {
     assert_error_contains(
         "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = True }",
-        "expected int, found bool",
+        "expected `int`, found `bool`",
     );
 }
 
@@ -1892,7 +1892,7 @@ fn a_deferred_field_is_still_type_checked() {
          \x20   let l = c.letter\n\
          \x20   let flag = c.blank\n\
          \x20   l + 1",
-        "expected int, found str",
+        "expected `int`, found `str`",
     );
 }
 
@@ -2325,7 +2325,7 @@ fn fst_and_snd_project_a_pair() {
     assert!(pyfun::check("let b = snd (1, \"x\")\nlet s = String.len b").is_ok());
     // They are ordinary values, so they pass to a higher-order function.
     assert!(pyfun::check("let firsts = List.map fst (List.zip [1] [\"a\"])").is_ok());
-    assert_error_contains("let bad = fst 1", "found int");
+    assert_error_contains("let bad = fst 1", "found `int`");
 }
 
 // ---------- record patterns ----------
@@ -2488,7 +2488,7 @@ fn rejects_assigning_unbound_binding() {
 
 #[test]
 fn rejects_reassignment_with_wrong_type() {
-    assert_error_contains("let mut x = 0\nx <- True", "expected int, found bool");
+    assert_error_contains("let mut x = 0\nx <- True", "expected `int`, found `bool`");
 }
 
 #[test]
@@ -2572,11 +2572,8 @@ fn a_recursive_function_of_arity_two_can_perform_io() {
     );
     // The effect lands on the innermost arrow, exactly as for a declared extern.
     assert!(
-        analysis
-            .types
-            .iter()
-            .any(|t| t.ty == "'a -> int ->{io} int"),
-        "expected `'a -> int ->{{io}} int`, got {:?}",
+        analysis.types.iter().any(|t| t.ty == "a -> int ->{io} int"),
+        "expected `a -> int ->{{io}} int`, got {:?}",
         analysis.types
     );
 }
@@ -2999,7 +2996,7 @@ fn a_callback_of_the_wrong_type_keeps_its_type_mismatch() {
                let listen = serve 5 7777";
     assert_eq!(
         errors(src),
-        ["type mismatch: expected Writer -> Async unit, found int"]
+        ["type mismatch: expected `Writer -> Async unit`, found `int`"]
     );
 }
 
@@ -3093,7 +3090,7 @@ fn empty_list_is_polymorphic() {
 
 #[test]
 fn rejects_heterogeneous_list() {
-    assert_error_contains("let bad = [1, True]", "expected int, found bool");
+    assert_error_contains("let bad = [1, True]", "expected `int`, found `bool`");
 }
 
 // ---------- tuples ----------
@@ -3549,7 +3546,7 @@ fn map_of_list_and_to_list_round_trip_through_pairs() {
 #[test]
 fn rejects_map_of_list_from_a_non_pair_list() {
     // `Map.of_list` needs a list of pairs, not a list of ints.
-    assert_error_contains("let bad = Map.of_list [1, 2, 3]", "found int");
+    assert_error_contains("let bad = Map.of_list [1, 2, 3]", "found `int`");
 }
 
 #[test]
@@ -3557,7 +3554,7 @@ fn set_element_type_is_enforced() {
     // `Set.add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
     assert_error_contains(
         "let bad = Set.add \"x\" (Set.of_list [1, 2])",
-        "expected str, found int",
+        "expected `str`, found `int`",
     );
 }
 
@@ -3708,7 +3705,7 @@ fn qualified_member_type_is_enforced() {
     // `M.inc : int -> int`, so applying it to a bool is a type error.
     assert_error_contains(
         "module M =\n  let inc n = n + 1\nlet bad = M.inc True",
-        "expected int, found bool",
+        "expected `int`, found `bool`",
     );
 }
 
@@ -3759,7 +3756,7 @@ fn extern_type_is_generalized_over_its_variables() {
 fn extern_is_type_checked_at_the_call_site() {
     assert_error_contains(
         "extern pure tan: float -> float = math.tan\nlet bad = tan \"x\"",
-        "expected float, found str",
+        "expected `float`, found `str`",
     );
 }
 
@@ -4510,12 +4507,12 @@ fn a_tuple_target_binds_each_element_at_its_own_type() {
 
 #[test]
 fn a_tuple_target_must_match_the_value_shape() {
-    assert_error_contains("let (a, b) = 5", "expected ('a, 'b), found int");
+    assert_error_contains("let (a, b) = 5", "expected `(a, b)`, found `int`");
 }
 
 #[test]
 fn a_tuple_target_must_match_the_value_arity() {
-    assert_error_contains("let (a, b, c) = (1, 2)", "found (int, int)");
+    assert_error_contains("let (a, b, c) = (1, 2)", "found `(int, int)`");
 }
 
 #[test]
@@ -4559,7 +4556,7 @@ fn a_destructuring_let_bang_unwraps_before_it_destructures() {
     // The target sees the *inner* type, so a non-tuple payload is the error.
     assert_error_contains(
         "let f r = result {\n  let! (a, b) = r\n  return a\n}\nlet g = f (Ok 1)",
-        "expected ('a, 'b), found int",
+        "expected `(a, b)`, found `int`",
     );
 }
 
@@ -4583,7 +4580,10 @@ fn option_block_chains_several_binds() {
 
 #[test]
 fn option_block_requires_an_option_to_bind() {
-    assert_error_contains("let f = option { let! x = 1  return x }", "expected Option");
+    assert_error_contains(
+        "let f = option { let! x = 1  return x }",
+        "expected `Option",
+    );
 }
 
 #[test]
@@ -4679,7 +4679,7 @@ fn the_string_type_is_str_and_the_old_name_is_reserved() {
         .is_ok()
     );
     // Types display under the same name.
-    assert_error_contains("let inc x = x + 1\nlet bad = inc \"a\"", "found str");
+    assert_error_contains("let inc x = x + 1\nlet bad = inc \"a\"", "found `str`");
     // A lowercase name the checker does not know is a type *variable* in an
     // extern signature, so the old name has to be refused outright: left alone,
     // `string -> int` would accept every argument type.
@@ -4883,15 +4883,15 @@ fn collection_literals_type_as_the_collections_they_build() {
     // a set one type; the error points at the item that breaks it.
     assert_error_contains(
         "let bad = {\"a\": 1, \"b\": \"two\"}",
-        "expected int, found str",
+        "expected `int`, found `str`",
     );
     assert_error_contains(
         "let bad = {1: \"a\", \"2\": \"b\"}",
-        "expected int, found str",
+        "expected `int`, found `str`",
     );
-    assert_error_contains("let bad = {1, \"two\"}", "expected int, found str");
+    assert_error_contains("let bad = {1, \"two\"}", "expected `int`, found `str`");
     // A literal is the collection it builds, not a list.
-    assert_error_contains("let bad = List.len {1, 2}", "expected List");
+    assert_error_contains("let bad = List.len {1, 2}", "expected `List");
 }
 
 #[test]
@@ -5069,9 +5069,12 @@ fn membership_is_typed_by_what_is_searched() {
         .is_ok()
     );
     // The left side has to be what the right side holds.
-    assert_error_contains("let bad = \"a\" in [1, 2]", "expected int, found str");
-    assert_error_contains("let bad = 1 in {\"Ada\": 36}", "expected str, found int");
-    assert_error_contains("let bad = 1 in \"hello\"", "expected str, found int");
+    assert_error_contains("let bad = \"a\" in [1, 2]", "expected `int`, found `str`");
+    assert_error_contains(
+        "let bad = 1 in {\"Ada\": 36}",
+        "expected `str`, found `int`",
+    );
+    assert_error_contains("let bad = 1 in \"hello\"", "expected `str`, found `int`");
     assert_error_contains(
         "let bad = 1 in 5",
         "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`",

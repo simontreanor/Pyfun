@@ -235,7 +235,7 @@ fn run_refuses_to_execute_ill_typed_code() {
     assert!(!output.status.success(), "ill-typed code must not run");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("expected int, found bool"),
+        stderr.contains("expected `int`, found `bool`"),
         "expected a type diagnostic, got:\n{stderr}"
     );
     let _ = std::fs::remove_file(&file);

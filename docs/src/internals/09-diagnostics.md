@@ -33,7 +33,7 @@ diagnostic across the compiler shares one format for free.
 A type mismatch. HM inference reports the expected and found types at the offending call:
 
 ```text
-error: type mismatch: expected int<'a>, found str
+error: type mismatch: expected `int<'a>`, found `str`
  --> 2:13
   |
 2 | let wrong = add "hello" 5
