@@ -1639,7 +1639,7 @@ impl Lowerer {
             }
         };
         let base = self.fresh_tmp();
-        unpack_into_as(target, &source, &base, &rename, out);
+        unpack_into_as(target, &source, &base, &rename, &self.newtype_ctors, out);
     }
 
     /// Whether a top-level parameterless binding's value introduces frame-level
@@ -2034,6 +2034,7 @@ impl Lowerer {
         decls.append(&mut destructure_params(
             prelude_params,
             &param_names(prelude_params),
+            &self.newtype_ctors,
         ));
         decls.append(&mut stmts);
         Ok(decls)
@@ -11730,7 +11731,7 @@ fn bind_irrefutable(
             }
             out.push(PyStmt::UnpackAssign { targets, value });
             for (elem, temp) in nested {
-                unpack_into_as(elem, &temp, &temp, rename, out);
+                unpack_into_as(elem, &temp, &temp, rename, &HashSet::new(), out);
             }
         }
         _ => unreachable!("ladder payloads are simple_irrefutable"),
@@ -11792,13 +11793,24 @@ fn param_bindings(params: &[Param]) -> Vec<String> {
 /// since Python 3 removed tuple parameters. A nested tuple unpacks through a temp
 /// (`_pf_arg0_0`), one statement per level, which keeps each emitted line the
 /// obvious Python for that level.
-fn destructure_params(params: &[Param], args: &[String]) -> Vec<PyStmt> {
+fn destructure_params(
+    params: &[Param],
+    args: &[String],
+    newtypes: &HashSet<String>,
+) -> Vec<PyStmt> {
     let mut out = Vec::new();
     for (p, arg) in params.iter().zip(args) {
         if p.name().is_none() {
             // A parameter's source is already a reserved argument name, so it
             // doubles as the base for any nested temps.
-            unpack_into_as(&p.pattern, arg, arg, &|n| py_value_name(n), &mut out);
+            unpack_into_as(
+                &p.pattern,
+                arg,
+                arg,
+                &|n| py_value_name(n),
+                newtypes,
+                &mut out,
+            );
         }
     }
     out
@@ -11814,9 +11826,47 @@ fn unpack_into_as(
     source: &str,
     base: &str,
     rename: &dyn Fn(&str) -> String,
+    newtypes: &HashSet<String>,
     out: &mut Vec<PyStmt>,
 ) {
     match pattern {
+        // A newtype's constructor erases, so its pattern is the payload's, on
+        // the value itself: `let raw (UserId s) = s` binds `s` to the argument.
+        Pattern::Ctor { name, args, .. } if newtypes.contains(name) && args.len() == 1 => {
+            match &args[0] {
+                Pattern::Wildcard => {}
+                Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+                    target: rename(name.as_str()),
+                    value: PyExpr::Name(py_value_name(source)),
+                }),
+                nested => unpack_into_as(nested, source, base, rename, newtypes, out),
+            }
+        }
+        // A sole constructor reads its fields by position (`_0`, `_1`, …), one
+        // attribute each; the checker has established that it always matches.
+        Pattern::Ctor { args, .. } => {
+            for (i, arg) in args.iter().enumerate() {
+                let value = PyExpr::Attribute {
+                    value: Box::new(PyExpr::Name(py_value_name(source))),
+                    attr: format!("_{i}"),
+                };
+                match arg {
+                    Pattern::Wildcard => {}
+                    Pattern::Var { name, .. } => out.push(PyStmt::Assign {
+                        target: rename(name.as_str()),
+                        value,
+                    }),
+                    nested => {
+                        let temp = format!("{base}_{i}");
+                        out.push(PyStmt::Assign {
+                            target: temp.clone(),
+                            value,
+                        });
+                        unpack_into_as(nested, &temp, &temp, rename, newtypes, out);
+                    }
+                }
+            }
+        }
         // A tuple unpacks in one statement, the way Python spells it.
         Pattern::Tuple { elems } => {
             let mut targets = Vec::with_capacity(elems.len());
@@ -11837,7 +11887,7 @@ fn unpack_into_as(
                 value: PyExpr::Name(py_value_name(source)),
             });
             for (elem, temp) in nested {
-                unpack_into_as(elem, &temp, &temp, rename, out);
+                unpack_into_as(elem, &temp, &temp, rename, newtypes, out);
             }
         }
         // A record reads the fields it names, one attribute each — the same
@@ -11860,7 +11910,7 @@ fn unpack_into_as(
                             target: temp.clone(),
                             value,
                         });
-                        unpack_into_as(nested, &temp, &temp, rename, out);
+                        unpack_into_as(nested, &temp, &temp, rename, newtypes, out);
                     }
                 }
             }

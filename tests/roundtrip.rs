@@ -195,6 +195,10 @@ const PROGRAMS: &[&str] = &[
     "type Option a = None | Some a",
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
+    // A sole constructor's pattern in a parameter and a `let`.
+    "let unwrap (Wrap v) = v",
+    "let (Wrap a (b, _)) = w",
+    "let f = fun (Wrap v) -> v",
     // Record-bodied constructors: a declaration, the literal, the pattern.
     "type Shape = Circle { radius: float } | Rect { width: float, height: float } | Dot",
     "type Tree a = Leaf | Node { left: Tree a, value: a, right: Tree a }",
@@ -715,12 +719,12 @@ fn a_refutable_parameter_pattern_is_rejected_with_a_hint() {
     // A parameter has no second arm to fall through to, so only always-matching
     // shapes are admitted. Each rejection names what it saw.
     for (src, what) in [
-        ("let f (Some x) = x", "a constructor pattern"),
         ("let f ([a, b]) = a", "a list pattern"),
         ("let f (0) = 1", "a literal pattern"),
         ("let f (a | b) = a", "an or-pattern"),
         ("let f (p as q) = q", "an as-pattern"),
-        ("let f (a, Some b) = a", "a constructor pattern"),
+        ("let f (a, Some 1) = a", "a literal pattern"),
+        ("let f (Wrap [a]) = a", "a list pattern"),
     ] {
         let err = parse(src).unwrap_err();
         assert!(
@@ -728,6 +732,16 @@ fn a_refutable_parameter_pattern_is_rejected_with_a_hint() {
             "{src} -> {}",
             err.message()
         );
+    }
+    // A constructor pattern over always-matching parts has a shape that may
+    // always match, so it parses; whether its type has another constructor is
+    // the type checker's question.
+    for src in [
+        "let f (Some x) = x",
+        "let f (a, Wrap b) = a",
+        "let f (Box { v }) = v",
+    ] {
+        assert!(parse(src).is_ok(), "{src}");
     }
 }
 

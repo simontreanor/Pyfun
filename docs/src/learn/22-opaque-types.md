@@ -27,6 +27,25 @@ u-1001
 `UserId : str -> UserId` wraps a value, and the pattern `case UserId s:` binds the underlying
 string back out. That one case makes the match exhaustive, because the type has exactly one shape.
 
+A pattern with only one shape can never fail, so you may write it straight into the parameter and
+skip the `match`:
+
+```pyfun
+opaque type UserId = str
+
+let describe (UserId s) = s
+
+UserId "u-1001" |> describe |> print
+```
+
+```console
+u-1001
+```
+
+The brackets matter: `(UserId s)` is one parameter taken apart, where `UserId s` without them would
+be two parameters. The same works in a `let`, as `let (UserId s) = uid`, and for any type that has a
+single constructor.
+
 Mixing the two up is where the checker steps in. Passing an `Email` to a function that takes a
 `UserId` is rejected before any Python is produced:
 

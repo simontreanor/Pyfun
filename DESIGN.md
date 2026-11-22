@@ -1512,16 +1512,22 @@ boundary stays n-ary (§6).
 `fun acc (a, b) -> acc + a * b`, `let const42 _ = 42`, `let describe (Cell { letter }) = letter`. A
 record has exactly one shape, so naming a subset of its fields still matches every value of that
 type. A parameter has no second arm to fall through to, which is why refutable shapes (a literal, a
-constructor, a list pattern, an or-pattern, an as-pattern) are rejected there with a message naming
-what was written; match on the value in the body instead. A record pattern's *tag* is checked later,
-by the type checker, so a tag naming a sum-type constructor rather than a record is rejected as "not
-a record type" and nothing refutable slips through. Only a **parenthesized**
+list pattern, an or-pattern, an as-pattern) are rejected there with a message naming what was
+written; match on the value in the body instead. **A constructor pattern binds there when its type
+has no other constructor**, since it then cannot fail: `let unwrap (Wrap v) = v`, and the newtype
+idiom `let raw (UserId s) = s` (F#'s single-case union, Haskell's irrefutable constructor). The
+parser admits the shape and the type checker counts the constructors, because only it knows the
+type: `let f (Some x) = x` is an error that names what else the value may be (`Option` also has
+`None`). Positional and record-bodied constructors (§8.3) follow the one rule. An active-pattern
+case is decided by running its recognizer, so it stays in `match`. Only a **parenthesized**
 parameter takes the pattern grammar: a bare uppercase identifier stays a parameter *name*, so
 `let f Some x = …` keeps meaning two parameters rather than silently becoming one constructor
 pattern. Python 3 removed tuple parameters, so a destructuring parameter lowers to a synthetic
 argument name unpacked on the body's first line (`def tile_score(_pf_arg0): t, sq = _pf_arg0`), one
 statement per nesting level; a record parameter reads one attribute per field it names
-(`letter = _pf_arg0.letter`) and nothing for the fields it does not. A destructuring *lambda*
+(`letter = _pf_arg0.letter`) and nothing for the fields it does not; a constructor parameter reads
+its fields the same way (`n = _pf_arg0._0` for a positional one), and a newtype's, which is erased,
+is the argument itself. A destructuring *lambda*
 therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement.
 
 **A `let` binding may destructure too**, under exactly the rule above and for exactly the same
@@ -1530,8 +1536,9 @@ Python spells this `a, b = f()`, and Pyfun emits precisely that: a tuple of plai
 single statement straight from the value, with no temp in the way. Anything deeper reads through a
 reserved temp, one statement per level (`a, _pf_t0_1 = p` then `b, c = _pf_t0_1`), and a record
 target reads one attribute per field it names. The target is held to irrefutability by the same
-check a parameter's is, so `let (Some x) = …` is rejected with a message naming what was written and
-pointing at `match`, which has somewhere to fall through to. The bracket-less `let Some x = …` would
+checks a parameter's is, so `let (Wrap v) = w` binds when `Wrap` is its type's only constructor and
+`let (Some x) = …` is rejected with a message pointing at `match`, which has somewhere to fall
+through to. The bracket-less `let Some x = …` would
 otherwise parse as a *function* called `Some`, so a capitalized binding name is rejected outright:
 it can only be a constructor written without its brackets (or a module name), never a value. Three positions take a target: a
 top-level `let`, a block-local `let`, and a computation expression's `let`/`let!` — where a
@@ -2519,10 +2526,9 @@ Python is the model: a dataclass is built `Rect(width=2.0, height=3.0)` and matc
   one type.
 - **Exhaustiveness** treats the tagged pattern as its constructor's, with omitted fields as
   wildcards, and prints a witness in the same form (`` `Rect { name = _, width = _, height = _ }` ``).
-- **No constructor pattern in a parameter or a `let`**, named or positional, however many
-  constructors the type has: those positions take a name, `_`, or a tuple or record of those (§7).
-  The parser refuses the positional form by its shape. The named form has a record pattern's shape,
-  so the checker refuses it, in the parser's words, once it knows the tag is a constructor.
+- **In a parameter or a `let`** the pattern binds when its type has no other constructor
+  (`let unwrap (Box { value }) = value`), under the rule every constructor pattern follows there
+  (§7): a positional constructor's does the same (`let unwrap (Wrap v) = v`).
 - **A field every constructor shares belongs to the whole type.** When every constructor of a sum
   type declares a field at the same type (`name` above), a value of the type has it: `s.name` reads
   it and `{ s with name = "big" }` copies the value with it replaced, keeping whichever constructor
