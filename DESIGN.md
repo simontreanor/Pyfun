@@ -697,8 +697,8 @@ idioms (`cons`/`head`/`tail`, `x :: xs` cons-decomposition in `match`) are a **n
 type would lower to un-Pythonic linked nodes, and its recursive idiom is stack-unsafe without TCO (also
 a non-goal — CPython has none). Python has no built-in singly-linked list either (`deque` is
 doubly-ended). The array-appropriate, Python-native counterpart — **sequence patterns** `case []` /
-`case [x]` / `case [first, *rest]` over `List` — is deferred (real, not a non-goal). For now the bulk
-operations are the API. The list operations are
+`case [x]` / `case [first, *rest]` over `List` — is shipped (§7.2), beside the bulk
+operations. The list operations are
 `List.map`/`List.filter`/`List.fold`/`List.len`/`List.sum`/`List.rev`/`List.range`/`List.zip` — **module-
 qualified** (see *Built-in modules* below), single source of truth `types::LIST_PRELUDE` +
 `seed_list_prelude`. `List.len`/`List.sum` map name-for-name onto the Python builtins; the rest lower
@@ -1496,7 +1496,7 @@ be run for its effect.
 MVP language features: immutable bindings by default with checked `let mut`/`<-` and indentation
 blocks (§3), expression `if`/`match`, **curried functions + partial application**, **pipe `|>`**, ADT
 and **record** declarations, the computation expressions of §8, units of measure (§8), readable
-Python output. (Effect tracking is designed but deferred — §4.)
+Python output, and inferred effect tracking (§4).
 
 Lexical conventions: line comments start with `#` (Python-style — `//` is floor division, §7.1);
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
@@ -2337,7 +2337,7 @@ classification), but is noisier per use, *looks* structural/anonymous (dishonest
 nominal), and gains no symmetry with construction-vs-pattern. Rejected in favour of the tag, which buys
 familiarity (dataclass/Haskell) and honesty. Neither option lifts field-uniqueness (decision 2).
 
-Deferred: derived ordering on records, and lifting the unique-field-name restriction.
+Derived ordering on records (§7.1) and shared field names across records (the use-site rule above) have both since shipped.
 
 ## 9. Tooling
 

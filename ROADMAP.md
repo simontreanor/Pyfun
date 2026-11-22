@@ -431,6 +431,81 @@ play comes first; the browser target is last because it depends on the async dec
     threading.Thread(daemon = true, target = ...)`, now parses and emits the single call. The
     mid-list `None` change is breaking in principle; nothing in the repo or lessons relied on it.
 
+## Language review backlog (2026-11-22)
+
+A review of 0.10.0 against small probe programs. Every finding below was reproduced on the released
+compiler, and the whole list was accepted on 2026-11-22, including the surface changes.
+
+**Order of work.** The breaking surface changes go first and ship together as 0.11.0, so the
+lessons, examples and notebooks migrate once: items 7 to 11, each its own PR, each leaving a
+diagnostic that names the new spelling where the old one is written (no aliases, names stay
+single-spelling). The additions (12 to 14) and the diagnostics (1 to 6) follow, the hints last among
+them so they point at the final spellings. Tooling (15 to 18) and the larger items (19, 20) come
+after the release.
+
+**Checker and diagnostics**
+
+1. **Warnings** (M). `Level::Warning` exists and nothing emits one. First set: an unreachable `case`
+   arm (the usefulness checker already knows), an unused local binding, an unused `import` or
+   `extern`, and a top-level `let` that rebinds an earlier name.
+2. **Local mutation stays pure** (M). `let pure f` with a `let mut` accumulator that never leaves the
+   function is rejected as performing `io`. Mask the effect when the `mut` is not captured by a
+   closure, so `let pure` covers the accumulator style.
+3. **Tracebacks in `.pyfun` lines** (M). A runtime error under `pyfun run`, the REPL and the kernel
+   names `_pyfun_main.py` in a temp directory. Map frames back to source spans.
+4. **Hints for Python habits** (S). `def` and `len` already get a tailored message. The same
+   treatment for `True`/`False`, `lambda x:`, `if c:`, `x = 5`, a top-level `for`, `import math`,
+   `"abc".upper()`, `x in xs`, `xs[0]`, `{"a": 1}`, `{1, 2}`, a `{x:>10}` format spec and an
+   `if` with no `else`. A synonym table consulted before edit distance fixes the member
+   suggestions (`Map.get` suggests `Map.len` today, and `List.item` suggests `List.iter`).
+5. **Guards in the exhaustiveness message** (S). When the missing witness has a guarded arm, say that
+   a guarded arm does not count.
+6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
+   also print `(List 'a) -> Option 'a` with parentheses the grammar does not need. Print what the
+   user would write.
+
+**Consistency (breaking, 0.11.0)**
+
+7. **The `try` prefix.** `Map.tryFind` and `String.tryIndexOf` carry it. `List.find`, `List.head`,
+   `List.get`, `List.max`, `String.get` and `Seq.find` return `Option` without it. Every lookup is
+   total, so the prefix carries no information: rename the two to `Map.find` and `String.indexOf`.
+8. **Block openers.** `match e:`, `case p:` and a CE's `for x in xs:` open a block with a colon.
+   `if` takes `then`, while `elif` is already Python's word. Accept `if c:` / `elif c:` / `else:`
+   for the block form and keep `then` for the one-line form.
+9. **`True` and `False`.** Every other constructor is capitalized, Python's are capitalized, and the
+   emitted code is capitalized. `true` and `false` are the exception.
+10. **`str` for `string`.** The emitted annotation is already `str`.
+11. **snake_case.** The standard library and every example use camelCase (`tryFind`, `ofList`,
+    `sortBy`), so emitted modules read as un-Pythonic to a Python caller. The largest breaking
+    change on this list, mechanical to migrate, and cheapest before 1.0. Where Python has the word,
+    use Python's (`startswith`, `endswith`). User code keeps whatever case its author writes.
+
+**Python-familiar additions**
+
+12. **`{"a": 1}` and `{1, 2}` literals** for `Map` and `Set`. Braces today hold only a record
+    update (`{ p with … }`) and a CE body after a name, so the forms are free.
+13. **`x in xs` and `x not in xs`**, lowering to the same Python operators, typed by a closed
+    container constraint in the manner of `num` and `comparison`.
+14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`
+    today.
+
+**Tooling**
+
+15. **`pyfun fmt`** (L). Named in `DESIGN.md` §10 and absent from the CLI. Needs comments kept as
+    trivia, which `pyfun parse` drops.
+16. **`pyfun test`** (M). Compile `test_*` functions to `test_*.py` and let pytest run them.
+    Follow-ons: checked examples in `##` doc comments, and derived Hypothesis generators.
+17. **Typed default output** (M). Plain `compile` writes `_0: object` and unannotated `def`s, while
+    `--native` already computes annotations. Add `--typed` with `py.typed`, and emit `##` docs as
+    docstrings.
+18. **LSP: inlay hints, code actions, signature help** (M each). "Add missing cases" can reuse the
+    exhaustiveness witnesses.
+
+**Larger**
+
+19. **An `exn` effect label** on externs, discharged by `try` (L).
+20. **`from X import y` and nested packages** (M each), both deferred in `DESIGN.md` §6.1.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
