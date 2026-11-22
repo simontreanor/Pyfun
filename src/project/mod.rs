@@ -252,6 +252,10 @@ pub struct CompiledProject {
     pub files: Vec<(String, String)>,
     /// Lowering notes from every module, each prefixed with its module name.
     pub notes: Vec<String>,
+    /// Each module's line map, by module name: where its emitted lines came
+    /// from, for a traceback in `.pyfun` lines (`DESIGN.md` §9). Filled only by
+    /// [`compile_traced`], and only for a module whose map could be built.
+    pub line_maps: Vec<(String, crate::LineMap)>,
 }
 
 /// Lower and emit every module of `project` to Python (`DESIGN.md` §6.1).
@@ -284,6 +288,27 @@ pub fn compile_with(
     project: &Project,
     target: crate::python_emitter::PyTarget,
     native: bool,
+) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_project(project, target, native, false)
+}
+
+/// [`compile`], also building each module's line map (see
+/// [`crate::compile_with_line_map`]): what `pyfun run` needs to report a
+/// runtime error in `.pyfun` lines.
+pub fn compile_traced(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_project(
+        project,
+        crate::python_emitter::PyTarget::default(),
+        false,
+        true,
+    )
+}
+
+fn compile_project(
+    project: &Project,
+    target: crate::python_emitter::PyTarget,
+    native: bool,
+    trace: bool,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
@@ -375,6 +400,7 @@ pub fn compile_with(
     let mut files = Vec::new();
     let mut needs_runtime = false;
     let mut notes: Vec<String> = Vec::new();
+    let mut line_maps = Vec::new();
     for module in &project.modules {
         let mut ctx = ImportContext::default();
         for import in &module.imports {
@@ -439,6 +465,20 @@ pub fn compile_with(
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
         let codecs = codecs_by_module.get(&module.name).unwrap_or(&no_codecs);
         let binding_types = types_by_module.remove(&module.name).unwrap_or_default();
+        let traced = trace
+            .then(|| {
+                lowering::lower_in_project_tracing(
+                    &module.ast,
+                    &ctx,
+                    floats,
+                    codecs,
+                    native,
+                    binding_types.clone(),
+                    true,
+                )
+                .ok()
+            })
+            .flatten();
         let lowered =
             lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native, binding_types)?;
         needs_runtime |= lowered.uses_runtime;
@@ -448,10 +488,13 @@ pub fn compile_with(
                 .iter()
                 .map(|n| format!("in `{}`: {n}", module.name)),
         );
-        files.push((
-            module_py_name(&module.name),
-            python_emitter::emit_for(&lowered.py, target),
-        ));
+        let python = python_emitter::emit_for(&lowered.py, target);
+        if let Some(map) = traced
+            .and_then(|t| crate::line_map_of(&python_emitter::emit_for(&t.py, target), &python))
+        {
+            line_maps.push((module.name.clone(), map));
+        }
+        files.push((module_py_name(&module.name), python));
     }
     if needs_runtime {
         files.push((
@@ -466,7 +509,11 @@ pub fn compile_with(
             ),
         ));
     }
-    Ok(CompiledProject { files, notes })
+    Ok(CompiledProject {
+        files,
+        notes,
+        line_maps,
+    })
 }
 
 /// Best-effort resolution of `module`'s imports' export interfaces, reading

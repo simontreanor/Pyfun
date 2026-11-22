@@ -1419,7 +1419,7 @@ leads `sys.path`, so siblings resolve, and the *working* directory is left alone
 paths still mean what they meant on the command line), then cleans up. Each command **detects imports** by
 parsing the entry: a file with **no imports takes the single-file path** (`compile` to stdout / one file
 with the classes *inlined*, `run` staging one `_pyfun_main.py` the same way), and only a file that actually
-`import`s engages the graph driver. `run` never pipes the program to `python -`: that would spend the
+`import`s engages the graph driver. An error the program does not catch is reported in `.pyfun` lines (§9). `run` never pipes the program to `python -`: that would spend the
 program's own stdin on its source text, so the first `input` in an interactive program would hit `EOFError`.
 The compiler stays the gatekeeper: `compile`/`run` over a project gate on a clean `project::check` first.
 Graph errors (missing file, cycle, a lex/parse failure in some module) are rendered before any checking.
@@ -2630,6 +2630,44 @@ but it **blocks `compile`/`run`** (there is no value to lower) and makes `check`
 leftover hole is caught. `check` also lists in-scope bindings that would fill the hole, including
 *refinement* fits reported applied to further holes (`String.concat ? ?`). This reaches beyond F#, which
 has no typed holes.
+
+**Tracebacks in `.pyfun` lines (`pyfun run`).** A well-typed program can still fail when it runs: a
+library raises, a file is missing, a division is by zero. Under `pyfun run` the traceback names the
+source. Each frame of the program gives its `.pyfun` file, the line of the statement that was running
+and that statement's text:
+
+```text
+Traceback (most recent call last):
+  File "shapes.pyfun", line 14, in <module>
+    let scores =
+        [1, 2, 3]
+        |> List.map (fun x -> x + describe (Circle 1.0))
+        |> List.filter (fun x -> x > 0)
+  File "shapes.pyfun", line 14, in <lambda>
+    let scores =
+  File "shapes.pyfun", line 11, in describe
+    case Circle(r): ratio 1 2
+  File "shapes.pyfun", line 7, in ratio
+    a // (total - total)
+ZeroDivisionError: division by zero
+```
+
+The unit is the **statement**: a top-level item, a line of a block, a `match` arm, a branch of an `if`,
+an item of a computation expression. A statement written over several lines is shown whole (its first
+lines, when it is long), since the emitted Python holds it on one line and cannot say which of them was
+running; a lambda inside it gets a frame of its own on the same line. A frame the compiler wrote is
+left out: a prelude helper such as the function behind `List.map`, the shared runtime `_pyfun_rt`, the
+launcher. A function the compiler had to name (the body of a `result { }` block) reads `<fun>`. A
+library's frames stay exactly as Python prints them, so the traceback still ends where the error was
+raised. In a project each module's frames name that module's file.
+
+The program that runs is the program `pyfun compile` writes, byte for byte. Nothing is added to it: the
+line map travels beside it, and a hook reads the map only when an error reaches the top. The map is
+built from a second lowering whose statements carry source positions, and it is used only when that
+lowering emits exactly the Python that runs; a program for which it does not keeps Python's own
+traceback. `PYFUN_TRACEBACK=python` asks for Python's own traceback over the emitted code, which is the
+view to attach to a compiler bug report. Python emitted by `pyfun compile` and run with `python`
+reports its own lines, as any Python file does. The REPL and the Jupyter kernel are next (`ROADMAP.md`).
 
 **Syntax highlighting.** A TextMate grammar flags the escape-hatch tokens (`mut`, `<-`, `extern`) in a
 caution colour, marking the opt-outs from the immutable-by-default / effect-checked defaults; `pure`

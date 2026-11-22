@@ -17,6 +17,7 @@ pub mod lsp;
 pub mod parser;
 pub mod project;
 pub mod python_emitter;
+pub mod traceback;
 pub mod types;
 
 pub use parser::ast as syntax;
@@ -204,6 +205,42 @@ pub fn compile_with(
     target: python_emitter::PyTarget,
     native: bool,
 ) -> Result<(String, Vec<String>), CompileError> {
+    compile_mapped(source, target, native, false).map(|(py, notes, _)| (py, notes))
+}
+
+/// Where each line of an emitted Python file came from: `(python line, source
+/// span)` entries in line order, 1-based, the span being the statement the line
+/// was lowered from (the header alone of a `match`, an `if` or a function). A Python line with no entry of its own belongs to the
+/// nearest entry above it; lines above the first entry (imports, emitted
+/// classes, helpers) come from no source line.
+pub type LineMap = Vec<(usize, lexer::Span)>;
+
+/// Compile `source` and build its [`LineMap`], for a traceback that names
+/// `.pyfun` lines (`DESIGN.md` §9).
+///
+/// The map is read from a second, *traced* lowering whose statements carry
+/// source-position markers. Markers can only be trusted if they changed
+/// nothing else, so the traced emission, markers removed, must equal the real
+/// one byte for byte; when it does not (some rewrite reacted to a marker),
+/// there is no map and the traceback stays Python's own.
+pub fn compile_with_line_map(source: &str) -> Result<(String, Option<LineMap>), CompileError> {
+    compile_traced(source).map(|(py, _, map)| (py, map))
+}
+
+/// [`compile_with_line_map`], with the lowering notes [`compile_collecting`]
+/// returns: everything `pyfun run` needs from one compilation.
+pub fn compile_traced(
+    source: &str,
+) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
+    compile_mapped(source, python_emitter::PyTarget::default(), false, true)
+}
+
+fn compile_mapped(
+    source: &str,
+    target: python_emitter::PyTarget,
+    native: bool,
+    want_map: bool,
+) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
     // which we mark the integer literals that resolved to `float` so lowering emits
@@ -232,13 +269,94 @@ pub fn compile_with(
     let (py, notes) = lowering::lower_native_typed(
         &module,
         &floats,
-        lowering::OrderPolicy::OnDemand(ordered),
+        lowering::OrderPolicy::OnDemand(ordered.clone()),
         &codecs,
         native,
-        binding_types,
+        binding_types.clone(),
     )
     .map_err(CompileError::Lower)?;
-    Ok((python_emitter::emit_for(&py, target), notes))
+    let python = python_emitter::emit_for(&py, target);
+    let map = if want_map {
+        lowering::lower_native_typed_tracing(
+            &module,
+            &floats,
+            lowering::OrderPolicy::OnDemand(ordered),
+            &codecs,
+            native,
+            binding_types,
+            true,
+        )
+        .ok()
+        .and_then(|(traced, _)| line_map_of(&python_emitter::emit_for(&traced, target), &python))
+    } else {
+        None
+    };
+    Ok((python, notes, map))
+}
+
+/// The traced emission of `source` with its markers removed, for finding out why
+/// a program has no line map: diff it against [`compile`]'s output.
+#[doc(hidden)]
+pub fn traced_python(source: &str) -> Result<String, CompileError> {
+    let module = parse(source)?;
+    let (mut errors, types, _holes, ordered, codecs) = types::check_collecting(&module);
+    if !errors.is_empty() {
+        return Err(CompileError::Type(errors.remove(0)));
+    }
+    let floats = float_literal_spans(&types);
+    let (traced, _) = lowering::lower_native_typed_tracing(
+        &module,
+        &floats,
+        lowering::OrderPolicy::OnDemand(ordered),
+        &codecs,
+        false,
+        std::collections::HashMap::new(),
+        true,
+    )
+    .map_err(CompileError::Lower)?;
+    Ok(python_emitter::split_line_markers(&python_emitter::emit(&traced)).0)
+}
+
+/// The line map a traced emission describes, provided that removing its
+/// markers gives exactly `python`, the program that will run.
+///
+/// A marker holds for the lines after it at its own depth or deeper. When the
+/// emitted code dedents past it (the end of a hoisted function's body, say),
+/// the lines that follow belong again to the marker in force at their depth,
+/// so the map gets an entry there too.
+pub(crate) fn line_map_of(traced: &str, python: &str) -> Option<LineMap> {
+    let (stripped, marks) = python_emitter::split_line_markers(traced);
+    if stripped != python {
+        return None;
+    }
+    let mut map = LineMap::new();
+    // The markers in force, outermost first: `(indentation, source span)`.
+    let mut scopes: Vec<(usize, lexer::Span)> = Vec::new();
+    let mut marks = marks.into_iter().peekable();
+    let mut current = None;
+    for (index, line) in python.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        while scopes.last().is_some_and(|scope| scope.0 > indent) {
+            scopes.pop();
+        }
+        while let Some((_, start, end)) = marks.next_if(|(at, _, _)| *at <= index + 1) {
+            if scopes.last().is_some_and(|scope| scope.0 == indent) {
+                scopes.pop();
+            }
+            scopes.push((indent, lexer::Span::new(start as usize, end as usize)));
+        }
+        let now = scopes.last().map(|scope| scope.1);
+        if now != current
+            && let Some(span) = now
+        {
+            map.push((index + 1, span));
+            current = now;
+        }
+    }
+    Some(map)
 }
 
 /// The spans of expressions whose inferred type is `float` (dimensionless or

@@ -134,10 +134,35 @@ pub fn lower_native_typed(
     native: bool,
     binding_types: HashMap<Span, crate::types::Ty>,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
+    lower_native_typed_tracing(
+        module,
+        float_literals,
+        order,
+        codecs,
+        native,
+        binding_types,
+        false,
+    )
+}
+
+/// [`lower_native_typed`], optionally **traced**: with `trace` set, the result
+/// carries a [`PyStmt::Line`] marker ahead of the statements each Pyfun
+/// statement lowered to. A traced module is for building a line map
+/// (`DESIGN.md` §9); the program that runs is always the untraced one.
+pub fn lower_native_typed_tracing(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+    codecs: &crate::types::Codecs,
+    native: bool,
+    binding_types: HashMap<Span, crate::types::Ty>,
+    trace: bool,
+) -> Result<(PyModule, Vec<String>), LowerError> {
     // Newtype patterns in binding positions erase first, so every pass below
     // sees `let raw (UserId s) = s` as the `let raw s = s` it is at run time.
     let module = &newtype_patterns::erase(module, &local_newtypes(module));
     let mut lowerer = Lowerer::new(module);
+    lowerer.trace_lines = trace;
     lowerer.native = native;
     lowerer.binding_types = binding_types;
     if native {
@@ -231,12 +256,35 @@ pub fn lower_in_project(
     native: bool,
     binding_types: HashMap<Span, crate::types::Ty>,
 ) -> Result<LoweredModule, LowerError> {
+    lower_in_project_tracing(
+        module,
+        ctx,
+        float_literals,
+        codecs,
+        native,
+        binding_types,
+        false,
+    )
+}
+
+/// [`lower_in_project`], optionally traced (see
+/// [`lower_native_typed_tracing`]).
+pub fn lower_in_project_tracing(
+    module: &Module,
+    ctx: &ImportContext,
+    float_literals: &HashSet<Span>,
+    codecs: &crate::types::Codecs,
+    native: bool,
+    binding_types: HashMap<Span, crate::types::Ty>,
+    trace: bool,
+) -> Result<LoweredModule, LowerError> {
     // As in the single-file path, with the imported newtypes' qualified
     // constructors (`Ids.UserId`) beside this module's own.
     let mut newtypes = local_newtypes(module);
     newtypes.extend(ctx.newtype_ctors.iter().cloned());
     let module = &newtype_patterns::erase(module, &newtypes);
     let mut lowerer = Lowerer::new(module);
+    lowerer.trace_lines = trace;
     lowerer.native = native;
     lowerer.binding_types = binding_types;
     if native {
@@ -476,6 +524,10 @@ struct Lowerer {
     /// Native mode's type table: the resolved type of each binding, keyed by the
     /// binding target's span, for the annotations on top-level functions.
     binding_types: HashMap<Span, crate::types::Ty>,
+    /// Emit a [`PyStmt::Line`] marker ahead of each Pyfun statement's lowering
+    /// ([`Lowerer::mark`]). Off for the program that runs; on for the second,
+    /// traced lowering a line map is read from.
+    trace_lines: bool,
     /// Native mode: the Python spelling of each local user type (a record's
     /// class, a sum type's union alias), for annotating block-local functions as
     /// they lower. See [`native_type_spellings`].
@@ -835,6 +887,7 @@ impl Lowerer {
             needs_task_scope: false,
             native: false,
             binding_types: HashMap::new(),
+            trace_lines: false,
             native_spell: HashMap::new(),
             codecs: crate::types::Codecs::default(),
             codec_table_used: std::collections::BTreeMap::new(),
@@ -1217,6 +1270,11 @@ impl Lowerer {
                 Item::Let(binding) => binding.bound_names().into_iter().collect(),
                 _ => HashSet::new(),
             };
+            match item {
+                Item::Let(binding) => self.mark(binding_span(binding), &mut code),
+                Item::Expr(expr) => self.mark(statement_span(expr), &mut code),
+                _ => {}
+            }
             match item {
                 // Measures, type declarations, `import`, and `extern import` emit
                 // no runtime code (the latter's Python import is hoisted only when
@@ -2128,6 +2186,29 @@ impl Lowerer {
         expr: &Expr,
         locals: &HashSet<String>,
     ) -> Result<Vec<PyStmt>, LowerError> {
+        let mut stmts = self.lower_return_unmarked(expr, locals)?;
+        // A block's statements carry their own markers; anything else is one
+        // source expression, marked where it begins. The branches of an `if`
+        // and the arms of a `match` come back through here, so each has its own.
+        if self.trace_lines && !matches!(expr.kind, ExprKind::Block { .. }) {
+            stmts.insert(0, line_marker(statement_span(expr)));
+        }
+        Ok(stmts)
+    }
+
+    /// Record, in a traced lowering, that the statements about to be pushed to
+    /// `out` come from the source at `span`. A no-op otherwise.
+    fn mark(&self, span: Span, out: &mut Vec<PyStmt>) {
+        if self.trace_lines {
+            out.push(line_marker(span));
+        }
+    }
+
+    fn lower_return_unmarked(
+        &mut self,
+        expr: &Expr,
+        locals: &HashSet<String>,
+    ) -> Result<Vec<PyStmt>, LowerError> {
         match &expr.kind {
             ExprKind::If { cond, then, else_ } => {
                 let (mut stmts, test) = self.lower_value(cond, locals)?;
@@ -2202,11 +2283,14 @@ impl Lowerer {
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
+                    self.mark(binding_span(b), &mut out);
                     self.lower_block_let(b, &locals, &mut out, nested)?;
                     locals.extend(b.bound_names());
                 }
+                // `lower_return` marks its own statements.
                 BlockStmt::Expr(e) if i == last => out.extend(self.lower_return(e, &locals)?),
                 BlockStmt::Expr(e) => {
+                    self.mark(statement_span(e), &mut out);
                     let (s, v) = self.lower_value(e, &locals)?;
                     self.push_discarded(&mut out, s, v);
                 }
@@ -2320,8 +2404,8 @@ impl Lowerer {
                 } else {
                     // An arm needs statements: hoist into an `if` assigning a temp.
                     let tmp = self.fresh_tmp();
-                    let body = with_assign(then_stmts, &tmp, then_val);
-                    let orelse = with_assign(else_stmts, &tmp, else_val);
+                    let body = self.marked_assign(then, then_stmts, &tmp, then_val);
+                    let orelse = self.marked_assign(else_, else_stmts, &tmp, else_val);
                     stmts.push(PyStmt::If { test, body, orelse });
                     Ok((stmts, PyExpr::Name(tmp)))
                 }
@@ -2377,7 +2461,7 @@ impl Lowerer {
                     cases.push(PyCase {
                         pattern,
                         guard,
-                        body: with_assign(arm_stmts, &tmp, arm_val),
+                        body: self.marked_assign(&arm.body, arm_stmts, &tmp, arm_val),
                     });
                 }
                 seal_cases(arms, &mut cases, &self.ctor_fields);
@@ -2603,10 +2687,12 @@ impl Lowerer {
         for (i, stmt) in stmts.iter().enumerate() {
             match stmt {
                 BlockStmt::Let(b) => {
+                    self.mark(binding_span(b), &mut out);
                     self.lower_block_let(b, &locals, &mut out, nested)?;
                     locals.extend(b.bound_names());
                 }
                 BlockStmt::Expr(e) => {
+                    self.mark(statement_span(e), &mut out);
                     let (mut s, v) = self.lower_value(e, &locals)?;
                     if i == last {
                         out.append(&mut s);
@@ -3552,9 +3638,27 @@ impl Lowerer {
             None => self.lower_return(body, locals),
             Some(tmp) => {
                 let (s, v) = self.lower_value(body, locals)?;
-                Ok(with_assign(s, tmp, v))
+                Ok(self.marked_assign(body, s, tmp, v))
             }
         }
+    }
+
+    /// A branch in value position: the statements `body` lowered to, then its
+    /// value assigned to `tmp`, under the branch's own line marker in a traced
+    /// lowering (a block's statements carry theirs already).
+    fn marked_assign(
+        &self,
+        body: &Expr,
+        stmts: Vec<PyStmt>,
+        tmp: &str,
+        value: PyExpr,
+    ) -> Vec<PyStmt> {
+        let mut out = Vec::new();
+        if !matches!(body.kind, ExprKind::Block { .. }) {
+            self.mark(statement_span(body), &mut out);
+        }
+        out.extend(with_assign(stmts, tmp, value));
+        out
     }
 
     /// Lower a variable reference, special-casing data constructors: a nullary
@@ -4686,7 +4790,7 @@ impl Lowerer {
                 None => self.lower_return(&arm.body, &scope.locals)?,
                 Some(tmp) => {
                     let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
-                    with_assign(s, tmp, v)
+                    self.marked_assign(&arm.body, s, tmp, v)
                 }
             };
             self.exit_arm(scope);
@@ -4764,7 +4868,7 @@ impl Lowerer {
                     (None, _) => self.lower_return(&arm.body, &scope.locals)?,
                     (Some(tmp), Some(d)) => {
                         let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
-                        let mut b = with_assign(s, tmp, v);
+                        let mut b = self.marked_assign(&arm.body, s, tmp, v);
                         b.push(PyStmt::Assign {
                             target: d.clone(),
                             value: PyExpr::Bool(true),
@@ -4806,7 +4910,7 @@ impl Lowerer {
                 (None, _) => self.lower_return(&arm.body, &scope.locals)?,
                 (Some(tmp), Some(d)) => {
                     let (s, v) = self.lower_value(&arm.body, &scope.locals)?;
-                    let mut b = with_assign(s, tmp, v);
+                    let mut b = self.marked_assign(&arm.body, s, tmp, v);
                     b.push(PyStmt::Assign {
                         target: d.clone(),
                         value: PyExpr::Bool(true),
@@ -5116,6 +5220,7 @@ impl Lowerer {
         has_yield: &mut bool,
     ) -> Result<(), LowerError> {
         for item in items {
+            self.mark(ce_item_span(item), body);
             match item {
                 CeItem::Yield(e) => {
                     let (mut s, v) = self.lower_value(e, locals)?;
@@ -5200,6 +5305,21 @@ impl Lowerer {
     }
 
     fn lower_short_circuit_items(
+        &mut self,
+        items: &[CeItem],
+        locals: &HashSet<String>,
+        sc: ShortCircuit,
+    ) -> Result<Vec<PyStmt>, LowerError> {
+        let mut stmts = self.lower_short_circuit_items_unmarked(items, locals, sc)?;
+        if self.trace_lines
+            && let Some(first) = items.first()
+        {
+            stmts.insert(0, line_marker(ce_item_span(first)));
+        }
+        Ok(stmts)
+    }
+
+    fn lower_short_circuit_items_unmarked(
         &mut self,
         items: &[CeItem],
         locals: &HashSet<String>,
@@ -5383,6 +5503,7 @@ impl Lowerer {
         body: &mut Vec<PyStmt>,
     ) -> Result<(), LowerError> {
         for item in items {
+            self.mark(ce_item_span(item), body);
             match item {
                 CeItem::LetBang { target, value, .. } => {
                     let (mut s, v) = self.lower_value(value, locals)?;
@@ -5990,7 +6111,7 @@ impl Lowerer {
                 None => self.lower_return(&a.arm.body, &scope.locals)?,
                 Some(tmp) => {
                     let (arm_stmts, arm_val) = self.lower_value(&a.arm.body, &scope.locals)?;
-                    with_assign(arm_stmts, tmp, arm_val)
+                    self.marked_assign(&a.arm.body, arm_stmts, tmp, arm_val)
                 }
             };
             let mut inner = Vec::new();
@@ -6173,7 +6294,7 @@ impl Lowerer {
                     }
                     NativeArmBody::Assign(tmp) => {
                         let (arm_stmts, arm_val) = self.lower_value(&arm.body, &scope.locals)?;
-                        with_assign(arm_stmts, tmp, arm_val)
+                        self.marked_assign(&arm.body, arm_stmts, tmp, arm_val)
                     }
                 };
                 self.exit_arm(scope);
@@ -11106,6 +11227,80 @@ const OPTION_CE: ShortCircuit = ShortCircuit {
     name: "option",
     success: "Some",
 };
+
+/// The marker a traced lowering puts ahead of the statements lowered from
+/// `span`.
+fn line_marker(span: Span) -> PyStmt {
+    PyStmt::Line(span.start as u32, span.end as u32)
+}
+
+/// Where the part of `expr` that runs as one statement ends, for its line
+/// marker: all of a plain expression, the scrutinee of a `match`, the condition
+/// of an `if`. `None` when no part of it does, as for a block or a computation
+/// expression, whose statements have markers of their own.
+fn head_end(expr: &Expr) -> Option<usize> {
+    match &expr.kind {
+        ExprKind::Match { scrutinee, .. } => Some(scrutinee.span().end),
+        ExprKind::If { cond, .. } => Some(cond.span().end),
+        ExprKind::Block { .. } | ExprKind::Ce { .. } => None,
+        ExprKind::Fn { body, .. } | ExprKind::Try { body } => {
+            head_end(body).map(|end| end.max(expr.span().start))
+        }
+        _ => Some(expr.span().end),
+    }
+}
+
+/// The source extent an expression in statement position is marked with: from
+/// its start to its [`head_end`], or its start alone.
+fn statement_span(expr: &Expr) -> Span {
+    let start = expr.span().start;
+    Span::new(start, head_end(expr).unwrap_or(start).max(start))
+}
+
+/// The source extent of a binding, for its line marker. A value binding runs
+/// from its target to the [`head_end`] of its value; a function's is its
+/// target, since its body's statements are marked where they are lowered.
+fn binding_span(binding: &LetBinding) -> Span {
+    let target = binding.target_span.span();
+    if !binding.params.is_empty() {
+        return target;
+    }
+    Span::new(
+        target.start,
+        head_end(&binding.value)
+            .unwrap_or(target.end)
+            .max(target.end),
+    )
+}
+
+/// The source extent of a computation-expression item, for its line marker: a
+/// binding is marked as [`binding_span`] marks one, a `for` covers its header.
+fn ce_item_span(item: &CeItem) -> Span {
+    match item {
+        CeItem::LetBang {
+            target_span, value, ..
+        }
+        | CeItem::Let {
+            target_span, value, ..
+        } => {
+            let target = target_span.span();
+            Span::new(
+                target.start,
+                head_end(value).unwrap_or(target.end).max(target.end),
+            )
+        }
+        CeItem::For {
+            target_span,
+            source,
+            ..
+        } => Span::new(target_span.span().start, source.span().end),
+        CeItem::DoBang(e)
+        | CeItem::Return(e)
+        | CeItem::ReturnBang(e)
+        | CeItem::Yield(e)
+        | CeItem::YieldBang(e) => statement_span(e),
+    }
+}
 
 /// A defensive error for a CE item the type checker should already have rejected.
 fn ce_item_error(builder: &str) -> LowerError {

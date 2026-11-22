@@ -6198,6 +6198,7 @@ fn run_and_check(source: &str, expected: &[(&str, &str)]) {
     };
     let mut program =
         pyfun::compile(source).unwrap_or_else(|e| panic!("compile failed: {e}\n{source}"));
+    assert_line_mapped(source);
     program.push('\n');
     for (name, _) in expected {
         program.push_str(&format!("print({name})\n"));
@@ -7016,7 +7017,33 @@ fn matching_an_option_pulls_in_the_option_prelude() {
 fn run_source(src: &str) -> Option<String> {
     let python = python_cmd()?;
     let program = pyfun::compile(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
+    assert_line_mapped(src);
     Some(run_python(&python, &program).replace("\r\n", "\n"))
+}
+
+/// Every end-to-end program doubles as a check that it can be traced: its
+/// marked lowering must emit the same Python, so a runtime error in it can be
+/// reported in `.pyfun` lines. A rewrite that starts reacting to a marker
+/// fails here, in whichever test exercises it.
+fn assert_line_mapped(src: &str) {
+    let (_, map) = pyfun::compile_with_line_map(src).expect("compiles");
+    if map.is_none() {
+        let (plain, traced) = (
+            pyfun::compile(src).expect("compiles"),
+            pyfun::traced_python(src).expect("compiles"),
+        );
+        let at = plain
+            .lines()
+            .zip(traced.lines())
+            .position(|(a, b)| a != b)
+            .unwrap_or(0);
+        panic!(
+            "no line map: the traced emission differs at line {}\n  plain:  {}\n  traced: {}\n{src}",
+            at + 1,
+            plain.lines().nth(at).unwrap_or("<end>"),
+            traced.lines().nth(at).unwrap_or("<end>"),
+        );
+    }
 }
 
 #[test]

@@ -27,6 +27,8 @@ src/
   python_emitter/  Python-AST IR → readable source (py311.rs = the --target 3.11 rewrite)
   diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes; the Warning type
   lint.rs          the warnings the syntax alone shows (DESIGN §3); types/ finds the rest and joins them
+  traceback.rs     what `pyfun run` stages for a traceback in .pyfun lines (DESIGN §9): launcher, hook, line table
+  traceback_hook.py  the hook itself, a Python module embedded with include_str!
   project/         module graph: acyclic import resolution, cross-module checking
     manifest.rs      pyfun.toml reader/editor, project root and vendored façades (DESIGN §6.2)
   lsp/             front-end-first language server (stdio JSON-RPC)
@@ -566,6 +568,42 @@ two caches above already eliminate all *redundant* whole-file work, and region-b
 complicate the offside-rule lexer and the recovering parser for no perceptible latency win at this
 scale. The `editors/vscode/` client is intentionally thin — all language smarts live in the Rust
 server.
+
+## Tracebacks in `.pyfun` lines — implements DESIGN §9
+
+Three pieces, each small, and one invariant that keeps them honest.
+
+**Markers.** `Lowerer::trace_lines` turns on a *traced* lowering (`lower_native_typed_tracing`,
+`lower_in_project_tracing`). It pushes a `PyStmt::Line(start, end)` ahead of the statements lowered from
+each Pyfun statement: a top-level item, a block statement (`lower_block_return`, `lower_block_value`),
+whatever `lower_return` is handed (so each branch of an `if` and each arm of a tail-position `match`),
+a value-position arm (`lower_arm_body`), and each item of a `seq`/`async`/`result`/`option` block. The
+two offsets are the statement's extent in the source (`statement_span`, `binding_span`): all of a plain
+expression, the header of a `match`, an `if`, a block or a function. The emitter prints a marker as a line that starts
+with NUL, which emitted Python never contains.
+
+**The line map.** `lib.rs::line_map_of` splits the traced emission into Python text and markers
+(`python_emitter::split_line_markers`) and compares the text with the real emission. **They must be
+equal byte for byte**, or there is no map: a marker is an extra statement in the IR, and a peephole
+that counts statements or matches a statement shape could react to one. Every end-to-end program in
+`tests/compile.rs` asserts that it has a map, and `tests/tracebacks.rs` does the same for every lesson
+block and example, so a rewrite that starts reacting to markers fails in the test that exercises it.
+(The one place that needed teaching was the emitter's `elif` collapse, which now looks through leading
+markers.) A marker holds for the lines after it at its own indentation or deeper; when the Python
+dedents past it, the marker in force at that depth takes over again. That is what sends the line after
+a hoisted function's body back to the statement that owns it. Lines above the first marker (imports,
+classes, prelude helpers) have no entry.
+
+**The table and the hook.** `traceback::table` turns each file's map into JSON: `[emitted line, first
+source line, last source line]` rows and the source lines.
+`main.rs::stage_and_run` writes the emitted files, the table, the hook and a three-line launcher to
+the temp directory and runs the launcher. The hook (`src/traceback_hook.py`) executes the entry file
+in `__main__`'s own namespace with `sys.argv[0]` and `__file__` set as a direct run would have them,
+and installs `sys.excepthook`. On an uncaught error it rewrites the `TracebackException`'s stacks,
+causes and contexts included: a frame from the staging directory becomes its source statement or is
+dropped when the table has no row for it, and every other frame is left alone. Any failure inside the
+hook falls back to `sys.__excepthook__`. The table is read only at that point, so a program that ends
+cleanly pays for one extra module import.
 
 ## Names Python already owns — implements DESIGN §5
 
