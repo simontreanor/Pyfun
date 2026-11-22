@@ -223,9 +223,9 @@ pub enum TypeDeclKind {
     /// matched — it only ever crosses the `extern` boundary. Replaces the phantom-ADT
     /// idiom `type Conn = ConnH` (`DESIGN.md` §6).
     Opaque,
-    /// `opaque type UserId = string` — a zero-cost newtype (Scala 3's opaque
+    /// `opaque type UserId = str` — a zero-cost newtype (Scala 3's opaque
     /// types, adapted): nominally distinct from its underlying type everywhere,
-    /// wrapped by the constructor of the same name (`UserId : string -> UserId`)
+    /// wrapped by the constructor of the same name (`UserId : str -> UserId`)
     /// and unwrapped by the single-case pattern (`case UserId s:`) — and **fully
     /// erased** at lowering: no Python class, wrap compiles to the bare value, so
     /// the underlying value is what crosses the `extern` boundary (`DESIGN.md`
@@ -426,7 +426,7 @@ pub enum ExprKind {
         name: Option<String>,
     },
     /// An interpolated string `f"...{expr}..."`: a sequence of literal chunks and
-    /// embedded expressions. Evaluates to a `string`; each hole may be any type
+    /// embedded expressions. Evaluates to a `str`; each hole may be any type
     /// (stringified by the emitted Python f-string).
     Interp {
         parts: Vec<InterpPart>,

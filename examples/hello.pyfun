@@ -308,7 +308,7 @@ let mask = 0xFF                     # 255  (hex; also 0o17 octal, 0b1010 binary)
 # `io` at full application — unless asserted `pure`; `math.fabs` is pure.
 # (`extern sqrt`/`extern cbrt` would clash — sqrt/cbrt are the built-in unit-aware
 # roots now, so a Python name that isn't a Pyfun builtin is used here.)
-extern show: a -> string = str
+extern show: a -> str = str
 extern pure fabs: float -> float = math.fabs
 
 # Declared-arrow effect annotations: effects are inferred everywhere, but an
@@ -328,7 +328,7 @@ let root = fabs (0.0 - 3.0)          # 3.0   (math.fabs(-3.0))
 # Exception`, so the imperative FFI boundary becomes the FP error type. The
 # reserved `Exception` record exposes `errorKind` (the class name) and
 # `errorMessage`. `try` binds looser than `+` but tighter than `|>`.
-extern parseInt: string -> int = int
+extern parseInt: str -> int = int
 let parsed42 = Result.withDefault 0 (try (parseInt "42"))    # 42
 let parsedBad = Result.withDefault 0 (try (parseInt "oops")) # 0  (ValueError caught)
 let errorKindOf s =
@@ -391,7 +391,7 @@ let byName = Map.ofList (List.zip names ages)
 let adaAge = Option.withDefault 0 (Map.tryFind "ada" byName)  # 36
 let entries = Map.toList byName               # [("ada", 36), ("alan", 41)]
 
-# Strings: the `String` module over the built-in `string` type. All pure; there is
+# Strings: the `String` module over the built-in `str` type. All pure; there is
 # no `char` type, so `String.toList` yields single-character strings. `String.toInt`
 # is a total parse — it returns the built-in `Option`, `None` on failure.
 let title = String.concat "Hello, " "World"   # "Hello, World"

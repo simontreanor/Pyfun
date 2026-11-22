@@ -86,7 +86,7 @@ fn run_feeds_the_program_its_own_stdin() {
     // and no interactive program could be run by the tool that runs programs.
     let file = write_temp(
         "stdin",
-        "extern readLine : string -> string = builtins.input\n\
+        "extern readLine : str -> str = builtins.input\n\
          let main =\n\
          \x20   let name = readLine \"name? \"\n\
          \x20   print (f\"hi {name}\")\n\
@@ -128,8 +128,8 @@ fn run_leaves_the_working_directory_alone() {
     std::fs::write(dir.join("data.txt"), "payload").expect("write data file");
     let file = write_temp(
         "cwd",
-        "extern readFile : string -> string = pathlib.Path.read_text\n\
-         extern pure path : string -> string = pathlib.Path\n\
+        "extern readFile : str -> str = pathlib.Path.read_text\n\
+         extern pure path : str -> str = pathlib.Path\n\
          let main = print (readFile (path \"data.txt\"))\n\
          main",
     );
@@ -151,7 +151,7 @@ fn run_leaves_the_working_directory_alone() {
 
 /// A program that prints its own `sys.argv`, the shape from issue #73.
 const ARGV_SOURCE: &str = "extern import sys\n\
-     extern getArgv : unit -> List string = sys.argv.copy\n\
+     extern getArgv : unit -> List str = sys.argv.copy\n\
      print (getArgv ())";
 
 /// Run `ARGV_SOURCE` under `pyfun run` with `extra` after the file path and

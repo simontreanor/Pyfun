@@ -143,7 +143,7 @@ type Pt = { x: int, y: int }
 extern with effect annotation
 ================================================================================
 
-extern slurp : string ->{io} string = builtins.open
+extern slurp : str ->{io} str = builtins.open
 
 --------------------------------------------------------------------------------
 
@@ -165,7 +165,7 @@ extern slurp : string ->{io} string = builtins.open
 extern pure with kwargs target
 ================================================================================
 
-extern pure loads : string -> Json = json.loads(strict=True, offset=-2, sep=", ")
+extern pure loads : str -> Json = json.loads(strict=True, offset=-2, sep=", ")
 
 --------------------------------------------------------------------------------
 
@@ -194,7 +194,7 @@ extern pure loads : string -> Json = json.loads(strict=True, offset=-2, sep=", "
 extern with a caller-supplied kwarg slot
 ================================================================================
 
-extern openText : string -> string -> Seq string = builtins.open(mode="rt", encoding=...)
+extern openText : str -> str -> Seq str = builtins.open(mode="rt", encoding=...)
 
 --------------------------------------------------------------------------------
 
@@ -251,7 +251,7 @@ extern type Path
 opaque type (zero-cost newtype)
 ================================================================================
 
-opaque type UserId = string
+opaque type UserId = str
 opaque type Tag a = List a
 let opaque = 1
 

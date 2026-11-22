@@ -46,11 +46,11 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 
 ## Reusable patterns (all verified against the current compiler)
 
-- **Typed dotted extern.** `extern loads: string -> List float = json.loads` — the Pyfun
+- **Typed dotted extern.** `extern loads: str -> List float = json.loads` — the Pyfun
   type is a promise the compiler trusts at the boundary; `= module.fn` auto-imports.
 - **Totality via `try`.** `try (loads s) : Result (List float) Exception` turns a raised
   exception into a value; `match` forces you to handle `Error`.
-- **Homogeneous decode is free.** A JSON array → `List a`, a flat object → `Map string a`.
+- **Homogeneous decode is free.** A JSON array → `List a`, a flat object → `Map str a`.
   Both lower 1:1 to the Python list/dict they already are.
 - **Stateful/OOP libraries.** Declare each opaque object as an **`extern type`**
   (`extern type Conn`) — a typed handle with no constructor — and reach its members with an
@@ -62,7 +62,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   `conn.execute` (currying for free).
 - **Heterogeneous decode into your ADTs.** Don't cast the whole object — build a
   **decoder** with the built-in `Decode` module and run it with `Decode.decodeString :
-  Decoder a -> string -> Result a Exception`. `Decode.field "age" Decode.int` pulls and
+  Decoder a -> str -> Result a Exception`. `Decode.field "age" Decode.int` pulls and
   strictly decodes a field; `Decode.map3`/`map2`/`map4` fan several field decoders into
   one that builds your record; `Decode.list`/`nullable`/`oneOf`/`andThen` cover arrays,
   optional/`null`, unions, and value-dependent shapes. The first bad field
@@ -86,9 +86,9 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **Keyword arguments on the target.** A trailing `(kw = value, …)` puts Python keyword
   arguments on every emitted call, reaching keyword-only and deep-positional parameters
   without the positional fillers needed to skip past them. A literal is pinned at the
-  declaration (`extern openText : string -> a = builtins.open(mode = "rt")`), and `...`
+  declaration (`extern openText : str -> a = builtins.open(mode = "rt")`), and `...`
   takes the value from the caller, so one extern covers every call shape instead of one per
-  fixed value: `extern parseInt : string -> int -> int = int(base = ...)` lowers
+  fixed value: `extern parseInt : str -> int -> int = int(base = ...)` lowers
   `parseInt "ff" 16` to `int("ff", base=16)`. Pinned literals consume no argument, so the
   two mix (`= builtins.open(mode = "rt", encoding = ...)`), and both work on a receiver
   method (`= .write_text(encoding = ...)`). A partially applied slot extern keeps working:
@@ -105,7 +105,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 
 ## Honest limits (the frontier these examples expose)
 
-- **No raw cast into records.** `extern parseUser: string -> User = json.loads`
+- **No raw cast into records.** `extern parseUser: str -> User = json.loads`
   type-checks but crashes (`'dict' object has no attribute 'name'`) — `json` returns a
   Python `dict` (subscript), a Pyfun record lowers to a class (attribute). This is a
   footgun to avoid, not a wall: the built-in `Decode` module (`json_to_adt.pyfun`) is the

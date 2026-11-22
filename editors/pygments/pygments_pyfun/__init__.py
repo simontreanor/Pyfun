@@ -33,7 +33,7 @@ KEYWORDS = (
 )
 OPERATOR_WORDS = ("and", "or", "not")
 BUILDERS = ("async", "seq", "result", "option")
-BUILTIN_TYPES = ("int", "float", "bool", "string", "unit")
+BUILTIN_TYPES = ("int", "float", "bool", "str", "unit")
 BUILTINS = (
     "print", "input", "abs", "min", "max", "round", "floor", "ceil", "truncate",
     "sqrt", "cbrt", "id", "const", "ignore", "flip", "fst", "snd", "sign",

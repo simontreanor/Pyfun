@@ -8,7 +8,7 @@ the value comes in two kinds.
 The first kind is a literal, fixed once at the declaration:
 
 ```pyfun
-extern parseHex: string -> int = int(base = 16)
+extern parseHex: str -> int = int(base = 16)
 
 let raw = "ff"
 
@@ -31,7 +31,7 @@ That suits a value which never changes. When it does change, `...` in place of t
 value from the caller:
 
 ```pyfun
-extern parseIn: string -> int -> int = int(base = ...)
+extern parseIn: str -> int -> int = int(base = ...)
 
 let fromHex s = parseIn s 16
 let fromBinary s = parseIn s 2
@@ -49,7 +49,7 @@ b |> fromBinary |> print
 ```
 
 One extern now covers every base. The type gained an argument for the slot to claim, and
-`parseIn : string -> int -> int` is an ordinary curried arrow, so inference, effects, and the checker
+`parseIn : str -> int -> int` is an ordinary curried arrow, so inference, effects, and the checker
 treat it like any other function. What changes is where the argument lands in the emitted call:
 
 ```python
@@ -69,7 +69,7 @@ Currying holds across the boundary. A slot extern applied to some of its argumen
 awaiting the rest, like any other Pyfun function:
 
 ```pyfun
-extern parseIn: string -> int -> int = int(base = ...)
+extern parseIn: str -> int -> int = int(base = ...)
 
 let ff = parseIn "ff"
 
@@ -91,8 +91,8 @@ a single extern whose base comes from the caller, and keep the output the same.
 
 ```pyfun
 # Two externs that differ only in the base each one pins.
-extern parseHex: string -> int = int(base = 16)
-extern parseBinary: string -> int = int(base = 2)
+extern parseHex: str -> int = int(base = 16)
+extern parseBinary: str -> int = int(base = 2)
 
 let hex = "ff"
 let binary = "1011"
@@ -108,13 +108,13 @@ Expected output:
 11
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=IyBUd28gZXh0ZXJucyB0aGF0IGRpZmZlciBvbmx5IGluIHRoZSBiYXNlIGVhY2ggb25lIHBpbnMuCmV4dGVybiBwYXJzZUhleDogc3RyaW5nIC0-IGludCA9IGludChiYXNlID0gMTYpCmV4dGVybiBwYXJzZUJpbmFyeTogc3RyaW5nIC0-IGludCA9IGludChiYXNlID0gMikKCmxldCBoZXggPSAiZmYiCmxldCBiaW5hcnkgPSAiMTAxMSIKCmhleCB8PiBwYXJzZUhleCB8PiBwcmludApiaW5hcnkgfD4gcGFyc2VCaW5hcnkgfD4gcHJpbnQK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=IyBUd28gZXh0ZXJucyB0aGF0IGRpZmZlciBvbmx5IGluIHRoZSBiYXNlIGVhY2ggb25lIHBpbnMuCmV4dGVybiBwYXJzZUhleDogc3RyIC0-IGludCA9IGludChiYXNlID0gMTYpCmV4dGVybiBwYXJzZUJpbmFyeTogc3RyIC0-IGludCA9IGludChiYXNlID0gMikKCmxldCBoZXggPSAiZmYiCmxldCBiaW5hcnkgPSAiMTAxMSIKCmhleCB8PiBwYXJzZUhleCB8PiBwcmludApiaW5hcnkgfD4gcGFyc2VCaW5hcnkgfD4gcHJpbnQK)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-extern parseIn: string -> int -> int = int(base = ...)
+extern parseIn: str -> int -> int = int(base = ...)
 
 let fromHex s = parseIn s 16
 let fromBinary s = parseIn s 2

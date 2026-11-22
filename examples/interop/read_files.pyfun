@@ -7,9 +7,9 @@
 # and cleans up after itself.
 
 extern type Path
-extern toPath: string -> Path = pathlib.Path
-extern writeText: Path -> string -> int = pathlib.Path.write_text
-extern readText: Path -> string = pathlib.Path.read_text
+extern toPath: str -> Path = pathlib.Path
+extern writeText: Path -> str -> int = pathlib.Path.write_text
+extern readText: Path -> str = pathlib.Path.read_text
 extern unlink: Path -> unit = pathlib.Path.unlink
 
 # `roundTrip` calls `io` externs, so it is inferred `io` too — a `let pure roundTrip`

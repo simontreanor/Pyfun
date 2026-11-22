@@ -3,7 +3,7 @@
 //! `Decode.decodeString dec s` normally builds a runtime decoder *value* — a
 //! tree of raising closures — and interprets it over `json.loads` output. When
 //! `dec` is a syntactically-known composition of the simple combinators
-//! (`string`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
+//! (`str`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
 //! `succeed`/`fail`/`oneOf`, possibly through top-level `let` decoder names),
 //! this pass deforests the interpreter: it emits the equivalent **direct
 //! dict/list access with inline error handling** — one `try` whose body reads
@@ -126,7 +126,7 @@ impl Lowerer {
         let head = super::flatten_app(e, &mut args);
         let q = crate::types::qualified_name(head)?;
         match (q.as_str(), args.len()) {
-            ("Decode.string", 0) => Some(DecPlan::Str),
+            ("Decode.str", 0) => Some(DecPlan::Str),
             ("Decode.int", 0) => Some(DecPlan::Int),
             ("Decode.float", 0) => Some(DecPlan::Float),
             ("Decode.bool", 0) => Some(DecPlan::Bool),

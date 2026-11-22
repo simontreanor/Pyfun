@@ -430,7 +430,7 @@ impl Parser {
             // `extern type Conn` declares an opaque handle type; `extern import m`
             // a boundary module import; `extern name : …` a value.
             Tok::Extern if *self.peek2() == Tok::Type => Ok(Item::Type(self.parse_extern_type()?)),
-            // `opaque type UserId = string` — a zero-cost newtype. `opaque` is a
+            // `opaque type UserId = str` — a zero-cost newtype. `opaque` is a
             // contextual keyword: only the exact `opaque type` sequence triggers it
             // (`opaque` alone stays an ordinary identifier).
             Tok::Ident(name) if name == "opaque" && *self.peek2() == Tok::Type => {
@@ -725,7 +725,7 @@ impl Parser {
         })
     }
 
-    /// `opaque type UserId = string` (or parameterized, `opaque type Tag a = List a`)
+    /// `opaque type UserId = str` (or parameterized, `opaque type Tag a = List a`)
     /// — a zero-cost newtype (`DESIGN.md` §7.3). The body is a single type
     /// expression (the underlying type), inline after `=`; the constructor and the
     /// single-case pattern are derived from the type name, so there is no variant

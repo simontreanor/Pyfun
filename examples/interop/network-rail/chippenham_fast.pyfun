@@ -14,15 +14,15 @@
 # libraries do the grinding. `extern` is the boundary that lets you have both —
 # leverage the fast thing that already exists rather than re-emulate it in Pyfun.
 
-extern scan: string -> ( (Map string string)
-                       , (List ( string, string, string
-                               , (List (string, string, string)) )) )
+extern scan: str -> ( (Map str str)
+                       , (List ( str, str, str
+                               , (List (str, str, str)) )) )
        = nr_stream.scan
-extern writeUtf8: string -> string -> int = nr_stream.write_utf8
+extern writeUtf8: str -> str -> int = nr_stream.write_utf8
 
-type Stop = { tiploc: string, arr: string, dep: string }
-type Run  = { uid: string, days: string, stp: string, stops: List Stop }
-type Leg  = { dest: string, finalDest: string, rdays: string, depMin: int, arrMin: int, jt: int, via: List string }
+type Stop = { tiploc: str, arr: str, dep: str }
+type Run  = { uid: str, days: str, stp: str, stops: List Stop }
+type Leg  = { dest: str, finalDest: str, rdays: str, depMin: int, arrMin: int, jt: int, via: List str }
 
 let dataFile = "examples/interop/network-rail/sample.ndjson"
 let outFile  = "examples/interop/network-rail/chippenham-routes.md"

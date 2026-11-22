@@ -4,7 +4,7 @@
 //!
 //! - **Diagnostics**: the existing type/effect/unit errors ([`crate::analyze`])
 //!   streamed as `textDocument/publishDiagnostics` on open/change.
-//! - **Hover**: the inferred type (effects included, e.g. `string ->{io} unit`) of
+//! - **Hover**: the inferred type (effects included, e.g. `str ->{io} unit`) of
 //!   the narrowest expression under the cursor — the only way to *see* an inferred
 //!   type, since Pyfun never writes them.
 //! - **Go-to-definition** and **find-references**: navigate between a symbol and its
@@ -1610,7 +1610,7 @@ const BUILTIN_CTORS: &[&str] = &["Ok", "Error", "Some", "None"];
 
 /// Built-in and reserved type names.
 const BUILTIN_TYPES: &[&str] = &[
-    "int", "float", "bool", "string", "unit", "Result", "Async", "Seq", "List", "Set", "Map",
+    "int", "float", "bool", "str", "unit", "Result", "Async", "Seq", "List", "Set", "Map",
     "Option", "Decoder",
 ];
 

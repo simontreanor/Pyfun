@@ -5,7 +5,7 @@
 extern type Datetime
 extern import datetime as dt
 extern pure mkDate : int -> int -> int -> Datetime = dt.datetime
-extern slurp : string ->{io} string = builtins.open
+extern slurp : str ->{io} str = builtins.open
 extern pure applyIt : (a ->{e} b) -> a ->{e} b = apply
 
 # --- literals ---

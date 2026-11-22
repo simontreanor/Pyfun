@@ -13,7 +13,7 @@ exists and states its type; lesson 12 covers it in full. The `try` expression ru
 and catches any exception into an `Error`.
 
 ```pyfun
-extern parseInt: string -> int = int
+extern parseInt: str -> int = int
 
 let describe s =
   match try (parseInt s):
@@ -63,7 +63,7 @@ error: type mismatch: expected Result 'a 'b, found int
 Wrap the parse in `try` so it becomes a `Result` the match can take apart.
 
 ```pyfun
-extern parseInt: string -> int = int
+extern parseInt: str -> int = int
 
 let describe s =
   match parseInt s:
@@ -81,13 +81,13 @@ ok: 88
 bad: ValueError
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlSW50OiBzdHJpbmcgLT4gaW50ID0gaW50CgpsZXQgZGVzY3JpYmUgcyA9CiAgbWF0Y2ggcGFyc2VJbnQgczoKICAgIGNhc2UgT2sgbjogZiJvazoge259IgogICAgY2FzZSBFcnJvciBlOiBmImJhZDoge2UuZXJyb3JLaW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlSW50OiBzdHIgLT4gaW50ID0gaW50CgpsZXQgZGVzY3JpYmUgcyA9CiAgbWF0Y2ggcGFyc2VJbnQgczoKICAgIGNhc2UgT2sgbjogZiJvazoge259IgogICAgY2FzZSBFcnJvciBlOiBmImJhZDoge2UuZXJyb3JLaW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-extern parseInt: string -> int = int
+extern parseInt: str -> int = int
 
 let describe s =
   match try (parseInt s):

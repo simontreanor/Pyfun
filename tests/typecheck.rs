@@ -25,8 +25,8 @@ fn decode_module_types_a_record_decoder() {
     // The headline: field decoders fan into a record via `map3`, run totally.
     assert!(
         pyfun::check(
-            "type P = { name: string, age: int, tags: List string }\n\
-             let d =\n  Decode.map3 (fun name age tags -> P { name = name, age = age, tags = tags })\n    (Decode.field \"name\" Decode.string)\n    (Decode.field \"age\" Decode.int)\n    (Decode.field \"tags\" (Decode.list Decode.string))\n\
+            "type P = { name: str, age: int, tags: List str }\n\
+             let d =\n  Decode.map3 (fun name age tags -> P { name = name, age = age, tags = tags })\n    (Decode.field \"name\" Decode.str)\n    (Decode.field \"age\" Decode.int)\n    (Decode.field \"tags\" (Decode.list Decode.str))\n\
              let r = Decode.decodeString d \"{}\""
         )
         .is_ok()
@@ -441,7 +441,7 @@ fn rejects_ill_typed_list_ops() {
     // `get`'s index is an int.
     assert_error_contains("let r = List.get \"x\" [1, 2]", "int");
     // `contains` element must match the list's element type.
-    assert_error_contains("let r = List.contains \"a\" [1, 2]", "string");
+    assert_error_contains("let r = List.contains \"a\" [1, 2]", "str");
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn rejects_redefining_builtin_result() {
 #[test]
 fn accepts_opaque_type_wrap_and_unwrap() {
     // The constructor wraps the underlying; the single-ctor match unwraps it.
-    let src = "opaque type UserId = string\n\
+    let src = "opaque type UserId = str\n\
                let uid = UserId \"u-1\"\n\
                let name u =\n  match u:\n    case UserId s: s\n\
                let n = name uid";
@@ -612,8 +612,8 @@ fn accepts_parameterized_opaque_type() {
 #[test]
 fn accepts_opaque_type_in_an_extern_signature() {
     // A newtype names a position in an extern's declared type like any nominal type.
-    let src = "opaque type UserId = string\n\
-               extern pure upperId: UserId -> string = str.upper\n\
+    let src = "opaque type UserId = str\n\
+               extern pure upperId: UserId -> str = str.upper\n\
                let r = upperId (UserId \"abc\")";
     assert!(pyfun::check(src).is_ok());
 }
@@ -621,14 +621,14 @@ fn accepts_opaque_type_in_an_extern_signature() {
 #[test]
 fn accepts_wrapping_through_a_pipe() {
     // The constructor is an ordinary curried function, so it sits after `|>`.
-    assert!(pyfun::check("opaque type UserId = string\nlet uid = \"u\" |> UserId").is_ok());
+    assert!(pyfun::check("opaque type UserId = str\nlet uid = \"u\" |> UserId").is_ok());
 }
 
 #[test]
 fn newtype_constructor_is_first_class() {
     // `List.map UserId` has type `List string -> List UserId`, and the result is
     // consumed by a function matching newtype patterns.
-    let src = "opaque type UserId = string\n\
+    let src = "opaque type UserId = str\n\
                let firstLen ids =\n  match ids:\n    case [UserId s, *_]: String.len s\n    case []: 0\n\
                let n = firstLen (List.map UserId [\"ab\", \"c\"])";
     assert!(pyfun::check(src).is_ok());
@@ -638,8 +638,8 @@ fn newtype_constructor_is_first_class() {
 fn rejects_newtype_where_underlying_expected() {
     // Nominal distinctness: a `UserId` is not a `string`.
     assert_error_contains(
-        "opaque type UserId = string\nlet bad = String.len (UserId \"x\")",
-        "expected string, found UserId",
+        "opaque type UserId = str\nlet bad = String.len (UserId \"x\")",
+        "expected str, found UserId",
     );
 }
 
@@ -647,10 +647,10 @@ fn rejects_newtype_where_underlying_expected() {
 fn rejects_underlying_where_newtype_expected() {
     // …and a raw `string` is not a `UserId`.
     assert_error_contains(
-        "opaque type UserId = string\n\
+        "opaque type UserId = str\n\
          let name u =\n  match u:\n    case UserId s: s\n\
          let bad = name \"raw\"",
-        "expected UserId, found string",
+        "expected UserId, found str",
     );
 }
 
@@ -658,7 +658,7 @@ fn rejects_underlying_where_newtype_expected() {
 fn rejects_non_exhaustive_newtype_match() {
     // A literal payload covers only that value; the witness names the newtype ctor.
     assert_error_contains(
-        "opaque type UserId = string\n\
+        "opaque type UserId = str\n\
          let f u =\n  match u:\n    case UserId \"root\": 1",
         "`UserId _` is not matched",
     );
@@ -701,7 +701,7 @@ fn rejects_non_bool_condition() {
 fn rejects_branch_type_mismatch() {
     assert_error_contains(
         "let r = if True then 1 else \"x\"",
-        "expected int, found string",
+        "expected int, found str",
     );
 }
 
@@ -720,7 +720,7 @@ fn rejects_infinite_type() {
 fn rejects_match_arm_result_mismatch() {
     assert_error_contains(
         "let f n =\n  match n:\n    case 0: 1\n    case _: \"two\"",
-        "expected int, found string",
+        "expected int, found str",
     );
 }
 
@@ -1051,7 +1051,7 @@ fn for_items_type_in_every_builder() {
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
     let analysis = pyfun::analyze("let s = seq { for (a, b) in [(1, \"x\")]: yield b }");
     assert!(
-        analysis.types.iter().any(|t| t.ty == "Seq string"),
+        analysis.types.iter().any(|t| t.ty == "Seq str"),
         "{:?}",
         analysis.types
     );
@@ -1346,7 +1346,7 @@ fn rejects_comparison_of_unorderable_type() {
 #[test]
 fn rejects_equality_across_different_types() {
     // Equality requires both sides to have the same type.
-    assert_error_contains("let r = 1 == \"x\"", "expected int, found string");
+    assert_error_contains("let r = 1 == \"x\"", "expected int, found str");
 }
 
 #[test]
@@ -1537,7 +1537,7 @@ fn accepts_record_decl_literal_update_and_access() {
 }
 
 const NESTED: &str = "type Inner = { a: int, b: int }\n\
-                      type Outer = { inner: Inner, tag: string }\n\
+                      type Outer = { inner: Inner, tag: str }\n\
                       let o = Outer { inner = Inner { a = 1, b = 2 }, tag = \"x\" }\n";
 
 #[test]
@@ -1675,8 +1675,8 @@ fn a_shared_field_resolves_when_the_base_type_is_known() {
     // whose type is unknown falls back to resolution by field name.
     assert!(
         pyfun::check(
-            "type Placed = { letter: string, row: int }\n\
-             type Cell = { letter: string, blank: bool }\n\
+            "type Placed = { letter: str, row: int }\n\
+             type Cell = { letter: str, blank: bool }\n\
              type Board = { top: Cell }\n\
              let p = Placed { letter = \"a\", row = 1 }\n\
              let c = Cell { letter = \"b\", blank = False }\n\
@@ -1707,7 +1707,7 @@ fn a_known_record_missing_the_field_is_reported_against_that_record() {
 #[test]
 fn a_near_miss_field_on_a_known_record_suggests_the_real_one() {
     assert_error_contains(
-        "type Cell = { letter: string }\nlet c = Cell { letter = \"a\" }\nlet l = c.leter",
+        "type Cell = { letter: str }\nlet c = Cell { letter = \"a\" }\nlet l = c.leter",
         "did you mean `letter`",
     );
 }
@@ -1858,7 +1858,7 @@ fn string_get_answers_with_option_like_list_get() {
 #[test]
 fn string_of_list_inverts_to_list() {
     assert!(pyfun::check("let s = String.ofList (String.toList \"abc\")").is_ok());
-    assert_error_contains("let bad = String.ofList [1, 2]", "string");
+    assert_error_contains("let bad = String.ofList [1, 2]", "str");
 }
 
 // ---------- deferred field resolution ----------
@@ -1870,8 +1870,8 @@ fn a_shared_field_resolves_from_a_later_statement() {
     // at first sight reported an ambiguity the program did not really have.
     assert!(
         pyfun::check(
-            "type Placed = { row: int, letter: string }\n\
-             type Cell = { row: int, letter: string, blank: bool }\n\
+            "type Placed = { row: int, letter: str }\n\
+             type Cell = { row: int, letter: str, blank: bool }\n\
              let describe c =\n\
              \x20   let l = c.letter\n\
              \x20   let flag = c.blank\n\
@@ -1886,21 +1886,21 @@ fn a_deferred_field_is_still_type_checked() {
     // Deferring must not weaken the check: once the base is known, the field's
     // type has to fit every use of it.
     assert_error_contains(
-        "type Placed = { row: int, letter: string }\n\
-         type Cell = { row: int, letter: string, blank: bool }\n\
+        "type Placed = { row: int, letter: str }\n\
+         type Cell = { row: int, letter: str, blank: bool }\n\
          let bad c =\n\
          \x20   let l = c.letter\n\
          \x20   let flag = c.blank\n\
          \x20   l + 1",
-        "expected int, found string",
+        "expected int, found str",
     );
 }
 
 #[test]
 fn a_deferred_field_must_exist_on_the_record_that_wins() {
     assert_error_contains(
-        "type Cell = { letter: string, blank: bool }\n\
-         type Tile = { letter: string, score: int }\n\
+        "type Cell = { letter: str, blank: bool }\n\
+         type Tile = { letter: str, score: int }\n\
          let bad c =\n\
          \x20   let s = c.score\n\
          \x20   let flag = c.blank\n\
@@ -1914,8 +1914,8 @@ fn a_field_on_a_value_nothing_pins_is_still_ambiguous() {
     // The genuinely unresolvable case: no statement anywhere says what `c` is.
     // The message names both ways out, including the parameter form.
     let msgs = errors(
-        "type Placed = { row: int, letter: string }\n\
-         type Cell = { row: int, letter: string, blank: bool }\n\
+        "type Placed = { row: int, letter: str }\n\
+         type Cell = { row: int, letter: str, blank: bool }\n\
          let get c = c.letter",
     );
     let msg = msgs.join(" ");
@@ -1930,8 +1930,8 @@ fn a_pinned_container_resolves_its_payload() {
     // payload is pinned by the map.
     assert!(
         pyfun::check(
-            "type Placed = { row: int, letter: string }\n\
-             type Cell = { row: int, letter: string, blank: bool }\n\
+            "type Placed = { row: int, letter: str }\n\
+             type Cell = { row: int, letter: str, blank: bool }\n\
              let board = Map.ofList [(1, Placed { row = 1, letter = \"A\" })]\n\
              let at k =\n\
              \x20 match Map.tryFind k board:\n\
@@ -2052,7 +2052,7 @@ fn option_and_result_agree_on_the_empty_case() {
 fn sign_is_a_number_to_an_int() {
     assert!(pyfun::check("let s = sign (-5)\nlet t = s + 1").is_ok());
     assert!(pyfun::check("let s = sign 2.5").is_ok());
-    assert_error_contains("let bad = sign \"x\"", "string");
+    assert_error_contains("let bad = sign \"x\"", "str");
 }
 
 // ---------- the Option/Result sweep (ROADMAP dogfooding finding #5) ----------
@@ -2063,7 +2063,7 @@ fn option_map2_combines_two_options() {
     // The two payloads need not share a type, but the function must agree.
     assert_error_contains(
         "let bad = Option.map2 (fun a b -> a + b) (Some 1) (Some \"x\")",
-        "string",
+        "str",
     );
 }
 
@@ -2072,7 +2072,7 @@ fn option_or_else_takes_the_fallback_first() {
     // Argument order matches `withDefault`, so it reads as
     // `primary |> Option.orElse fallback`.
     assert!(pyfun::check("let s = Some 1 |> Option.orElse (Some 2)").is_ok());
-    assert_error_contains("let bad = Option.orElse (Some 1) (Some \"x\")", "string");
+    assert_error_contains("let bad = Option.orElse (Some 1) (Some \"x\")", "str");
 }
 
 #[test]
@@ -2105,7 +2105,7 @@ fn result_map2_keeps_one_error_type() {
     // which is why it happily combines with anything.)
     assert_error_contains(
         "let bad = Result.map2 (fun a b -> a + b) (Error \"x\") (Error 2)",
-        "string",
+        "str",
     );
 }
 
@@ -2255,7 +2255,7 @@ fn list_map2_pairs_two_lists() {
     // The two lists need not share an element type, but the function must agree.
     assert_error_contains(
         "let bad = List.map2 (fun a b -> a + b) [1, 2] [\"x\"]",
-        "string",
+        "str",
     );
 }
 
@@ -2265,7 +2265,7 @@ fn list_ordering_members_need_comparison() {
     // `sortBy`/`maxBy` constrain the *key*, not the element.
     assert!(
         pyfun::check(
-            "type P = { name: string, age: int }\n             let ps = [P { name = \"a\", age = 2 }]\n             let byAge = List.sortBy (fun p -> p.age) ps\n             let oldest = List.maxBy (fun p -> p.age) ps"
+            "type P = { name: str, age: int }\n             let ps = [P { name = \"a\", age = 2 }]\n             let byAge = List.sortBy (fun p -> p.age) ps\n             let oldest = List.maxBy (fun p -> p.age) ps"
         )
         .is_ok()
     );
@@ -2621,7 +2621,7 @@ fn annotated_async_extern_carries_the_async_label() {
     // The `->{async}` annotation is trusted as written: `fetch` performs `async`
     // (not the boundary's default `io`), so the `pure` violation names `async`.
     assert_error_contains(
-        "extern fetch: string ->{async} Async string = httpx.get\nlet pure go u = fetch u",
+        "extern fetch: str ->{async} Async str = httpx.get\nlet pure go u = fetch u",
         "declared `pure` but performs `async`",
     );
 }
@@ -2635,15 +2635,15 @@ fn an_async_extern_must_return_the_async_type() {
         "`sleep` is declared `->{async}` but returns `unit`, which cannot be awaited",
     );
     assert_error_contains(
-        "extern get: string ->{async} List string = client.get",
-        "declare the result as `Async (List string)`",
+        "extern get: str ->{async} List str = client.get",
+        "declare the result as `Async (List str)`",
     );
     // The working spellings: the `Async` type, with or without the label.
     for src in [
         "extern sleep: float -> Async unit = asyncio.sleep",
         "extern sleep: float ->{async} Async unit = asyncio.sleep",
         // A label on an argument arrow is not the innermost arrow.
-        "extern each: (string ->{async} unit) -> unit = m.each",
+        "extern each: (str ->{async} unit) -> unit = m.each",
     ] {
         assert!(pyfun::check(src).is_ok(), "{src}: {:?}", errors(src));
     }
@@ -2737,7 +2737,7 @@ fn decode_auto_is_pinned_by_a_later_use_and_open_otherwise() {
                match back:\n  case Ok p: print p.x\n  case Error _: print 0";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
     // Inside a function the arms pin it before the function generalizes.
-    let src = "type Msg = Hello string | Resign\n\
+    let src = "type Msg = Hello str | Resign\n\
                let parse s =\n  match Decode.decodeString Decode.auto s:\n    \
                  case Ok (Hello who): who\n    case Ok Resign: \"resign\"\n    case Error _: \"bad\"";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
@@ -2763,7 +2763,7 @@ fn encode_auto_is_pure_and_takes_anything() {
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
     let analysis = pyfun::analyze("let s = Encode.auto 1");
     assert!(
-        analysis.types.iter().any(|t| t.ty == "string"),
+        analysis.types.iter().any(|t| t.ty == "str"),
         "{:?}",
         analysis.types
     );
@@ -2809,7 +2809,7 @@ fn async_ce_and_print_union_to_io_async() {
 fn labels_union_across_calls_and_display_in_canonical_order() {
     // A body that prints (io) and fetches (async) accumulates both labels; the
     // `pure` violation renders the set deterministically, `io` first.
-    let src = "extern fetch: string ->{async} Async string = httpx.get\n\
+    let src = "extern fetch: str ->{async} Async str = httpx.get\n\
                let pure shout u =\n    print u\n    fetch u";
     assert_error_contains(src, "declared `pure` but performs `io, async`");
 }
@@ -2818,7 +2818,7 @@ fn labels_union_across_calls_and_display_in_canonical_order() {
 fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
     // `->{async, io}` written backwards still displays canonically as
     // `->{io, async}` (labels live in an ordered set).
-    let src = "extern push: string ->{async, io} Async unit = hub.push\nlet go s = push s";
+    let src = "extern push: str ->{async, io} Async unit = hub.push\nlet go s = push s";
     let analysis = pyfun::analyze(src);
     assert!(
         analysis.diagnostics.is_empty(),
@@ -2829,8 +2829,8 @@ fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
         analysis
             .types
             .iter()
-            .any(|t| t.ty == "string ->{io, async} Async unit"),
-        "expected a `string ->{{io, async}} Async unit` entry, got {:?}",
+            .any(|t| t.ty == "str ->{io, async} Async unit"),
+        "expected a `str ->{{io, async}} Async unit` entry, got {:?}",
         analysis.types
     );
 }
@@ -2838,7 +2838,7 @@ fn multi_label_arrow_displays_sorted_regardless_of_annotation_order() {
 #[test]
 fn inferred_multi_label_arrow_displays_on_the_binding() {
     // `go` both prints and fetches, so its inferred arrow shows both labels.
-    let src = "extern fetch: string ->{async} Async string = httpx.get\n\
+    let src = "extern fetch: str ->{async} Async str = httpx.get\n\
                let go u =\n    print u\n    fetch u";
     let analysis = pyfun::analyze(src);
     assert!(
@@ -2850,8 +2850,8 @@ fn inferred_multi_label_arrow_displays_on_the_binding() {
         analysis
             .types
             .iter()
-            .any(|t| t.ty == "string ->{io, async} Async string"),
-        "expected a `string ->{{io, async}} Async string` entry, got {:?}",
+            .any(|t| t.ty == "str ->{io, async} Async str"),
+        "expected a `str ->{{io, async}} Async str` entry, got {:?}",
         analysis.types
     );
 }
@@ -2860,7 +2860,7 @@ fn inferred_multi_label_arrow_displays_on_the_binding() {
 fn partial_application_of_an_annotated_extern_is_pure() {
     // Like the io default, a declared label sits on the innermost arrow: the
     // effect happens at full application only.
-    let src = "extern post: string -> string ->{async} Async string = httpx.post\n\
+    let src = "extern post: str -> str ->{async} Async str = httpx.post\n\
                let pure prep = post \"host\"";
     assert!(pyfun::check(src).is_ok());
 }
@@ -2899,7 +2899,7 @@ fn format_fixed_rejects_a_non_numeric_amount() {
 fn declared_io_arrow_in_a_type_decl_flows_through_matching() {
     // A ctor field declared `string ->{io} unit` yields an effectful function
     // when matched out — calling it makes the caller impure.
-    let src = "type Handler = H (string ->{io} unit)\n\
+    let src = "type Handler = H (str ->{io} unit)\n\
                let pure run h =\n  match h:\n    case H f: f \"x\"";
     assert_error_contains(src, "declared `pure` but performs `io`");
 }
@@ -2907,7 +2907,7 @@ fn declared_io_arrow_in_a_type_decl_flows_through_matching() {
 #[test]
 fn declared_io_arrow_accepts_an_io_function() {
     // `print : 'a ->{io} unit` matches the declared `->{io}` field exactly.
-    let src = "type Handler = H (string ->{io} unit)\nlet h = H print";
+    let src = "type Handler = H (str ->{io} unit)\nlet h = H print";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -2916,7 +2916,7 @@ fn declared_effect_arrows_are_exact_no_subeffecting() {
     // Pinned current semantics: there is no sub-effecting, so a *pure* function
     // does not satisfy a declared `->{io}` arrow (closed effect sets must match
     // exactly). Effect subsumption is a possible follow-on (`DESIGN.md` §4).
-    let src = "type Handler = H (string ->{io} unit)\nlet h = H (fun s -> ())";
+    let src = "type Handler = H (str ->{io} unit)\nlet h = H (fun s -> ())";
     assert!(pyfun::check(src).is_err());
 }
 
@@ -2925,7 +2925,7 @@ fn annotation_on_an_argument_arrow_keeps_the_boundary_io_default() {
     // Only an *innermost*-arrow annotation opts out of effectful-by-default: an
     // annotation on a higher-order argument doesn't make the extern itself pure.
     assert_error_contains(
-        "extern register: (string ->{io} unit) -> unit = hub.register\n\
+        "extern register: (str ->{io} unit) -> unit = hub.register\n\
          let pure setup f = register f",
         "declared `pure` but performs `io`",
     );
@@ -2937,7 +2937,7 @@ fn rejects_an_unknown_effect_label() {
     // (`DESIGN.md` §4), so the unknown-label error now fires only where
     // variables are not allowed: a `type` declaration's arrows.
     assert_error_contains(
-        "type Spook = S (string ->{spooky} unit)",
+        "type Spook = S (str ->{spooky} unit)",
         "unknown effect label `spooky`",
     );
 }
@@ -3072,7 +3072,7 @@ fn rejects_an_effect_var_in_a_record_field() {
     // The privilege is extern-scoped: a `->{e}` in a record field (like an ADT
     // variant field) has no extern scheme to generalize into, so it errors.
     assert_error_contains(
-        "type Callbacks = { onData: string ->{e} unit }",
+        "type Callbacks = { onData: str ->{e} unit }",
         "unknown effect label `e`",
     );
 }
@@ -3125,7 +3125,7 @@ fn tuple_elements_keep_their_own_types() {
          \x20 match t:\n\
          \x20 \x20 case (a, b): b\n\
          let bad = second + 1",
-        "string",
+        "str",
     );
 }
 
@@ -3155,7 +3155,7 @@ let s = tileScore (3, 4)"
     assert_error_contains(
         "let tileScore (t, sq) = t * sq
 let bad = tileScore (3, \"x\")",
-        "string",
+        "str",
     );
 }
 
@@ -3192,7 +3192,7 @@ fn a_record_parameter_binds_its_fields() {
     // matches — the parameter destructures without a `match`.
     assert!(
         pyfun::check(
-            "type Cell = { row: int, letter: string }
+            "type Cell = { row: int, letter: str }
              let describe (Cell { letter }) = letter
              let s = describe (Cell { row = 1, letter = \"A\" })"
         )
@@ -3255,7 +3255,7 @@ fn rejects_non_exhaustive_tuple_match_with_witness() {
 
 #[test]
 fn accepts_tuple_in_record_field_and_extern() {
-    let src = "type Pair = { both: (int, string) }\n\
+    let src = "type Pair = { both: (int, str) }\n\
                extern pure mk : a -> b -> (a, b) = builtins.tuple\n\
                let p = Pair { both = (1, \"x\") }";
     assert!(pyfun::check(src).is_ok());
@@ -3272,8 +3272,8 @@ fn map_preserves_element_type_change() {
     // `List.map (int -> string)` over a `List int` yields a `List string`, so
     // summing the result (which needs `List int`) is a type error.
     assert_error_contains(
-        "extern show: a -> string = str\nlet bad = List.sum (List.map show [1, 2])",
-        "string",
+        "extern show: a -> str = str\nlet bad = List.sum (List.map show [1, 2])",
+        "str",
     );
 }
 
@@ -3304,7 +3304,7 @@ fn input_is_a_prelude_builtin_with_the_io_effect() {
         "declared `pure` but performs `io`",
     );
     // The prompt is a string.
-    assert_error_contains("let x = input 3", "string");
+    assert_error_contains("let x = input 3", "str");
 }
 
 #[test]
@@ -3345,7 +3345,7 @@ fn accepts_map_functions() {
 fn try_yields_a_result_over_exception() {
     // `try e : Result <e> Exception`; the Ok payload is the body's type, the Error
     // payload is the reserved `Exception` record (accessed by field).
-    let src = "extern parseInt : string -> int = int\n\
+    let src = "extern parseInt : str -> int = int\n\
                let describe s =\n\
                \x20 match try (parseInt s):\n\
                \x20 \x20 case Ok n: n\n\
@@ -3356,7 +3356,7 @@ fn try_yields_a_result_over_exception() {
 #[test]
 fn try_body_type_flows_into_ok() {
     // The Ok arm binds the body's type — here `string`, so String ops apply.
-    let src = "extern readFile : string -> string = open\n\
+    let src = "extern readFile : str -> str = open\n\
                let firstChar path =\n\
                \x20 match try (readFile path):\n\
                \x20 \x20 case Ok contents: String.upper contents\n\
@@ -3564,7 +3564,7 @@ fn set_element_type_is_enforced() {
     // `Set.add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
     assert_error_contains(
         "let bad = Set.add \"x\" (Set.ofList [1, 2])",
-        "expected string, found int",
+        "expected str, found int",
     );
 }
 
@@ -3574,7 +3574,7 @@ fn map_find_or_default_must_match_the_value_type() {
     // map is a type error.
     assert_error_contains(
         "let m = Map.add \"a\" \"x\" Map.empty\nlet bad = Map.findOr \"a\" 0 m",
-        "string",
+        "str",
     );
 }
 
@@ -3637,10 +3637,10 @@ fn result_map_changes_the_ok_type() {
     // `Result.map (int -> string)` over a `Result int e` yields `Result string e`,
     // so a later int default is a type error.
     assert_error_contains(
-        "extern show: a -> string = str\n\
+        "extern show: a -> str = str\n\
          let r = Ok 1\n\
          let bad = Result.withDefault 0 (Result.map show r)",
-        "string",
+        "str",
     );
 }
 
@@ -3758,7 +3758,7 @@ fn accepts_extern_with_concrete_type() {
 #[test]
 fn extern_type_is_generalized_over_its_variables() {
     // `show : a -> string` must be usable at two different argument types.
-    let src = "extern show: a -> string = str\nlet a = show 1\nlet b = show True";
+    let src = "extern show: a -> str = str\nlet a = show 1\nlet b = show True";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3766,7 +3766,7 @@ fn extern_type_is_generalized_over_its_variables() {
 fn extern_is_type_checked_at_the_call_site() {
     assert_error_contains(
         "extern pure tan: float -> float = math.tan\nlet bad = tan \"x\"",
-        "expected float, found string",
+        "expected float, found str",
     );
 }
 
@@ -3775,7 +3775,7 @@ fn extern_boundary_is_effectful_by_default() {
     // A plain `extern` is impure at full application, so a `pure` binding that
     // calls it must be rejected.
     assert_error_contains(
-        "extern readLine: string -> string\nlet pure ask q = readLine q",
+        "extern readLine: str -> str\nlet pure ask q = readLine q",
         "declared `pure` but performs `io`",
     );
 }
@@ -3798,7 +3798,7 @@ fn partial_application_of_an_extern_is_pure() {
 #[test]
 fn rejects_extern_redefining_an_existing_name() {
     assert_error_contains(
-        "extern print: string -> unit\nlet r = print \"hi\"",
+        "extern print: str -> unit\nlet r = print \"hi\"",
         "already defined",
     );
     // `sqrt` is a prelude builtin now, so the old dimensionless-extern
@@ -3899,7 +3899,7 @@ fn a_hole_infers_its_type_from_context() {
     assert_eq!(hs[0].0, Some("body".to_string()));
     assert!(hs[0].1.contains("int"), "hole ty was {:?}", hs[0].1);
     let hs = holes_of("let f = String.concat ? \"!\"");
-    assert_eq!(hs[0].1, "string");
+    assert_eq!(hs[0].1, "str");
     // A function-typed context: `List.map ? xs` — the hole is a function.
     let hs = holes_of("let f xs = List.map ? xs");
     assert!(hs[0].1.contains("->"), "hole ty was {:?}", hs[0].1);
@@ -4672,4 +4672,35 @@ fn a_lowercase_boolean_is_one_diagnostic_and_the_rest_still_types() {
         "let no = false",
         "Pyfun spells this `False`, as Python does",
     );
+}
+
+#[test]
+fn the_string_type_is_str_and_the_old_name_is_reserved() {
+    assert!(
+        pyfun::check(
+            "type P = { name: str, tags: List str }\n\
+             opaque type UserId = str\n\
+             extern size: str -> int = len\n\
+             let n = size (P { name = \"a\", tags = [] }).name"
+        )
+        .is_ok()
+    );
+    // Types display under the same name.
+    assert_error_contains("let inc x = x + 1\nlet bad = inc \"a\"", "found str");
+    // A lowercase name the checker does not know is a type *variable* in an
+    // extern signature, so the old name has to be refused outright: left alone,
+    // `string -> int` would accept every argument type.
+    for source in [
+        "extern size: string -> int = len",
+        "type P = { name: string }",
+        "type Msg = Said string | Quit",
+        "opaque type UserId = string",
+        "type Box string = B string",
+        "extern words: str -> List string = str.split",
+    ] {
+        assert_error_contains(source, "Pyfun spells this type `str`, as Python does");
+    }
+    // The decoder follows the type's name, and the old member points at it.
+    assert!(pyfun::check("let d = Decode.list Decode.str").is_ok());
+    assert_error_contains("let d = Decode.string", "did you mean `Decode.str`?");
 }

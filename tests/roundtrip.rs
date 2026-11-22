@@ -172,7 +172,7 @@ const PROGRAMS: &[&str] = &[
     "let pure apply f x = f x",
     // Records: declaration, literal, functional update, field access.
     "type Point = { x: int, y: int }",
-    "type Box a = { item: a, tag: string }",
+    "type Box a = { item: a, tag: str }",
     "let p = Point { x = 3, y = 4 }",
     // A qualified (cross-module) record literal for an imported record.
     "let p = Geometry.Point { x = 3, y = 4 }",
@@ -211,10 +211,10 @@ const PROGRAMS: &[&str] = &[
     // underlying, a wrap, and a match with newtype patterns. `opaque` is a
     // contextual keyword — only before `type` — so a binding named `opaque`
     // still parses.
-    "opaque type UserId = string",
+    "opaque type UserId = str",
     "opaque type Tag a = List a",
-    "opaque type Pairz = (int, string)",
-    "opaque type UserId = string\nlet uid = UserId \"u\"",
+    "opaque type Pairz = (int, str)",
+    "opaque type UserId = str\nlet uid = UserId \"u\"",
     "opaque type Cents = int\nlet f c =\n  match c:\n    case Cents 0: \"free\"\n    case Cents n: \"costs\"",
     "let opaque = 1",
     // List literals: empty, simple, nested, and compound elements.
@@ -235,7 +235,7 @@ const PROGRAMS: &[&str] = &[
     "let fst t =\n  match t:\n    case (a, _): a",
     "let deep p =\n  match p:\n    case ((a, b), c): a",
     // Tuple types in declarations and externs.
-    "type Pair = { both: (int, string) }",
+    "type Pair = { both: (int, str) }",
     "extern pure mk: a -> b -> (a, b) = builtins.tuple",
     // Computation expressions (built-in builders).
     "let a = seq { yield 1 yield! xs }",
@@ -273,12 +273,12 @@ const PROGRAMS: &[&str] = &[
     "let a = 5</s>",
     // Externs (typed Python imports). The `= target` clause prints only when the
     // Python target differs from the Pyfun name.
-    "extern len: string -> int",
-    "extern show: a -> string = str",
+    "extern len: str -> int",
+    "extern show: a -> str = str",
     "extern pure sqrt: float -> float = math.sqrt",
     "extern pure pow: float -> float -> float = math.pow",
     // A dotted target inside a submodule (imported as the submodule at lowering).
-    "extern quote: string -> string = urllib.parse.quote",
+    "extern quote: str -> str = urllib.parse.quote",
     // `extern import` (`DESIGN.md` §6): a boundary module declaration mirroring
     // Python's import statement — bare, dotted, aliased, and alongside the
     // extern whose target it roots.
@@ -290,38 +290,38 @@ const PROGRAMS: &[&str] = &[
     // argument; a property (`= .attr`) is read. Includes the case where the member
     // name equals the Pyfun name, which must still print the leading `.` to
     // round-trip, and must keep the method-vs-property distinction.
-    "extern readBody: a -> string = .read()",
-    "extern read: a -> string = .read()",
-    "extern execute: a -> string -> b = .execute()",
+    "extern readBody: a -> str = .read()",
+    "extern read: a -> str = .read()",
+    "extern execute: a -> str -> b = .execute()",
     "extern jsonBody: a -> b = .json()",
-    "extern scheme: a -> string = .scheme",
-    "extern text: a -> string = .text",
+    "extern scheme: a -> str = .scheme",
+    "extern text: a -> str = .text",
     // Pinned keyword arguments on an `extern` target (`DESIGN.md` §6): a plain
     // target, a receiver-method target, multiple kwargs, and int / negative-int /
     // bool / float literal values all round-trip. The kwargs also force the `= …`
     // clause to print even when the Python name equals the Pyfun name.
-    "extern openText: string -> Seq string = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
-    "extern writeText: a -> string -> int = .write_text(encoding=\"utf-8\")",
-    "extern connect: string -> a = sqlite3.connect(timeout=5, check_same_thread=False)",
-    "extern gzipOpen: string -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
-    "extern open: string -> a = open(mode=\"rt\")",
+    "extern openText: str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
+    "extern writeText: a -> str -> int = .write_text(encoding=\"utf-8\")",
+    "extern connect: str -> a = sqlite3.connect(timeout=5, check_same_thread=False)",
+    "extern gzipOpen: str -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
+    "extern open: str -> a = open(mode=\"rt\")",
     // A `...` slot takes its value from the caller instead of the declaration, and
     // mixes freely with pinned literals on all three target forms.
-    "extern parseInt: string -> int -> int = int(base=...)",
-    "extern openText: string -> string -> Seq string = builtins.open(mode=\"rt\", encoding=...)",
-    "extern writeText: a -> string -> string -> int = .write_text(encoding=...)",
-    "extern mix: string -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)",
+    "extern parseInt: str -> int -> int = int(base=...)",
+    "extern openText: str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)",
+    "extern writeText: a -> str -> str -> int = .write_text(encoding=...)",
+    "extern mix: str -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)",
     // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
     // as written, so single, multi, and argument-position annotations roundtrip.
-    "extern fetch: string ->{async} string = httpx.get",
-    "extern send: string -> string ->{io, async} unit = hub.send",
-    "extern register: (string ->{io} unit) -> unit = hub.register",
+    "extern fetch: str ->{async} str = httpx.get",
+    "extern send: str -> str ->{io, async} unit = hub.send",
+    "extern register: (str ->{io} unit) -> unit = hub.register",
     // Effect *variables* (`->{e}`, extern-only): a bare var and a label+var mix
     // print back verbatim (the effect list is just names to the printer).
     "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each",
     "extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app",
-    "type Handler = H (string ->{io} unit)",
-    "type Callbacks = { onData: string ->{io, async} unit }",
+    "type Handler = H (str ->{io} unit)",
+    "type Callbacks = { onData: str ->{io, async} unit }",
     // Interpolated strings `f"..."`: literal chunks, holes with full expressions,
     // `{{`/`}}` escapes. Printing re-escapes and reparses to the same AST.
     "let g = f\"hello {name}\"",
@@ -922,7 +922,7 @@ fn booleans_print_capitalized_in_every_position() {
     for source in [
         "let yes = True",
         "let f b =\n  match b:\n    case True: 1\n    case False: 0",
-        "extern connect: string -> a = sqlite3.connect(check_same_thread=False)",
+        "extern connect: str -> a = sqlite3.connect(check_same_thread=False)",
     ] {
         let printed = pyfun::ast::print_module(&parse(source).unwrap());
         assert_eq!(

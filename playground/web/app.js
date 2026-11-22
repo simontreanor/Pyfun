@@ -79,8 +79,8 @@ print (Seq.toList counts)
     source: `# Opaque types: a zero-cost newtype. \`UserId\` and \`Email\` are both strings underneath,
 # and the checker still refuses to let one stand in for the other. The distinction is
 # erased at lowering, so the emitted Python carries no wrapper class at all.
-opaque type UserId = string
-opaque type Email = string
+opaque type UserId = str
+opaque type Email = str
 
 type Account = { id: UserId, email: Email, credits: int }
 
@@ -105,13 +105,13 @@ print (f"credits between {low} and {high}")
     label: "JSON → typed records",
     source: `# Parse JSON into your own typed records.
 # Bad input becomes a value you handle, never a crash.
-type User = { name: string, age: int }
+type User = { name: str, age: int }
 
 # Build a decoder compositionally: \`field\` pulls one key,
 # \`map2\` combines the field decoders into the record.
 let userDecoder =
   Decode.map2 (fun name age -> User { name = name, age = age })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
 
 # Consuming a result is an exhaustive match on Ok / Error.

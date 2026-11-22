@@ -1,13 +1,13 @@
 # 22. Opaque types
 
-A user id and an email address can both live in a `string`, and a plain `string` will let you pass
+A user id and an email address can both live in a `str`, and a plain `str` will let you pass
 one where the other belongs. An opaque type gives a value of an existing type its own name, and the
 checker then keeps the two apart everywhere. You declare one with `opaque type`, wrap with the
 constructor of the same name, and unwrap with a single-case `match`.
 
 ```pyfun
-opaque type UserId = string
-opaque type Email = string
+opaque type UserId = str
+opaque type Email = str
 
 let uid = UserId "u-1001"
 let contact = Email "ana@example.org"
@@ -23,16 +23,16 @@ uid |> describe |> print
 u-1001
 ```
 
-`UserId` and `Email` are distinct types built on the same underlying `string`. The constructor
-`UserId : string -> UserId` wraps a value, and the pattern `case UserId s:` binds the underlying
+`UserId` and `Email` are distinct types built on the same underlying `str`. The constructor
+`UserId : str -> UserId` wraps a value, and the pattern `case UserId s:` binds the underlying
 string back out. That one case makes the match exhaustive, because the type has exactly one shape.
 
 Mixing the two up is where the checker steps in. Passing an `Email` to a function that takes a
 `UserId` is rejected before any Python is produced:
 
 ```pyfun
-opaque type UserId = string
-opaque type Email = string
+opaque type UserId = str
+opaque type Email = str
 
 let describe u =
   match u:
@@ -64,9 +64,9 @@ at the Python boundary: because the running value is the underlying string, an `
 the opaque type in its signature, and the Python side receives exactly the `str` it expects.
 
 ```pyfun
-opaque type UserId = string
+opaque type UserId = str
 
-extern pure shout: UserId -> string = str.upper
+extern pure shout: UserId -> str = str.upper
 
 let uid = UserId "u-1001"
 let loud = uid |> shout
@@ -90,7 +90,7 @@ takes an `OrderId`. Run `pyfun check` to see the mismatch, then wrap the string 
 the program type-checks.
 
 ```pyfun
-opaque type OrderId = string
+opaque type OrderId = str
 
 let orderLabel o =
   match o:
@@ -108,7 +108,7 @@ print label
 The checker reports:
 
 ```console
-error: type mismatch: expected OrderId, found string
+error: type mismatch: expected OrderId, found str
   --> 11:13
    |
 11 | let label = orderLabel raw
@@ -121,13 +121,13 @@ Expected output:
 order o-9
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=b3BhcXVlIHR5cGUgT3JkZXJJZCA9IHN0cmluZwoKbGV0IG9yZGVyTGFiZWwgbyA9CiAgbWF0Y2ggbzoKICAgIGNhc2UgT3JkZXJJZCBzOiBTdHJpbmcuY29uY2F0ICJvcmRlciAiIHMKCiMgVGhlIGlkIGFycml2ZXMgYXMgYSBwbGFpbiBzdHJpbmcgZnJvbSB0aGUgb3V0c2lkZSB3b3JsZC4KbGV0IHJhdyA9ICJvLTkiCgojIFRoaXMgbGluZSBkb2VzIG5vdCB0eXBlLWNoZWNrIHlldDogb3JkZXJMYWJlbCB3YW50cyBhbiBPcmRlcklkLgpsZXQgbGFiZWwgPSBvcmRlckxhYmVsIHJhdwoKcHJpbnQgbGFiZWwK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=b3BhcXVlIHR5cGUgT3JkZXJJZCA9IHN0cgoKbGV0IG9yZGVyTGFiZWwgbyA9CiAgbWF0Y2ggbzoKICAgIGNhc2UgT3JkZXJJZCBzOiBTdHJpbmcuY29uY2F0ICJvcmRlciAiIHMKCiMgVGhlIGlkIGFycml2ZXMgYXMgYSBwbGFpbiBzdHJpbmcgZnJvbSB0aGUgb3V0c2lkZSB3b3JsZC4KbGV0IHJhdyA9ICJvLTkiCgojIFRoaXMgbGluZSBkb2VzIG5vdCB0eXBlLWNoZWNrIHlldDogb3JkZXJMYWJlbCB3YW50cyBhbiBPcmRlcklkLgpsZXQgbGFiZWwgPSBvcmRlckxhYmVsIHJhdwoKcHJpbnQgbGFiZWwK)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-opaque type OrderId = string
+opaque type OrderId = str
 
 let orderLabel o =
   match o:

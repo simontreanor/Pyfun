@@ -16,16 +16,16 @@ extern type Event
 extern type Callback
 
 # The document, by id; a missing id raises at the boundary like any extern.
-extern byId: string -> Element = js.document.getElementById
+extern byId: str -> Element = js.document.getElementById
 
 # Replace an element's children with one text node (`el.replaceChildren(text)`).
-extern setText: Element -> string -> unit = .replaceChildren()
+extern setText: Element -> str -> unit = .replaceChildren()
 
 # `el.setAttribute(name, value)` and `el.append(child)`.
-extern setAttr: Element -> string -> string -> unit = .setAttribute()
+extern setAttr: Element -> str -> str -> unit = .setAttribute()
 extern append: Element -> Element -> unit = .append()
-extern create: string -> Element = js.document.createElement
+extern create: str -> Element = js.document.createElement
 
 # `el.addEventListener(event, callback)`; the callback performs `io` (it will).
-extern on: Element -> string -> Callback -> unit = .addEventListener()
+extern on: Element -> str -> Callback -> unit = .addEventListener()
 extern proxy: (Event ->{io} unit) -> Callback = pyodide.ffi.create_proxy

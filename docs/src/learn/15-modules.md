@@ -92,7 +92,7 @@ another module can build those values, match them, and name the types in its own
 ```pyfun
 import Shapes
 
-type Scene = { name: string, item: Shapes.Placed }
+type Scene = { name: str, item: Shapes.Placed }
 
 let scene =
   Scene { name = "demo", item = Shapes.Placed { shape = Shapes.Circle 2.0, x = 0.0, y = 0.0 } }

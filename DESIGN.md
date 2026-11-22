@@ -100,15 +100,15 @@ is **canonical and deterministic**: labels render in a fixed order, `io` first (
 
 **Effect annotations on declared arrows.** Function arrows in *declared* types — `type`
 declarations (ADT ctor / record field types) and `extern` signatures — may carry an explicit
-annotation `->{label, …}` (e.g. `type Handler = H (string ->{io} unit)`, `extern fetch : string
-->{async} Async string = client.get`). A bare `->` stays pure; an unknown label is a compile error. This is
+annotation `->{label, …}` (e.g. `type Handler = H (str ->{io} unit)`, `extern fetch : str
+->{async} Async str = client.get`). A bare `->` stays pure; an unknown label is a compile error. This is
 the *declaration-side* exception to "never written": ordinary code remains annotation-free. For an
 `extern`, an annotation on the **innermost** arrow is trusted as written and replaces the
 `io`-by-default boundary rule (that's how an async client binds as `->{async}` rather than `->{io}`);
 an annotation elsewhere (say on a higher-order *argument* arrow) does not suppress the default — the
 extern still calls Python. An `->{async}` extern must return the `Async` *type*: an async Python
 function returns a coroutine, and the only thing the lowering awaits is an `Async` value bound with
-`let!`/`do!` inside an `async { }` block, so `string ->{async} string` would create a coroutine and
+`let!`/`do!` inside an `async { }` block, so `str ->{async} str` would create a coroutine and
 drop it (issue #104). The checker rejects that declaration and names the working spelling; the
 label stays an inferred, checkable fact and the type is what the emitter acts on. Effect-directed
 lowering (emit `await` wherever the label says so) was considered and turned down: an
@@ -531,14 +531,14 @@ result helpers are the obvious next increments.
 function" story is now a first-class declaration:
 
 ```
-extern len : string -> int                  # Pyfun name = Python name
-extern show : a -> string = str             # aliased to a Python builtin
+extern len : str -> int                  # Pyfun name = Python name
+extern show : a -> str = str             # aliased to a Python builtin
 extern pure cbrt : float -> float = math.cbrt   # dotted path; module auto-imported
 ```
 
 `extern [pure] name : type [= a.b.c]` binds `name` to a Python callable (or value) at a declared
 Pyfun type. Type variables are bare lowercase identifiers (as in `type` declarations) and are
-generalized, so `show : a -> string` is polymorphic. The optional `= a.b.c` clause is the dotted
+generalized, so `show : a -> str` is polymorphic. The optional `= a.b.c` clause is the dotted
 Python target; omitted, it defaults to the Pyfun name (the prelude convention). A reference lowers
 directly to its target (`math.cbrt`), and the module prefix of a *used* extern is emitted as an
 `import` (deduplicated, sorted). The dotted target mixes a module path with an attribute path, and
@@ -618,20 +618,20 @@ erased to nothing themselves; only their reference sites and imports survive low
 connection, a `pathlib.Path`, an HTTP response — needs a Pyfun type only so it can cross the `extern`
 boundary and be passed between calls. `extern type Conn` (optionally parameterized, `extern type Ref a`)
 declares exactly that: a nominal type name with an arity but **no constructors, no fields, and no
-runtime representation**. It registers like any user type (so `extern connect : string -> Conn` checks),
+runtime representation**. It registers like any user type (so `extern connect : str -> Conn` checks),
 but has no way to be built or `match`ed — it is only ever produced and consumed by externs — and it
 **erases** at lowering, emitting no Python class. It is preferable to a phantom-ADT workaround
 (`type Conn = ConnH`, a nullary sum whose sole constructor exists only to be never used): the one-liner
 carries the intent ("opaque, don't look inside"), drops the throwaway constructor that could be
 mistakenly applied, and emits nothing. Parsing is disambiguated by lookahead — `extern type …` is the
 handle form, `extern name : …` the value form. (For a value Pyfun *does* construct and inspect but
-wants nominally distinct at zero cost — `UserId` over `string` — see **opaque types**, §7.3: same
+wants nominally distinct at zero cost — `UserId` over `str` — see **opaque types**, §7.3: same
 erasure, but with a constructor and a single-case pattern.)
 
 **Instance-access externs (`= .member`).** A leading dot marks the target as a *member path applied to
 the first argument* — the receiver — rather than a module-qualified free function. Trailing `()` is the
 "call" marker that separates the two forms: a **method** `= .read()` lowers `read resp` to `resp.read()`
-and `extern execute : Conn -> string -> Cursor = .execute()` lowers `execute conn sql` to
+and `extern execute : Conn -> str -> Cursor = .execute()` lowers `execute conn sql` to
 `conn.execute(sql)`; a **property** `= .scheme` (no `()`) lowers `scheme url` to `url.scheme` — an
 attribute read, no call. For a method, currying falls out of Python's own binding, so the receiver-only
 partial `execute conn` is the bound method `conn.execute` (no `functools.partial`); a bare reference to
@@ -644,15 +644,15 @@ forms coexist; the plain dotted form stays right for genuine module functions an
 
 **Pinned keyword arguments (`= target(kw = lit, …)`).** A trailing `(kw = lit, …)` on an
 extern target pins **fixed Python keyword arguments**, appended to every emitted call:
-`extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")` lowers `openText path`
+`extern openText : str -> Seq str = builtins.open(mode="rt", encoding="utf-8")` lowers `openText path`
 to `builtins.open(path, mode="rt", encoding="utf-8")`, and the receiver-method form
-`extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8")` lowers `writeText p text`
+`extern writeText : Path -> str -> int = pathlib.Path.write_text(encoding="utf-8")` lowers `writeText p text`
 to `p.write_text(text, encoding="utf-8")`. This reaches Python keyword-only / deep-positional arguments
 (such as `open`'s `encoding`) *without* the ugly positional fillers that would otherwise be needed to
 skip past intervening parameters. Each `kw` is a lowercase identifier and each `lit` a string / int
 (optionally negated) / float / bool literal — the only forms the boundary needs; a duplicate keyword or
 a non-literal value is a parse error. The pinned kwargs are **purely a lowering concern**: they never
-appear in the Pyfun arrow type (the type above is still `string -> Seq string`), they are invisible to
+appear in the Pyfun arrow type (the type above is still `str -> Seq str`), they are invisible to
 inference and effects, and the parens compose with all three target forms (an empty `()` after a leading
 dot is still just the method marker). The feature is **strictly additive** — an extern with no `(…)`
 behaves exactly as before. Under-application never *drops* the kwargs: a partial or bare reference to a
@@ -665,9 +665,9 @@ arguments with defaults, and pinning a literal only covers the value that is fix
 `...` in place of the literal makes the keyword's value come from the **caller** instead:
 
 ```
-extern parseInt : string -> int -> int = int(base = ...)          # parseInt "ff" 16 → int("ff", base=16)
-extern openText : string -> string -> Seq string = builtins.open(mode = "rt", encoding = ...)
-extern writeText : Path -> string -> string -> int = .write_text(encoding = ...)
+extern parseInt : str -> int -> int = int(base = ...)          # parseInt "ff" 16 → int("ff", base=16)
+extern openText : str -> str -> Seq str = builtins.open(mode = "rt", encoding = ...)
+extern writeText : Path -> str -> str -> int = .write_text(encoding = ...)
 ```
 
 The spelling is Python's own stub-file placeholder (`def get(url, timeout=...)`), lexed as one token.
@@ -680,7 +680,7 @@ argument and a `unit` parameter contributes none, so a type left with nothing fo
 rejected with a diagnostic rather than silently mis-lowered.
 
 A slot changes only *where* an argument lands in the emitted call, so like a pinned literal it stays
-**invisible to the type** (`parseInt` is an ordinary `string -> int -> int`), to inference, and to
+**invisible to the type** (`parseInt` is an ordinary `str -> int -> int`), to inference, and to
 effects. Under-application still never drops anything, but it cannot use `functools.partial`, which has
 no way to carry a keyword whose value has not arrived. An under-applied slot extern becomes a **lambda**
 over the remaining arguments (`parseInt "ff"` → `lambda _pf_k0: int("ff", base=_pf_k0)`; a bare
@@ -814,7 +814,7 @@ mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Ma
 `Option`; the two bridge **both ways** — `Result.toOption` (`Ok v → Some v`, `Error _ → None`) and
 `Option.toResult e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
 
-**Strings — the `String` module.** Text operations over the built-in `string` type (which
+**Strings — the `String` module.** Text operations over the built-in `str` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
 `upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
 `toFloat`/`toList`/`slice`/`tryIndexOf` (single source of truth `types::STRING_PRELUDE` +
@@ -826,14 +826,14 @@ clamps out-of-range; emitted via a `PyExpr::Slice` node so the output reads `s[a
 `join`/`replace`, matching Python's `str` methods, and consistent with `List.len`), and Pyfun's own
 convention otherwise (the `contains`/`ofList`-style `toInt`/`toList`/`fromInt` family, and camelCase for
 multi-word `startsWith`/`endsWith` like `tryFind`/`withDefault`). Unlike the collection preludes these
-schemes are **monomorphic** (concrete over `string`/`int`/`float`/`bool`, no type variables) and all
-**pure**. There is **no `char` type** — a character is a length-1 string, so `String.toList : string ->
-List string` yields single-character strings and `String.join`/`concat` compose them back. Separator-first
+schemes are **monomorphic** (concrete over `str`/`int`/`float`/`bool`, no type variables) and all
+**pure**. There is **no `char` type** — a character is a length-1 string, so `String.toList : str ->
+List str` yields single-character strings and `String.join`/`concat` compose them back. Separator-first
 argument order (`String.join ", " xs`, `String.split "," s`) keeps partial application natural. Lowering
 mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Python builtins
 (`len`/`str`/`list`); the rest lower to emitted `_pf_str_*` helpers (`_pf_str_upper` = `s.upper()`,
 `_pf_str_split` = `s.split(sep)`, …) so each curried function is one callable. The one total parse,
-`String.toInt : string -> Option int`, lowers to a `try`/`except ValueError` helper returning
+`String.toInt : str -> Option int`, lowers to a `try`/`except ValueError` helper returning
 `Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
 prelude. Overloading `+` for strings is deferred — `String.concat` is the concatenation path.
 
@@ -845,7 +845,7 @@ grouping), `Format.percent n x` (ratio → percent), `Format.currency sym n x` (
 `Format.grouped x` (grouped integer), and `Format.padLeft`/`padRight w fill s` (alignment, replacing
 `:>N`/`:<N`). The numeric formatters are **unit-polymorphic** over `float<'u>`/`int<'u>` — the unit is
 compile-time only and erases at lowering — so `Format.currency "£" 2 19.5<gbp>` checks; padding is
-monomorphic over `string` (`fill` is a length-1 string, per the no-`char` rule). All **pure**; each
+monomorphic over `str` (`fill` is a length-1 string, per the no-`char` rule). All **pure**; each
 lowers to an emitted `_pf_fmt_*` helper wrapping `format(x, spec)` (the spec a nested f-string assembled
 from the checked `int`) or `str.rjust`/`ljust`. Dates are deferred (no date type; they would need a
 Python `datetime` `extern`).
@@ -938,9 +938,9 @@ library over an opaque built-in `Decoder a`, module-qualified like the others (s
 `types::DECODE_PRELUDE` + `seed_decode_prelude`). It is the batteries-included form of the "parse, don't
 validate" pattern: instead of casting an untyped `dict` into a record (which type-checks but crashes,
 since `json` yields subscript-access dicts and a Pyfun record is an attribute-access class), you build a
-**decoder** — a total recipe — and run it with `Decode.decodeString : Decoder a -> string ->
+**decoder** — a total recipe — and run it with `Decode.decodeString : Decoder a -> str ->
 Result a Exception`, so malformed input is a value you `match`, never a crash. Primitives
-`Decode.string`/`int`/`float`/`bool` are **strict** (a JSON number does not decode as a string;
+`Decode.str`/`int`/`float`/`bool` are **strict** (a JSON number does not decode as a string;
 `Decode.int` rejects a JSON bool — a Python `bool` is an `int` subclass — while `Decode.float` accepts a
 JSON int); structure combinators `Decode.field name dec`, `Decode.list dec`, `Decode.nullable dec` (JSON
 `null` → `Option`); and composition `Decode.map`/`map2`/`map3`/`map4` (the fan-in that builds a record
@@ -965,7 +965,7 @@ stages the files into the in-browser file system, and runs the entry with stdout
 `<pre>` panes; `--page <fragment.html>` puts the program's own markup above them. A shareable link
 with no server, which is how two players get a game whose interface is the browser. The page is
 reachable through Pyodide's `js` module like any Python library: `extern import js`, then
-`extern byId: string -> Element = js.document.getElementById`, instance-access externs for methods
+`extern byId: str -> Element = js.document.getElementById`, instance-access externs for methods
 (`.replaceChildren`, `.addEventListener`), and `pyodide.ffi.create_proxy` for a callback the page
 holds (a lifetime detail a façade hides). The cookbook's `browser/` entry is that façade, a
 `Dom` module a program imports, with a counter page as its consumer. Two things fall out of work
@@ -978,7 +978,7 @@ Signalling for a peer-to-peer transport is the program's problem, not the langua
 
 **Derived codecs — `Decode.auto` and `Encode.auto`.** A program that speaks to itself over a wire
 (or a save file) has the same Pyfun type on both ends, and writing the two halves by hand is where
-they drift. `Encode.auto : a -> string` and `Decode.auto : Decoder a` are derived from the type, so
+they drift. `Encode.auto : a -> str` and `Decode.auto : Decoder a` are derived from the type, so
 both ends are one line and the property the tests state once is `Decode.decodeString Decode.auto
 (Encode.auto v) == Ok v` for every type the derivation accepts: the primitives, records, sum types,
 tuples, `List`, `Set`, `Map`, `Option`, `Result`, newtypes (erased, so the wire carries the
@@ -1013,7 +1013,7 @@ built-in decoder, not a mechanism for user-defined derivations.
 **String interpolation — `f"..."`.** Python-style interpolated strings: an `f` prefix
 (adjacent to the quote — `f "x"` with a space stays ordinary application, as in Python) with `{expr}`
 holes holding **full Pyfun expressions**, and `{{`/`}}` for literal braces. The whole string is a
-`string`; a hole may be **any type** — the emitted Python f-string stringifies it (so `f"{p}"` for a
+`str`; a hole may be **any type** — the emitted Python f-string stringifies it (so `f"{p}"` for a
 record uses the generated `__repr__`, `Point { x = 1 }` → `Point(1)`), which is the one place Pyfun
 relaxes to Python's implicit `str()` rather than requiring an explicit conversion. Holes' **effects
 propagate** (`f"{impure x}"` is `io`). *Lexing* is the crux: the lexer (`lex_fstring`) splits an
@@ -1083,8 +1083,8 @@ runs `e`, and a thrown Python exception becomes `Error`; success is `Ok`. `try` 
 looser than `+`/comparison but tighter than `|>`, so `try parse s` is `try (parse s)` while `try parse s
 |> Result.withDefault 0` pipes the `Result` out; parens capture a wider body. It does **not** change
 effects — the body's `io` still happens (`try` catches a *thrown* exception, it doesn't suppress the
-call). The `Error` payload is a **reserved built-in record `Exception`** with `errorKind : string` (the
-class name, `type(e).__name__`) and `errorMessage : string` (`str(e)`) — read by field access (`e.errorKind`)
+call). The `Error` payload is a **reserved built-in record `Exception`** with `errorKind : str` (the
+class name, `type(e).__name__`) and `errorMessage : str` (`str(e)`) — read by field access (`e.errorKind`)
 or matched (`case Error (Exception { errorKind = "ValueError" }): …`). It reuses the ordinary record
 machinery (so its two fields join the global field registry, and a user `type Exception` is rejected as
 reserved), lowered to a class emitted as **`_Exception`** so it does not shadow Python's builtin
@@ -1092,7 +1092,7 @@ reserved), lowered to a class emitted as **`_Exception`** so it does not shadow 
 binding): `try:  t = Ok(<body>)  except Exception as e:  t = Error(_Exception(type(e).__name__, str(e)))`.
 There is deliberately **no `raise`, no `finally`, no exception hierarchy** (Pyfun signals failure with
 `Error`; the `result {}` CE + `Result` module compose the rest). Enabled by **string-literal patterns**
-(`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `string` type, so a string `match`
+(`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `str` type, so a string `match`
 still needs a wildcard).
 
 **Seq — the lazy module.** The `seq {}` CE produces a `Seq a` (a Python generator); the
@@ -1167,7 +1167,7 @@ mechanism needed **no parser change**: `Module.member` is parsed as the ordinary
 (value identifiers are lowercase, so `Upper.x` is only ever module access — a record-field base is a
 lowercase value), and the checker + lowering resolve the dotted member against the module instead of as
 record-field access. A genuinely global handful stay unqualified (`print`/`input`/`abs`/`min`/`max` in
-`PRELUDE`), matching F# (`List.map` qualified, `abs` global). `input : string ->{io} string` is
+`PRELUDE`), matching F# (`List.map` qualified, `abs` global). `input : str ->{io} str` is
 Python's `input(prompt)` name-for-name (`input ""` for promptless) — the io effect coming *in*,
 pairing with `print`'s going out; `input "n? " |> String.toInt : Option int` is the idiomatic total
 parse. Environment caveats: the REPL's worker protocol runs over stdin, so `input` inside the REPL
@@ -1502,6 +1502,14 @@ Lexical conventions: line comments start with `#` (Python-style — `//` is floo
 identifiers are ASCII alpha + `_`; capitalized identifiers denote constructors in pattern position
 (§ patterns).
 
+**The string type is `str`.** Python's name, and the name the emitted annotations already use, so
+`type User = { name: str }` reads the same on both sides of the boundary. The decoder follows the
+type (`Decode.str`); the module of text operations stays `String`, a module name like `List`. The
+`string` of releases before 0.11 stays reserved in type position and is an error naming the fix
+(``Pyfun spells this type `str`, as Python does``). Reserving it is what keeps old code from
+compiling to something else: a lowercase name the checker does not know is a type *variable* in an
+`extern` signature (§6), so `extern size: string -> int` would otherwise accept every argument type.
+
 **Booleans are `True` and `False`.** They are spelled as Python spells them, which is also how
 Pyfun's own rule spells them: `bool` is a type with two constructors, and every constructor is
 capitalized. Source, the emitted Python, a printed value and a witness in a diagnostic
@@ -1589,7 +1597,7 @@ down.
    `//` (the type-directed-lowering problem this would otherwise create disappears).
 2. **One built-in numeric constraint, `num`.** `+ - * //` (and the prelude numerics)
    are typed with a single compiler-known constraint: `let add a b = a + b : num 'a => 'a -> 'a ->
-   'a`. `int` and `float` (with any units) satisfy `num`; `bool`/`string` do not (→ "expected int,
+   'a`. `int` and `float` (with any units) satisfy `num`; `bool`/`str` do not (→ "expected int,
    found bool"). Generic functions like `area`/`min`/`max` stay polymorphic over int *and* float
    *and* units — the property a hard-coded int-default would throw away. No type annotations are ever
    required (Pyfun has none anyway). Implemented as a `Ty::Num(var, unit)` variant resolved by a tiny
@@ -1629,7 +1637,7 @@ down.
 6. **Comparison & equality.** `< > <= >=` carry a closed built-in **`comparison`**
    constraint, implemented like `num` (an `ord` constraint set on type variables, propagated through
    unification and generalized), so `let lt a b = a < b` infers `comparison 'a => 'a -> 'a -> bool`.
-   The constraint is satisfied by `int`/`float`/`string` **and by
+   The constraint is satisfied by `int`/`float`/`str` **and by
    user sum types, records, tuples, the built-in `Option`/`Result`, and `List`, compared structurally**
    (bools and functions are still rejected).
    A **sum type** orders by variant *declaration order* first, then field-by-field (`Red < Green < Blue`;
@@ -1942,13 +1950,13 @@ def describe(n):
 
 ### 7.3 Opaque types — zero-cost newtypes
 
-`opaque type UserId = string` (optionally parameterized, `opaque type Tag a = List a`) declares a
+`opaque type UserId = str` (optionally parameterized, `opaque type Tag a = List a`) declares a
 **newtype**: a nominal type distinct from its underlying type everywhere, with **zero runtime cost**.
 The spelling is Scala 3's, and so is the pitch — domain distinctions (`UserId` vs `Email`, both
-`string`) enforced by the checker, erased by the emitter. Pyfun adapts the semantics to its own
+`str`) enforced by the checker, erased by the emitter. Pyfun adapts the semantics to its own
 ground rules:
 
-- **Wrap** with the constructor of the same name (`UserId : string -> UserId`, pure, curried like any
+- **Wrap** with the constructor of the same name (`UserId : str -> UserId`, pure, curried like any
   constructor); **unwrap** with the single-case pattern (`case UserId s:`), which participates in
   exhaustiveness exactly like a one-constructor sum (a missing case reports the witness `UserId _`;
   the payload position takes any pattern, so `case Cents 0:` refines on the underlying value).
@@ -1963,7 +1971,7 @@ ground rules:
 - **The interop payoff.** Because the runtime value *is* the underlying value, an `extern` may be
   typed with the newtype directly — `extern save : UserId -> unit` hands Python the bare `str` it
   expects while the Pyfun side enforces the distinction. This is the difference from the single-case
-  ADT idiom (`type UserId = UserId string`), which allocates a wrapper object that would leak across
+  ADT idiom (`type UserId = UserId str`), which allocates a wrapper object that would leak across
   the boundary; the emitted-representation contract (§5) is why single-case sums are *not* silently
   erased — a newtype is the author's explicit promise that the type never has a runtime identity.
 - **Distinct everywhere, not scope-transparent.** Scala's opaque types are transparent inside the
@@ -2338,7 +2346,7 @@ catch-all for exhaustiveness.
 `Pattern` AST (Maranget usefulness, matrix specialization), which is unchanged; only the surface spelling
 of construction and record patterns moves. `Point { item = Some n } | Point { item = None }` is still
 recognized as complete without a `_`, and witnesses print in the tagged form (`` `Point { x = _, y = True
-} ` ``). Infinite types (`int`, `string`) and types without matchable constructors are exhaustive only via
+} ` ``). Infinite types (`int`, `str`) and types without matchable constructors are exhaustive only via
 a wildcard arm.
 
 **Alternative considered — distinctive delimiters `{| … |}`** (OCaml/F#-anonymous flavour, e.g.

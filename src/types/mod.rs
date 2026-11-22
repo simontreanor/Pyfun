@@ -349,7 +349,20 @@ impl Scheme {
 
 type Env = HashMap<String, Scheme>;
 
-const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "string", "unit"];
+const BUILTIN_TYPES: [&str; 5] = ["int", "float", "bool", "str", "unit"];
+
+/// The string type's name before 0.11. It stays reserved in type position: a
+/// lowercase name the checker does not know is a type *variable* in an `extern`
+/// signature, so without this `extern f: string -> int` would quietly accept
+/// every argument type.
+const OLD_STR_TYPE: &str = "string";
+
+fn old_str_type_error(span: Span) -> TypeError {
+    TypeError {
+        message: "Pyfun spells this type `str`, as Python does".to_string(),
+        span,
+    }
+}
 
 /// Built-in container / reserved `Con` types that do **not** derive structural
 /// ordering (`DESIGN.md` §7.1). `Option`/`Result` are absent on purpose — they order
@@ -587,13 +600,13 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("iter", 2),
 ];
 
-/// The `String` module (`DESIGN.md` §6): text operations over the built-in `string`
+/// The `String` module (`DESIGN.md` §6): text operations over the built-in `str`
 /// type (which lowers to a Python `str`). Like the collection preludes, the
 /// `(member, arity)` pairs are the single source of truth shared with
 /// [`seed_string_prelude`] (schemes) and lowering (arities + emitted helpers). All
-/// pure and **monomorphic** (over `string`/`int`/`float`/`bool`) — no type vars.
+/// pure and **monomorphic** (over `str`/`int`/`float`/`bool`) — no type vars.
 /// Pyfun has no `char` type, so a "character" is a length-1 string: `String.toList`
-/// yields single-char strings. `String.toInt : string -> Option int` is **total**
+/// yields single-char strings. `String.toInt : str -> Option int` is **total**
 /// (a `ValueError`-guarded parse), so it lowers to a `try`/`except` helper.
 pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("len", 1),
@@ -628,7 +641,7 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
 /// alternative to Python's `:.2f` format specifiers (a non-goal — the compiler
 /// can't see into a spec string). The numeric formatters are unit-polymorphic over
 /// `float<'u>`/`int<'u>` (the unit is compile-time only and erases at lowering), so
-/// `Format.currency "£" 2 19.5<gbp>` checks; padding is monomorphic over `string`.
+/// `Format.currency "£" 2 19.5<gbp>` checks; padding is monomorphic over `str`.
 /// All pure, and each lowers to `format(x, spec)` / `str.rjust`/`ljust`.
 pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
     ("fixed", 2),
@@ -671,10 +684,10 @@ pub const TASK_PRELUDE: &[(&str, usize)] = &[("scope", 1), ("start", 1)];
 /// (schemes) and lowering (arities + emitted `_pf_dec_*` helpers). Every arrow is
 /// **pure**: decoders are a pure sublanguage, so the whole pipeline stays effect-free.
 /// The `map2`/`map3`/`map4` fan-in combinators build a record (or any value) from
-/// several field decoders at once. Nullary `string`/`int`/`float`/`bool` are the
+/// several field decoders at once. Nullary `str`/`int`/`float`/`bool` are the
 /// primitive decoders (arity 0 — decoder *values*).
 pub const DECODE_PRELUDE: &[(&str, usize)] = &[
-    ("string", 0),
+    ("str", 0),
     ("int", 0),
     ("float", 0),
     ("bool", 0),
@@ -1466,7 +1479,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Format.padRight",
         "Left-align in a field of this width, padded with this fill string.",
     ),
-    ("Decode.string", "Decode a JSON string."),
+    ("Decode.str", "Decode a JSON string."),
     ("Decode.int", "Decode a JSON integer."),
     ("Decode.float", "Decode a JSON number."),
     ("Decode.bool", "Decode a JSON boolean."),
@@ -1763,7 +1776,7 @@ pub struct Hole {
     /// The hole's name (`?name`), or `None` for a bare `?`.
     pub name: Option<String>,
     /// The hole's inferred type, resolved against the final substitution and
-    /// rendered (e.g. `int -> string`; an unconstrained hole shows a type var).
+    /// rendered (e.g. `int -> str`; an unconstrained hole shows a type var).
     pub ty: String,
     /// **Valid hole fits** (direct): in-scope binding names whose type could fill
     /// the hole directly (their scheme unifies with the hole's type), most-specific
@@ -1782,7 +1795,7 @@ pub struct Hole {
 
 impl Hole {
     /// The informative one-line message, e.g.
-    /// `` hole `?g` has type `string` — try: greeting — or: String.upper ? ``.
+    /// `` hole `?g` has type `str` — try: greeting — or: String.upper ? ``.
     pub fn message(&self) -> String {
         let mut parts = vec![match &self.name {
             Some(n) => format!("hole `?{n}` has type `{}`", self.ty),
@@ -1810,7 +1823,7 @@ impl Hole {
 /// [`check_collecting`] so an editor (the LSP, `DESIGN.md` §9) can show a type on
 /// hover — Pyfun types are inferred, never written, so this is the only way to see
 /// one without provoking an error. The rendered string includes latent effects
-/// (e.g. `string ->{io} unit`), since `show` prints them on arrows; `effect`
+/// (e.g. `str ->{io} unit`), since `show` prints them on arrows; `effect`
 /// additionally summarizes the concrete effect the value performs when fully applied,
 /// for a dedicated hover line ([`effect_summary`]).
 /// A derived JSON codec shape for one type (`DESIGN.md` §6, "Derived codecs"):
@@ -1992,7 +2005,7 @@ struct Decls {
     /// (declare-before-use, like every binding); total cases *also* join
     /// `ctors`/`type_ctors` under a hidden type named by [`ap_fn_key`].
     active_patterns: HashMap<String, ApInfo>,
-    /// Newtypes in scope (`opaque type UserId = string`), local and imported:
+    /// Newtypes in scope (`opaque type UserId = str`), local and imported:
     /// erased at lowering, so a derived codec reads through to the underlying type.
     newtypes: HashSet<String>,
 }
@@ -2068,7 +2081,7 @@ pub struct ModuleExports {
     /// referenced — so an importing module can write the type's name in a
     /// record field, an `extern` signature, or an ADT payload.
     opaques: Vec<ExportedOpaque>,
-    /// The module's newtype names (`opaque type UserId = string`), so a dependent
+    /// The module's newtype names (`opaque type UserId = str`), so a dependent
     /// deriving a codec over one reads through to the underlying type.
     pub newtypes: HashSet<String>,
     /// Public **base measure** names (`measure m`). Merged **unqualified** into a
@@ -3172,9 +3185,9 @@ fn build_decls(
                     }
                 }
             }
-            // A newtype (`opaque type UserId = string`) checks exactly like a
+            // A newtype (`opaque type UserId = str`) checks exactly like a
             // single-constructor sum whose constructor shares the type's name
-            // (`UserId : string -> UserId`), so pattern checking and
+            // (`UserId : str -> UserId`), so pattern checking and
             // exhaustiveness need nothing new; only lowering differs (erasure).
             TypeDeclKind::Newtype(underlying) => {
                 decls.newtypes.insert(decl.name.clone());
@@ -3376,7 +3389,7 @@ fn build_decls(
                 // Effectful-by-default boundary: the innermost arrow gets `io`
                 // unless the binding asserts `pure` — or the innermost arrow
                 // carries an explicit `->{...}` annotation, which is trusted as
-                // written (e.g. `extern fetch : string ->{async} string`). An
+                // written (e.g. `extern fetch : str ->{async} str`). An
                 // annotation elsewhere (say on a higher-order *argument* arrow)
                 // does not suppress the default: the extern still calls Python.
                 if !decl.pure && !innermost_arrow_annotated(&decl.ty) {
@@ -5085,8 +5098,8 @@ fn seed_set_prelude(env: &mut Env) {
 }
 
 /// Seed the `String` module ([`STRING_PRELUDE`]) — pure, **monomorphic** text
-/// operations over the built-in `string`, under qualified keys (`String.split`).
-/// No type variables (all concrete over `string`/`int`/`float`), so the schemes are
+/// operations over the built-in `str`, under qualified keys (`String.split`).
+/// No type variables (all concrete over `str`/`int`/`float`), so the schemes are
 /// closed. `String.toInt` returns `Option int` (a total parse).
 fn seed_string_prelude(env: &mut Env) {
     let str_ = || Ty::Str;
@@ -5164,7 +5177,7 @@ fn seed_string_prelude(env: &mut Env) {
 /// typed alternative to Python `:.2f` format specifiers. The numeric formatters are
 /// unit-polymorphic over `float<'u>`/`int<'u>` (each scheme quantifies the shared
 /// [`PRELUDE_UVAR`], so uses instantiate a fresh unit var, and the unit erases at
-/// lowering); the string-padding ops are closed over `string`. All pure.
+/// lowering); the string-padding ops are closed over `str`. All pure.
 fn seed_format_prelude(env: &mut Env) {
     let str_ = || Ty::Str;
     let int = || Ty::Int(Unit::dimensionless());
@@ -5181,7 +5194,7 @@ fn seed_format_prelude(env: &mut Env) {
         mutable: false,
         ty,
     };
-    // A closed scheme (no quantified vars) — the `string`-only padding ops.
+    // A closed scheme (no quantified vars) — the `str`-only padding ops.
     let cscheme = |ty: Ty| Scheme {
         vars: vec![],
         uvars: vec![],
@@ -5219,7 +5232,7 @@ fn seed_format_prelude(env: &mut Env) {
 
 /// Seed the `Decode` module ([`DECODE_PRELUDE`]) — Elm-style JSON decoder combinators
 /// over the opaque `Decoder a`. Every arrow is **pure**: decoders are a pure, total
-/// sublanguage, so composing and running them (`decodeString : Decoder a -> string ->
+/// sublanguage, so composing and running them (`decodeString : Decoder a -> str ->
 /// Result a Exception`) never introduces an effect, even though the runner parses JSON
 /// at the boundary. The function argument to `map`/`map2`/… is likewise a pure arrow,
 /// which is what keeps the whole pipeline pure and sound.
@@ -5247,7 +5260,7 @@ fn seed_decode_prelude(env: &mut Env) {
         env.insert(format!("Decode.{member}"), s);
     };
     // Primitive decoders — nullary decoder *values*, each strict about its JSON type.
-    put("string", scheme(vec![], dec(str_())));
+    put("str", scheme(vec![], dec(str_())));
     put("int", scheme(vec![], dec(int())));
     put("float", scheme(vec![], dec(float())));
     put("bool", scheme(vec![], dec(Ty::Bool)));
@@ -6220,7 +6233,7 @@ fn resolve(
                 .collect();
             Ok(Ty::Tuple(resolved?))
         }
-        TypeExpr::Con(name, _, args) => {
+        TypeExpr::Con(name, name_span, args) => {
             let no_args = |t: Ty| -> Result<Ty, TypeError> {
                 if args.is_empty() {
                     Ok(t)
@@ -6231,6 +6244,16 @@ fn resolve(
                     })
                 }
             };
+            if name == OLD_STR_TYPE {
+                // Point at the name itself; a synthesized node has no span of
+                // its own, so fall back to the declaration's.
+                let at = name_span.span();
+                return Err(old_str_type_error(if at.start == at.end {
+                    span
+                } else {
+                    at
+                }));
+            }
             if let Some(&v) = params.get(name) {
                 return no_args(Ty::Var(v));
             }
@@ -6238,7 +6261,7 @@ fn resolve(
                 "int" => return no_args(Ty::Int(Unit::dimensionless())),
                 "float" => return no_args(Ty::Float(Unit::dimensionless())),
                 "bool" => return no_args(Ty::Bool),
-                "string" => return no_args(Ty::Str),
+                "str" => return no_args(Ty::Str),
                 "unit" => return no_args(Ty::Unit),
                 _ => {}
             }
@@ -6688,7 +6711,7 @@ impl Infer {
     }
 
     /// Require `ty` to support ordering comparison (`< > <= >=`): the `comparison`
-    /// constraint, satisfied by `int`/`float`/`string` (numbers and strings), plus
+    /// constraint, satisfied by `int`/`float`/`str` (numbers and strings), plus
     /// **tuples** and **user sum types / records** compared structurally
     /// (`DESIGN.md` §7.1). A bare type variable gains the constraint and is checked
     /// once it resolves (the [`unify`](Self::unify) hook re-runs this).
@@ -7458,7 +7481,7 @@ impl Infer {
             ExprKind::Int(_) => Ok(self.fresh_num()),
             ExprKind::Float(_) => Ok(Ty::Float(Unit::dimensionless())),
             ExprKind::Str(_) => Ok(Ty::Str),
-            // An interpolated string is a `string`; each hole may be any type (the
+            // An interpolated string is a `str`; each hole may be any type (the
             // emitted Python f-string stringifies it). We still infer every hole so
             // its effect propagates (`f"{impure x}"` is `io`).
             ExprKind::Interp { parts } => {
@@ -9220,7 +9243,7 @@ impl Infer {
     }
 
     /// The complete set of constructors for a column type, or `None` when the type
-    /// is infinite (`int`/`string`/…) or has no matchable constructors — in which
+    /// is infinite (`int`/`str`/…) or has no matchable constructors — in which
     /// case only a wildcard can be exhaustive.
     fn ctor_signature(&self, ty: &Ty) -> Option<Vec<Tag>> {
         match ty {
@@ -10157,7 +10180,7 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
         Ty::Int(u) | Ty::Num(_, u) => show_numeric("int", u, namer, out),
         Ty::Float(u) => show_numeric("float", u, namer, out),
         Ty::Bool => out.push_str("bool"),
-        Ty::Str => out.push_str("string"),
+        Ty::Str => out.push_str("str"),
         Ty::Unit => out.push_str("unit"),
         Ty::Var(n) => out.push_str(&namer.ty(*n)),
         Ty::Con(name, args) if args.is_empty() => out.push_str(name),

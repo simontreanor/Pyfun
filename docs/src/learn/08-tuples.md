@@ -81,7 +81,7 @@ that destructures binds the parts on the way in, so the body starts with the pie
 and the `match` from the previous example disappears:
 
 ```pyfun
-type Cell = { letter: string, points: int }
+type Cell = { letter: str, points: int }
 
 let line (name, score) = f"{name}: {score}"
 let label (Cell { letter, points }) = f"{letter} is worth {points}"
