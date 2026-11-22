@@ -69,11 +69,11 @@ let walk_legs days term dep_m via stops =
   match stops:
     case []: []
     case [s, *rest]:
-      if calls s then
+      if calls s:
         let arr_m = to_min s.arr
         let onward = List.concat via [s.tiploc]
         if arr_m < 0 then walk_legs days term dep_m onward rest
-        else
+        else:
           let leg = Leg { dest = s.tiploc, final_dest = term, rdays = days, dep_min = dep_m,
                           arr_min = arr_m, jt = jtime dep_m arr_m, via = via }
           List.concat [leg] (walk_legs days term dep_m onward rest)
@@ -81,7 +81,7 @@ let walk_legs days term dep_m via stops =
 
 let legs_of_run r =
   if r.stp == "C" then []
-  else
+  else:
     match from_chippenham r.stops:
       case None: []
       case Some (chipp_dep, downstream):

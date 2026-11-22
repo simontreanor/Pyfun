@@ -154,3 +154,39 @@ let ok =
       (comparison_expression
         (integer)
         (integer)))))
+
+================================================================================
+if with block branches opens them with a colon
+================================================================================
+
+let sign x =
+  if x > 0:
+    print "positive"
+    1
+  elif x < 0:
+    -1
+  else:
+    0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (if_expression
+      (comparison_expression
+        (identifier)
+        (integer))
+      (application
+        (identifier)
+        (string))
+      (integer)
+      (elif_clause
+        (comparison_expression
+          (identifier)
+          (integer))
+        (unary_expression
+          (integer)))
+      (integer))))

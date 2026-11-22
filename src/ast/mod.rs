@@ -322,6 +322,20 @@ fn print_body(expr: &Expr, indent: usize) -> String {
     }
 }
 
+/// Print one branch of an `if`, opener included, after its condition or its
+/// `else`. Each branch has one spelling, chosen by its shape (`DESIGN.md` §7.2):
+/// a branch that needs a block opens with `:` and goes on deeper lines, and any
+/// other follows `inline` (`then`, or nothing after `else`) on the same line.
+fn print_if_branch(inline: &str, branch: &Expr, indent: usize) -> String {
+    if needs_block(branch) {
+        format!(":\n{}", print_layout(branch, indent + 1))
+    } else if inline.is_empty() {
+        format!(" {}", print_expr(branch))
+    } else {
+        format!(" {inline} {}", print_expr(branch))
+    }
+}
+
 /// Render an expression at column `indent` (every line padded, first included),
 /// using the offside layout for blocks and the `if`/`match`/`fun` that contain
 /// them. Anything block-free falls back to the inline [`print_expr`] form, which
@@ -337,20 +351,20 @@ fn print_layout(expr: &Expr, indent: usize) -> String {
             // A right-nested `if` in the else branch prints as an `elif` chain (the
             // canonical form for `else if` too; `DESIGN.md` §7.2).
             let mut s = format!(
-                "{pad}if {} then{}",
+                "{pad}if {}{}",
                 print_expr(cond),
-                print_body(then, indent)
+                print_if_branch("then", then, indent)
             );
             let mut cur: &Expr = else_;
             while let ExprKind::If { cond, then, else_ } = &cur.kind {
                 s.push_str(&format!(
-                    "\n{pad}elif {} then{}",
+                    "\n{pad}elif {}{}",
                     print_expr(cond),
-                    print_body(then, indent)
+                    print_if_branch("then", then, indent)
                 ));
                 cur = else_;
             }
-            s.push_str(&format!("\n{pad}else{}", print_body(cur, indent)));
+            s.push_str(&format!("\n{pad}else{}", print_if_branch("", cur, indent)));
             s
         }
         ExprKind::Match { scrutinee, arms } => {

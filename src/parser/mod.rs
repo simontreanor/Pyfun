@@ -1410,22 +1410,84 @@ impl Parser {
         self.parse_if_rest(start)
     }
 
-    /// Parse the `cond then branch (elif … | else …)` tail of an `if`/`elif`. `elif`
+    /// Parse the `cond branch (elif … | else …)` tail of an `if`/`elif`. `elif`
     /// is pure sugar for `else if` (`DESIGN.md` §7.2): it produces a nested `If` in
     /// the else branch, so there is no distinct AST node.
     fn parse_if_rest(&mut self, start: usize) -> Result<Expr, ParseError> {
         let cond = Box::new(self.parse_expr()?);
-        self.expect(&Tok::Then, "`then`")?;
-        let then = Box::new(self.parse_block_or_expr()?);
+        let then = Box::new(self.parse_if_branch(true)?);
         let else_ = if matches!(self.peek(), Tok::Elif) {
             let elif_start = self.cur_start();
             self.bump();
             Box::new(self.parse_if_rest(elif_start)?)
         } else {
-            self.expect(&Tok::Else, "`else` or `elif`")?;
-            Box::new(self.parse_block_or_expr()?)
+            if !matches!(self.peek(), Tok::Else) {
+                // Python's `if` with no `else`. Here an `if` is an expression, so
+                // it has a value on both paths; the branch that does nothing is
+                // written out as `()`.
+                return Err(ParseError {
+                    message: "an `if` is an expression, so it needs an `else` (or `elif`) \
+                              branch: write `else ()` for one that does nothing"
+                        .to_string(),
+                    span: self.span(),
+                });
+            }
+            self.bump();
+            Box::new(self.parse_if_branch(false)?)
         };
         Ok(self.mk(start, ExprKind::If { cond, then, else_ }))
+    }
+
+    /// Parse one branch of an `if`, from its opener on. Each branch has one
+    /// spelling, chosen by its shape (`DESIGN.md` §7.2): a branch on the same line
+    /// follows `then` (or a bare `else`), and a branch on its own indented lines
+    /// follows `:` (`if cond:`, `elif cond:`, `else:`), as Python writes it. The
+    /// two crossed shapes are errors that name the other opener, so there is
+    /// never a second way to write the same branch. `after_cond` says which
+    /// opener is due: the one after a condition, or the one after `else`, which
+    /// the caller has already consumed.
+    fn parse_if_branch(&mut self, after_cond: bool) -> Result<Expr, ParseError> {
+        let opener = if after_cond {
+            self.span()
+        } else {
+            self.tokens[self.pos - 1].span
+        };
+        let colon = if after_cond {
+            match self.peek() {
+                Tok::Colon => true,
+                Tok::Then => false,
+                _ => return Err(self.error("expected `then` or `:`")),
+            }
+        } else {
+            matches!(self.peek(), Tok::Colon)
+        };
+        if after_cond || colon {
+            self.bump();
+        }
+        let block = matches!(self.peek(), Tok::Indent);
+        let (written, block_form, line_form) = if after_cond {
+            ("then", "`if cond:`", "`if cond then value`")
+        } else {
+            ("else", "`else:`", "`else value`")
+        };
+        match (colon, block) {
+            (true, true) => self.parse_block(),
+            (false, false) => self.parse_expr(),
+            (true, false) => Err(ParseError {
+                message: format!(
+                    "`:` opens a branch on its own indented lines; \
+                     a branch on the same line is written {line_form}"
+                ),
+                span: Span::new(opener.start, self.prev_end()),
+            }),
+            (false, true) => Err(ParseError {
+                message: format!(
+                    "a branch on its own indented lines opens with `:`, as in Python: \
+                     write {block_form}, not `{written}`"
+                ),
+                span: opener,
+            }),
+        }
     }
 
     /// Parse `match e: case pat [if guard]: body …` (`DESIGN.md` §7.2). At bracket

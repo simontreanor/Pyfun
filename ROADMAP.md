@@ -457,8 +457,7 @@ after the release.
    or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
    `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`
    is answered with `Map.find`, `List.append` with `List.concat`). Still to come, each with the item
-   that settles its form: `x in xs` (item 13), and an `if` with no `else` or written
-   `a if c else b` (item 8).
+   that settles its form: `x in xs` (item 13). Python's ternary `a if c else b` is still unanswered.
 5. **Guards in the exhaustiveness message** (S). When the missing witness has a guarded arm, say that
    a guarded arm does not count.
 6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
@@ -469,9 +468,9 @@ after the release.
 
 7. ~~**The `try` prefix.**~~ **DONE 2026-11-22** (#190): `Map.find` and `String.indexOf`. Every lookup is
    total and returns an `Option`, so none is marked; the old names are answered with the new ones.
-8. **Block openers.** `match e:`, `case p:` and a CE's `for x in xs:` open a block with a colon.
-   `if` takes `then`, while `elif` is already Python's word. Accept `if c:` / `elif c:` / `else:`
-   for the block form and keep `then` for the one-line form.
+8. ~~**Block openers.**~~ **DONE 2026-11-22** (#193): a branch on its own indented lines opens with `:`
+   (`if c:` / `elif c:` / `else:`), a branch on the same line follows `then`, and each shape has
+   that one spelling (`DESIGN.md` §7.2). An `if` with no `else` says to write `else ()`.
 9. ~~**`True` and `False`.**~~ **DONE 2026-11-22** (#188). The lowercase spellings stay reserved
    and are an error naming the capitalized one (`DESIGN.md` §7).
 10. ~~**`str` for `string`.**~~ **DONE 2026-11-22** (#189). `Decode.string` followed as `Decode.str`;
