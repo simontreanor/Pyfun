@@ -2678,7 +2678,7 @@ impl Lowerer {
     /// spelling, and keeps this check independent of the scope machinery the
     /// fold pass and closure capture rely on.
     fn py_module_ref(&mut self, base: &str) -> String {
-        let module = base.to_lowercase();
+        let module = crate::project::module_stem(base);
         if self.binder_names.contains(&module) {
             let alias = format!("_pf_{module}");
             self.needed_imports.insert(format!("{module} as {alias}"));

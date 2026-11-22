@@ -89,16 +89,35 @@ impl std::fmt::Display for ProjectError {
 
 impl std::error::Error for ProjectError {}
 
-/// The source file name a module name resolves to: lowercase stem + `.pyfun`
-/// (the flat, single-directory convention of `DESIGN.md` §6.1).
-pub fn module_file_name(name: &str) -> String {
-    format!("{}.pyfun", name.to_lowercase())
+/// The file stem a module name maps to: the name in snake_case, as PEP 8 names a
+/// module (`Geometry` → `geometry`, `TrainTimes` → `train_times`). One function
+/// serves the `.pyfun` source, the emitted `.py` and the Python `import`, so the
+/// three can never disagree (`DESIGN.md` §6.1).
+pub fn module_stem(name: &str) -> String {
+    crate::types::to_snake_case(name)
 }
 
-/// The module name for a source path: its file stem with the first letter
-/// uppercased (`geometry.pyfun` → `Geometry`). `None` if the path has no stem.
+/// The source file name a module name resolves to: its stem + `.pyfun`
+/// (the flat, single-directory convention of `DESIGN.md` §6.1).
+pub fn module_file_name(name: &str) -> String {
+    format!("{}.pyfun", module_stem(name))
+}
+
+/// The module name for a source path: its file stem in PascalCase, each
+/// underscore-separated word capitalized (`geometry.pyfun` → `Geometry`,
+/// `train_times.pyfun` → `TrainTimes`). An underscore before a digit is kept
+/// (`day_1.pyfun` → `Day_1`), so the name maps back to the same stem. `None` if
+/// the path has no stem.
 pub fn module_name_from_path(path: &Path) -> Option<String> {
-    Some(capitalize(path.file_stem()?.to_str()?))
+    let stem = path.file_stem()?.to_str()?;
+    let mut name = String::with_capacity(stem.len());
+    for (i, word) in stem.split('_').enumerate() {
+        if i > 0 && !word.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            name.push('_');
+        }
+        name.push_str(&capitalize(word));
+    }
+    Some(name)
 }
 
 /// Resolve the module graph rooted at `entry`, loading sources through `load`.
@@ -567,9 +586,10 @@ fn export_records(module: &Module) -> HashMap<String, Vec<String>> {
     out
 }
 
-/// The emitted Python file name for a module (`Geometry` → `geometry.py`).
+/// The emitted Python file name for a module (`Geometry` → `geometry.py`,
+/// `TrainTimes` → `train_times.py`).
 pub fn module_py_name(name: &str) -> String {
-    format!("{}.py", name.to_lowercase())
+    format!("{}.py", module_stem(name))
 }
 
 /// Whether a module visit is in progress (on the DFS path) or finished.
@@ -879,6 +899,22 @@ mod tests {
     #[test]
     fn module_name_and_file_name_round_trip() {
         assert_eq!(module_file_name("Geometry"), "geometry.pyfun");
+        // A multi-word module is a snake_case file, the way PEP 8 names one.
+        assert_eq!(module_file_name("TrainTimes"), "train_times.pyfun");
+        assert_eq!(module_py_name("TrainTimes"), "train_times.py");
+        for (stem, name) in [
+            ("train_times", "TrainTimes"),
+            ("json_to_adt", "JsonToAdt"),
+            ("day_1", "Day_1"),
+            ("geometry", "Geometry"),
+        ] {
+            let path = format!("{stem}.pyfun");
+            assert_eq!(
+                module_name_from_path(Path::new(&path)).as_deref(),
+                Some(name)
+            );
+            assert_eq!(module_stem(name), stem, "{name} maps back to its file");
+        }
         assert_eq!(
             module_name_from_path(Path::new("src/geometry.pyfun")).as_deref(),
             Some("Geometry")

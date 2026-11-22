@@ -477,10 +477,9 @@ after the release.
     the old type name stays reserved and is an error naming the new one (`DESIGN.md` §7).
 11. ~~**snake_case, one rule.**~~ **DONE 2026-11-22** (#191): 67 standard library names, the CE builder
     methods (`return_from`, `yield_from`), the `Exception` fields, and every lesson, example and test
-    (`DESIGN.md` §6). An old camelCase spelling is answered with its snake_case member. Two loose ends
-    stay open: a multi-word module file (`import TrainTimes` should read `train_times.pyfun`; today
-    the stem is only lowercased), and a warning for a camelCase value name in user code, which waits
-    on item 1.
+    (`DESIGN.md` §6). An old camelCase spelling is answered with its snake_case member. A multi-word
+    module file followed (`import TrainTimes` reads `train_times.pyfun`, `DESIGN.md` §6.1). One loose
+    end stays open: a warning for a camelCase value name in user code, which waits on item 1.
 
 **Python-familiar additions**
 

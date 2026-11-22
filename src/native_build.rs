@@ -119,7 +119,8 @@ fn build_project(path: &Path, out: &Path) -> ExitCode {
             modules.push(stem.to_string());
         }
     }
-    let Some(entry_module) = pyfun::project::module_name_from_path(path).map(|m| m.to_lowercase())
+    let Some(entry_module) =
+        pyfun::project::module_name_from_path(path).map(|m| pyfun::project::module_stem(&m))
     else {
         return fail("the file needs a name");
     };
