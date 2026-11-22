@@ -6620,6 +6620,10 @@ struct Infer {
     /// `in` tests whose right operand was still an unsolved variable where they
     /// were written. Settled with the deferred field accesses.
     pending_members: Vec<PendingMember>,
+    /// Container variables that some binding's scheme now carries a membership
+    /// test for. A pending test over one has been handed to every scheme that
+    /// mentions the variable, so it is no longer this binding's to settle.
+    generalized_containers: HashSet<u32>,
     /// The expression being inferred, so a constraint posed by instantiating a
     /// scheme can point at the use that posed it.
     cur_span: Option<Span>,
@@ -8233,12 +8237,40 @@ impl Infer {
         self.pending_members = kept;
     }
 
+    /// Settle the deferred `in` tests whose container a later statement has
+    /// since pinned down, ahead of a generalization. A test that is settled no
+    /// longer holds its variables back, so `let f x xs = x in xs and
+    /// List.len xs > 0` is as polymorphic in its element as the same function
+    /// written with the two tests the other way round. A test that fails stays
+    /// pending, for [`Infer::resolve_pending_members`] to report.
+    fn settle_known_members(&mut self) {
+        let pending = std::mem::take(&mut self.pending_members);
+        let mut kept = Vec::with_capacity(pending.len());
+        for p in pending {
+            let known = !matches!(self.apply(&p.container), Ty::Var(_));
+            let settled = known
+                && matches!(
+                    self.settle_member(&p.elem, &p.container, p.elem_span, p.span),
+                    Ok(true)
+                );
+            if !settled {
+                kept.push(p);
+            }
+        }
+        self.pending_members = kept;
+    }
+
     /// Settle every deferred `in` test, now that the enclosing binding is fully
-    /// inferred. One whose container is still unknown is an error: Pyfun
-    /// resolves `in` rather than generalizing over it, so a helper that takes
-    /// "any container" names the module function it means.
+    /// inferred. One whose container is still unknown is an error, unless a
+    /// binding was generalized over that container: the test then lives in the
+    /// binding's scheme, and each use of the binding poses it again.
     fn resolve_pending_members(&mut self) -> Result<(), TypeError> {
         for p in std::mem::take(&mut self.pending_members) {
+            if let Ty::Var(v) = self.apply(&p.container)
+                && self.generalized_containers.contains(&v)
+            {
+                continue;
+            }
             if !self.settle_member(&p.elem, &p.container, p.elem_span, p.span)? {
                 return Err(unknown_container(p.span));
             }
@@ -10451,21 +10483,20 @@ impl Infer {
     /// waits on one of the variables being generalized: the binding becomes
     /// polymorphic in its container, and the test moves from this binding's
     /// obligations into its scheme, where each use poses it again.
+    ///
+    /// The obligation is not removed here. Bindings generalized together can
+    /// share a container variable (the members of a mutually recursive group,
+    /// the names of a destructuring `let`), and each of them must carry the test
+    /// in its own scheme: dropping it after the first would leave the others
+    /// accepting any argument. The variable is recorded as generalized instead,
+    /// and [`Infer::resolve_pending_members`] lets such an obligation go.
     fn generalize(&mut self, env: &Env, ty: &Ty) -> Scheme {
+        self.settle_known_members();
         let scheme = self.generalize_ty(env, ty);
-        if !scheme.members.is_empty() {
-            let pending = std::mem::take(&mut self.pending_members);
-            let mut kept = Vec::with_capacity(pending.len());
-            for p in pending {
-                let taken = match self.apply(&p.container) {
-                    Ty::Var(v) => scheme.vars.contains(&v),
-                    _ => false,
-                };
-                if !taken {
-                    kept.push(p);
-                }
+        for (_, container) in &scheme.members {
+            if let Ty::Var(v) = container {
+                self.generalized_containers.insert(*v);
             }
-            self.pending_members = kept;
         }
         scheme
     }
@@ -10501,6 +10532,9 @@ impl Infer {
                 Ty::Var(v) if ty_vars.contains(&v) && !env_t.contains(&v) => {
                     captured.push((elem, Ty::Var(v)));
                 }
+                // Already in the scheme of a binding generalized just before this
+                // one: that binding's test, and no hold on this one's variables.
+                Ty::Var(v) if self.generalized_containers.contains(&v) => {}
                 _ => {
                     free_type_vars(&container, &mut |v| {
                         member_held.insert(v);
