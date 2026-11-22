@@ -8,10 +8,19 @@ chunks the engine hands back. Because the kernel is itself the Python runtime,
 cell output, tracebacks, ``input()``, and KeyboardInterrupt need no plumbing.
 
 Protocol frames are 8 ASCII digits (payload byte length) + UTF-8 payload.
-Request: frame(op), frame(payload) with op in {"eval", "type"}.
+Request: frame(op), frame(payload) with op in {"eval", "eval-in", "type", "hook"}.
 Response: frame("ok"|"error"), frame(message), frame(python-blob).
+
+A cell that fails when it runs is reported in the lines the author wrote. The
+engine supplies both halves: "hook" returns the source of the module that
+rewrites a traceback, and "eval-in" (payload: the cell's name, a newline, the
+cell) answers with a blob whose first line is its table, saying which statement
+of which cell each emitted line came from. An engine that predates either op
+answers "error", and the kernel then runs cells with "eval" and shows Python's
+own traceback.
 """
 
+import json
 import os
 import re
 import shutil
@@ -103,8 +112,8 @@ class Engine:
         """One protocol round-trip; respawns and replays the log on a dead engine.
 
         Returns (status, message, blob); raises EngineError when the engine is
-        unusable even after a respawn. Successful "eval" payloads are logged for
-        replay.
+        unusable even after a respawn. Successful "eval" and "eval-in" requests
+        are logged for replay.
         """
         replayed = False
         if self._proc is None or self._proc.poll() is not None:
@@ -117,16 +126,16 @@ class Engine:
                 raise  # a freshly rebuilt engine failed too — give up
             self._respawn_and_replay()
             status, message, blob = self._roundtrip(op, payload)
-        if op == "eval" and status == "ok":
-            self._log.append(payload)
+        if op in ("eval", "eval-in") and status == "ok":
+            self._log.append((op, payload))
         return status, message, blob
 
     def _respawn_and_replay(self):
         self.close()
         self._spawn()
-        for cell in self._log:
+        for op, cell in self._log:
             # Rebuild the session state; blobs are discarded (already executed).
-            self._roundtrip("eval", cell)
+            self._roundtrip(op, cell)
 
     def reset(self):
         """Forget every definition: the next request spawns a fresh engine with
@@ -193,6 +202,45 @@ class PyfunKernel(Kernel):
         super().__init__(**kwargs)
         self._engine = Engine()
         self._ns = {}
+        # The traceback hook's namespace: None until asked for, False when the
+        # engine has none to give.
+        self._hook = None
+        # The table of each blob that came with one, by the name it ran under.
+        self._tables = {}
+        self._blobs = 0
+
+    def _traceback_hook(self):
+        """The engine's traceback hook as a namespace, or False without one."""
+        if self._hook is None:
+            self._hook = False
+            try:
+                status, source, _blob = self._engine.request("hook", "")
+                if status == "ok":
+                    hook = {"__name__": "pyfun_traceback"}
+                    exec(compile(source, "<pyfun traceback hook>", "exec"), hook)
+                    self._hook = hook
+            except Exception:
+                pass
+        return self._hook
+
+    def _lookup(self, filename):
+        """What the hook asks of each frame: a blob's table, or to leave out
+        this module's own frames."""
+        if filename in self._tables:
+            return self._tables[filename]
+        if filename == __file__:
+            return self._hook["HIDE"]
+        return None
+
+    def _format_error(self):
+        """The traceback of the exception being handled, in the cell's lines
+        when the engine said where the emitted lines came from."""
+        if self._hook:
+            try:
+                return self._hook["render"](*sys.exc_info(), self._lookup)
+            except Exception:
+                pass
+        return traceback.format_exc()
 
     def _stream(self, name, text):
         self.send_response(self.iopub_socket, "stream", {"name": name, "text": text})
@@ -218,6 +266,7 @@ class PyfunKernel(Kernel):
         if first.strip() == ":reset":
             self._engine.reset()
             self._ns = {}
+            self._tables = {}
             code = rest
         if not code.strip():
             return {
@@ -226,8 +275,19 @@ class PyfunKernel(Kernel):
                 "payload": [],
                 "user_expressions": {},
             }
+        table = ""
         try:
-            status, message, blob = self._engine.request("eval", code)
+            status = "error"
+            if self._traceback_hook():
+                # The cell under the name a traceback gives it.
+                named = f"In[{self.execution_count}]\n{code}"
+                status, message, blob = self._engine.request("eval-in", named)
+                if status == "ok":
+                    table, _, blob = blob.partition("\n")
+                elif message.startswith("unknown op"):
+                    self._hook = False
+            if not self._hook:
+                status, message, blob = self._engine.request("eval", code)
         except EngineError as exc:
             text = f"pyfun engine error: {exc}"
             if not silent:
@@ -245,10 +305,17 @@ class PyfunKernel(Kernel):
             saved = sys.stdout, sys.stderr
             sys.stdout = _StreamProxy(self, "stdout", silent)
             sys.stderr = _StreamProxy(self, "stderr", silent)
+            self._blobs += 1
+            name = f"<pyfun-{self._blobs}>"
+            if table:
+                try:
+                    self._tables[name] = json.loads(table)
+                except ValueError:
+                    pass
             try:
-                self._exec(blob)
+                self._exec(blob, name)
             except BaseException:
-                text = traceback.format_exc()
+                text = self._format_error()
                 if not silent:
                     self._stream("stderr", text)
                 return self._error_reply("PythonError", text)
@@ -261,8 +328,9 @@ class PyfunKernel(Kernel):
             "user_expressions": {},
         }
 
-    def _exec(self, blob):
-        """Run a cell's Python in this namespace.
+    def _exec(self, blob, name):
+        """Run a cell's Python in this namespace, compiled under `name` so a
+        traceback's frames can be told apart cell by cell.
 
         ipykernel runs cells inside its own event loop, and `asyncio.run` (how a
         Pyfun program runs an `async { }` block) refuses to start while a loop
@@ -270,14 +338,15 @@ class PyfunKernel(Kernel):
         worker thread, which has no loop of its own, and the kernel waits for
         it; any other cell runs here, where an interrupt reaches it directly.
         """
+        code = compile(blob, name, "exec")
         if "asyncio" not in blob:
-            exec(blob, self._ns)
+            exec(code, self._ns)
             return
         outcome = {}
 
         def work():
             try:
-                exec(blob, self._ns)
+                exec(code, self._ns)
             except BaseException as exc:  # re-raised on the kernel's thread
                 outcome["error"] = exc
 

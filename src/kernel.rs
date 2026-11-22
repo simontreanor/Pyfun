@@ -38,7 +38,11 @@ use std::process::ExitCode;
 use pyfun::diagnostics::{self, Level};
 use pyfun::syntax::Item;
 
-use crate::repl::{blob_of_new, chunk_python, expression_is_unit, is_infrastructure};
+use pyfun::traceback::Row;
+
+use crate::repl::{
+    Program, SourceLine, entry_lines, expression_is_unit, is_infrastructure, opening_line, table_of,
+};
 
 pub fn run() -> ExitCode {
     let mut engine = Engine::new();
@@ -53,11 +57,30 @@ pub fn run() -> ExitCode {
         let Ok(Some(payload)) = read_frame(&mut input) else {
             return ExitCode::SUCCESS;
         };
-        let reply = match op.as_str() {
-            "eval" => engine.eval_cell(&payload),
+        let mut reply = match op.as_str() {
+            "eval" => engine.eval_cell(UNLABELLED, &payload),
+            // The cell under the name a traceback should give it, and its
+            // blob's table back: the table is the blob frame's first line.
+            "eval-in" => {
+                let (label, cell) = payload.split_once('\n').unwrap_or(("", &payload));
+                let label = if label.is_empty() { UNLABELLED } else { label };
+                let mut reply = engine.eval_cell(label, cell);
+                if reply.ok {
+                    reply.blob = format!("{}\n{}", table_of(&reply.rows), reply.blob);
+                }
+                reply
+            }
             "type" => engine.type_of(&payload),
+            // The traceback hook's source, for the kernel to execute once.
+            "hook" => Reply {
+                ok: true,
+                message: pyfun::traceback::HOOK_SOURCE.to_string(),
+                blob: String::new(),
+                rows: Vec::new(),
+            },
             other => Reply::error(format!("unknown op `{other}`")),
         };
+        reply.rows.clear();
         let status = if reply.ok { "ok" } else { "error" };
         if write_frame(&mut output, status)
             .and_then(|()| write_frame(&mut output, &reply.message))
@@ -98,7 +121,13 @@ struct Reply {
     ok: bool,
     message: String,
     blob: String,
+    /// The rows of the blob's table (`DESIGN.md` §9): which statement of the
+    /// cell each of its lines came from.
+    rows: Vec<Row>,
 }
+
+/// What a traceback calls a cell the kernel did not name.
+const UNLABELLED: &str = "<cell>";
 
 impl Reply {
     fn error(message: String) -> Reply {
@@ -106,6 +135,7 @@ impl Reply {
             ok: false,
             message,
             blob: String::new(),
+            rows: Vec::new(),
         }
     }
 }
@@ -114,6 +144,8 @@ impl Reply {
 struct Engine {
     /// Accumulated definition source (the type-level state).
     defs: String,
+    /// Where each line of `defs` was entered: one [`SourceLine`] per line.
+    def_lines: Vec<SourceLine>,
     /// Emitted top-level chunks the caller has been given to exec (the diffing
     /// state) — the emitter is deterministic, so recompiling the accumulated
     /// program re-yields these byte-for-byte and they are skipped.
@@ -124,13 +156,14 @@ impl Engine {
     fn new() -> Engine {
         Engine {
             defs: String::new(),
+            def_lines: vec![opening_line()],
             executed: HashSet::new(),
         }
     }
 
     /// Evaluate one cell: definitions accumulate (echoing their inferred types),
     /// a trailing expression is split off and evaluated per entry.
-    fn eval_cell(&mut self, cell: &str) -> Reply {
+    fn eval_cell(&mut self, label: &str, cell: &str) -> Reply {
         let module = match pyfun::parse(cell) {
             Ok(m) => m,
             Err(e) => {
@@ -157,22 +190,32 @@ impl Engine {
 
         let mut message = String::new();
         let mut blob = String::new();
+        let mut rows = Vec::new();
 
         if !defs_src.trim().is_empty() {
-            match self.add_definitions(defs_src, def_items) {
-                Ok((echoes, defs_blob)) => {
+            match self.add_definitions(defs_src, def_items, label) {
+                Ok((echoes, defs_blob, defs_rows)) => {
                     message.push_str(&echoes);
                     blob.push_str(&defs_blob);
+                    rows.extend(defs_rows);
                 }
                 Err(rendered) => return Reply::error(rendered),
             }
         }
 
         if let Some(expr) = expr_src {
-            match self.eval_expression(expr) {
-                Ok((warned, expr_blob)) => {
+            // The expression's lines are counted from the top of the cell, and
+            // its blob follows the definitions' in the one the kernel runs.
+            let first_line = 1 + defs_src.matches('\n').count();
+            let above = blob.matches('\n').count();
+            match self.eval_expression(expr, label, first_line) {
+                Ok((warned, expr_blob, expr_rows)) => {
                     message.push_str(&warned);
                     blob.push_str(&expr_blob);
+                    rows.extend(expr_rows.into_iter().map(|row| Row {
+                        emitted: row.emitted + above,
+                        ..row
+                    }));
                 }
                 Err(rendered) => return Reply::error(rendered),
             }
@@ -182,6 +225,7 @@ impl Engine {
             ok: true,
             message,
             blob,
+            rows,
         }
     }
 
@@ -191,7 +235,8 @@ impl Engine {
         &mut self,
         entry: &str,
         new_count: usize,
-    ) -> Result<(String, String), String> {
+        label: &str,
+    ) -> Result<(String, String, Vec<Row>), String> {
         let combined = format!("{}\n{entry}", self.defs);
         let analysis = pyfun::analyze(&combined);
         if !analysis.diagnostics.is_empty() {
@@ -218,13 +263,15 @@ impl Engine {
                 }
             }
         }
-        match pyfun::compile(&combined) {
-            Ok(python) => {
-                let chunks = chunk_python(&python);
-                let blob = blob_of_new(&chunks, &self.executed);
-                self.executed.extend(chunks);
+        let mut lines = self.def_lines.clone();
+        lines.extend(entry_lines(label, 1, entry));
+        match Program::compile(&combined, lines) {
+            Ok(program) => {
+                let (blob, rows) = program.pending(&self.executed);
+                self.executed.extend(program.chunks().cloned());
                 self.defs = combined;
-                Ok((echoes, blob))
+                self.def_lines = program.into_lines();
+                Ok((echoes, blob, rows))
             }
             Err(e) => Err(diagnostics::render(
                 &combined,
@@ -239,7 +286,12 @@ impl Engine {
     /// the chunks to run it once (wrapped in `print (…)` unless `unit`-typed).
     /// Infrastructure chunks it pulls in are remembered; its own statements are
     /// not, so re-running the cell re-runs the expression.
-    fn eval_expression(&mut self, entry: &str) -> Result<(String, String), String> {
+    fn eval_expression(
+        &mut self,
+        entry: &str,
+        label: &str,
+        first_line: usize,
+    ) -> Result<(String, String, Vec<Row>), String> {
         let combined = format!("{}\n{entry}", self.defs);
         let analysis = pyfun::analyze(&combined);
         if !analysis.diagnostics.is_empty() {
@@ -252,16 +304,17 @@ impl Engine {
         } else {
             format!("{}\nprint ({entry})", self.defs)
         };
-        match pyfun::compile(&program_src) {
-            Ok(python) => {
-                let chunks = chunk_python(&python);
-                let blob = blob_of_new(&chunks, &self.executed);
-                for chunk in chunks {
-                    if is_infrastructure(&chunk) {
-                        self.executed.insert(chunk);
+        let mut lines = self.def_lines.clone();
+        lines.extend(entry_lines(label, first_line, entry));
+        match Program::compile(&program_src, lines) {
+            Ok(program) => {
+                let (blob, rows) = program.pending(&self.executed);
+                for chunk in program.chunks() {
+                    if is_infrastructure(chunk) {
+                        self.executed.insert(chunk.clone());
                     }
                 }
-                Ok((warned, blob))
+                Ok((warned, blob, rows))
             }
             Err(e) => Err(diagnostics::render(
                 &program_src,
@@ -302,6 +355,7 @@ impl Engine {
                 ok: true,
                 message: format!("{expr} : {ty}"),
                 blob: String::new(),
+                rows: Vec::new(),
             },
             None => Reply::error(format!(
                 "(could not determine a type — is `{expr}` an expression?)"

@@ -455,11 +455,10 @@ after the release.
    function that declares it performs nothing, so `let pure` covers the accumulator style. A closure
    or a computation-expression body assigning it, and a module-level `let mut`, keep their `io`
    (`DESIGN.md` §4).
-3. **Tracebacks in `.pyfun` lines** (M). **`pyfun run` DONE 2026-11-22**: an uncaught error names the
-   `.pyfun` file, the line and the statement of each frame, in a single file and across a project's
-   modules; compiler-written frames are left out and library frames kept (`DESIGN.md` §9). Still to
-   come: the REPL and the kernel, whose errors name `<string>` lines of the chunk that was sent. They
-   need a table per chunk and lines counted within the entry or the cell.
+3. ~~**Tracebacks in `.pyfun` lines**~~ **DONE 2026-11-22** (#207 `pyfun run`, then the REPL and the
+   kernel): an error at run time names the source file or the entry, the line and the statement of
+   each frame, across a project's modules and across the entries of a session; compiler-written
+   frames are left out and library frames kept (`DESIGN.md` §9).
 4. **Hints for Python habits** (S). **Mostly DONE 2026-11-22** (#194): `x = 5` and `x += 1`, a `for`
    or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
    `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`

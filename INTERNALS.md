@@ -594,8 +594,8 @@ dedents past it, the marker in force at that depth takes over again. That is wha
 a hoisted function's body back to the statement that owns it. Lines above the first marker (imports,
 classes, prelude helpers) have no entry.
 
-**The table and the hook.** `traceback::table` turns each file's map into JSON: `[emitted line, first
-source line, last source line]` rows and the source lines.
+**The table and the hook.** `traceback::table` turns each file's map into JSON rows, `[emitted line,
+source line, [the statement's lines]]`, under the file's source path.
 `main.rs::stage_and_run` writes the emitted files, the table, the hook and a three-line launcher to
 the temp directory and runs the launcher. The hook (`src/traceback_hook.py`) executes the entry file
 in `__main__`'s own namespace with `sys.argv[0]` and `__file__` set as a direct run would have them,
@@ -604,6 +604,27 @@ causes and contexts included: a frame from the staging directory becomes its sou
 dropped when the table has no row for it, and every other frame is left alone. Any failure inside the
 hook falls back to `sys.__excepthook__`. The table is read only at that point, so a program that ends
 cleanly pays for one extra module import.
+
+**Sessions.** The REPL and the kernel engine compile the accumulated definitions plus one entry and
+send only the chunks the namespace has not run (`repl.rs::Program::pending`). A chunk is cut out of the
+emitted program and joined to others, so the blob gets a table of its own: `chunk_python` records the
+line each chunk starts on, and `pending` walks the blob's lines, asking the line map for each one's
+statement. Every chunk's first line opens a row, a row with source line 0 when the chunk came from no
+statement (a prelude helper, a class), so that one chunk's statement never leaks into the next. A
+session keeps one `SourceLine` (entry label, line within the entry, text) for each line of its
+accumulated source, which is how a statement's offset becomes `<input 3>`, line 1; the row carries that
+label as its fourth cell. The expression entry that is wrapped in `print (…)` to show its value keeps
+the text as it was entered.
+
+The REPL's worker is `python -c` over the hook's source followed by the driver loop. It receives the
+table and then the blob, compiles the blob under a name of its own (`<pyfun-7>`), keeps the table under
+that name and, on an exception, calls the hook's `render` with a lookup that answers a blob's name with
+its table and hides the driver's own `<string>` frames. The kernel does the same in its own process:
+the engine's `hook` op returns the hook's source, which the kernel executes once, and `eval-in` takes
+the cell's label (`In[7]`, from Jupyter's execution count) ahead of the cell and answers with the table
+as the blob frame's first line. `eval` is unchanged, three frames with a bare blob, so an older kernel
+package keeps working with a newer engine; a newer kernel that is answered `unknown op` by an older
+engine falls back to `eval` and Python's own traceback.
 
 ## Names Python already owns — implements DESIGN §5
 

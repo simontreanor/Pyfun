@@ -237,3 +237,87 @@ fn a_cells_warnings_lead_its_output() {
     assert_eq!(reply.status, "ok");
     assert_eq!(reply.message, "f : num a => a -> a\n");
 }
+
+// ---------- Tracebacks in the cell's lines (`DESIGN.md` §9) ----------
+
+/// Split an `eval-in` blob frame into its table and the Python to run.
+fn table_and_blob(frame: &str) -> (&str, &str) {
+    frame.split_once('\n').expect("a table line, then the blob")
+}
+
+#[test]
+fn eval_in_returns_the_blobs_table_ahead_of_the_blob() {
+    let mut engine = Engine::spawn();
+    let reply = engine.request("eval-in", "In[4]\nlet ratio a b =\n    a // b\nratio 6 3");
+    assert_eq!(reply.status, "ok", "{}", reply.message);
+    let (table, blob) = table_and_blob(&reply.blob);
+    // The blob is what `eval` would have returned.
+    assert_eq!(
+        blob,
+        "def ratio(a, b):\n    return a // b\nprint(ratio(6, 3))\n"
+    );
+    // The table: the `def` line is the `let`, its body the second line of the
+    // cell, and the expression that closes the cell is on the cell's line 3.
+    assert_eq!(
+        table,
+        concat!(
+            r#"{"source":"","rows":["#,
+            r#"[1,1,["let ratio a b ="],"In[4]"],"#,
+            r#"[2,2,["    a // b"],"In[4]"],"#,
+            r#"[3,3,["ratio 6 3"],"In[4]"]"#,
+            r#"]}"#
+        )
+    );
+}
+
+#[test]
+fn a_later_cells_table_names_only_what_it_sends() {
+    let mut engine = Engine::spawn();
+    let first = engine.request("eval-in", "In[1]\nlet double x = x * 2");
+    assert_eq!(first.status, "ok", "{}", first.message);
+    // The second cell reuses `double`, already in the namespace: its blob and
+    // its table hold the new statement alone, and a prelude helper it pulls in
+    // is a row with no source.
+    let second = engine.request("eval-in", "In[2]\n[1, 2] |> List.map double");
+    assert_eq!(second.status, "ok", "{}", second.message);
+    let (table, blob) = table_and_blob(&second.blob);
+    assert!(!blob.contains("def double"), "{blob}");
+    assert!(blob.starts_with("def _pf_map("), "{blob}");
+    assert!(
+        table.starts_with(r#"{"source":"","rows":[[1,0,[]],["#),
+        "{table}"
+    );
+    assert!(
+        table.ends_with(r#",["[1, 2] |> List.map double"],"In[2]"]]}"#),
+        "{table}"
+    );
+    assert!(!table.contains("In[1]"), "{table}");
+}
+
+#[test]
+fn plain_eval_keeps_its_three_frames_for_an_older_kernel() {
+    let mut engine = Engine::spawn();
+    let reply = engine.eval("let ratio a b = a // b\nratio 6 3");
+    assert_eq!(reply.status, "ok", "{}", reply.message);
+    assert_eq!(
+        reply.blob,
+        "def ratio(a, b):\n    return a // b\nprint(ratio(6, 3))\n"
+    );
+}
+
+#[test]
+fn the_engine_hands_out_the_traceback_hook() {
+    let mut engine = Engine::spawn();
+    let reply = engine.request("hook", "");
+    assert_eq!(reply.status, "ok");
+    assert!(reply.message.contains("def render("), "the hook's source");
+    assert_eq!(reply.blob, "");
+}
+
+#[test]
+fn a_rejected_cell_has_no_table() {
+    let mut engine = Engine::spawn();
+    let reply = engine.request("eval-in", "In[1]\nlet bad = 1 + True");
+    assert_eq!(reply.status, "error");
+    assert_eq!(reply.blob, "");
+}
