@@ -378,9 +378,19 @@ impl Resolver {
     /// is resolved as a module symbol (so a recursive call jumps to the
     /// definition), hence it is not added to the local scope here.
     fn walk_binding(&mut self, binding: &LetBinding) {
+        self.walk_binding_patterns(binding);
         self.push_scope(param_scope(binding));
         self.walk_expr(&binding.value);
         self.scopes.pop();
+    }
+
+    /// The constructor and record-tag occurrences in a binding's own patterns:
+    /// its target (`let (Wrap v) = w`) and its parameters (`let f (Wrap v) = …`).
+    fn walk_binding_patterns(&mut self, binding: &LetBinding) {
+        self.walk_pattern(&binding.target);
+        for param in &binding.params {
+            self.walk_pattern(&param.pattern);
+        }
     }
 
     /// Record constructor occurrences inside a pattern so a constructor's
@@ -532,6 +542,7 @@ impl Resolver {
             match item {
                 CeItem::LetBang { target, value, .. } | CeItem::Let { target, value, .. } => {
                     self.walk_expr(value);
+                    self.walk_pattern(target);
                     // A destructuring target binds each of its names at its
                     // own span, like any other binding position.
                     for (name, span) in target.bound_vars() {
@@ -550,6 +561,7 @@ impl Resolver {
                     ..
                 } => {
                     self.walk_expr(source);
+                    self.walk_pattern(target);
                     self.scopes.push(HashMap::new());
                     for (name, span) in target.bound_vars() {
                         self.bind_in_scope(name.to_string(), span);
@@ -581,6 +593,9 @@ impl Resolver {
                 }),
             },
             ExprKind::Fn { params, body } => {
+                for param in params {
+                    self.walk_pattern(&param.pattern);
+                }
                 self.push_scope(params_scope(params));
                 self.walk_expr(body);
                 self.scopes.pop();
@@ -705,6 +720,7 @@ impl Resolver {
                             // The value sees the current scope (bindings are not
                             // recursive); the name then binds for later statements,
                             // pointing at its own precise name span.
+                            self.walk_binding_patterns(binding);
                             self.push_scope(param_scope(binding));
                             self.walk_expr(&binding.value);
                             self.scopes.pop();
@@ -921,6 +937,24 @@ mod tests {
             Target::Module(n) => n != "x",
             Target::Local(_) => true,
         }));
+    }
+
+    #[test]
+    fn a_constructor_is_found_in_a_binding_pattern() {
+        // A sole constructor's pattern in a parameter, a `let`, a lambda and a
+        // computation expression is a use of the constructor, like one in a
+        // `match` arm.
+        let src = "type W = Wrap int\n\
+                   let unwrap (Wrap v) = v\n\
+                   let (Wrap k) = Wrap 1\n\
+                   let f = fun (Wrap v) -> v\n\
+                   let g = result {\n  let! (Wrap n) = Ok (Wrap 2)\n  return n\n}";
+        let m = module(src);
+        let sym = Target::Module("Wrap".to_string());
+        // The declaration, four patterns and two constructions.
+        assert_eq!(find_references(&m, &sym, true).len(), 7);
+        let in_param = src.find("(Wrap v)").unwrap() + 2;
+        assert_eq!(symbol_at(&m, in_param).unwrap().1, sym);
     }
 
     #[test]

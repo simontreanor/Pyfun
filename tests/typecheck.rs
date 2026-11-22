@@ -3206,7 +3206,7 @@ fn a_sum_constructor_is_not_a_record_parameter() {
     assert_error_contains(
         "type Shape = Circle float | Square float
 let f (Circle { r }) = r",
-        "not a constructor pattern, and `Circle` is a constructor",
+        "constructor `Circle` takes its fields by position, not by name",
     );
 }
 
@@ -5302,7 +5302,7 @@ fn a_constructor_has_one_spelling() {
     assert_error_contains(
         "type Shape = Circle float | Square float\n\
          let f s =\n  match s:\n    case Circle { radius }: radius\n    case Square w: w",
-        "constructor `Circle` takes its fields by position, not by name: match it as `Circle _`",
+        "constructor `Circle` takes its fields by position, not by name: write the pattern as `Circle _`",
     );
     // A constructor and a record type cannot share a name: each is a Python
     // class of that name. A sum type may share its own constructor's.
@@ -5379,40 +5379,75 @@ fn a_named_constructor_pattern_counts_toward_exhaustiveness() {
 }
 
 #[test]
-fn no_constructor_pattern_binds_in_a_parameter_or_a_let() {
-    // One rule for both kinds of constructor: a parameter or a `let` takes a
-    // name, `_`, or a tuple or record of those. The parser refuses the
-    // positional form by its shape; the named form looks like a record
-    // pattern, so the checker refuses it with the same words. It makes no
-    // difference how many constructors the type has.
-    let rule = "must always match, so it takes a name, `_`, or a tuple or record of those, not";
-    for src in [
-        // positional, refused by the parser
-        "type W = Wrap int\nlet unwrap (Wrap v) = v",
-        "type W = Wrap int\nlet w = Wrap 1\nlet (Wrap v) = w",
-        // named, refused by the checker
-        "type W = Wrap { value: int }\nlet unwrap (Wrap { value }) = value",
-        "type W = Wrap { value: int }\nlet w = Wrap { value = 1 }\nlet Wrap { value } = w",
-        "type W = Wrap { value: int }\nlet f = fun (Wrap { value }) -> value",
-        "type S = Circle { radius: float } | Dot\nlet f (Circle { radius }) = radius",
-        // a positional constructor written with braces
-        "type Shape = Circle float | Square float\nlet f (Circle { r }) = r",
-    ] {
-        let message = match pyfun::parse(src) {
-            Err(e) => e.to_string(),
-            Ok(_) => errors(src).join("\n"),
-        };
-        assert!(message.contains(rule), "{src}\n{message}");
-        assert!(message.contains("constructor"), "{src}\n{message}");
-    }
-    // The value is taken whole and matched.
+fn a_sole_constructor_pattern_binds_in_a_parameter_or_a_let() {
+    // A pattern that cannot fail is allowed where there is nowhere to fall
+    // through to. A constructor pattern cannot fail when its type has no other
+    // constructor, whichever way the constructor takes its fields; a newtype's
+    // constructor is the common case.
     assert!(
         pyfun::check(
-            "type W = Wrap { value: int }\n\
-             let unwrap w =\n  match w:\n    case Wrap { value }: value\n\
-             let n = unwrap (Wrap { value = 1 }) + 1"
+            "type Wrapper = Wrap int str\n\
+             type Named = Box { value: int, note: str }\n\
+             opaque type UserId = str\n\
+             type Pair a = MkPair a a\n\
+             let unwrap (Wrap n _) = n\n\
+             let note_of (Box { note }) = note\n\
+             let raw (UserId s) = s\n\
+             let swap (MkPair a b) = MkPair b a\n\
+             let w = Wrap 41 \"w\"\n\
+             let b = Box { value = 1, note = \"n\" }\n\
+             let (Wrap k label) = w\n\
+             let Box { value = v } = b\n\
+             let (MkPair (Wrap x _) (Wrap y _)) = MkPair (Wrap 7 \"a\") (Wrap 8 \"b\")\n\
+             let (Wrap p _, (q, r)) = (w, (1, 2))\n\
+             let total = unwrap w + k + v + x + y + p + q + r + String.len label\n\
+             let names = String.len (note_of b) + String.len (raw (UserId \"ada\"))\n\
+             let firsts = [w] |> List.map (fun (Wrap n _) -> n) |> List.sum\n\
+             let swapped = swap (MkPair \"a\" \"b\")\n\
+             let go = result {\n  let! (Wrap n _) = Ok w\n  return n + 1\n}"
         )
         .is_ok()
+    );
+    // The bound names take the constructor's field types.
+    assert_error_contains(
+        "type Wrapper = Wrap int str\nlet f (Wrap n _) = String.len n",
+        "type mismatch",
+    );
+    assert_error_contains(
+        "type Wrapper = Wrap int str\nlet f (Wrap a) = a",
+        "constructor `Wrap` expects 2 argument(s), found 1",
+    );
+    // With another constructor in the type the pattern can fail, and the error
+    // names what else the value may be. One message for both kinds.
+    assert_error_contains(
+        "type Shape = Circle float | Square float\nlet f (Circle r) = r",
+        "a `Circle` pattern can fail to match here: `Shape` also has `Square`. A parameter or a `let` takes a constructor pattern only when the type has no other constructor; take the value whole and `match` on it",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let f (Circle {{ radius }}) = radius"),
+        "a `Circle` pattern can fail to match here: `Shape` also has `Rect` and `Dot`",
+    );
+    assert_error_contains(
+        "let f (Some x) = x",
+        "a `Some` pattern can fail to match here: `Option` also has `None`",
+    );
+    assert_error_contains(
+        "let (Ok v) = Ok 1",
+        "a `Ok` pattern can fail to match here: `Result` also has `Error`",
+    );
+    assert_error_contains(
+        &format!("{NAMED_SHAPES}let s = Dot {{ name = \"d\" }}\nlet Circle {{ radius }} = s"),
+        "a `Circle` pattern can fail to match here",
+    );
+    // An active-pattern case is decided by running its recognizer.
+    assert_error_contains(
+        "let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\nlet f (Even) = 1",
+        "`Even` is an active-pattern case",
+    );
+    // A positional constructor is still not written with braces.
+    assert_error_contains(
+        "type W = Wrap int\nlet f (Wrap { value }) = value",
+        "constructor `Wrap` takes its fields by position, not by name: write the pattern as `Wrap _`",
     );
 }
 

@@ -1354,8 +1354,8 @@ impl Parser {
                 return Err(ParseError {
                     message: format!(
                         "a `let` binding must always match, so it takes a name, `_`, or a \
-                         tuple or record of those, not {what} (use `match` instead, which \
-                         has somewhere to fall through to)"
+                         tuple, record or sole constructor of those, not {what} (use `match` \
+                         instead, which has somewhere to fall through to)"
                     ),
                     span: Span::new(start, self.prev_end()),
                 });
@@ -1405,9 +1405,9 @@ impl Parser {
                 if let Some(what) = refutable_shape(&pattern) {
                     return Err(ParseError {
                         message: format!(
-                            "a parameter must always match, so it takes a name, `_`, or a tuple \
-                             or record of those, not {what} (match on the value in the body \
-                             instead)"
+                            "a parameter must always match, so it takes a name, `_`, or a \
+                             tuple, record or sole constructor of those, not {what} (match on \
+                             the value in the body instead)"
                         ),
                         span: Span::new(start, self.prev_end()),
                     });
@@ -2956,24 +2956,24 @@ fn starts_param(tok: &Tok) -> bool {
 
 /// Whether `pattern` can fail to match, and if so what to call it in the error.
 /// The two **binding** positions — a parameter and a `let` target — admit only the
-/// shapes that always match: a name, `_`, tuples, and **record** patterns, each
-/// over irrefutable sub-patterns. A tuple's arity is fixed by its type and a
-/// record has exactly one shape (naming a subset of its fields still matches every
-/// value), so both are irrefutable when their parts are. Everything else (a
-/// literal, a constructor, a list pattern, an or-pattern) can fail, and neither
-/// position has anywhere to fail *to*.
+/// shapes that always match: a name, `_`, tuples, **record** patterns and
+/// **constructor** patterns, each over irrefutable sub-patterns. A tuple's arity
+/// is fixed by its type and a record has exactly one shape (naming a subset of
+/// its fields still matches every value), so both are irrefutable when their
+/// parts are. Everything else (a literal, a list pattern, an or-pattern) can
+/// fail, and neither position has anywhere to fail *to*.
 ///
-/// A record pattern's tag is only *resolved* later, in the type checker. A tag
-/// that turns out to be a constructor (record-bodied or positional) is rejected
-/// there in these positions, as a constructor pattern is here, so nothing
-/// refutable slips through this way.
+/// A constructor pattern always matches only when its type has no other
+/// constructor (`let unwrap (Wrap v) = v`), which the syntax cannot say: the
+/// shape passes here and the type checker counts the constructors. The same
+/// goes for a record pattern whose tag turns out to be a constructor.
 fn refutable_shape(pattern: &Pattern) -> Option<&'static str> {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => None,
         Pattern::Tuple { elems } => elems.iter().find_map(refutable_shape),
         Pattern::Record { fields, .. } => fields.iter().find_map(|f| refutable_shape(&f.pattern)),
         Pattern::Int(_) | Pattern::Str(_) | Pattern::Bool(_) => Some("a literal pattern"),
-        Pattern::Ctor { .. } => Some("a constructor pattern"),
+        Pattern::Ctor { args, .. } => args.iter().find_map(refutable_shape),
         Pattern::List { .. } => Some("a list pattern"),
         Pattern::Or(_) => Some("an or-pattern"),
         Pattern::As { .. } => Some("an as-pattern"),
@@ -3301,12 +3301,19 @@ mod tests {
         // The same rule a parameter is held to, and for the same reason: there is
         // no second arm to fall through to (`DESIGN.md` §7).
         for (src, what) in [
-            ("let (Some x) = Some 1", "a constructor pattern"),
             ("let ([a, b]) = [1, 2]", "a list pattern"),
+            ("let (Wrap 3) = w", "a literal pattern"),
+            ("let (Wrap (a | b)) = w", "an or-pattern"),
         ] {
             let msg = parse_error(src);
             assert!(msg.contains(what), "{src:?} reported: {msg}");
             assert!(msg.contains("must always match"), "{src:?} reported: {msg}");
+        }
+        // A constructor pattern has a shape that may always match (its type may
+        // have no other constructor), so it parses; the checker counts.
+        for src in ["let (Some x) = Some 1", "let (Wrap a (b, _)) = w"] {
+            let (_, errors) = parse_recover(lex(src).unwrap());
+            assert!(errors.is_empty(), "{src:?}: {errors:?}");
         }
     }
 

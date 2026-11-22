@@ -8889,3 +8889,78 @@ fn e2e_an_empty_tagged_pattern_matches_any_value_of_its_tag() {
         assert_eq!(out.trim(), "('wrap', 'empty', True)");
     }
 }
+
+#[test]
+fn e2e_a_sole_constructor_pattern_unpacks_in_a_parameter_and_a_let() {
+    // The F# single-case idiom: a type with one constructor is taken apart where
+    // it is bound, with no `match`. Positional and named constructors and a
+    // newtype all bind the same way, in a parameter, a `let`, a lambda, a fold,
+    // a `for` and a `let!`.
+    let src = "type Wrapper = Wrap int str\n\
+               type Named = Box { value: int, note: str }\n\
+               opaque type UserId = str\n\
+               type Pair a = MkPair a a\n\
+               let unwrap (Wrap n _) = n\n\
+               let note_of (Box { note }) = note\n\
+               let raw (UserId s) = s\n\
+               let swap (MkPair a b) = MkPair b a\n\
+               let both (Wrap n _) (Box { value }) = n + value\n\
+               let w = Wrap 41 \"w\"\n\
+               let b = Box { value = 1, note = \"n\" }\n\
+               let (Wrap k label) = w\n\
+               let Box { value = v } = b\n\
+               let (MkPair (Wrap x _) (Wrap y _)) = MkPair (Wrap 7 \"a\") (Wrap 8 \"b\")\n\
+               let (Wrap p _, (q, r)) = (w, (1, 2))\n\
+               print (unwrap w, note_of b, raw (UserId \"ada\"), swap (MkPair 1 2), both w b)\n\
+               print (k, label, v, x, y, p, q, r)\n\
+               [w, Wrap 1 \"x\"] |> List.map (fun (Wrap n _) -> n) |> print\n\
+               [w, Wrap 1 \"x\"] |> List.fold (fun acc (Wrap n _) -> acc + n) 0 |> print\n\
+               let inner =\n  let (Wrap m _) = w\n  let go (UserId s) (Wrap n _) = f\"{s}{n + m}\"\n  go (UserId \"u\") w\n\
+               print inner\n\
+               let ids = [UserId \"a\", UserId \"b\"]\n\
+               print (seq { for (UserId s) in Seq.of_list ids: yield String.upper s } |> Seq.to_list)\n\
+               let bumped = result {\n  let! (Wrap n _) = Ok w\n  return n + 1\n}\n\
+               print bumped\n\
+               let count_down (Wrap n s) acc = if n <= 0 then acc else count_down (Wrap (n - 1) s) (acc + n)\n\
+               print (count_down (Wrap 4 \"c\") 0)";
+    let expected = "(41, 'n', 'ada', MkPair(2, 1), 42)\n\
+                    (41, 'w', 1, 7, 8, 41, 1, 2)\n\
+                    [41, 1]\n\
+                    42\n\
+                    u82\n\
+                    ['A', 'B']\n\
+                    Ok(42)\n\
+                    10";
+    if let Some(out) = run_source(src) {
+        assert_eq!(out.trim(), expected);
+    }
+    if let Some((_, lines)) = run_native(src) {
+        assert_eq!(lines.join("\n").trim(), expected);
+    }
+    // The fields are read where the value arrives: by position for a positional
+    // constructor, by name for a named one, and not at all for a newtype, whose
+    // constructor is erased.
+    let py = pyfun::compile(
+        "type Wrapper = Wrap int str\n\
+         type Named = Box { value: int, note: str }\n\
+         opaque type UserId = str\n\
+         let unwrap (Wrap n _) = n\n\
+         let note_of (Box { note }) = note\n\
+         let raw (UserId s) = s\n\
+         let (Wrap k label) = Wrap 1 \"w\"",
+    )
+    .expect("compiles");
+    assert!(
+        py.contains("def unwrap(_pf_arg0):\n    n = _pf_arg0._0\n    return n"),
+        "{py}"
+    );
+    assert!(
+        py.contains("def note_of(_pf_arg0):\n    note = _pf_arg0.note\n    return note"),
+        "{py}"
+    );
+    assert!(
+        py.contains("def raw(_pf_arg0):\n    s = _pf_arg0\n    return s"),
+        "{py}"
+    );
+    assert!(py.contains("k = _pf_t0._0\nlabel = _pf_t0._1"), "{py}");
+}

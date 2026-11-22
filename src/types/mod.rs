@@ -6794,9 +6794,9 @@ struct Infer {
     auto_sites: Vec<(Span, Ty)>,
     /// Whether the pattern being bound may fail to match: true in a `match` arm,
     /// false in a parameter or a `let` target. The parser rejects every shape
-    /// that is refutable by its syntax, a constructor pattern among them; a
-    /// record pattern tagged with a constructor has a record pattern's shape, so
-    /// the checker applies the same rule to it here.
+    /// that is refutable by its syntax. A constructor pattern, of either kind,
+    /// is refutable only when its type has other constructors, which the
+    /// checker sees here ([`Infer::require_sole_constructor`]).
     refutable_ok: bool,
     /// The record each update rebuilds, by identity name: the update's span,
     /// the path walked so far, and the record found there. Becomes
@@ -8898,6 +8898,40 @@ impl Infer {
         (info.field_names.is_some() || !is_record).then(|| info.clone())
     }
 
+    /// A constructor pattern in a parameter or a `let` must always match, so
+    /// its type may have no other constructor (`let unwrap (Wrap v) = v`; a
+    /// newtype's is the common case). `result` is the pattern's type.
+    fn require_sole_constructor(
+        &self,
+        ctor: &str,
+        result: &Ty,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let Ty::Con(sum, _) = result else {
+            return Ok(());
+        };
+        let Some(all) = self.decls.type_ctors.get(sum) else {
+            return Ok(());
+        };
+        if all.len() <= 1 {
+            return Ok(());
+        }
+        let others: Vec<String> = all
+            .iter()
+            .filter(|c| c.as_str() != ctor)
+            .map(|c| format!("`{c}`"))
+            .collect();
+        Err(TypeError {
+            message: format!(
+                "a `{ctor}` pattern can fail to match here: `{sum}` also has {}. A parameter \
+                 or a `let` takes a constructor pattern only when the type has no other \
+                 constructor; take the value whole and `match` on it",
+                others.join(" and ")
+            ),
+            span,
+        })
+    }
+
     /// The field names of constructor `name` (bare or `Module.Ctor`) when it is
     /// record-bodied.
     fn named_ctor_fields(&self, name: &str) -> Option<&Vec<String>> {
@@ -9818,6 +9852,18 @@ impl Infer {
                 // An active-pattern case resolves through the AP registry, not
                 // the constructor table (`DESIGN.md` §7.2).
                 if let Some(ap) = self.decls.active_patterns.get(name).cloned() {
+                    // A recognizer decides its case by running, so it belongs
+                    // where a pattern may fail.
+                    if !self.refutable_ok {
+                        return Err(TypeError {
+                            message: format!(
+                                "`{name}` is an active-pattern case, which is decided by \
+                                 running its recognizer: a parameter or a `let` takes a pattern \
+                                 that always matches, so `match` on the value instead"
+                            ),
+                            span: name_span.span(),
+                        });
+                    }
                     return self.bind_ap_pattern(name, name_span.span(), &ap, args, scrut_ty, env);
                 }
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
@@ -9848,6 +9894,9 @@ impl Infer {
                 let cty = self.instantiate(&info.scheme);
                 let (field_tys, result_ty) = split_fun(&cty, info.arity);
                 self.unify(&result_ty, scrut_ty, span)?;
+                if !self.refutable_ok {
+                    self.require_sole_constructor(name, &result_ty, name_span.span())?;
+                }
                 for (sub, field_ty) in args.iter().zip(field_tys) {
                     self.bind_pattern(sub, &field_ty, span, env)?;
                 }
@@ -9862,26 +9911,11 @@ impl Infer {
                 // the tag is the constructor and the fields are its own.
                 let (what, owner, record_ty, field_tys) = match self.ctor_tag(ty) {
                     Some(info) => {
-                        // A parameter or a `let` takes no constructor pattern,
-                        // of either kind: the parser refuses the positional
-                        // form by its shape, and this is the same rule for the
-                        // form only the checker can tell from a record's.
-                        if !self.refutable_ok {
-                            return Err(TypeError {
-                                message: format!(
-                                    "a parameter or a `let` must always match, so it takes a \
-                                     name, `_`, or a tuple or record of those, not a \
-                                     constructor pattern, and `{ty}` is a constructor (use \
-                                     `match` instead, which has somewhere to fall through to)"
-                                ),
-                                span: ty_span.span(),
-                            });
-                        }
                         let Some(names) = info.field_names.clone() else {
                             return Err(TypeError {
                                 message: format!(
                                     "constructor `{ty}` takes its fields by position, not by \
-                                     name: match it as `{ty}{}`",
+                                     name: write the pattern as `{ty}{}`",
                                     " _".repeat(info.arity)
                                 ),
                                 span: ty_span.span(),
@@ -9889,6 +9923,11 @@ impl Infer {
                         };
                         let cty = self.instantiate(&info.scheme);
                         let (tys, result) = split_fun(&cty, info.arity);
+                        // In a parameter or a `let` the pattern must be the only
+                        // one its type has, as for a positional constructor.
+                        if !self.refutable_ok {
+                            self.require_sole_constructor(ty, &result, ty_span.span())?;
+                        }
                         let fields: Vec<(String, Ty)> = names.into_iter().zip(tys).collect();
                         ("constructor", ty.clone(), result, fields)
                     }

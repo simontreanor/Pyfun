@@ -102,16 +102,17 @@ of two named things, with no helper in the way. Note the brackets around a recor
 parameter, which keep `label (Cell { … })` from parsing as two parameters.
 
 The rule in all three positions is that the pattern has to match every value of its type. Names,
-`_`, tuples and records qualify, and they nest. A constructor pattern does not, because it can
-fail:
+`_`, tuples and records qualify, and they nest. A constructor qualifies only when its type has no
+other one, which you will meet in lesson 22. `Some` does not, because the value could be `None`:
 
 ```pyfun
 let (Some x) = Some 1
 ```
 
 ```console
-error: a `let` binding must always match, so it takes a name, `_`, or a tuple or record of those,
-not a constructor pattern (use `match` instead, which has somewhere to fall through to)
+error: a `Some` pattern can fail to match here: `Option` also has `None`. A parameter or a `let`
+takes a constructor pattern only when the type has no other constructor; take the value whole and
+`match` on it
 ```
 
 Leaving the brackets off does not help. A name after `let` that starts with a capital letter can
