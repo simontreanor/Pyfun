@@ -198,26 +198,48 @@ pub struct ModuleErrors {
 /// module; an empty vec means the whole project type-checks. A module with errors
 /// still contributes its (best-effort) exports so dependents can be checked too.
 pub fn check(project: &Project) -> Vec<ModuleErrors> {
+    check_reporting(project).0
+}
+
+/// Warnings found in one module of a project.
+#[derive(Debug)]
+pub struct ModuleWarnings {
+    /// The module the warnings were found in.
+    pub name: String,
+    pub warnings: Vec<crate::diagnostics::Warning>,
+}
+
+/// [`check`], with each module's warnings beside the errors. A module appears in
+/// a list only when it has something for it.
+pub fn check_reporting(project: &Project) -> (Vec<ModuleErrors>, Vec<ModuleWarnings>) {
     use crate::types::{self, ModuleExports};
 
     let mut exports: HashMap<String, ModuleExports> = HashMap::new();
     let mut all = Vec::new();
+    let mut all_warnings = Vec::new();
     for module in &project.modules {
         let imports: HashMap<String, ModuleExports> = module
             .imports
             .iter()
             .filter_map(|name| exports.get(name).map(|e| (name.clone(), e.clone())))
             .collect();
-        let (errors, module_exports) = types::check_module(&module.ast, &imports);
+        let (errors, module_exports, warnings) =
+            types::check_module_reporting(&module.ast, &imports);
         if !errors.is_empty() {
             all.push(ModuleErrors {
                 name: module.name.clone(),
                 errors,
             });
         }
+        if !warnings.is_empty() {
+            all_warnings.push(ModuleWarnings {
+                name: module.name.clone(),
+                warnings,
+            });
+        }
         exports.insert(module.name.clone(), module_exports);
     }
-    all
+    (all, all_warnings)
 }
 
 /// A compiled project: each module's emitted Python source, keyed by file name

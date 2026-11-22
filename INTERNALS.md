@@ -24,7 +24,8 @@ src/
     decode_spec.rs   statically-known decoders deforest (DESIGN §5.3)
     self_tail_call.rs a saturated self tail call becomes `while True` (DESIGN §5.4)
   python_emitter/  Python-AST IR → readable source (py311.rs = the --target 3.11 rewrite)
-  diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes
+  diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes; the Warning type
+  lint.rs          the warnings the syntax alone shows (DESIGN §3); types/ finds the rest and joins them
   project/         module graph: acyclic import resolution, cross-module checking
     manifest.rs      pyfun.toml reader/editor, project root and vendored façades (DESIGN §6.2)
   lsp/             front-end-first language server (stdio JSON-RPC)

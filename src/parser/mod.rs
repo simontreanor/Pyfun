@@ -1555,7 +1555,9 @@ impl Parser {
     /// or-pattern (`case a | b:`); the optional `if guard` makes the arm refutable.
     fn parse_case_arm(&mut self) -> Result<MatchArm, ParseError> {
         self.expect(&Tok::Case, "`case`")?;
+        let pattern_start = self.cur_start();
         let pattern = self.parse_pattern()?;
+        let pattern_span = NodeSpan::new(Span::new(pattern_start, self.prev_end()));
         let guard = if self.eat(&Tok::If) {
             Some(self.parse_expr()?)
         } else {
@@ -1565,6 +1567,7 @@ impl Parser {
         let body = self.parse_block_or_expr()?;
         Ok(MatchArm {
             pattern,
+            pattern_span,
             guard,
             body,
         })

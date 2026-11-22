@@ -377,3 +377,143 @@ fn single_file_without_imports_still_inlines_classes() {
     assert!(stdout.contains("class Some"), "{stdout}");
     assert!(!stdout.contains("_pyfun_rt"), "{stdout}");
 }
+
+/// A program that builds and has two warnings: an unused local and an arm that
+/// cannot match.
+const WARNED: &str = "let f n =\n    let unused = 5\n    match n:\n        case 0: \"zero\"\n        case 0: \"again\"\n        case _: \"other\"\nprint (f 0)\n";
+
+#[test]
+fn check_reports_warnings_and_still_succeeds() {
+    let project = Project::new("warn_check", &[("main.pyfun", WARNED)]);
+    let out = Command::new(pyfun_bin())
+        .arg("check")
+        .arg(project.path("main.pyfun"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("warning: `unused` is never used"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: this `case` can never match"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("ok: no type errors (2 warnings)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn check_strict_makes_a_warning_a_failure() {
+    let project = Project::new(
+        "warn_strict",
+        &[("main.pyfun", WARNED), ("clean.pyfun", "print 42\n")],
+    );
+    // The flag reads on either side of the path.
+    for args in [
+        ["check", "--strict", "main.pyfun"],
+        ["check", "main.pyfun", "--strict"],
+    ] {
+        let out = Command::new(pyfun_bin())
+            .args(args)
+            .current_dir(&project.0)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{stderr}");
+        assert!(stderr.contains("no type errors (2 warnings)"), "{stderr}");
+        assert!(
+            stderr.contains("error: `--strict` makes a warning a failure"),
+            "{stderr}"
+        );
+    }
+    // A program without warnings passes under it.
+    let out = Command::new(pyfun_bin())
+        .args(["check", "--strict", "clean.pyfun"])
+        .current_dir(&project.0)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+}
+
+#[test]
+fn check_reports_each_modules_warnings_in_a_project() {
+    // `Geometry` is imported and never used; the unused local is in the other
+    // module. Each is rendered under its own module's heading.
+    let project = Project::new(
+        "warn_project",
+        &[
+            (
+                "main.pyfun",
+                "import Geometry\nimport Extra\nprint (Extra.twice 2)\n",
+            ),
+            GEOMETRY,
+            (
+                "extra.pyfun",
+                "let twice n =\n    let unused = 1\n    n * 2\n",
+            ),
+        ],
+    );
+    let out = Command::new(pyfun_bin())
+        .arg("check")
+        .arg(project.path("main.pyfun"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("warning: `import Geometry` is never used"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("-- module `Extra` (extra.pyfun) --"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("warning: `unused` is never used"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("ok: no type errors (3 modules) (2 warnings)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn run_and_compile_print_warnings_beside_the_program() {
+    let project = Project::new("warn_run", &[("main.pyfun", WARNED)]);
+    // `compile` writes the Python to stdout and the warnings to stderr.
+    let out = Command::new(pyfun_bin())
+        .arg("compile")
+        .arg(project.path("main.pyfun"))
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stdout.contains("def f(n):"), "{stdout}");
+    assert!(!stdout.contains("warning:"), "{stdout}");
+    assert!(
+        stderr.contains("warning: `unused` is never used"),
+        "{stderr}"
+    );
+    if !have_python() {
+        return;
+    }
+    // `run` prints them and then runs the program, whose output is untouched.
+    let out = Command::new(pyfun_bin())
+        .arg("run")
+        .arg(project.path("main.pyfun"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "zero");
+    assert!(
+        stderr.contains("warning: this `case` can never match"),
+        "{stderr}"
+    );
+}

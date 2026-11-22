@@ -85,7 +85,7 @@ let accumulate =
   let tally x =
     running <- running + x
     running
-  let first = tally 10
+  let _ = tally 10
   tally 5                             # 15  (10 then +5)
 
 # A block in a `match` arm (opened after `case P:`).
@@ -379,7 +379,7 @@ let nobody = Option.with_default 0 (Map.find "x" scores)  # 0
 
 # The `Option` module chains lookups: `bind` sequences Option-returning steps,
 # `filter` keeps a value only if it passes, `to_result` bridges to `Result`.
-let doubled = Option.bind (fun n -> Some (n * 2)) (Map.find "ada" scores)  # Some 20
+let ada_twice = Option.bind (fun n -> Some (n * 2)) (Map.find "ada" scores)  # Some 20
 let big_score = Option.filter (fun n -> n > 9) (Map.find "alan" scores)     # None (9 <= 9)
 let ada_or_err = Option.to_result "no ada" (Map.find "ada" scores)           # Ok 10
 
@@ -562,7 +562,7 @@ print first_big                        # Some(4)  (List.find, first match)
 print (Set.len uniq)                  # 3
 print ada                             # 10
 print nobody                          # 0
-print doubled                         # Some(20)  (Option.bind)
+print ada_twice                       # Some(20)  (Option.bind)
 print big_score                        # None_     (Option.filter, 9 <= 9)
 print ada_or_err                        # Ok(10)    (Option.to_result)
 print ada_age                          # 36   (zip -> Map.of_list -> find)

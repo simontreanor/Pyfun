@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::diagnostics::{Warning, WarningKind};
 use crate::lexer::Span;
 use crate::parser::ast::{
     ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item,
@@ -2197,7 +2198,8 @@ fn register_sum_fields(decls: &mut Decls, name: &str) {
 
 /// Type-check a whole module, returning every independent error found.
 pub fn check(module: &Module) -> Result<(), Vec<TypeError>> {
-    let (errors, _types, _exports, _holes, _ordered, _codecs) = run(module, false, &HashMap::new());
+    let (errors, _types, _exports, _holes, _ordered, _codecs, _warnings) =
+        run(module, false, &HashMap::new());
     if errors.is_empty() {
         Ok(())
     } else {
@@ -2313,8 +2315,77 @@ pub fn check_module(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, ModuleExports) {
-    let (errors, _types, exports, _holes, _ordered, _codecs) = run(module, false, imports);
+    let (errors, _types, exports, _holes, _ordered, _codecs, _warnings) =
+        run(module, false, imports);
     (errors, exports)
+}
+
+/// [`check_module`], with the module's warnings.
+pub fn check_module_reporting(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, ModuleExports, Vec<Warning>) {
+    let (errors, _types, exports, _holes, _ordered, _codecs, warnings) =
+        run(module, false, imports);
+    (errors, exports, warnings)
+}
+
+/// Everything an editor or `pyfun check` shows for one module: errors, the
+/// hover table, typed holes and warnings, in a single inference pass.
+pub fn check_reporting(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>, Vec<Warning>) {
+    let (errors, types, _exports, holes, _ordered, _codecs, warnings) = run(module, true, imports);
+    (errors, types, holes, warnings)
+}
+
+/// The imports of `module` that nothing in it uses. An import is used by a
+/// `Module.member` anywhere (an expression, a pattern, a record tag, a type, a
+/// computation expression's builder), and also by the things that cross a module
+/// boundary without a qualifier: a measure, a type named bare in an annotation,
+/// and a record's fields read by name. A module that exports measures is never
+/// reported, since nothing marks which unit came from where.
+fn unused_imports(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+    touched_records: &HashSet<String>,
+) -> Vec<Warning> {
+    let mentioned = crate::lsp::resolve::mentioned_modules(module);
+    let bare_types: HashSet<String> = crate::lsp::resolve::type_references(module)
+        .into_iter()
+        .map(|t| t.name)
+        .filter(|n| !n.contains('.'))
+        .collect();
+    let mut out = Vec::new();
+    for item in &module.items {
+        let Item::Import { name, span } = item else {
+            continue;
+        };
+        // An import that did not resolve has its own error.
+        let Some(exports) = imports.get(name) else {
+            continue;
+        };
+        let crosses_bare = !exports.measures.is_empty()
+            || exports.types.iter().any(|t| bare_types.contains(&t.name))
+            || exports.opaques.iter().any(|o| bare_types.contains(&o.name))
+            || exports
+                .records
+                .iter()
+                .any(|r| bare_types.contains(&r.name) || touched_records.contains(&r.name))
+            || exports
+                .types
+                .iter()
+                .any(|t| touched_records.contains(&t.name));
+        if !mentioned.contains(name) && !crosses_bare {
+            out.push(Warning {
+                message: format!("`import {name}` is never used"),
+                span: span.span(),
+                kind: WarningKind::UnusedImport,
+            });
+        }
+    }
+    out
 }
 
 /// Like [`check_module`] but also returns the span→type table (as
@@ -2325,7 +2396,7 @@ pub fn check_module_collecting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, ModuleExports, Codecs) {
-    let (errors, types, exports, _holes, _ordered, codecs) = run(module, true, imports);
+    let (errors, types, exports, _holes, _ordered, codecs, _warnings) = run(module, true, imports);
     (errors, types, exports, codecs)
 }
 
@@ -2336,7 +2407,7 @@ pub fn check_collecting_with_imports(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>) {
-    let (errors, types, _exports, holes, _ordered, _codecs) = run(module, true, imports);
+    let (errors, types, _exports, holes, _ordered, _codecs, _warnings) = run(module, true, imports);
     (errors, types, holes)
 }
 
@@ -2354,7 +2425,8 @@ pub fn check_collecting(
     HashSet<String>,
     Codecs,
 ) {
-    let (errors, types, _exports, holes, ordered, codecs) = run(module, true, &HashMap::new());
+    let (errors, types, _exports, holes, ordered, codecs, _warnings) =
+        run(module, true, &HashMap::new());
     (errors, types, holes, ordered, codecs)
 }
 
@@ -2375,6 +2447,8 @@ type RunResult = (
     HashSet<String>,
     // The derived codecs the module's `Decode.auto` sites need.
     Codecs,
+    // Warnings: the program compiles, and something in it does nothing.
+    Vec<Warning>,
 );
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
@@ -2738,6 +2812,13 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         }
     }
 
+    // Warnings: the checker's own (an arm that cannot match), an import nothing
+    // here uses, and the ones the syntax alone shows ([`crate::lint`]).
+    let mut warnings = std::mem::take(&mut inf.warnings);
+    warnings.extend(unused_imports(module, imports, &inf.touched_records));
+    warnings.extend(crate::lint::lint(module, !holes.is_empty()));
+    warnings.sort_by_key(|w| (w.span.start, w.span.end));
+
     let ordered = std::mem::take(&mut inf.ordered);
     let (exported_records, exported_opaques) = close_over_references(
         &exports,
@@ -2770,6 +2851,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
         holes,
         ordered,
         codecs,
+        warnings,
     )
 }
 
@@ -6792,6 +6874,12 @@ struct Infer {
     /// Every `Decode.auto` reference with its instantiated `Decoder a`, resolved
     /// after inference into a [`Codec`] (or an error when `a` is still open).
     auto_sites: Vec<(Span, Ty)>,
+    /// Warnings found while inferring (today, a `case` arm that cannot match).
+    warnings: Vec<Warning>,
+    /// Records and sum types whose fields some access, update, literal or
+    /// pattern resolved to. A field read by name uses its record's module
+    /// without naming it, which the unused-import warning has to know.
+    touched_records: HashSet<String>,
     /// Whether the pattern being bound may fail to match: true in a `match` arm,
     /// false in a parameter or a `let` target. The parser rejects every shape
     /// that is refutable by its syntax. A constructor pattern, of either kind,
@@ -8136,6 +8224,7 @@ impl Infer {
                     let body_ty = self.infer_expr(&arm.body, &arm_env)?;
                     self.unify(&result, &body_ty, arm.body.span())?;
                 }
+                self.warn_unreachable_arms(&scrut_ty, arms);
                 self.check_exhaustive(&scrut_ty, arms, span)?;
                 Ok(self.apply(&result))
             }
@@ -9002,6 +9091,7 @@ impl Infer {
     }
 
     fn instantiate_record(&mut self, name: &str) -> (Ty, Vec<(String, Ty)>) {
+        self.touched_records.insert(name.to_string());
         let info = self
             .field_bearer(name)
             .cloned()
@@ -10094,6 +10184,146 @@ impl Infer {
             message: format!("{message}{guard_note}"),
             span,
         })
+    }
+
+    /// Warn about each arm that cannot match: one whose pattern is not *useful*
+    /// against the unguarded arms above it, in Maranget's sense, so every value
+    /// it would take is taken before control reaches it. A guarded arm above
+    /// takes nothing for certain and is left out of the comparison, though a
+    /// guarded arm can itself be unreachable.
+    ///
+    /// Two kinds of match are left alone. A suffix-star list pattern
+    /// (`[*r, x]`) needs the cycle guard [`Infer::useful`] carries, and an active
+    /// pattern's case is decided by running its recognizer, so two arms with the
+    /// same case name are not the same test when the pattern takes arguments.
+    fn warn_unreachable_arms(&mut self, scrut_ty: &Ty, arms: &[MatchArm]) {
+        if arms
+            .iter()
+            .any(|a| has_suffix_star(&a.pattern) || self.mentions_active_pattern(&a.pattern))
+        {
+            return;
+        }
+        let types = vec![self.apply(scrut_ty)];
+        let mut above: Vec<Vec<Pattern>> = Vec::new();
+        for arm in arms {
+            let row = vec![arm.pattern.clone()];
+            if !above.is_empty() && !self.row_useful(&above, &types, &row) {
+                self.warnings.push(Warning {
+                    message: "this `case` can never match: the arms above it already take \
+                              every value it would"
+                        .to_string(),
+                    span: arm.pattern_span.span(),
+                    kind: WarningKind::UnreachableArm,
+                });
+            }
+            if arm.guard.is_none() {
+                above.push(row);
+            }
+        }
+    }
+
+    /// Whether `pattern` names an active-pattern case anywhere inside it.
+    fn mentions_active_pattern(&self, pattern: &Pattern) -> bool {
+        match pattern {
+            Pattern::Ctor { name, args, .. } => {
+                self.decls.active_patterns.contains_key(name)
+                    || args.iter().any(|a| self.mentions_active_pattern(a))
+            }
+            Pattern::Record { fields, .. } => fields
+                .iter()
+                .any(|f| self.mentions_active_pattern(&f.pattern)),
+            Pattern::Tuple { elems } => elems.iter().any(|e| self.mentions_active_pattern(e)),
+            Pattern::List {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                prefix
+                    .iter()
+                    .chain(suffix)
+                    .any(|p| self.mentions_active_pattern(p))
+                    || rest
+                        .as_deref()
+                        .is_some_and(|r| self.mentions_active_pattern(r))
+            }
+            Pattern::Or(alts) => alts.iter().any(|a| self.mentions_active_pattern(a)),
+            Pattern::As { pattern, .. } => self.mentions_active_pattern(pattern),
+            Pattern::Wildcard
+            | Pattern::Var { .. }
+            | Pattern::Int(_)
+            | Pattern::Str(_)
+            | Pattern::Bool(_) => false,
+        }
+    }
+
+    /// Is the row `q` useful against `matrix`: does it match some value that no
+    /// row of the matrix does? The general form of [`Infer::useful`], which
+    /// asks the same of a row of wildcards and also builds a witness. Each
+    /// matrix row and `q` have one pattern per entry of `types`.
+    fn row_useful(&mut self, matrix: &[Vec<Pattern>], types: &[Ty], q: &[Pattern]) -> bool {
+        let Some((head, q_rest)) = q.split_first() else {
+            // No columns left: `q` is useful only if no row got this far.
+            return matrix.is_empty();
+        };
+        let matrix = expand_first_column(matrix);
+        // An as-pattern matches what its inner pattern does.
+        let mut head = head;
+        while let Pattern::As { pattern, .. } = head {
+            head = pattern;
+        }
+        // An or-pattern is useful if any alternative is.
+        if let Pattern::Or(alts) = head {
+            return alts.iter().any(|alt| {
+                let mut row = vec![alt.clone()];
+                row.extend_from_slice(q_rest);
+                self.row_useful(&matrix, types, &row)
+            });
+        }
+        let col_ty = self.apply(&types[0]);
+        let rest = &types[1..];
+        match self.pattern_tag(head) {
+            // A constructor head: only rows that can match that constructor
+            // compete, each opened into its sub-patterns.
+            Some(tag) => {
+                let arg_tys = self.tag_field_types(&col_ty, &tag);
+                let arity = arg_tys.len();
+                let spec = self.specialize(&matrix, &tag, arity);
+                let mut sub_types = arg_tys;
+                sub_types.extend_from_slice(rest);
+                self.row_heads(head, &tag, arity)
+                    .into_iter()
+                    .any(|mut row| {
+                        row.extend_from_slice(q_rest);
+                        self.row_useful(&spec, &sub_types, &row)
+                    })
+            }
+            // A wildcard head. If the rows name every constructor of the type,
+            // the wildcard is useful when it is for some constructor; if they do
+            // not, it can take a constructor none of them names, and only the
+            // rows that are wildcards here too still compete.
+            None => {
+                let present = self.present_tags(&matrix);
+                let full_sig = self.ctor_signature(&col_ty);
+                let complete = full_sig
+                    .as_ref()
+                    .is_some_and(|sig| sig.iter().all(|t| present.contains(t)));
+                if complete {
+                    full_sig.unwrap_or_default().into_iter().any(|tag| {
+                        let arg_tys = self.tag_field_types(&col_ty, &tag);
+                        let arity = arg_tys.len();
+                        let spec = self.specialize(&matrix, &tag, arity);
+                        let mut sub_types = arg_tys;
+                        sub_types.extend_from_slice(rest);
+                        let mut row = vec![Pattern::Wildcard; arity];
+                        row.extend_from_slice(q_rest);
+                        self.row_useful(&spec, &sub_types, &row)
+                    })
+                } else {
+                    let def = default_matrix(&matrix);
+                    self.row_useful(&def, rest, q_rest)
+                }
+            }
+        }
     }
 
     /// Is a wildcard row useful against `matrix` over the column `types`? `Some`

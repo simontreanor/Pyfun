@@ -170,7 +170,10 @@ impl Engine {
 
         if let Some(expr) = expr_src {
             match self.eval_expression(expr) {
-                Ok(expr_blob) => blob.push_str(&expr_blob),
+                Ok((warned, expr_blob)) => {
+                    message.push_str(&warned);
+                    blob.push_str(&expr_blob);
+                }
                 Err(rendered) => return Reply::error(rendered),
             }
         }
@@ -194,7 +197,8 @@ impl Engine {
         if !analysis.diagnostics.is_empty() {
             return Err(render_errors(&combined, &analysis.diagnostics));
         }
-        let mut echoes = String::new();
+        // The cell's warnings lead its output, ahead of the type echoes.
+        let mut echoes = render_warnings(&combined, &analysis, combined.len() - entry.len());
         if let Some(module) = &analysis.module {
             let start = module.items.len().saturating_sub(new_count);
             for item in &module.items[start..] {
@@ -235,12 +239,13 @@ impl Engine {
     /// the chunks to run it once (wrapped in `print (…)` unless `unit`-typed).
     /// Infrastructure chunks it pulls in are remembered; its own statements are
     /// not, so re-running the cell re-runs the expression.
-    fn eval_expression(&mut self, entry: &str) -> Result<String, String> {
+    fn eval_expression(&mut self, entry: &str) -> Result<(String, String), String> {
         let combined = format!("{}\n{entry}", self.defs);
         let analysis = pyfun::analyze(&combined);
         if !analysis.diagnostics.is_empty() {
             return Err(render_errors(&combined, &analysis.diagnostics));
         }
+        let warned = render_warnings(&combined, &analysis, combined.len() - entry.len());
         let is_unit = expression_is_unit(&analysis);
         let program_src = if is_unit {
             combined
@@ -256,7 +261,7 @@ impl Engine {
                         self.executed.insert(chunk);
                     }
                 }
-                Ok(blob)
+                Ok((warned, blob))
             }
             Err(e) => Err(diagnostics::render(
                 &program_src,
@@ -307,6 +312,23 @@ impl Engine {
 
 /// Render type errors against the combined source into one string (the offending
 /// line is in the new entry — the accumulated definitions were already valid).
+/// The rendered warnings of the cell text that begins at `entry_start`: the
+/// ones about that cell alone (a notebook binds names again and imports ahead
+/// of use, so those kinds are not reported).
+fn render_warnings(source: &str, analysis: &pyfun::Analysis, entry_start: usize) -> String {
+    let mut out = String::new();
+    for w in pyfun::entry_warnings(analysis, entry_start) {
+        out.push_str(&diagnostics::render(
+            source,
+            Level::Warning,
+            &w.message,
+            w.span,
+        ));
+        out.push('\n');
+    }
+    out
+}
+
 fn render_errors(source: &str, errors: &[pyfun::types::TypeError]) -> String {
     let mut out = String::new();
     for e in errors {

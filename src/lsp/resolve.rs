@@ -213,6 +213,44 @@ pub fn type_references(module: &Module) -> Vec<TypeRef> {
     walk(module).type_refs
 }
 
+/// The `let`-bound locals nothing refers to: each a name and its binder span,
+/// in source order. A name that starts with `_` says it is unused on purpose and
+/// is left out.
+pub fn unused_lets(module: &Module) -> Vec<(String, Span)> {
+    let r = walk(module);
+    let used: std::collections::HashSet<Span> = r
+        .refs
+        .iter()
+        .filter_map(|reference| match reference.target {
+            Target::Local(span) => Some(span),
+            Target::Module(_) => None,
+        })
+        .collect();
+    let mut out: Vec<(String, Span)> = r
+        .let_binders
+        .into_iter()
+        .filter(|(name, span)| !name.starts_with('_') && !used.contains(span))
+        .collect();
+    out.sort_by_key(|(_, span)| (span.start, span.end));
+    out
+}
+
+/// Every module name the file mentions: the `M` of a `M.member` in an
+/// expression, a pattern or a record tag, of a qualified type (`M.Point`), and
+/// of a computation expression's builder (`M { … }`).
+pub fn mentioned_modules(module: &Module) -> std::collections::HashSet<String> {
+    let r = walk(module);
+    let mut out: std::collections::HashSet<String> =
+        r.quals.into_iter().map(|q| q.module).collect();
+    out.extend(
+        r.type_refs
+            .into_iter()
+            .filter_map(|t| t.name.split_once('.').map(|(m, _)| m.to_string())),
+    );
+    out.extend(r.builder_modules);
+    out
+}
+
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
     let mut r = Resolver::default();
@@ -328,6 +366,14 @@ struct Resolver {
     quals: Vec<QualRef>,
     /// Type-name occurrences in annotations, for in-file type find-references/rename.
     type_refs: Vec<TypeRef>,
+    /// The names bound by a `let` inside a block or a computation expression,
+    /// each at its binder span: the locals an "unused binding" warning is about.
+    /// (Parameters, pattern variables and loop targets are binders too, and are
+    /// left out: they are often there for the shape, not for the name.)
+    let_binders: Vec<(String, Span)>,
+    /// Modules a computation expression uses as its builder (`Maybe { … }`),
+    /// which is a use of the module with no `Module.member` to show for it.
+    builder_modules: Vec<String>,
     /// The module's record-bodied constructor names, so a record-shaped tag can be told apart:
     /// a record type's is a type-name occurrence, a constructor's is a reference
     /// to that constructor.
@@ -546,6 +592,7 @@ impl Resolver {
                     // A destructuring target binds each of its names at its
                     // own span, like any other binding position.
                     for (name, span) in target.bound_vars() {
+                        self.let_binders.push((name.to_string(), span));
                         self.bind_in_scope(name.to_string(), span);
                     }
                 }
@@ -617,6 +664,7 @@ impl Resolver {
                     pattern,
                     guard,
                     body,
+                    ..
                 } in arms
                 {
                     self.walk_pattern(pattern); // constructor / record-tag occurrences
@@ -648,7 +696,12 @@ impl Resolver {
                 self.walk_expr(lhs);
                 self.walk_expr(rhs);
             }
-            ExprKind::Ce { items, .. } => self.walk_ce_items(items),
+            ExprKind::Ce { builder, items } => {
+                if let crate::syntax::CeBuilder::User(name) = builder {
+                    self.builder_modules.push(name.clone());
+                }
+                self.walk_ce_items(items)
+            }
             ExprKind::Annot { value, .. } => self.walk_expr(value),
             ExprKind::List { elems } | ExprKind::Tuple { elems } => {
                 for e in elems {
@@ -725,6 +778,7 @@ impl Resolver {
                             self.walk_expr(&binding.value);
                             self.scopes.pop();
                             for (name, span) in let_target_vars(binding) {
+                                self.let_binders.push((name.clone(), span));
                                 self.bind_in_scope(name, span);
                             }
                         }

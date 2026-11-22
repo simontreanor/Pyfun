@@ -232,6 +232,7 @@ impl Session {
             render_errors(&combined, &analysis.diagnostics);
             return;
         }
+        render_warnings(&combined, &analysis, combined.len() - entry.len());
         // A `unit`-typed expression is run bare (its effect only); anything else is
         // wrapped in `print (…)` so its value is shown (and `None`/unit isn't printed).
         let is_unit = expression_is_unit(&analysis);
@@ -270,6 +271,7 @@ impl Session {
             render_errors(&combined, &analysis.diagnostics);
             return;
         }
+        render_warnings(&combined, &analysis, combined.len() - entry.len());
         // Echo the type of each newly-added top-level `let` binding (GHCi-style).
         if let Some(module) = &analysis.module {
             let start = module.items.len().saturating_sub(new_count);
@@ -425,6 +427,18 @@ pub(crate) fn expression_is_unit(analysis: &pyfun::Analysis) -> bool {
         .types
         .iter()
         .any(|t| t.span == span && t.ty == "unit")
+}
+
+/// Render the warnings of the entry that begins at `entry_start`: the ones
+/// about that entry alone. Binding a name again, or importing before use, is
+/// how a session goes, and neither is reported here.
+fn render_warnings(source: &str, analysis: &pyfun::Analysis, entry_start: usize) {
+    for w in pyfun::entry_warnings(analysis, entry_start) {
+        eprintln!(
+            "{}",
+            diagnostics::render(source, Level::Warning, &w.message, w.span)
+        );
+    }
 }
 
 /// Render type errors against the combined source (the offending line is in the
