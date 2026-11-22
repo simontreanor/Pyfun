@@ -155,8 +155,8 @@ const PROGRAMS: &[&str] = &[
     // `then`/`else`). A single-statement block is unwrapped, so only multi-stmt
     // bodies stay blocks; the printer renders them with offside layout.
     "let f n =\n  match n:\n    case 0:\n        let x = 1\n        x\n    case _: 0",
-    "let f c =\n  if c then\n      let x = 1\n      x\n  else 0",
-    "let f c =\n  if c then 1\n  else\n      let y = 2\n      y",
+    "let f c =\n  if c:\n      let x = 1\n      x\n  else 0",
+    "let f c =\n  if c then 1\n  else:\n      let y = 2\n      y",
     "let g = fun x ->\n  let y = x\n  y",
     "let f n =\n  match n:\n    case 0:\n        let a = 1\n        a\n    case _:\n        let b = 2\n        b",
     // Offside rule: consecutive bare statements are separate items.
@@ -1055,6 +1055,82 @@ fn python_words_stay_ordinary_names() {
     ] {
         assert!(parse(source).is_ok(), "{source}: {:?}", parse(source).err());
     }
+
+fn an_if_branch_is_spelled_by_its_shape() {
+    // A branch on its own indented lines opens with `:`, as Python writes it;
+    // a branch on the same line follows `then` (or a bare `else`). The printer
+    // picks per branch, so a chain may mix them.
+    let block = "let sign x =\n  if x > 0:\n    print \"positive\"\n    1\n  elif x < 0:\n    print \"negative\"\n    2\n  else:\n    print \"zero\"\n    0";
+    let module = parse(block).unwrap();
+    let printed = pyfun::ast::print_module(&module);
+    assert_eq!(
+        printed.trim_end(),
+        "let sign x =\n    if (x > 0):\n        (print \"positive\")\n        1\n    elif (x < 0):\n        (print \"negative\")\n        2\n    else:\n        (print \"zero\")\n        0",
+    );
+    assert_eq!(parse(&printed).unwrap(), module, "{printed}");
+
+    let mixed = "let f x =\n  if x > 0:\n    let y = x * 2\n    y + 1\n  else 0";
+    let module = parse(mixed).unwrap();
+    let printed = pyfun::ast::print_module(&module);
+    assert_eq!(
+        printed.trim_end(),
+        "let f x =\n    if (x > 0):\n        let y = (x * 2)\n        (y + 1)\n    else 0",
+    );
+    assert_eq!(parse(&printed).unwrap(), module, "{printed}");
+
+    // A one-expression branch written as a block is the same AST as the inline
+    // form, and prints inline.
+    let lone = "let f x =\n  if x > 0:\n    1\n  else:\n    2";
+    assert_eq!(
+        parse(lone).unwrap(),
+        parse("let f x = if x > 0 then 1 else 2").unwrap()
+    );
+    let printed = pyfun::ast::print_module(&parse(lone).unwrap());
+    assert!(printed.contains("then 1 else 2"), "{printed}");
+}
+
+#[test]
+fn a_crossed_if_branch_names_the_other_opener() {
+    for (source, expected) in [
+        (
+            "let f x =\n  if x > 0 then\n    1\n  else 2",
+            "a branch on its own indented lines opens with `:`, as in Python: \
+             write `if cond:`, not `then`",
+        ),
+        (
+            "let f x =\n  if x > 0:\n    1\n  else\n    2",
+            "a branch on its own indented lines opens with `:`, as in Python: \
+             write `else:`, not `else`",
+        ),
+        (
+            "let f x =\n  if x > 0 then 1\n  elif x < 0 then\n    2\n  else 3",
+            "write `if cond:`, not `then`",
+        ),
+        (
+            "let f x = if x > 0: 1 else 2",
+            "`:` opens a branch on its own indented lines; \
+             a branch on the same line is written `if cond then value`",
+        ),
+        (
+            "let f x =\n  if x > 0 then 1\n  else: 2",
+            "a branch on the same line is written `else value`",
+        ),
+        // Inside brackets the offside rule is off, so there is no block to open.
+        (
+            "let f x = (if x > 0:\n  1\n  else 2)",
+            "a branch on the same line is written `if cond then value`",
+        ),
+        ("let f x = if x > 0 1 else 2", "expected `then` or `:`"),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message().contains(expected),
+            "{source}\n-> {}",
+            err.message()
+        );
+    }
+    // Inside brackets a multi-line `if` keeps `then`, its lines being continuations.
+    assert!(parse("let f x = (if x > 0 then\n  1\n  else\n  2)").is_ok());
 }
 
 #[test]

@@ -3750,7 +3750,7 @@ fn a_shadowing_lambda_parameter_does_not_block_the_loop() {
         "
         let f n =
           if n == 0 then 0
-          else
+          else:
             let doubled = List.map (fun n -> n + 1) [1, 2]
             f (n - 1)
         ",
@@ -4582,10 +4582,10 @@ fn e2e_blocks_in_match_arms_and_if_branches() {
               acc <- acc * 2
               acc
         let absdiff a b =
-          if a > b then
+          if a > b:
               let d = a - b
               d
-          else
+          else:
               let d = b - a
               d
         let r1 = classify 0
@@ -7911,7 +7911,7 @@ fn e2e_a_let_in_an_if_branch_does_not_rebind_the_outer_binding() {
         let f flag =
           let x = 1
           let y =
-            if flag then
+            if flag:
               let x = 10
               x + 1
             else 0
@@ -7976,7 +7976,7 @@ fn e2e_a_nested_function_let_shadowing_an_outer_function_is_renamed() {
         let f flag n =
           let go k = k * 100
           let y =
-            if flag then
+            if flag:
               let go k = if k == 0 then 0 else k + go (k - 1)
               go n
             else 0
@@ -7997,7 +7997,7 @@ fn e2e_a_nested_let_mut_with_assignment_keeps_the_outer_binding() {
         let f flag =
           let total = 1
           let y =
-            if flag then
+            if flag:
               let mut total = 0
               total <- total + 5
               total <- total + 5
@@ -8021,7 +8021,7 @@ fn e2e_a_closure_assigning_a_renamed_nested_mut_declares_the_fresh_name() {
         let f flag =
           let count = 1
           let y =
-            if flag then
+            if flag:
               let mut count = 0
               let bump u = count <- count + u
               bump 4
@@ -8043,7 +8043,7 @@ fn e2e_a_nested_let_shadowing_a_parameter_read_later_is_renamed() {
     let src = "
         let f x flag =
           let y =
-            if flag then
+            if flag:
               let x = 10
               x
             else 0
@@ -8078,7 +8078,7 @@ fn a_nested_let_with_no_occurrence_outside_its_block_is_not_renamed() {
     let src = "
         let f flag =
           let y =
-            if flag then
+            if flag:
               let t = 10
               t + 1
             else 0
@@ -8098,7 +8098,7 @@ fn e2e_a_destructuring_nested_let_renames_each_colliding_name() {
         let f flag =
           let a = 1
           let y =
-            if flag then
+            if flag:
               let (a, b) = (10, 20)
               a + b
             else 0
@@ -8119,7 +8119,7 @@ fn e2e_a_nested_let_fresh_name_bumps_past_a_name_in_use() {
           let x = 1
           let _x = 100
           let y =
-            if flag then
+            if flag:
               let x = 10
               x + 1
             else 0
@@ -8168,12 +8168,12 @@ fn a_let_reused_across_sequential_branches_keeps_its_name() {
     let src = "
         let f a b =
           let x =
-            if a then
+            if a:
               let t = 1
               t + 1
             else 0
           let y =
-            if b then
+            if b:
               let t = 10
               t + 1
             else 0
@@ -8222,7 +8222,7 @@ fn e2e_a_nested_let_reading_the_parameter_it_shadows_is_renamed() {
     let src = "
         let f x flag =
           let y =
-            if flag then
+            if flag:
               let x = x + 1
               x * 2
             else 0
@@ -8628,5 +8628,21 @@ fn e2e_collection_literals_behave_as_map_and_set() {
     assert_eq!(
         out.trim().replace("\r\n", "\n"),
         "(Some(36), 2)\n(3, True, False)\n('go', 1)\n[1, 2, 3]"
+    );
+}
+
+#[test]
+fn e2e_if_with_colon_block_branches() {
+    // The Python-shaped block form, an `elif`, and a chain that mixes a block
+    // branch with a same-line one.
+    let src = "let sign x =\n  if x > 0:\n    print \"positive\"\n    1\n  elif x < 0:\n    -1\n  else:\n    0\n\
+               let mixed x =\n  if x > 0:\n    let y = x * 2\n    y + 1\n  else 0\n\
+               print (sign 5, sign (-2), sign 0)\nprint (mixed 4, mixed (-1))";
+    let program = pyfun::compile(src).unwrap();
+    let Some(python) = python_cmd() else { return };
+    let out = run_python(&python, &program);
+    assert_eq!(
+        out.trim().replace("\r\n", "\n"),
+        "positive\n(1, -1, 0)\n(9, 0)"
     );
 }

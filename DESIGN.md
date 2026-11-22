@@ -1581,7 +1581,7 @@ block structure by a layout rule, not semicolons or braces. At lexing time a lay
 columns (outside any `()`/`{}` brackets, where line breaks are always continuations) emits three
 synthetic tokens: `Indent` opens a block, `Dedent` closes one, `Sep` separates two statements.
 - A block opens after any **tail-position keyword** at bracket depth 0: a `let … =` body, a `match`
-  arm or lambda `->`, an `if`'s `then`/`else`, or a `type … =` body. (An inline body crosses no
+  arm or lambda `->`, an `if`'s `:`/`then`/`else`, or a `type … =` body. (An inline body crosses no
   newline, so the priming lapses and no block opens.) The top level is the outermost (implicit) block.
   For a `type`, this is what lets a sum be laid out one constructor per line (the F#/ML habit) —
   `type T =` then an indented `| A` / `| B` / … — since `|` is a continuation token (below), the arms
@@ -1845,16 +1845,41 @@ two ways to write one thing in an MVP). `->` is retained for lambdas (`fun x -> 
 (`int -> int`), where it does not compete with a Python form. Examples and `examples/hello.pyfun` move to
 the new spelling in the same change.
 
-**`if` is deliberately *not* `:`-framed** (unlike `match`). `if cond then a else b` stays — it is an
-**expression** (Python's `if:`/`elif:`/`else:` is a statement, and Python's value-form is the backwards
-`a if cond else b` ternary; neither is a good fit), it is frequently a one-liner where offside blocks
-would be heavy, and `then` is not a false-friend (Python has no `then`, so nobody is *misled*). Block
-branches already work via the offside opener after `then`/`else` (§3), so nothing is lost. The `:`-framing
-suits multi-clause block constructs (`match`); `if/then/else` suits inline conditionals — a principled
-split, not an inconsistency. The one additive familiarity win taken here is **`elif`**: pure sugar for
-`else if`, parsed by `parse_if_rest` into a nested `If` in the else branch (no new AST node). The
-pretty-printer canonicalizes any else-if chain (however written) to an `elif` chain, so it round-trips;
-`elif` is a keyword and a statement-continuation lead (like `else`), so a chain spans lines cleanly.
+**`if` has two shapes, and each branch is spelled by its own.** A branch on the same line follows
+`then` (or a bare `else`); a branch on its own indented lines follows `:`, exactly as Python writes it:
+
+```
+let abs x = if x < 0 then -x else x
+
+let sign x =
+  if x > 0:
+    print "positive"
+    1
+  elif x < 0:
+    -1
+  else:
+    0
+```
+
+The block form is Python's `if:`/`elif:`/`else:` statement, used as an expression: the block's last
+expression is its value. The one-line form keeps `then` because Python offers nothing better there:
+its conditional expression is the value-first ternary `a if cond else b`, which has no `elif` and
+would make the two shapes read in different orders, and `if cond: a else: b` on one line is a syntax
+error in Python too. `then` is not a false friend (Python has no `then`, so nobody is *misled*).
+
+The opener is chosen per branch, so a chain may mix them (`if c:` + block, then `else 0`), and **there
+is never a second way to write the same branch**: `then` or a bare `else` followed by an indented
+branch is an error naming `if cond:` or `else:`, and a `:` followed by a same-line branch is an error
+naming `then`. Inside brackets the offside rule is off (§7), so there is no block to open and a
+multi-line `if` there keeps `then`, its lines being continuations. The layout rule needed no change:
+`:` at bracket depth 0 was already a block opener for `match`/`case` (§7). The pretty-printer picks
+the opener the same way, from whether the branch needs a block. Before 0.11 a block branch followed
+`then`/`else`; that spelling is the first of the two errors above.
+
+**`elif`** is pure sugar for `else if`, parsed by `parse_if_rest` into a nested `If` in the else
+branch (no new AST node). The pretty-printer canonicalizes any else-if chain (however written) to an
+`elif` chain, so it round-trips; `elif` is a keyword and a statement-continuation lead (like `else`),
+so a chain spans lines cleanly.
 
 **Example (with §8.3 tagged records — construction and pattern now mirror):**
 ```

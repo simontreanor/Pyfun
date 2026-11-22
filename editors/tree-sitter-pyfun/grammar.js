@@ -272,17 +272,23 @@ module.exports = grammar({
     if_expression: $ => seq(
       'if',
       field('condition', $._expression),
-      'then',
+      $._branch_opener,
       field('consequence', $._body),
       repeat(field('alternative', $.elif_clause)),
       'else',
+      optional(':'),
       field('alternative', $._body),
     ),
+
+    // A branch on the same line follows `then`; a branch on its own indented
+    // lines follows `:` (DESIGN.md §7.2). The compiler holds each shape to its
+    // opener; the grammar accepts either so a half-edited file still highlights.
+    _branch_opener: _ => choice('then', ':'),
 
     elif_clause: $ => seq(
       'elif',
       field('condition', $._expression),
-      'then',
+      $._branch_opener,
       field('consequence', $._body),
     ),
 
