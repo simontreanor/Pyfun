@@ -2519,14 +2519,6 @@ fn rejects_pure_binding_that_prints() {
 }
 
 #[test]
-fn rejects_pure_binding_that_mutates() {
-    assert_error_contains(
-        "let pure f x =\n    let mut acc = x\n    acc <- acc + 1\n    acc",
-        "declared `pure` but performs `io`",
-    );
-}
-
-#[test]
 fn io_propagates_through_calls() {
     // `bad` performs no io directly, but calls an impure helper → impure.
     assert_error_contains(
@@ -4900,4 +4892,55 @@ fn collection_literals_type_as_the_collections_they_build() {
     assert_error_contains("let bad = {1, \"two\"}", "expected int, found str");
     // A literal is the collection it builds, not a list.
     assert_error_contains("let bad = List.len {1, 2}", "expected List");
+}
+
+#[test]
+fn a_local_accumulator_leaves_its_function_pure() {
+    // A `let mut` assigned in the body of the function that declares it cannot
+    // be observed from outside: every call gets a fresh one, and nothing changes
+    // it after the call returns. So the accumulator style is pure.
+    assert!(
+        pyfun::check("let pure f x =\n    let mut acc = x\n    acc <- acc + 1\n    acc").is_ok()
+    );
+    // Each function's own local counts, at any nesting depth.
+    assert!(
+        pyfun::check(
+            "let pure h x =\n  let mut n = x\n  let inner y =\n    let mut m = y\n    m <- m * 2\n    m\n  n <- inner n\n  n"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn mutation_that_can_be_observed_is_still_io() {
+    let io = "declared `pure` but performs `io`";
+    // A module-level `let mut` is shared state.
+    assert_error_contains(
+        "let mut total = 0\nlet pure bump x =\n  total <- total + x\n  total",
+        io,
+    );
+    // A closure assigning its enclosing function's local: the mutation happens
+    // in another frame, during some other call.
+    assert_error_contains(
+        "let pure f xs =\n  let mut best = 0\n  let _ = List.map (fun x -> best <- x) xs\n  best",
+        io,
+    );
+    // The closure that mutates carries the effect on its own arrow, so the
+    // function that only builds it stays pure and the one that calls it does not.
+    let msgs = errors(
+        "let counter start =\n  let mut n = start\n  fun step ->\n    n <- n + step\n    n\n\
+         let pure make = counter 0\n\
+         let pure bad = (counter 0) 1",
+    );
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].contains("`bad` is declared `pure` but performs `io`"),
+        "{msgs:?}"
+    );
+    // A computation-expression body is its own frame (an `async` or `seq` body
+    // may run later, or more than once).
+    assert_error_contains(
+        "let pure g x =\n  let mut n = x\n  let r = result {\n    n <- n + 1\n    return n\n  }\n  r",
+        io,
+    );
 }

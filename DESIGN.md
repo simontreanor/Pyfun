@@ -81,7 +81,7 @@ and effects as part of the type system from the MVP.** This is a defining featur
 later add-on, and it shapes inference and lowering — so it must be designed in from the start.
 
 **Implemented (inference-first, zero pollution).** Function arrows (`Ty::Fun`) carry a latent
-[`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, mutation via `<-` —,
+[`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, observable mutation via `<-` —,
 `async`, and `spawn`, which `Task.start` performs and only a `Task.scope` discharges, §8) plus effect
 *variables* for polymorphism. Effects are **inferred and never written in
 ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : 'a ->{io}
@@ -133,6 +133,28 @@ whose arrow meets a closed declared arrow is reported at the argument with both 
 `->{e}` fix (`` `handle` performs {io, async}, but `serve` takes this callback as `Writer -> Async
 unit`, which performs nothing; … `Reader -> Writer ->{e} Async unit` ``, #180), not the inferred set,
 which would accept only callbacks performing exactly that.
+
+**A local accumulator is not an effect.** `x <- e` performs `io` when the state it changes can be
+seen from outside, and a `let mut` assigned in the body of the function that declares it cannot:
+every call gets a fresh one, and nothing can change it once the call has returned. So the
+accumulator style the language offers (§3) leaves its function pure, and `let pure` accepts it:
+
+```
+let pure sum_to n =
+  let mut acc = 0
+  acc <- acc + n
+  acc
+```
+
+The rule is by frame, and every other assignment keeps its `io`. A closure that assigns its
+enclosing function's local runs in a deeper frame, during some other call, so the mutation
+outlives or interleaves with its caller: the closure's own arrow carries `io`, which leaves the
+function that only *builds* it pure and makes the one that *calls* it impure. A computation
+expression's body counts as a frame too (it lowers to a nested `def`, and an `async` or `seq` body
+may run later, or more than once). A module-level `let mut` is shared state wherever it is assigned.
+The checker implements this with a function depth (`Infer::fn_depth`) and the depth at which each
+`let mut` was declared (`Scheme::mut_frame`): an assignment is local exactly when the two are equal
+and non-zero, which is sound because the functions enclosing any program point have distinct depths.
 
 **Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
 written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or

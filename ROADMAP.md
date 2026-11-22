@@ -448,9 +448,10 @@ after the release.
 1. **Warnings** (M). `Level::Warning` exists and nothing emits one. First set: an unreachable `case`
    arm (the usefulness checker already knows), an unused local binding, an unused `import` or
    `extern`, and a top-level `let` that rebinds an earlier name.
-2. **Local mutation stays pure** (M). `let pure f` with a `let mut` accumulator that never leaves the
-   function is rejected as performing `io`. Mask the effect when the `mut` is not captured by a
-   closure, so `let pure` covers the accumulator style.
+2. ~~**Local mutation stays pure**~~ **DONE 2026-11-22** (#196): a `let mut` assigned in the body of the
+   function that declares it performs nothing, so `let pure` covers the accumulator style. A closure
+   or a computation-expression body assigning it, and a module-level `let mut`, keep their `io`
+   (`DESIGN.md` §4).
 3. **Tracebacks in `.pyfun` lines** (M). A runtime error under `pyfun run`, the REPL and the kernel
    names `_pyfun_main.py` in a temp directory. Map frames back to source spans.
 4. **Hints for Python habits** (S). **Mostly DONE 2026-11-22** (#194): `x = 5` and `x += 1`, a `for`

@@ -330,6 +330,11 @@ struct Scheme {
     /// Whether this binding was declared `let mut` (so `<-` may reassign it).
     /// Mutable bindings are monomorphic (never generalized).
     mutable: bool,
+    /// For a `let mut` declared inside a function body, the depth of that
+    /// function ([`Infer::fn_depth`]); `0` for every other binding. An
+    /// assignment made at the same depth is in the declaring function's own
+    /// body, where the mutation cannot be observed from outside (`DESIGN.md` §4).
+    mut_frame: u32,
     ty: Ty,
 }
 
@@ -342,6 +347,7 @@ impl Scheme {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty,
         }
     }
@@ -3258,6 +3264,7 @@ fn build_decls(
                         ord_vars: vec![],
                         eff_vars: vec![],
                         mutable: false,
+                        mut_frame: 0,
                         ty: ctor_ty,
                     };
                     env.insert(variant.name.clone(), scheme.clone());
@@ -3304,6 +3311,7 @@ fn build_decls(
                             ord_vars: vec![],
                             eff_vars: vec![],
                             mutable: false,
+                            mut_frame: 0,
                             ty: ctor_ty,
                         };
                         env.insert(decl.name.clone(), scheme.clone());
@@ -3488,6 +3496,7 @@ fn build_decls(
                         ord_vars: vec![],
                         eff_vars: (0..eff_map.len() as u32).collect(),
                         mutable: false,
+                        mut_frame: 0,
                         ty,
                     },
                 );
@@ -3519,6 +3528,7 @@ fn seed_async_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars,
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, s: Scheme| {
@@ -3568,6 +3578,7 @@ fn seed_task_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars,
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // Task.scope : Async a -> Async a
@@ -4291,6 +4302,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(Box::new(Ty::Var(0)), Box::new(Ty::Unit), Effect::io()),
         },
     );
@@ -4308,6 +4320,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(Box::new(Ty::Str), Box::new(Ty::Str), Effect::io()),
         },
     );
@@ -4319,6 +4332,7 @@ fn seed_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // sign : num 'a => 'a<'u> -> int   (pure) — -1, 0 or 1. The unit erases: the
@@ -4364,6 +4378,7 @@ fn seed_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty: Ty::Fun(
             Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
             Box::new(Ty::Int(Unit::var(PRELUDE_UVAR))),
@@ -4390,6 +4405,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(2))),
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
@@ -4412,6 +4428,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR).pow(3))),
                 Box::new(Ty::Float(Unit::var(PRELUDE_UVAR))),
@@ -4430,6 +4447,7 @@ fn seed_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let pure_fn = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::pure());
@@ -4466,6 +4484,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![e],
             mutable: false,
+            mut_frame: 0,
             ty: pure_fn(
                 // f : a -> b ->{e} c
                 pure_fn(Ty::Var(0), arrow_e(Ty::Var(1), Ty::Var(2))),
@@ -4488,6 +4507,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(0)), Effect::pure()),
         },
     );
@@ -4500,6 +4520,7 @@ fn seed_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: Ty::Fun(Box::new(pair()), Box::new(Ty::Var(1)), Effect::pure()),
         },
     );
@@ -4523,6 +4544,7 @@ fn seed_list_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // List.len : List a -> int   (pure)
@@ -4602,6 +4624,7 @@ fn seed_list_prelude(env: &mut Env) {
             ord_vars: vec![0],
             eff_vars: vec![],
             mutable: false,
+            mut_frame: 0,
             ty: pure_fn(list(Ty::Var(0)), list(Ty::Var(0))),
         },
     );
@@ -4615,6 +4638,7 @@ fn seed_list_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let arrow_e = |a: Ty, b: Ty| Ty::Fun(Box::new(a), Box::new(b), Effect::var(e));
@@ -4699,6 +4723,7 @@ fn seed_list_prelude(env: &mut Env) {
         ord_vars,
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let ord_eff_scheme = |vars: Vec<u32>, ord_vars: Vec<u32>, ty: Ty| Scheme {
@@ -4708,6 +4733,7 @@ fn seed_list_prelude(env: &mut Env) {
         ord_vars,
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
@@ -4717,6 +4743,7 @@ fn seed_list_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // List.head : List a -> Option a
@@ -5055,6 +5082,7 @@ fn seed_set_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, ty: Ty| {
@@ -5082,6 +5110,7 @@ fn seed_set_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let b = || Ty::Var(1);
@@ -5163,6 +5192,7 @@ fn seed_set_prelude(env: &mut Env) {
         ord_vars: vec![0],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     env.insert(
@@ -5202,6 +5232,7 @@ fn seed_string_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, ty: Ty| {
@@ -5278,6 +5309,7 @@ fn seed_format_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // A closed scheme (no quantified vars) — the `str`-only padding ops.
@@ -5288,6 +5320,7 @@ fn seed_format_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // Format.fixed n x -> n decimal places, no grouping (`n` first, curry-friendly).
@@ -5340,6 +5373,7 @@ fn seed_decode_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, s: Scheme| {
@@ -5447,6 +5481,7 @@ fn seed_map_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mv = || map(k(), v());
@@ -5478,6 +5513,7 @@ fn seed_map_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let w = || Ty::Var(2);
@@ -5580,6 +5616,7 @@ fn seed_option_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -5597,6 +5634,7 @@ fn seed_option_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![e],
             mutable: false,
+            mut_frame: 0,
             ty: pure_fn(arrow_e(a(), b()), arrow_e(opt(a()), opt(b()))),
         },
     );
@@ -5610,6 +5648,7 @@ fn seed_option_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![e],
             mutable: false,
+            mut_frame: 0,
             ty: pure_fn(arrow_e(a(), opt(b())), arrow_e(opt(a()), opt(b()))),
         },
     );
@@ -5623,6 +5662,7 @@ fn seed_option_prelude(env: &mut Env) {
             ord_vars: vec![],
             eff_vars: vec![e],
             mutable: false,
+            mut_frame: 0,
             ty: pure_fn(arrow_e(a(), Ty::Bool), arrow_e(opt(a()), opt(a()))),
         },
     );
@@ -5648,6 +5688,7 @@ fn seed_option_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![e],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // Option.map2 : (a ->{e} b ->{e} c) -> Option a -> Option b ->{e} Option c
@@ -5724,6 +5765,7 @@ fn seed_result_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -5738,6 +5780,7 @@ fn seed_result_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![ev],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // Result.map : (a ->{e} m) -> Result a e -> Result m e   (maps the Ok value)
@@ -5862,6 +5905,7 @@ fn seed_seq_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let ev = 0u32;
@@ -5873,6 +5917,7 @@ fn seed_seq_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![ev],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let mut put = |member: &str, sch: Scheme| {
@@ -6060,6 +6105,7 @@ fn seed_seq_prelude(env: &mut Env) {
         ord_vars,
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     let num_eff_scheme = |vars: Vec<u32>, num_vars: Vec<u32>, ty: Ty| Scheme {
@@ -6069,6 +6115,7 @@ fn seed_seq_prelude(env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![ev],
         mutable: false,
+        mut_frame: 0,
         ty,
     };
     // Seq.empty : Seq a
@@ -6164,6 +6211,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty: Ty::Fun(
             Box::new(Ty::Var(0)),
             Box::new(result_ty.clone()),
@@ -6177,6 +6225,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty: Ty::Fun(Box::new(Ty::Var(1)), Box::new(result_ty), Effect::pure()),
     };
     env.insert("Ok".to_string(), ok.clone());
@@ -6205,6 +6254,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty: Ty::Fun(
             Box::new(Ty::Var(0)),
             Box::new(option_ty.clone()),
@@ -6218,6 +6268,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         ord_vars: vec![],
         eff_vars: vec![],
         mutable: false,
+        mut_frame: 0,
         ty: option_ty,
     };
     env.insert("Some".to_string(), some.clone());
@@ -6488,6 +6539,11 @@ struct Infer {
     /// the outermost one: an inner binding cannot resolve them (that is the whole
     /// point) and must not generalize over them either.
     binding_depth: usize,
+    /// How many function bodies deep inference currently is: `0` at a module's
+    /// top level, one more inside each function, lambda, recognizer or
+    /// computation-expression body. It is what tells an assignment made in the
+    /// function that declared the `let mut` from one made in a closure over it.
+    fn_depth: u32,
     /// When set, [`infer_expr`](Infer::infer_expr) records the inferred type of
     /// every expression node into [`recorded`](Infer::recorded) for editor hover.
     record_types: bool,
@@ -6951,7 +7007,7 @@ impl Infer {
                 param_tys.push(pty.clone());
                 self.bind_pattern(&param.pattern, &pty, param.span.span(), &mut body_env)?;
             }
-            self.infer_expr(&binding.value, &body_env)
+            self.in_function(|this| this.infer_expr(&binding.value, &body_env))
                 .and_then(|body_ty| {
                     // The innermost arrow (applied last) carries the body's effect;
                     // the outer, currying arrows are pure (they just build closures).
@@ -7023,6 +7079,7 @@ impl Infer {
                     }
                     let mut scheme = Scheme::mono(self.apply(&ty));
                     scheme.mutable = true;
+                    scheme.mut_frame = self.fn_depth;
                     scheme
                 } else {
                     self.generalize(env, &ty)
@@ -7092,7 +7149,7 @@ impl Infer {
                 // A parameter pattern that does not fit its type fails this member,
                 // like any other error in its body.
                 Some(e) => Err(e),
-                None => self.infer_expr(&b.value, &fn_env),
+                None => self.in_function(|this| this.infer_expr(&b.value, &fn_env)),
             }
             .and_then(|body_ty| {
                 let mut ty = body_ty;
@@ -7217,7 +7274,7 @@ impl Infer {
             param_tys.push(pty.clone());
             self.bind_pattern(&param.pattern, &pty, param.span.span(), &mut fn_env)?;
         }
-        let body_res = self.infer_expr(&decl.value, &fn_env);
+        let body_res = self.in_function(|this| this.infer_expr(&decl.value, &fn_env));
         let body_eff = std::mem::replace(&mut self.cur_eff, outer);
         let body_ty = body_res?;
         let mut ty = body_ty.clone();
@@ -7750,7 +7807,7 @@ impl Infer {
                 // Defining a lambda is pure: capture the body's effect as the
                 // innermost arrow's latent effect rather than performing it here.
                 let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
-                let body_ty = self.infer_expr(body, &body_env)?;
+                let body_ty = self.in_function(|this| this.infer_expr(body, &body_env))?;
                 let mut ty = body_ty;
                 let mut eff = self.cur_eff.clone();
                 for p in param_tys.into_iter().rev() {
@@ -7917,9 +7974,28 @@ impl Infer {
         let target_ty = self.instantiate(&scheme);
         let vt = self.infer_expr(value, env)?;
         self.unify(&target_ty, &vt, value.span())?;
-        // Reassignment is an `io` effect (mutation of observable state).
-        self.perform(&Effect::io());
+        // Reassignment is an `io` effect when the state it changes can be seen
+        // from outside. A `let mut` assigned in the body of the function that
+        // declares it cannot: every call gets a fresh one, and nothing can change
+        // it once the call has returned, so an accumulator leaves its function
+        // pure. Assigning it from a closure (or a computation-expression body)
+        // is a deeper frame and stays `io`, since that mutation outlives or
+        // interleaves with its caller; so does a module-level `let mut`
+        // (`DESIGN.md` §4).
+        let local = self.fn_depth > 0 && scheme.mut_frame == self.fn_depth;
+        if !local {
+            self.perform(&Effect::io());
+        }
         Ok(Ty::Unit)
+    }
+
+    /// Run `body` as the inside of a function: one frame deeper for the local
+    /// mutation rule in [`Infer::infer_assign`], restored however `body` ends.
+    fn in_function<T>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
+        self.fn_depth += 1;
+        let result = body(self);
+        self.fn_depth -= 1;
+        result
     }
 
     /// The ambiguity error, naming both ways out. `owners` is the tier that
@@ -8556,6 +8632,19 @@ impl Infer {
     }
 
     fn infer_ce(
+        &mut self,
+        builder: &CeBuilder,
+        items: &[CeItem],
+        span: Span,
+        env: &Env,
+    ) -> Result<Ty, TypeError> {
+        // A built-in block's body is its own frame (it lowers to a nested `def`,
+        // and an `async`/`seq` body may run later, or more than once), so it
+        // counts as a function body for the assignment rule below.
+        self.in_function(|this| this.infer_ce_body(builder, items, span, env))
+    }
+
+    fn infer_ce_body(
         &mut self,
         builder: &CeBuilder,
         items: &[CeItem],
@@ -10064,6 +10153,7 @@ impl Infer {
             ord_vars: rename(&scheme.ord_vars, &tmap),
             eff_vars: rename(&scheme.eff_vars, &emap),
             mutable: scheme.mutable,
+            mut_frame: scheme.mut_frame,
             ty,
         }
     }
@@ -10129,6 +10219,7 @@ impl Infer {
             ord_vars,
             eff_vars,
             mutable: false,
+            mut_frame: 0,
             ty,
         }
     }
