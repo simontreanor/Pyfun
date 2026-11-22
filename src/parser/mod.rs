@@ -1421,7 +1421,18 @@ impl Parser {
             self.bump();
             Box::new(self.parse_if_rest(elif_start)?)
         } else {
-            self.expect(&Tok::Else, "`else` or `elif`")?;
+            if !matches!(self.peek(), Tok::Else) {
+                // Python's `if` with no `else`. Here an `if` is an expression, so
+                // it has a value on both paths; the branch that does nothing is
+                // written out as `()`.
+                return Err(ParseError {
+                    message: "an `if` is an expression, so it needs an `else` (or `elif`) \
+                              branch: write `else ()` for one that does nothing"
+                        .to_string(),
+                    span: self.span(),
+                });
+            }
+            self.bump();
             Box::new(self.parse_if_branch(false)?)
         };
         Ok(self.mk(start, ExprKind::If { cond, then, else_ }))

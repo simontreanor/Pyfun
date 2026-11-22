@@ -1055,7 +1055,9 @@ fn python_words_stay_ordinary_names() {
     ] {
         assert!(parse(source).is_ok(), "{source}: {:?}", parse(source).err());
     }
+}
 
+#[test]
 fn an_if_branch_is_spelled_by_its_shape() {
     // A branch on its own indented lines opens with `:`, as Python writes it;
     // a branch on the same line follows `then` (or a bare `else`). The printer
@@ -1189,4 +1191,22 @@ fn a_malformed_collection_literal_says_which_forms_exist() {
             err.message()
         );
     }
+}
+
+#[test]
+fn an_if_without_an_else_says_what_to_write() {
+    // Python's statement `if` may stop after one branch; an expression cannot.
+    for source in [
+        "let f x =\n  if x > 0:\n    print \"positive\"\nprint 1",
+        "let g x = if x > 0 then print \"positive\"",
+    ] {
+        let err = parse(source).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "an `if` is an expression, so it needs an `else` (or `elif`) branch: \
+             write `else ()` for one that does nothing",
+            "{source}"
+        );
+    }
+    assert!(parse("let g x = if x > 0 then print \"positive\" else ()").is_ok());
 }
