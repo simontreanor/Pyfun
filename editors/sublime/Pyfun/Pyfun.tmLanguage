@@ -73,7 +73,7 @@
 		<key>constants</key>
 		<dict>
 			<key>match</key>
-			<string>\b(true|false)\b</string>
+			<string>\b(True|False)\b</string>
 			<key>name</key>
 			<string>constant.language.pyfun</string>
 		</dict>

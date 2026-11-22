@@ -160,7 +160,7 @@ let dedupLegs legs =
         let k = f"{leg.depMin}|{leg.dest}"
         match Map.tryFind k seen:
           case Some _: (seen, out)
-          case None: (Map.add k true seen, List.concat out [leg])
+          case None: (Map.add k True seen, List.concat out [leg])
   match List.fold step (Map.empty, []) legs:
     case (_, out): out
 

@@ -68,7 +68,7 @@ fn rejects_unit_in_arithmetic() {
 #[test]
 fn let_generalization_makes_bindings_polymorphic() {
     // `id` must be usable at two different types in the same program.
-    assert!(pyfun::check("let id x = x\nlet a = id 1\nlet b = id true").is_ok());
+    assert!(pyfun::check("let id x = x\nlet a = id 1\nlet b = id True").is_ok());
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn recursive_function_has_the_expected_type() {
     // The recursive call constrains the argument, so `fact` is `int -> int`; calling
     // it on a bool is a type error.
     assert_error_contains(
-        "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\nlet bad = fact true",
+        "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\nlet bad = fact True",
         "expected int, found bool",
     );
 }
@@ -110,7 +110,7 @@ fn recursion_does_not_break_let_generalization() {
     assert!(
         pyfun::check(
             "let fact n =\n  if n == 0 then 1\n  else n * fact (n - 1)\n\
-             let id x = x\nlet a = id 1\nlet b = id true\nlet c = fact 4"
+             let id x = x\nlet a = id 1\nlet b = id True\nlet c = fact 4"
         )
         .is_ok()
     );
@@ -122,8 +122,8 @@ fn accepts_mutual_recursion() {
     // order — `isEven` sees the later `isOdd` and vice versa.
     assert!(
         pyfun::check(
-            "let isEven n = if n == 0 then true else isOdd (n - 1)\n\
-             let isOdd n = if n == 0 then false else isEven (n - 1)"
+            "let isEven n = if n == 0 then True else isOdd (n - 1)\n\
+             let isOdd n = if n == 0 then False else isEven (n - 1)"
         )
         .is_ok()
     );
@@ -149,7 +149,7 @@ fn mutual_recursion_preserves_polymorphism() {
             "let id x = x\n\
              let ping n = if n == 0 then id 0 else pong (n - 1)\n\
              let pong n = if n == 0 then id 1 else ping (n - 1)\n\
-             let flag = id true"
+             let flag = id True"
         )
         .is_ok()
     );
@@ -264,7 +264,7 @@ fn exponentiation_is_float_only_and_dimensionless() {
     // Units can't ride through a runtime exponent.
     assert_error_contains("measure m\nlet r = 2.0<m> ** 2.0", "float<m>");
     // Non-numeric operands are rejected.
-    assert_error_contains("let r = true ** 2.0", "float");
+    assert_error_contains("let r = True ** 2.0", "float");
     // The result is a float, so an int context rejects it.
     assert_error_contains("let r = List.get (2 ** 3) [1, 2]", "float");
 }
@@ -437,7 +437,7 @@ fn accepts_list_completeness_ops() {
 #[test]
 fn rejects_ill_typed_list_ops() {
     // `sort` carries the `comparison` constraint: bools aren't orderable.
-    assert_error_contains("let r = List.sort [true, false]", "comparison");
+    assert_error_contains("let r = List.sort [True, False]", "comparison");
     // `get`'s index is an int.
     assert_error_contains("let r = List.get \"x\" [1, 2]", "int");
     // `contains` element must match the list's element type.
@@ -517,9 +517,9 @@ fn accepts_chained_comparisons() {
 #[test]
 fn rejects_ill_typed_chained_comparisons() {
     // A chain across types fails to unify.
-    assert_error_contains("let x = 1 < 2 < true", "bool");
+    assert_error_contains("let x = 1 < 2 < True", "bool");
     // An ordering link needs the `comparison` constraint (bool isn't orderable).
-    assert_error_contains("let x = true < false < true", "comparison");
+    assert_error_contains("let x = True < False < True", "comparison");
 }
 
 #[test]
@@ -540,16 +540,16 @@ fn accepts_unary_minus() {
 
 #[test]
 fn rejects_negation_of_non_numeric() {
-    assert_error_contains("let x = -true", "int");
+    assert_error_contains("let x = -True", "int");
     assert_error_contains("let x = -\"hi\"", "int");
 }
 
 #[test]
 fn operator_section_carries_the_operators_constraint() {
     // `(+)` inherits the `num` constraint, so applying it to bools is rejected.
-    assert_error_contains("let r = (+) true false", "int");
+    assert_error_contains("let r = (+) True False", "int");
     // `(<)` inherits `comparison`: bool is not orderable.
-    assert_error_contains("let r = (<) true false", "comparison");
+    assert_error_contains("let r = (<) True False", "comparison");
 }
 
 #[test]
@@ -687,7 +687,7 @@ fn rejects_opaque_type_clashing_with_an_existing_type() {
 #[test]
 fn rejects_argument_type_mismatch() {
     assert_error_contains(
-        "let add a b = a + b\nlet r = add 1 true",
+        "let add a b = a + b\nlet r = add 1 True",
         "expected int, found bool",
     );
 }
@@ -700,7 +700,7 @@ fn rejects_non_bool_condition() {
 #[test]
 fn rejects_branch_type_mismatch() {
     assert_error_contains(
-        "let r = if true then 1 else \"x\"",
+        "let r = if True then 1 else \"x\"",
         "expected int, found string",
     );
 }
@@ -751,8 +751,8 @@ fn accepts_deep_exhaustive_nested_adt() {
     // Covering every nested combination is exhaustive without a wildcard.
     let src = "let f o =\n\
                \x20 match o:\n\
-               \x20 \x20 case Some true: 1\n\
-               \x20 \x20 case Some false: 2\n\
+               \x20 \x20 case Some True: 1\n\
+               \x20 \x20 case Some False: 2\n\
                \x20 \x20 case None: 3";
     assert!(pyfun::check(src).is_ok());
 }
@@ -770,13 +770,13 @@ fn accepts_deep_exhaustive_record_with_nested_ctors() {
 
 #[test]
 fn reports_nested_witness_for_missing_inner_constructor() {
-    // Missing `Some false` — the witness names the precise nested hole.
+    // Missing `Some False` — the witness names the precise nested hole.
     assert_error_contains(
         "let f o =\n\
          \x20 match o:\n\
-         \x20 \x20 case Some true: 1\n\
+         \x20 \x20 case Some True: 1\n\
          \x20 \x20 case None: 2",
-        "`Some false` is not matched",
+        "`Some False` is not matched",
     );
 }
 
@@ -835,7 +835,7 @@ fn list_pattern_element_type_is_enforced() {
          \x20 match xs:\n\
          \x20 \x20 case [1, *r]: r\n\
          \x20 \x20 case _: xs\n\
-         let bad = f [true, false]",
+         let bad = f [True, False]",
         "int",
     );
 }
@@ -942,7 +942,7 @@ fn suffix_element_type_is_enforced() {
          \x20 match xs:\n\
          \x20 \x20 case [*r, 1]: 1\n\
          \x20 \x20 case _: 0\n\
-         let bad = f [true, false]",
+         let bad = f [True, False]",
         "int",
     );
 }
@@ -964,10 +964,10 @@ fn reports_record_witness_for_missing_field_combination() {
         "type P = { x: bool, y: bool }\n\
          let f p =\n\
          \x20 match p:\n\
-         \x20 \x20 case P { x = true, y = true }: 1\n\
-         \x20 \x20 case P { x = true, y = false }: 2\n\
-         \x20 \x20 case P { x = false, y = true }: 3",
-        "`P { x = false, y = false }` is not matched",
+         \x20 \x20 case P { x = True, y = True }: 1\n\
+         \x20 \x20 case P { x = True, y = False }: 2\n\
+         \x20 \x20 case P { x = False, y = True }: 3",
+        "`P { x = False, y = False }` is not matched",
     );
 }
 
@@ -1044,7 +1044,7 @@ fn for_items_type_in_every_builder() {
                let pairs = seq { for (a, b) in [(1, 2)]: yield a + b }\n\
                let lazy = seq { for x in Seq.ofList [1]: yield x }\n\
                let check x = if x > 0 then Ok x else Error \"neg\"\n\
-               let all xs = result {\n  for x in xs:\n    let! _ = check x\n  return true\n}\n\
+               let all xs = result {\n  for x in xs:\n    let! _ = check x\n  return True\n}\n\
                let main = async {\n  for n in [1, 2]:\n    do! Async.sleep 0.001\n  return ()\n}\n\
                module B =\n  let yield_ x = [x]\n  let for_ xs f = List.collect f xs\n  let combine a b = List.concat a b\n  let delay f = f ()\n\
                let built = B { for x in [1, 2]: yield x }";
@@ -1115,9 +1115,9 @@ fn user_ce_threads_types_through_bind() {
          \x20 \x20 let! x = a\n\
          \x20 \x20 return x + 1\n\
          \x20 }}\n\
-         let bad = safe (Some true) None"
+         let bad = safe (Some True) None"
     );
-    // `x + 1` forces `x : int`, so `Some true` is a type error.
+    // `x + 1` forces `x : int`, so `Some True` is a type error.
     assert_error_contains(&src, "int");
 }
 
@@ -1285,7 +1285,7 @@ fn dimensionless_units_unify_with_plain_ints() {
 #[test]
 fn accepts_print_of_any_type() {
     // `print : 'a -> unit` is parametrically polymorphic.
-    assert!(pyfun::check("let a = print 1\nlet b = print true\nlet c = print \"x\"").is_ok());
+    assert!(pyfun::check("let a = print 1\nlet b = print True\nlet c = print \"x\"").is_ok());
 }
 
 #[test]
@@ -1308,7 +1308,7 @@ fn rejects_min_across_different_units() {
 #[test]
 fn user_definition_shadows_a_prelude_name() {
     // A user `min` overrides the builtin, here at a non-numeric type.
-    assert!(pyfun::check("let min a b = a\nlet r = min true false").is_ok());
+    assert!(pyfun::check("let min a b = a\nlet r = min True False").is_ok());
 }
 
 // ---------- comparison & equality (DESIGN §7.1) ----------
@@ -1316,7 +1316,7 @@ fn user_definition_shadows_a_prelude_name() {
 #[test]
 fn accepts_comparison_and_equality() {
     assert!(pyfun::check("let a = 1 < 2\nlet b = 2.5 >= 1.0\nlet c = \"x\" < \"y\"").is_ok());
-    assert!(pyfun::check("let a = 1 == 1\nlet b = true != false\nlet c = \"x\" == \"y\"").is_ok());
+    assert!(pyfun::check("let a = 1 == 1\nlet b = True != False\nlet c = \"x\" == \"y\"").is_ok());
 }
 
 #[test]
@@ -1335,7 +1335,7 @@ fn generic_comparison_function_is_constrained() {
 #[test]
 fn rejects_comparison_of_unorderable_type() {
     // Booleans and functions are not comparable with `<`.
-    assert_error_contains("let r = true < false", "does not support comparison");
+    assert_error_contains("let r = True < False", "does not support comparison");
     // `id` is concretely a function here, so comparing it is rejected.
     assert_error_contains(
         "let id x = x\nlet bad = id < id",
@@ -1506,7 +1506,7 @@ fn deferred_ordering_constraint_flows_to_a_concrete_adt() {
 #[test]
 fn accepts_boolean_operators() {
     assert!(
-        pyfun::check("let a = true and false\nlet b = true or false\nlet c = not true").is_ok()
+        pyfun::check("let a = True and False\nlet b = True or False\nlet c = not True").is_ok()
     );
     // Mixed with comparisons, producing a bool condition.
     assert!(pyfun::check("let between lo hi x = lo <= x and x <= hi").is_ok());
@@ -1514,8 +1514,8 @@ fn accepts_boolean_operators() {
 
 #[test]
 fn rejects_non_bool_logical_operands() {
-    assert_error_contains("let r = 1 and true", "expected bool, found int");
-    assert_error_contains("let r = true or 2", "expected bool, found int");
+    assert_error_contains("let r = 1 and True", "expected bool, found int");
+    assert_error_contains("let r = True or 2", "expected bool, found int");
     assert_error_contains("let r = not 5", "expected bool, found int");
 }
 
@@ -1640,7 +1640,7 @@ fn rejects_unknown_field_access_on_an_unknown_base() {
 #[test]
 fn rejects_wrong_record_field_type() {
     assert_error_contains(
-        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = true }",
+        "type Point = { x: int, y: int }\nlet p = Point { x = 1, y = True }",
         "expected int, found bool",
     );
 }
@@ -1679,7 +1679,7 @@ fn a_shared_field_resolves_when_the_base_type_is_known() {
              type Cell = { letter: string, blank: bool }\n\
              type Board = { top: Cell }\n\
              let p = Placed { letter = \"a\", row = 1 }\n\
-             let c = Cell { letter = \"b\", blank = false }\n\
+             let c = Cell { letter = \"b\", blank = False }\n\
              let b = Board { top = c }\n\
              let pl = p.letter\n\
              let cl = c.letter\n\
@@ -2421,12 +2421,12 @@ fn rejects_field_matched_twice_in_pattern() {
 
 #[test]
 fn rejects_record_pattern_field_type_mismatch() {
-    // `x : int`, so a `true` sub-pattern is a type error.
+    // `x : int`, so a `True` sub-pattern is a type error.
     assert_error_contains(
         "type Point = { x: int, y: int }\n\
          let f p =\n\
          \x20 match p:\n\
-         \x20 \x20 case Point { x = true }: 1\n\
+         \x20 \x20 case Point { x = True }: 1\n\
          \x20 \x20 case _: 0",
         "int",
     );
@@ -2468,7 +2468,7 @@ fn accepts_top_level_mut_and_reassignment() {
 #[test]
 fn local_bindings_stay_in_scope_polymorphically() {
     // A local `let` is generalized like a top-level one (usable at two types).
-    let src = "let f u =\n    let id a = a\n    let p = id 1\n    let q = id true\n    p";
+    let src = "let f u =\n    let id a = a\n    let p = id 1\n    let q = id True\n    p";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -2487,7 +2487,7 @@ fn rejects_assigning_unbound_binding() {
 
 #[test]
 fn rejects_reassignment_with_wrong_type() {
-    assert_error_contains("let mut x = 0\nx <- true", "expected int, found bool");
+    assert_error_contains("let mut x = 0\nx <- True", "expected int, found bool");
 }
 
 #[test]
@@ -3100,14 +3100,14 @@ fn empty_list_is_polymorphic() {
 
 #[test]
 fn rejects_heterogeneous_list() {
-    assert_error_contains("let bad = [1, true]", "expected int, found bool");
+    assert_error_contains("let bad = [1, True]", "expected int, found bool");
 }
 
 // ---------- tuples ----------
 
 #[test]
 fn accepts_tuple_construct_and_destructure() {
-    let src = "let pair = (1, true)\n\
+    let src = "let pair = (1, True)\n\
                let swap p =\n\
                \x20 match p:\n\
                \x20 \x20 case (a, b): (b, a)\n\
@@ -3180,7 +3180,7 @@ let n = const42 \"anything\""
     assert!(
         pyfun::check(
             "let fst2 a _ = a
-let n = fst2 1 true"
+let n = fst2 1 True"
         )
         .is_ok()
     );
@@ -3248,8 +3248,8 @@ fn tuple_match_is_exhaustive_without_wildcard() {
 fn rejects_non_exhaustive_tuple_match_with_witness() {
     // Deep exhaustiveness recurses into element columns and reports a witness.
     assert_error_contains(
-        "let f p =\n  match p:\n    case (true, b): b",
-        "`(false, _)` is not matched",
+        "let f p =\n  match p:\n    case (True, b): b",
+        "`(False, _)` is not matched",
     );
 }
 
@@ -3597,7 +3597,7 @@ fn empty_collections_are_polymorphic() {
         pyfun::check(
             "let a = Set.len (Set.add 1 Set.empty)\n\
              let b = Set.len (Set.add \"x\" Set.empty)\n\
-             let c = Map.len (Map.add 1 true Map.empty)"
+             let c = Map.len (Map.add 1 True Map.empty)"
         )
         .is_ok()
     );
@@ -3714,7 +3714,7 @@ fn module_members_are_not_visible_unqualified_outside() {
 fn qualified_member_type_is_enforced() {
     // `M.inc : int -> int`, so applying it to a bool is a type error.
     assert_error_contains(
-        "module M =\n  let inc n = n + 1\nlet bad = M.inc true",
+        "module M =\n  let inc n = n + 1\nlet bad = M.inc True",
         "expected int, found bool",
     );
 }
@@ -3758,7 +3758,7 @@ fn accepts_extern_with_concrete_type() {
 #[test]
 fn extern_type_is_generalized_over_its_variables() {
     // `show : a -> string` must be usable at two different argument types.
-    let src = "extern show: a -> string = str\nlet a = show 1\nlet b = show true";
+    let src = "extern show: a -> string = str\nlet a = show 1\nlet b = show True";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3844,7 +3844,7 @@ fn combinators_are_fully_type_polymorphic() {
     // unit; flip swaps the first two arguments of a binary function.
     assert!(
         pyfun::check(
-            "let a = id 1\nlet b = id true\nlet c = const 1 \"x\"\n\
+            "let a = id 1\nlet b = id True\nlet c = const 1 \"x\"\n\
              let d = ignore [1, 2]\nlet sub x y = x - y\nlet e = flip sub 3 10",
         )
         .is_ok()
@@ -3853,8 +3853,8 @@ fn combinators_are_fully_type_polymorphic() {
 
 #[test]
 fn const_returns_the_first_argument_type() {
-    // `const true 5 : bool`, so adding it to an int is a type error.
-    assert_error_contains("let bad = (const true 5) + 1", "bool");
+    // `const True 5 : bool`, so adding it to an int is a type error.
+    assert_error_contains("let bad = (const True 5) + 1", "bool");
 }
 
 #[test]
@@ -4092,14 +4092,14 @@ fn multiply_on_strings_hints_at_string_repeat() {
 #[test]
 fn a_plain_numeric_mismatch_keeps_its_message() {
     // Non-string numeric mismatches must not gain string operator hints.
-    let add_msgs = errors("let bad = 1 + true");
+    let add_msgs = errors("let bad = 1 + True");
     assert!(
         add_msgs
             .iter()
             .all(|m| !m.contains("String.concat") && !m.contains("List.concat")),
         "unexpected concat hint: {add_msgs:?}"
     );
-    let mul_msgs = errors("let bad = 1 * true");
+    let mul_msgs = errors("let bad = 1 * True");
     assert!(
         mul_msgs.iter().all(|m| !m.contains("String.repeat")),
         "unexpected repeat hint: {mul_msgs:?}"
@@ -4503,7 +4503,7 @@ fn total_active_pattern_over_an_adt_scrutinee_is_exhaustive() {
 #[test]
 fn compile_is_gated_on_type_checking() {
     // An ill-typed program must not produce Python.
-    assert!(pyfun::compile("let add a b = a + b\nlet r = add 1 true").is_err());
+    assert!(pyfun::compile("let add a b = a + b\nlet r = add 1 True").is_err());
     // A well-typed one still compiles.
     assert!(pyfun::compile("let add a b = a + b\nlet r = add 1 2").is_ok());
 }
@@ -4645,5 +4645,31 @@ fn uppercase_option_names_the_lowercase_builder() {
     assert_error_contains(
         "let f o = Option { let! x = o  return x }",
         "the built-in one is spelled `option`",
+    );
+}
+
+#[test]
+fn a_lowercase_boolean_is_one_diagnostic_and_the_rest_still_types() {
+    // The editor path: the old spelling is reported once, with the fix, and the
+    // token is still the boolean, so hover types the bindings around it.
+    let analysis = pyfun::analyze("let ok = true\nlet both = ok and False");
+    let messages: Vec<&str> = analysis
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(messages, ["Pyfun spells this `True`, as Python does"]);
+    assert!(!analysis.parse_ok);
+    assert_eq!(analysis.module.as_ref().map(|m| m.items.len()), Some(2));
+    assert!(
+        analysis.types.iter().any(|t| t.ty == "bool"),
+        "{:?}",
+        analysis.types
+    );
+    // The compiler path refuses the program outright.
+    assert_error_contains("let ok = true", "Pyfun spells this `True`, as Python does");
+    assert_error_contains(
+        "let no = false",
+        "Pyfun spells this `False`, as Python does",
     );
 }

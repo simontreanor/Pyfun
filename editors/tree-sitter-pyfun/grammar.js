@@ -686,7 +686,7 @@ module.exports = grammar({
       '>',
     ),
 
-    boolean: _ => choice('true', 'false'),
+    boolean: _ => choice('True', 'False'),
 
     integer: _ => token(choice(
       /0[xX][0-9a-fA-F][0-9a-fA-F_]*/,

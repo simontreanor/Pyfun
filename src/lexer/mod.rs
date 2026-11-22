@@ -806,6 +806,18 @@ impl<'a> Lexer<'a> {
             Tok::Underscore
         } else if let Some(kw) = Tok::keyword(text) {
             kw
+        } else if let Some((kw, spelling)) = lowercase_bool(text) {
+            // The pre-0.11 spelling. It stays reserved, so an old program fails
+            // here rather than binding a variable called `true` (which, in a
+            // `case true:` arm, would silently match everything). The token is
+            // still the boolean, so the editor's recovering lex reports this once
+            // and carries on with the rest of the file.
+            let error = self.err(
+                start,
+                &format!("Pyfun spells this `{spelling}`, as Python does"),
+            );
+            self.errors.push(error);
+            kw
         } else {
             Tok::Ident(text.to_string())
         };
@@ -923,6 +935,16 @@ impl<'a> Lexer<'a> {
             message: message.to_string(),
             span: Span::new(start, self.pos),
         }
+    }
+}
+
+/// The lowercase boolean spellings Pyfun used before 0.11, each paired with the
+/// token it meant and the spelling that replaced it.
+fn lowercase_bool(text: &str) -> Option<(Tok, &'static str)> {
+    match text {
+        "true" => Some((Tok::True, "True")),
+        "false" => Some((Tok::False, "False")),
+        _ => None,
     }
 }
 
@@ -1680,6 +1702,36 @@ mod tests {
         // A non-ASCII bad character is skipped as a single scalar, not per-byte.
         let (_, errors) = lex_recover("let x = §");
         assert_eq!(errors.len(), 1, "errors: {errors:?}");
+    }
+
+    #[test]
+    fn booleans_are_capitalized_like_every_other_constructor() {
+        let toks: Vec<Tok> = lex("True False")
+            .unwrap()
+            .into_iter()
+            .map(|t| t.tok)
+            .collect();
+        assert_eq!(toks, vec![Tok::True, Tok::False, Tok::Eof]);
+    }
+
+    #[test]
+    fn a_lowercase_boolean_is_an_error_naming_the_capitalized_spelling() {
+        // The strict lex fails, with the fix in the message.
+        let err = lex("let ok = true").unwrap_err();
+        assert_eq!(err.message, "Pyfun spells this `True`, as Python does");
+        assert_eq!((err.span.start, err.span.end), (9, 13));
+        assert_eq!(
+            lex("let ok = false").unwrap_err().message,
+            "Pyfun spells this `False`, as Python does"
+        );
+        // The recovering lex reports it once and still yields the boolean, so the
+        // editor checks the rest of the file instead of cascading.
+        let (tokens, errors) = lex_recover("let ok = true\nlet n = 1");
+        assert_eq!(errors.len(), 1, "errors: {errors:?}");
+        assert!(tokens.iter().any(|t| t.tok == Tok::True));
+        // A longer name that merely starts the same way is an ordinary identifier.
+        let toks: Vec<Tok> = lex("trueish").unwrap().into_iter().map(|t| t.tok).collect();
+        assert_eq!(toks, vec![Tok::Ident("trueish".to_string()), Tok::Eof]);
     }
 
     #[test]

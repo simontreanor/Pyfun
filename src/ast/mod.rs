@@ -217,7 +217,7 @@ fn print_extern_arg(arg: &ExternArg) -> String {
         ExternArg::Str(s) => print_string(s),
         ExternArg::Int(n) => n.to_string(),
         ExternArg::Float(f) => format!("{f:?}"),
-        ExternArg::Bool(b) => b.to_string(),
+        ExternArg::Bool(b) => print_bool(*b).to_string(),
         ExternArg::Slot => "...".to_string(),
     }
 }
@@ -405,7 +405,7 @@ pub fn print_expr(expr: &Expr) -> String {
             Some(n) => format!("?{n}"),
             None => "?".to_string(),
         },
-        ExprKind::Bool(b) => b.to_string(),
+        ExprKind::Bool(b) => print_bool(*b).to_string(),
         ExprKind::Unit => "()".to_string(),
         ExprKind::Var(name) => name.clone(),
 
@@ -622,7 +622,7 @@ pub fn print_pattern(pattern: &Pattern) -> String {
         Pattern::Var { name, .. } => name.clone(),
         Pattern::Int(n) => n.to_string(),
         Pattern::Str(s) => print_string(s),
-        Pattern::Bool(b) => b.to_string(),
+        Pattern::Bool(b) => print_bool(*b).to_string(),
         Pattern::Ctor { name, args, .. } if args.is_empty() => name.clone(),
         Pattern::Ctor { name, args, .. } => {
             let args: Vec<String> = args.iter().map(print_pattern).collect();
@@ -670,6 +670,12 @@ pub fn print_pattern(pattern: &Pattern) -> String {
             format!("({} as {name})", print_pattern(pattern))
         }
     }
+}
+
+/// A boolean literal as Pyfun spells it: capitalized, the way Python does and
+/// the way every other constructor is.
+pub fn print_bool(b: bool) -> &'static str {
+    if b { "True" } else { "False" }
 }
 
 fn print_string(s: &str) -> String {

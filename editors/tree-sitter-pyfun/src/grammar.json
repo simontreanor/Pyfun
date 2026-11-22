@@ -3556,11 +3556,11 @@
       "members": [
         {
           "type": "STRING",
-          "value": "true"
+          "value": "True"
         },
         {
           "type": "STRING",
-          "value": "false"
+          "value": "False"
         }
       ]
     },

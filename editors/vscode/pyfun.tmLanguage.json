@@ -86,7 +86,7 @@
     },
     "constants": {
       "name": "constant.language.pyfun",
-      "match": "\\b(true|false)\\b"
+      "match": "\\b(True|False)\\b"
     },
     "numbers": {
       "comment": "Integer/float literals, with an optional adjacent unit-of-measure annotation (e.g. 5<m>, 3.0<m/s^2>). The unit must touch the digits — matching Pyfun's lexer rule that distinguishes 5<m> from 5 < m.",

@@ -11,7 +11,7 @@ syn keyword pyfunDeclaration let mut pure type opaque measure module extern impo
 syn keyword pyfunConditional if then elif else
 syn keyword pyfunKeyword match case with do try as return yield
 syn keyword pyfunOperatorWord and or not
-syn keyword pyfunBoolean true false
+syn keyword pyfunBoolean True False
 
 " Built-in computation-expression builders (async/seq/result/option { … })
 syn keyword pyfunBuilder async seq result option

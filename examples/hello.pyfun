@@ -120,9 +120,9 @@ let rank c =
 
 # Mutual recursion works implicitly (no `rec`/`and`): `isEven` sees `isOdd` and
 # vice versa, defined in either order.
-let isEven n = if n == 0 then true else isOdd (n - 1)
-let isOdd n = if n == 0 then false else isEven (n - 1)
-let tenEven = isEven 10               # true
+let isEven n = if n == 0 then True else isOdd (n - 1)
+let isOdd n = if n == 0 then False else isEven (n - 1)
+let tenEven = isEven 10               # True
 
 # Or-patterns: `case a | b:` matches any alternative (Python-identical). All
 # alternatives must bind the same variables (here, none).
@@ -233,7 +233,7 @@ let origin = (0, 0)
 let swap p =
   match p:
     case (a, b): (b, a)
-let labelled = (1, "one", true)              # (int, string, bool)
+let labelled = (1, "one", True)              # (int, string, bool)
 let firstOf t =
   match t:
     case (a, _, _): a
@@ -358,14 +358,14 @@ let doubled = List.map ((*) 2) ns            # [2, 4, 6, 8, 10]
 # `find` O(n) first-match. There's no cheap prepend — that's the linked-list non-goal.
 let third = Option.withDefault 0 (List.get 2 ns)   # 3 (0-based)
 let missing = Option.withDefault 0 (List.get 9 ns) # 0 (out of bounds -> None)
-let hasThree = List.contains 3 ns            # true
+let hasThree = List.contains 3 ns            # True
 let joined = List.concat ns [6, 7]           # [1, 2, 3, 4, 5, 6, 7]
 let ordered = List.sort [3, 1, 2]            # [1, 2, 3]
 # Derived ordering: user sum types / records / tuples compare structurally, so
 # `<` (and `List.sort`) work on them. A sum orders by variant declaration order
 # then field-by-field (Red < Green < Blue).
 let sortedColors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
-let redFirst = Red < Green                       # true
+let redFirst = Red < Green                       # True
 # Built-in Option/Result order too: None < Some, Ok < Error (payloads orderable).
 let sortedOpts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
 let firstBig = List.find (fun x -> x > 3) ns # Some 4
@@ -482,7 +482,7 @@ print (0 <= seven < 10)              # True   (chained comparison)
 
 # Logical operators: `and` / `or` / `not` (Python keywords, Python precedence).
 print (seven < 10 and answer == 42)  # True
-print (not (seven == 8) or false)    # True
+print (not (seven == 8) or False)    # True
 
 # Records: construct with `{ f = v }`, access with `.f`, copy-and-update with
 # `{ r with f = v }`. The record type is resolved from the field names.

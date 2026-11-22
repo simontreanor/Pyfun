@@ -4732,6 +4732,14 @@
     "named": false
   },
   {
+    "type": "False",
+    "named": false
+  },
+  {
+    "type": "True",
+    "named": false
+  },
+  {
     "type": "[",
     "named": false
   },
@@ -4802,10 +4810,6 @@
   },
   {
     "type": "f\"",
-    "named": false
-  },
-  {
-    "type": "false",
     "named": false
   },
   {
@@ -4910,10 +4914,6 @@
   },
   {
     "type": "then",
-    "named": false
-  },
-  {
-    "type": "true",
     "named": false
   },
   {

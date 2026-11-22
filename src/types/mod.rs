@@ -9406,7 +9406,7 @@ impl Infer {
     fn render_witness(&self, w: &Wit, atom: bool) -> String {
         match w {
             Wit::Wild => "_".to_string(),
-            Wit::Con(Tag::Bool(b), _) => b.to_string(),
+            Wit::Con(Tag::Bool(b), _) => crate::ast::print_bool(*b).to_string(),
             Wit::Con(Tag::Int(n), _) => n.to_string(),
             Wit::Con(Tag::Str(s), _) => format!("{s:?}"),
             Wit::Con(Tag::Sum(name), args) => {

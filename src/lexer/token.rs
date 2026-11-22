@@ -152,8 +152,8 @@ impl Tok {
             "not" => Tok::Not,
             "and" => Tok::And,
             "or" => Tok::Or,
-            "true" => Tok::True,
-            "false" => Tok::False,
+            "True" => Tok::True,
+            "False" => Tok::False,
             _ => return None,
         })
     }

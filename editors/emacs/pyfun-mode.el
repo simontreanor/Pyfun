@@ -53,7 +53,7 @@ Contextual: each is a builder only immediately before an opening brace.")
      (1 font-lock-builtin-face))
     ;; The bang forms, which `regexp-opt' cannot reach through `symbols'.
     ("\\_<\\(?:let\\|do\\|return\\|yield\\)!" . font-lock-keyword-face)
-    ("\\_<\\(?:true\\|false\\)\\_>" . font-lock-constant-face)
+    ("\\_<\\(?:True\\|False\\)\\_>" . font-lock-constant-face)
     ;; Uppercase-initial identifiers: types, constructors, modules.
     ("\\_<[A-Z][A-Za-z0-9_]*\\_>" . font-lock-type-face)
     ;; A `let' binding's name (function or value).
