@@ -9132,14 +9132,36 @@ impl Infer {
         } else {
             format!("which performs exactly {}", effects(&closed))
         };
+        // A constructor's arrow is declared in a `type`, which cannot take an
+        // effect variable (§4), so the remedy there is to declare the effect the
+        // stored functions really have. An `extern` can take the variable.
+        let is_constructor = owner
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| last.starts_with(|c: char| c.is_ascii_uppercase()));
+        let remedy = if is_constructor {
+            let arrow_text = if performs.labels.is_empty() {
+                " -> ".to_string()
+            } else {
+                format!(" ->{{{}}} ", performs.show_labels())
+            };
+            format!(
+                "a `type` declares one exact effect for the functions it stores, so declare \
+                 that arrow with the effect they have: `{}`",
+                show_with_effect_var(&param, arrow).replacen(" ->{e} ", &arrow_text, 1)
+            )
+        } else {
+            format!(
+                "to accept a callback whatever it does, give that arrow an effect variable in \
+                 the extern that declares it: `{}`",
+                show_with_effect_var(&param, arrow)
+            )
+        };
         TypeError {
             message: format!(
-                "{who} performs {}, but `{owner}` takes this callback as `{}`, {allows}; \
-                 to accept a callback whatever it does, give that arrow an effect variable in \
-                 the extern that declares it: `{}`",
+                "{who} performs {}, but `{owner}` takes this callback as `{}`, {allows}; {remedy}",
                 effects(&performs),
                 show(declared),
-                show_with_effect_var(&param, arrow),
             ),
             span: arg.span(),
         }

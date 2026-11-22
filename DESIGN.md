@@ -156,6 +156,13 @@ The checker implements this with a function depth (`Infer::fn_depth`) and the de
 `let mut` was declared (`Scheme::mut_frame`): an assignment is local exactly when the two are equal
 and non-zero, which is sound because the functions enclosing any program point have distinct depths.
 
+The rule has one cost, and it follows from declared effects being exact (above). A function that was
+`io` *only* through its own accumulator is now pure, so it no longer fits an arrow declared
+`->{io}` in an `extern` or a `type`, where before 0.11 it did. The existing message for a closed
+callback arrow says so and names the way out: the effect variable `->{e}` for an `extern`, and, for a
+`type` (which cannot take one), declaring the arrow with the effect its functions really have. A
+callback that prints, or assigns state it does not own, is `io` as before and is unaffected.
+
 **Why inference-first (the chosen model).** Effects follow Koka/Flix/Unison — **inferred, never
 written in ordinary code** — rather than effects-as-values (Haskell `IO`: `do`/`<-`/wrapper types) or
 effects-as-keywords (Rust/Python `async` *coloring*, the very pain we avoid). The Python gradual-typing

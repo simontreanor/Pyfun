@@ -4944,3 +4944,47 @@ fn mutation_that_can_be_observed_is_still_io() {
         io,
     );
 }
+
+#[test]
+fn a_locally_mutating_callback_no_longer_fits_a_declared_io_arrow() {
+    // The cost of the rule above: declared effects are exact (`DESIGN.md` §4), so
+    // a function that was `io` only through its own accumulator is now pure and
+    // does not fit an arrow declared `->{io}`. The message names the way out for
+    // each kind of declaration.
+    let tally = "let tally x =\n  let mut n = x\n  n <- n + 1\n  ()\n";
+    assert_error_contains(
+        &format!(
+            "extern each: (int ->{{io}} unit) -> List int ->{{io}} unit = builtins.map\n\
+             {tally}each tally [1, 2]"
+        ),
+        "`tally` performs nothing, but `each` takes this callback as `int ->{io} unit`, \
+         which performs exactly {io}; to accept a callback whatever it does, give that arrow \
+         an effect variable in the extern that declares it: `int ->{e} unit`",
+    );
+    // With the effect variable the same callback fits, and so does one that prints.
+    assert!(
+        pyfun::check(&format!(
+            "extern each: (int ->{{e}} unit) -> List int ->{{io, e}} unit = builtins.map\n\
+             {tally}each tally [1, 2]\neach print [1, 2]"
+        ))
+        .is_ok()
+    );
+    // A `type` cannot take an effect variable, so its remedy is the exact arrow.
+    assert_error_contains(
+        "type Handler = H (int ->{io} int)\n\
+         let bump x =\n  let mut n = x\n  n <- n + 1\n  n\n\
+         let h = H bump",
+        "a `type` declares one exact effect for the functions it stores, so declare that arrow \
+         with the effect they have: `int -> int`",
+    );
+    // A callback whose mutation is observable is `io` as before and still fits.
+    assert!(
+        pyfun::check(
+            "type Handler = H (int ->{io} int)\n\
+             let mut total = 0\n\
+             let bump x =\n  total <- total + x\n  total\n\
+             let h = H bump"
+        )
+        .is_ok()
+    );
+}
