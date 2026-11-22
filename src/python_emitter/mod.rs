@@ -175,6 +175,13 @@ pub enum PyStmt {
         binding: Option<String>,
         handler: Vec<PyStmt>,
     },
+    /// A source-position marker: the statements after it (until the next
+    /// marker) were lowered from the Pyfun source between these byte offsets
+    /// (the start and end of a statement). Present
+    /// only in a *traced* lowering, which exists to build a line map for
+    /// tracebacks (`DESIGN.md` §9) and is never the program that runs. It emits
+    /// as a marker line ([`split_line_markers`] takes them out again).
+    Line(u32, u32),
     /// A data-constructor class with positional fields and `__match_args__`.
     /// `order` is `Some(variant_index)` for a **user** sum-type variant / record (so
     /// it derives structural `<`/`<=`/`>`/`>=` ordering, keyed on
@@ -460,8 +467,42 @@ pub fn emit(module: &PyModule) -> String {
 
 const INDENT: &str = "    ";
 
+/// The prefix of a marker line in a traced emission. NUL cannot occur in
+/// emitted Python, so a marker line is never mistaken for code.
+const LINE_MARK: &str = "\u{0}L";
+
+/// Split a traced emission into the Python text without its marker lines and
+/// the line map they describe: `(python line, source start, source end)` for
+/// each marker, where the Python line (1-based) is the first line after the
+/// marker. A line with no entry of its own belongs to the nearest entry above it.
+pub fn split_line_markers(traced: &str) -> (String, Vec<(usize, u32, u32)>) {
+    let mut text = String::with_capacity(traced.len());
+    let mut map = Vec::new();
+    let mut py_line = 1;
+    for line in traced.split_inclusive('\n') {
+        match line.trim_end_matches(['\n', '\r']).strip_prefix(LINE_MARK) {
+            Some(extent) => {
+                if let Some((start, end)) = extent.split_once(',')
+                    && let (Ok(start), Ok(end)) = (start.parse::<u32>(), end.parse::<u32>())
+                {
+                    map.push((py_line, start, end));
+                }
+            }
+            None => {
+                text.push_str(line);
+                py_line += 1;
+            }
+        }
+    }
+    (text, map)
+}
+
 fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
-    if stmts.is_empty() {
+    // Markers are not statements: a suite that holds nothing else is empty.
+    if stmts.iter().all(|s| matches!(s, PyStmt::Line(..))) {
+        for stmt in stmts {
+            emit_stmt(stmt, depth, out);
+        }
         // An empty suite still needs a body in Python.
         line(out, depth, "pass");
         return;
@@ -473,6 +514,8 @@ fn emit_block(stmts: &[PyStmt], depth: usize, out: &mut String) {
 
 fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
     match stmt {
+        // Unindented and on its own line, to be split out afterwards.
+        PyStmt::Line(start, end) => line(out, 0, &format!("{LINE_MARK}{start},{end}")),
         PyStmt::Import(module) => line(out, depth, &format!("import {module}")),
         PyStmt::ImportFrom { module, names } => {
             line(
@@ -580,11 +623,23 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             // Collapse an `else:` whose sole statement is another `if` into
             // `elif`, so nested chains (elif sugar, active-pattern matches) emit
             // idiomatic Python instead of stair-stepped `else: if:`.
-            let mut rest = orelse;
-            while let [PyStmt::If { test, body, orelse }] = rest.as_slice() {
+            // (A traced lowering puts a marker ahead of that `if`; it is emitted
+            // ahead of the `elif` and does not count as a statement.)
+            let mut rest = orelse.as_slice();
+            loop {
+                let marks = rest
+                    .iter()
+                    .take_while(|s| matches!(s, PyStmt::Line(..)))
+                    .count();
+                let [PyStmt::If { test, body, orelse }] = &rest[marks..] else {
+                    break;
+                };
+                for mark in &rest[..marks] {
+                    emit_stmt(mark, depth, out);
+                }
                 line(out, depth, &format!("elif {}:", expr(test)));
                 emit_block(body, depth + 1, out);
-                rest = orelse;
+                rest = orelse.as_slice();
             }
             if !rest.is_empty() {
                 line(out, depth, "else:");

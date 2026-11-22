@@ -23,6 +23,7 @@ use pyfun::diagnostics::{self, Level};
 use pyfun::project::{self, ProjectError};
 use pyfun::python_emitter::PyTarget;
 use pyfun::syntax::{Item, Module};
+use pyfun::traceback::{self, Traced};
 
 mod bundle;
 mod kernel;
@@ -288,6 +289,8 @@ fn compile(path: &str, out: Option<&str>, target: PyTarget, native: bool) -> Exi
 /// `prog_args` are handed to the interpreter after the script path, so the
 /// program sees them as `sys.argv[1..]`; `sys.argv[0]` is the staged script
 /// path, matching what `python out/main.py args...` gives the compiled form.
+///
+/// An uncaught error is reported in `.pyfun` lines ([`stage_and_run`]).
 fn run(path: &str, prog_args: &[String]) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
@@ -297,11 +300,11 @@ fn run(path: &str, prog_args: &[String]) -> ExitCode {
     {
         return run_project(path, prog_args);
     }
-    let python = match pyfun::compile_collecting(&source, PyTarget::default()) {
-        Ok((py, notes)) => {
+    let (python, map) = match pyfun::compile_traced(&source) {
+        Ok((py, notes, map)) => {
             report_warnings(&source, &pyfun::warnings(&source));
             report_notes(&notes);
-            py
+            (py, map)
         }
         Err(e) => {
             eprintln!(
@@ -311,6 +314,43 @@ fn run(path: &str, prog_args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let entry_py = "_pyfun_main.py";
+    let traced: Vec<Traced> = map
+        .iter()
+        .map(|map| Traced {
+            py_name: entry_py,
+            source_path: path,
+            source: &source,
+            map,
+        })
+        .collect();
+    stage_and_run(
+        &[(entry_py.to_string(), python)],
+        entry_py,
+        &traced,
+        prog_args,
+    )
+}
+
+/// Write `files` to a fresh temp directory and run `entry_py` there with the
+/// Python interpreter, handing it `prog_args`.
+///
+/// The interpreter is given an absolute script path and *no* `current_dir`: the
+/// program keeps the user's working directory, so its relative file paths mean
+/// what they meant on the command line, while Python still puts the script's
+/// own directory first on `sys.path` (which is how a project's sibling modules
+/// and `_pyfun_rt` resolve).
+///
+/// With line maps in `traced`, the script is a launcher that runs the entry
+/// program under the traceback hook (`pyfun::traceback`, `DESIGN.md` §9), so an
+/// uncaught error names `.pyfun` lines. `PYFUN_TRACEBACK=python` runs the entry
+/// program directly, for Python's own traceback over the emitted code.
+fn stage_and_run(
+    files: &[(String, String)],
+    entry_py: &str,
+    traced: &[Traced],
+    prog_args: &[String],
+) -> ExitCode {
     let Some(interp) = python_cmd() else {
         return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
     };
@@ -318,16 +358,33 @@ fn run(path: &str, prog_args: &[String]) -> ExitCode {
     if let Err(e) = std::fs::create_dir_all(&dir) {
         return fail(&format!("cannot create temp dir: {e}"));
     }
-    let entry_py = "_pyfun_main.py";
-    if let Err(e) = std::fs::write(dir.join(entry_py), &python) {
-        let _ = std::fs::remove_dir_all(&dir);
-        return fail(&format!("cannot stage {entry_py}: {e}"));
+    let python_traceback = std::env::var("PYFUN_TRACEBACK").is_ok_and(|v| v == "python");
+    let hooked = !traced.is_empty() && !python_traceback;
+    let mut staged: Vec<(&str, std::borrow::Cow<str>)> = files
+        .iter()
+        .map(|(name, source)| (name.as_str(), source.as_str().into()))
+        .collect();
+    if hooked {
+        staged.push((
+            traceback::LAUNCHER_FILE,
+            traceback::launcher(entry_py).into(),
+        ));
+        staged.push((traceback::HOOK_FILE, traceback::HOOK_SOURCE.into()));
+        staged.push((traceback::TABLE_FILE, traceback::table(traced).into()));
     }
-    // Absolute path, and *no* `current_dir`: the program keeps the user's working
-    // directory, so its relative file paths mean what they meant on the command
-    // line. Python still puts the script's own directory first on `sys.path`.
+    for (name, source) in &staged {
+        if let Err(e) = std::fs::write(dir.join(name), source.as_bytes()) {
+            let _ = std::fs::remove_dir_all(&dir);
+            return fail(&format!("cannot stage {name}: {e}"));
+        }
+    }
+    let script = if hooked {
+        traceback::LAUNCHER_FILE
+    } else {
+        entry_py
+    };
     let status = Command::new(&interp)
-        .arg(dir.join(entry_py))
+        .arg(dir.join(script))
         .args(prog_args)
         .status();
     let _ = std::fs::remove_dir_all(&dir);
@@ -532,39 +589,54 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project, PyTarget::default(), false) {
-        Ok(f) => f,
-        Err(code) => return code,
-    };
-    let Some(interp) = python_cmd() else {
-        return fail("no Python interpreter found on PATH (tried `python`, `python3`)");
-    };
-    // Materialize the tree to a temp dir and run `python <dir>/<entry>.py`. The
-    // emitted `import geometry` / `_pyfun_rt` lines resolve as siblings because
-    // Python puts the *script's* directory first on `sys.path`, which is also why
-    // the working directory is left alone: the program's relative file paths mean
-    // what they meant on the command line.
-    let dir = std::env::temp_dir().join(format!("pyfun_run_{}", std::process::id()));
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        return fail(&format!("cannot create temp dir: {e}"));
-    }
-    for (name, source) in &files {
-        if let Err(e) = std::fs::write(dir.join(name), source) {
-            let _ = std::fs::remove_dir_all(&dir);
-            return fail(&format!("cannot stage {name}: {e}"));
+    let compiled = match project::compile_traced(&project) {
+        Ok(compiled) => compiled,
+        Err(e) => {
+            eprintln!("error: lowering failed: {}", e.message);
+            return ExitCode::FAILURE;
         }
-    }
-    let entry_py = project::module_py_name(&project.entry().name);
-    let status = Command::new(&interp)
-        .arg(dir.join(&entry_py))
-        .args(prog_args)
-        .status();
-    let _ = std::fs::remove_dir_all(&dir);
-    match status {
-        Ok(s) if s.success() => ExitCode::SUCCESS,
-        Ok(_) => ExitCode::FAILURE,
-        Err(e) => fail(&format!("`{interp}` did not finish: {e}")),
-    }
+    };
+    report_notes(&compiled.notes);
+    // Each module's frames name its own source file, spelled the way the entry
+    // was given on the command line.
+    let root = Path::new(entry).parent().unwrap_or_else(|| Path::new(""));
+    let entry_name = &project.entry().name;
+    let names: Vec<(String, String)> = compiled
+        .line_maps
+        .iter()
+        .map(|(module, _)| {
+            let path = if module == entry_name {
+                entry.to_string()
+            } else {
+                let file = project::locate_module(root, module)
+                    .unwrap_or_else(|| root.join(project::module_file_name(module)))
+                    .display()
+                    .to_string();
+                if entry.contains('/') {
+                    file.replace('\\', "/")
+                } else {
+                    file
+                }
+            };
+            (project::module_py_name(module), path)
+        })
+        .collect();
+    let traced: Vec<Traced> = compiled
+        .line_maps
+        .iter()
+        .zip(&names)
+        .filter_map(|((module, map), (py_name, source_path))| {
+            let source = &project.modules.iter().find(|m| &m.name == module)?.source;
+            Some(Traced {
+                py_name,
+                source_path,
+                source,
+                map,
+            })
+        })
+        .collect();
+    let entry_py = project::module_py_name(entry_name);
+    stage_and_run(&compiled.files, &entry_py, &traced, prog_args)
 }
 
 /// The Python interpreter to use: `PYFUN_PYTHON` when set (so `run` and `add`
