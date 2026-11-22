@@ -70,7 +70,7 @@ no number
 [Lesson page](../learn/04-result.md)
 
 ```pyfun
-extern parseInt: string -> int = int
+extern parseInt: str -> int = int
 
 let describe s =
   match try (parseInt s):
@@ -124,7 +124,7 @@ go
 [Lesson page](../learn/06-records.md)
 
 ```pyfun
-type Account = { name: string, balance: int }
+type Account = { name: str, balance: int }
 
 let opened = Account { name = "Ada", balance = 0 }
 let funded = { opened with balance = 100 }
@@ -255,11 +255,11 @@ Hello, ada
 [Lesson page](../learn/12-python-interop.md)
 
 ```pyfun
-type Book = { title: string, pages: int }
+type Book = { title: str, pages: int }
 
 let bookDecoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
-    (Decode.field "title" Decode.string)
+    (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
 
 let describe r =
@@ -355,11 +355,11 @@ Expected output:
 measure m
 measure s
 
-type Run = { name: string, distance: float, time: float }
+type Run = { name: str, distance: float, time: float }
 
 let runDecoder =
   Decode.map3 (fun n d t -> Run { name = n, distance = d, time = t })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "distance" Decode.float)
     (Decode.field "time" Decode.float)
 

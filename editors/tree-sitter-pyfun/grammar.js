@@ -155,7 +155,7 @@ module.exports = grammar({
       repeat(field('type_parameter', $._type_variable)),
     ),
 
-    // `opaque type UserId = string` — a zero-cost newtype (DESIGN.md §7.3).
+    // `opaque type UserId = str` — a zero-cost newtype (DESIGN.md §7.3).
     // `opaque` is contextual in the reference parser (only before `type`);
     // tree-sitter's word-token rule gives the same behavior for free.
     opaque_type_definition: $ => seq(

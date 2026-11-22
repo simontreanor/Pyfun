@@ -5,7 +5,7 @@ two built-in types offer, grouped so you can find a feature when you need it.
 
 ## The String module
 
-There is no `char` type, so everything is a `string`, and the operations live in a `String` module.
+There is no `char` type, so everything is a `str`, and the operations live in a `String` module.
 Concatenation, case, splitting, joining and slicing are all pure, and the parses are total:
 `String.toInt` and `String.toFloat` return an `Option`, `None` when the text does not parse, so they
 can never raise.

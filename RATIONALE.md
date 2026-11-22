@@ -63,7 +63,7 @@ A function's type records what its body does. It carries `io` when the function 
 
 ```fsharp
 let add a b = a + b          # int -> int -> int
-let greet n = print n        # string ->{io} unit
+let greet n = print n        # str ->{io} unit
 ```
 
 Effects propagate as you compose. Call an effectful function and yours becomes effectful, and a body
@@ -117,12 +117,12 @@ engine is the part you want to get right, and it is typed, total, and immutable.
 between them:
 
 ```fsharp
-extern get : string ->{async} bytes = httpx.get
+extern get : str ->{async} bytes = httpx.get
 ```
 
 Past that call you are in Python, and the call is effectful by default. You reach the whole ecosystem at
 full speed, with a typed engine wrapped around it. A Python file object is an iterator, so an `extern`
-can hand one back as a lazy `Seq string`, and a fold over it streams a file of any size in constant
+can hand one back as a lazy `Seq str`, and a fold over it streams a file of any size in constant
 memory. The engine that consumes those lines is typed end to end, and a malformed line becomes a value
 you handle rather than a crash. The `examples/interop/` cookbook shows the pattern against `json`,
 `sqlite3`, and a 3 GB rail-timetable feed.

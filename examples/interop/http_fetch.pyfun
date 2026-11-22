@@ -11,9 +11,9 @@
 extern type Response
 extern type Bytes
 extern import urllib.request
-extern urlopen: string -> Response = urllib.request.urlopen
+extern urlopen: str -> Response = urllib.request.urlopen
 extern readBody: Response -> Bytes = .read()                 # resp.read() — a method
-extern decode: Bytes -> string -> string = codecs.decode
+extern decode: Bytes -> str -> str = codecs.decode
 
 # `fetch` calls `io` externs, so it is inferred `io`; `try` makes a bad URL an `Error`.
 let fetch url = try (decode (readBody (urlopen url)) "utf-8")
@@ -30,9 +30,9 @@ print (describe (fetch "://malformed"))                    # failed: ValueError
 # `urlparse` returns a value whose parts are attributes — pure string parsing.
 extern type Url
 extern import urllib.parse
-extern urlparse: string -> Url = urllib.parse.urlparse
-extern scheme: Url -> string = .scheme
-extern path: Url -> string = .path
+extern urlparse: str -> Url = urllib.parse.urlparse
+extern scheme: Url -> str = .scheme
+extern path: Url -> str = .path
 
 let u = urlparse "https://example.com/data.json"
 print (f"{scheme u} {path u}")                             # https /data.json
@@ -46,4 +46,4 @@ print (f"{scheme u} {path u}")                             # https /data.json
 # on it. Uncalled here.
 extern type AsyncClient
 extern newAsyncClient: unit -> AsyncClient = httpx.AsyncClient
-extern getAsync: AsyncClient -> string ->{async} Async Response = .get
+extern getAsync: AsyncClient -> str ->{async} Async Response = .get

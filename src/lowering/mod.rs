@@ -319,7 +319,7 @@ struct Lowerer {
     /// application and to know which bare references are nullary (and so must be
     /// emitted as `Ctor()`).
     ctor_arity: std::collections::HashMap<String, usize>,
-    /// Newtype constructors (`opaque type UserId = string`) — erased at lowering:
+    /// Newtype constructors (`opaque type UserId = str`) — erased at lowering:
     /// a fully-applied wrap is the bare argument, a first-class reference is
     /// `_pf_id`, and the single-case pattern recurses into its payload.
     newtype_ctors: HashSet<String>,
@@ -4102,7 +4102,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_seq_unfold")
             }
-            // String — text ops over the built-in `string` (Python `str`). Bare
+            // String — text ops over the built-in `str`. Bare
             // routes reuse Python builtins (`len`/`str`/`list`); the rest lower to
             // emitted `_pf_str_*` helpers so each curried function is one callable.
             "String.len" => bare("len"),
@@ -4161,7 +4161,7 @@ impl Lowerer {
             // `_pf_dec_*` helpers (recorded so they are defined). `nullable` builds
             // `Some`/`None_`; `decodeString` builds `Ok`/`Error`/`_Exception` and
             // needs `json` — so flag the corresponding preludes/imports.
-            "Decode.string" => self.decode_helper("_pf_dec_string"),
+            "Decode.str" => self.decode_helper("_pf_dec_str"),
             "Decode.int" => self.decode_helper("_pf_dec_int"),
             "Decode.float" => self.decode_helper("_pf_dec_float"),
             "Decode.bool" => self.decode_helper("_pf_dec_bool"),
@@ -7060,7 +7060,7 @@ fn py_annotation(ty: &crate::parser::ast::TypeExpr) -> String {
             ("int", 0) => "int",
             ("float", 0) => "float",
             ("bool", 0) => "bool",
-            ("string", 0) => "str",
+            ("str", 0) => "str",
             ("List", 1) => "list",
             ("Set", 1) => "set",
             ("Map", 2) => "dict",
@@ -8160,9 +8160,7 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
     used.iter()
         .map(|&helper| match helper {
             // Primitives — strict about the parsed JSON type.
-            "_pf_dec_string" => {
-                primitive("_pf_dec_string", "a string", isinst(name("str")), name("v"))
-            }
+            "_pf_dec_str" => primitive("_pf_dec_str", "a string", isinst(name("str")), name("v")),
             // A JSON bool is a Python `bool`, an `int` subclass — exclude it.
             "_pf_dec_int" => primitive(
                 "_pf_dec_int",

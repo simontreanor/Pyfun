@@ -49,10 +49,10 @@ Plenty of Python libraries hand you an object and expect you to call methods on 
 
 ```pyfun
 extern type Path
-extern pure toPath: string -> Path = pathlib.Path
-extern pure suffix: Path -> string = .suffix
-extern pure withName: Path -> string -> Path = .with_name
-extern pure asText: Path -> string = builtins.str
+extern pure toPath: str -> Path = pathlib.Path
+extern pure suffix: Path -> str = .suffix
+extern pure withName: Path -> str -> Path = .with_name
+extern pure asText: Path -> str = builtins.str
 
 let renamed = withName (toPath "report.csv") "summary.csv"
 
@@ -64,14 +64,14 @@ This prints `.csv` then `summary.csv`. `extern type Path` declares an opaque han
 
 The framing worth keeping is boundary versus engine. Pyfun shines at the boundary where the world is untyped and can fail, which is parsing, files, and the network. It adds little wrapped around an engine like numpy, whose speed lives in native code Pyfun cannot touch. Call the boundary safely and stay out of the engine's way.
 
-The clearest boundary is untrusted JSON. When an `extern` can raise, `try` from lesson 4 turns the exception into a `Result` you must handle. Building on that, the built-in `Decode` module turns raw JSON straight into your own record type or a structured error, so the rest of your program never sees an untyped shape. `Decode.field` pulls one field and runs a decoder on it, `Decode.string` and `Decode.int` decode strictly, `Decode.map2` combines two field decoders into one that builds a record, and `Decode.decodeString` runs the whole thing over a JSON string to yield `Result a Exception`.
+The clearest boundary is untrusted JSON. When an `extern` can raise, `try` from lesson 4 turns the exception into a `Result` you must handle. Building on that, the built-in `Decode` module turns raw JSON straight into your own record type or a structured error, so the rest of your program never sees an untyped shape. `Decode.field` pulls one field and runs a decoder on it, `Decode.str` and `Decode.int` decode strictly, `Decode.map2` combines two field decoders into one that builds a record, and `Decode.decodeString` runs the whole thing over a JSON string to yield `Result a Exception`.
 
 ```pyfun
-type Book = { title: string, pages: int }
+type Book = { title: str, pages: int }
 
 let bookDecoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
-    (Decode.field "title" Decode.string)
+    (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
 
 let describe r =
@@ -97,7 +97,7 @@ derived from the type it is used at:
 
 ```pyfun
 type Player = Ann | Bob
-type Msg = Hello Player | Move string | Resign
+type Msg = Hello Player | Move str | Resign
 type Turn = { player: Player, msg: Msg, score: Option int }
 
 let turn = Turn { player = Bob, msg = Move "K11 a QUIZ", score = Some 42 }
@@ -159,11 +159,11 @@ whatever the callback performs.
 Complete the decoder by filling both holes with the strict field decoders. `pyfun check` reports each hole's type and suggests the fit. The first report is:
 
 ```console
-note: hole `?titleDec` has type `Decoder string` — try: Decode.string, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.oneOf ?, Decode.field ? ?
+note: hole `?titleDec` has type `Decoder str` — try: Decode.str, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.oneOf ?, Decode.field ? ?
 ```
 
 ```pyfun
-type Book = { title: string, pages: int }
+type Book = { title: str, pages: int }
 
 let bookDecoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
@@ -189,17 +189,17 @@ Dune, 412 pages
 failed (KeyError): 'pages'
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyaW5nLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-type Book = { title: string, pages: int }
+type Book = { title: str, pages: int }
 
 let bookDecoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
-    (Decode.field "title" Decode.string)
+    (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
 
 let describe r =
@@ -214,5 +214,5 @@ wellFormed |> Decode.decodeString bookDecoder |> describe |> print
 missingField |> Decode.decodeString bookDecoder |> describe |> print
 ```
 
-`Decode.string` decodes the `title` field and `Decode.int` decodes `pages`. The valid object builds a `Book`, and the incomplete one short-circuits to a `KeyError` that `describe` reports through the `Error` arm.
+`Decode.str` decodes the `title` field and `Decode.int` decodes `pages`. The valid object builds a `Book`, and the incomplete one short-circuits to a `KeyError` that `describe` reports through the `Error` arm.
 </details>

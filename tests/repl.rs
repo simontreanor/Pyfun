@@ -221,7 +221,7 @@ fn repl_newtype_erases_and_matches_across_entries() {
     // later match — the type echo names the newtype, while the erased value
     // flows through the worker as the bare underlying string.
     let out = repl(
-        "opaque type UserId = string\n\
+        "opaque type UserId = str\n\
          let u = UserId \"ana\"\n\
          :{\n\
          match u:\n\

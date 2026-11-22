@@ -572,7 +572,7 @@ fn reanalyzes_a_dependent_when_an_imported_buffer_changes() {
     // After editing only the imported buffer, the dependent re-analyzes.
     let after = hover_value(3);
     assert!(
-        after.contains("string -> string"),
+        after.contains("str -> str"),
         "hover after import edit: {after:?}"
     );
 }

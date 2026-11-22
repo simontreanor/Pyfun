@@ -310,7 +310,7 @@ fn run_forwards_arguments_to_a_multi_file_project() {
                 "main.pyfun",
                 "import Geometry\n\
                  extern import sys\n\
-                 extern getArgv : unit -> List string = sys.argv.copy\n\
+                 extern getArgv : unit -> List str = sys.argv.copy\n\
                  print (Geometry.area 4 5)\n\
                  print (getArgv ())",
             ),

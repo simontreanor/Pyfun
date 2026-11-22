@@ -76,7 +76,7 @@ the hole expects. Replace `?` with `100` so the program prints the three lines b
 `opened.balance` still shows `0` afterward, because the update produced a new record.
 
 ```pyfun
-type Account = { name: string, balance: int }
+type Account = { name: str, balance: int }
 
 let opened = Account { name = "Ada", balance = 0 }
 let funded = { opened with balance = ? }
@@ -105,13 +105,13 @@ Ada
 0
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBBY2NvdW50ID0geyBuYW1lOiBzdHJpbmcsIGJhbGFuY2U6IGludCB9CgpsZXQgb3BlbmVkID0gQWNjb3VudCB7IG5hbWUgPSAiQWRhIiwgYmFsYW5jZSA9IDAgfQpsZXQgZnVuZGVkID0geyBvcGVuZWQgd2l0aCBiYWxhbmNlID0gPyB9CgpwcmludCBmdW5kZWQubmFtZQpwcmludCBmdW5kZWQuYmFsYW5jZQpwcmludCBvcGVuZWQuYmFsYW5jZQo)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBBY2NvdW50ID0geyBuYW1lOiBzdHIsIGJhbGFuY2U6IGludCB9CgpsZXQgb3BlbmVkID0gQWNjb3VudCB7IG5hbWUgPSAiQWRhIiwgYmFsYW5jZSA9IDAgfQpsZXQgZnVuZGVkID0geyBvcGVuZWQgd2l0aCBiYWxhbmNlID0gPyB9CgpwcmludCBmdW5kZWQubmFtZQpwcmludCBmdW5kZWQuYmFsYW5jZQpwcmludCBvcGVuZWQuYmFsYW5jZQo)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-type Account = { name: string, balance: int }
+type Account = { name: str, balance: int }
 
 let opened = Account { name = "Ada", balance = 0 }
 let funded = { opened with balance = 100 }

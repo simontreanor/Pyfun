@@ -183,13 +183,13 @@ Notice what the compiler does:
 - **Effects tracked across the boundary.** A bare `extern` is `io` at full application, so it
   can't be called from a `let pure`. Mark it `pure` (like `statistics.mean`) and it composes into
   pure code. An async client returns a coroutine, so its result is the `Async` type, awaited
-  by `let!` in an `async { }` block: `extern fetch: string -> Async string = client.get`.
+  by `let!` in an `async { }` block: `extern fetch: str -> Async str = client.get`.
 - **Exceptions become values.** `try (parseInt s) : Result int Exception` catches whatever the
   Python side raises and hands you a `Result` to `match` on. The imperative FFI edge becomes the
   FP error type, with `errorKind` and `errorMessage` fields.
 
 ```fsharp
-extern parseInt: string -> int = int          # Python's built-in int()
+extern parseInt: str -> int = int          # Python's built-in int()
 
 let safe s = Result.withDefault 0 (try (parseInt s))
 print (safe "42")     # 42
@@ -220,14 +220,14 @@ explodes three layers downstream. The built-in Elm-style `Decode` module turns J
 records — a missing field or wrong type is a value you handle, never an `AttributeError` an hour later:
 
 ```fsharp
-type User = { name: string, age: int }
+type User = { name: str, age: int }
 
 let user =
   Decode.map2 (fun name age -> User { name = name, age = age })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
 
-# Decode.decodeString user : string -> Result User Exception
+# Decode.decodeString user : str -> Result User Exception
 #   good input   -> Ok (a typed User)
 #   missing/bad  -> Error (a value describing exactly what was wrong)
 ```

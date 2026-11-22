@@ -21,7 +21,7 @@ you open a `.pyfun` file. If your `pyfun` lives somewhere else, point the extens
 
 - **Diagnostics** — type, effect, unit, and exhaustiveness errors inline, updated as you type.
 - **Hover** — the inferred type of the expression or binding under the cursor, with latent effects
-  shown on arrows (e.g. `string ->{io} unit`). Pyfun types are never written, so hover is how you
+  shown on arrows (e.g. `str ->{io} unit`). Pyfun types are never written, so hover is how you
   see what the compiler inferred. Doc comments (`##`) render below the type.
 - **Go-to-definition** and **find-references** — across files, for locals, parameters, pattern
   variables, top-level and module values, constructors, and type names.

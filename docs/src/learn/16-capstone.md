@@ -21,11 +21,11 @@ type each hole expects, along with names in scope that fit. Fill all three and t
 measure m
 measure s
 
-type Run = { name: string, distance: float, time: float }
+type Run = { name: str, distance: float, time: float }
 
 let runDecoder =
   Decode.map3 (fun n d t -> Run { name = n, distance = d, time = t })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "distance" ?)
     (Decode.field "time" Decode.float)
 
@@ -61,7 +61,7 @@ Expected output:
 ada, bo: average speed 4.8 m/s over 2 runs
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0cmluZywgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuRGVjb2RlciA9CiAgRGVjb2RlLm1hcDMgKGZ1biBuIGQgdCAtPiBSdW4geyBuYW1lID0gbiwgZGlzdGFuY2UgPSBkLCB0aW1lID0gdCB9KQogICAgKERlY29kZS5maWVsZCAibmFtZSIgRGVjb2RlLnN0cmluZykKICAgIChEZWNvZGUuZmllbGQgImRpc3RhbmNlIiA_KQogICAgKERlY29kZS5maWVsZCAidGltZSIgRGVjb2RlLmZsb2F0KQoKbGV0IGlucHV0ID0gIiIiWwogIHsibmFtZSI6ICJhZGEiLCAiZGlzdGFuY2UiOiAxMDAuMCwgInRpbWUiOiAyMC4wfSwKICB7Im5hbWUiOiAiYm8iLCAiZGlzdGFuY2UiOiAxNDAuMCwgInRpbWUiOiAzMC4wfQpdIiIiCgpsZXQgcmVwb3J0ID0KICBtYXRjaCBEZWNvZGUuZGVjb2RlU3RyaW5nIChEZWNvZGUubGlzdCBydW5EZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gcnVucyB8PiBMaXN0Lm1hcCAoZnVuIHIgLT4gci5uYW1lKSB8PiBTdHJpbmcuam9pbiAiLCAiCiAgICAgIGxldCBkaXN0ID0gcnVucyB8PiBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4KICAgICAgbGV0IHRpbWUgPSBydW5zIHw-IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4KICAgICAgbGV0IGF2ZyA9IGRpc3QgLyA_CiAgICAgIGYie25hbWVzfTogYXZlcmFnZSBzcGVlZCB7YXZnfSBtL3Mgb3ZlciB7TGlzdC5sZW4gcnVuc30gcnVucyIKICAgIGNhc2UgRXJyb3IgZTogZiJjb3VsZCBub3QgcmVhZCBpbnB1dCAoe2UuZXJyb3JLaW5kfSkiCgpwcmludCByZXBvcnQK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0ciwgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuRGVjb2RlciA9CiAgRGVjb2RlLm1hcDMgKGZ1biBuIGQgdCAtPiBSdW4geyBuYW1lID0gbiwgZGlzdGFuY2UgPSBkLCB0aW1lID0gdCB9KQogICAgKERlY29kZS5maWVsZCAibmFtZSIgRGVjb2RlLnN0cikKICAgIChEZWNvZGUuZmllbGQgImRpc3RhbmNlIiA_KQogICAgKERlY29kZS5maWVsZCAidGltZSIgRGVjb2RlLmZsb2F0KQoKbGV0IGlucHV0ID0gIiIiWwogIHsibmFtZSI6ICJhZGEiLCAiZGlzdGFuY2UiOiAxMDAuMCwgInRpbWUiOiAyMC4wfSwKICB7Im5hbWUiOiAiYm8iLCAiZGlzdGFuY2UiOiAxNDAuMCwgInRpbWUiOiAzMC4wfQpdIiIiCgpsZXQgcmVwb3J0ID0KICBtYXRjaCBEZWNvZGUuZGVjb2RlU3RyaW5nIChEZWNvZGUubGlzdCBydW5EZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gcnVucyB8PiBMaXN0Lm1hcCAoZnVuIHIgLT4gci5uYW1lKSB8PiBTdHJpbmcuam9pbiAiLCAiCiAgICAgIGxldCBkaXN0ID0gcnVucyB8PiBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4KICAgICAgbGV0IHRpbWUgPSBydW5zIHw-IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4KICAgICAgbGV0IGF2ZyA9IGRpc3QgLyA_CiAgICAgIGYie25hbWVzfTogYXZlcmFnZSBzcGVlZCB7YXZnfSBtL3Mgb3ZlciB7TGlzdC5sZW4gcnVuc30gcnVucyIKICAgIGNhc2UgRXJyb3IgZTogZiJjb3VsZCBub3QgcmVhZCBpbnB1dCAoe2UuZXJyb3JLaW5kfSkiCgpwcmludCByZXBvcnQK)
 
 <details>
 <summary>Show solution</summary>
@@ -70,11 +70,11 @@ ada, bo: average speed 4.8 m/s over 2 runs
 measure m
 measure s
 
-type Run = { name: string, distance: float, time: float }
+type Run = { name: str, distance: float, time: float }
 
 let runDecoder =
   Decode.map3 (fun n d t -> Run { name = n, distance = d, time = t })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "distance" Decode.float)
     (Decode.field "time" Decode.float)
 

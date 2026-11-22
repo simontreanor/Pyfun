@@ -9,8 +9,8 @@
 extern type Conn
 extern type Cursor
 
-extern connect: string -> Conn = sqlite3.connect        # a module function
-extern execute: Conn -> string -> Cursor = .execute()   # conn.execute(sql)
+extern connect: str -> Conn = sqlite3.connect        # a module function
+extern execute: Conn -> str -> Cursor = .execute()   # conn.execute(sql)
 extern fetchall: Cursor -> List a = .fetchall()         # cursor.fetchall()
 
 # `let _ = e` runs a statement for its effect and discards the cursor it returns.

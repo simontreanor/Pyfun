@@ -70,7 +70,7 @@ The only difference is *where the ~660k-line hot loop runs*:
 - **`chippenham_fast.pyfun`** hands the loop to `nr_stream.py`: a tight, C-backed
   Python `for` loop that substring-filters each line before parsing (~5 s).
 - **`chippenham.pyfun`** does the loop in Pyfun — the file object is consumed
-  directly as a lazy `Seq string` and reduced with `Seq.fold` (~7 s).
+  directly as a lazy `Seq str` and reduced with `Seq.fold` (~7 s).
 
 The interesting part is that these numbers used to be **~15× apart**, and closing
 that gap is the real lesson — a more useful one than "don't do it in your own
@@ -102,7 +102,7 @@ away, and let the measurement, not a slogan, decide where the boundary goes.
 ## How the pieces fit
 
 - **The boundary** — `open`/`gzip.open` return a file object. The fast version
-  iterates it in Python; the pure version types it as `Seq string` and folds it.
+  iterates it in Python; the pure version types it as `Seq str` and folds it.
   Either way memory stays flat regardless of file size. The pure version pins
   `mode`/`encoding`/`newline` as `extern` keyword arguments, so the emitted Python
   reads and writes UTF-8 with no positional filler.

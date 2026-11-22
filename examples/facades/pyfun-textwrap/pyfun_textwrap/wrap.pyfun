@@ -7,9 +7,9 @@
 
 extern import textwrap
 
-extern pure fillText: string -> int -> string = textwrap.fill(width = ...)
-extern pure shortenText: string -> int -> string = textwrap.shorten(width = ...)
-extern pure indentText: string -> string -> string = textwrap.indent
+extern pure fillText: str -> int -> str = textwrap.fill(width = ...)
+extern pure shortenText: str -> int -> str = textwrap.shorten(width = ...)
+extern pure indentText: str -> str -> str = textwrap.indent
 
 # `text |> Wrap.fill 24`: the text re-flowed to lines of at most 24 characters.
 let fill width text = fillText text width

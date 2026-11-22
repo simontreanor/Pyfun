@@ -23,11 +23,11 @@ extern pure days : int -> Delta = datetime.timedelta      # timedelta(days) — 
 # compile error; parsing a fixed string is pure.
 extern import datetime
 extern now : unit -> Datetime = datetime.datetime.now
-extern pure parseIso : string -> Datetime = datetime.datetime.fromisoformat
+extern pure parseIso : str -> Datetime = datetime.datetime.fromisoformat
 
 # Members of the opaque handles: `= .attr` reads a property, `= .attr()` calls a method.
 extern pure weekday   : Datetime -> int    = .weekday()   # 0 = Monday
-extern pure isoformat : Datetime -> string = .isoformat()
+extern pure isoformat : Datetime -> str = .isoformat()
 extern pure inDays    : Delta -> int       = .days
 
 # datetime's arithmetic lives on `+`/`-`, and Python exposes every operator as a

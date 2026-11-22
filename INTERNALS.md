@@ -343,7 +343,7 @@ bind after lowering the value and before the next item, so `bind_ce_target` does
 
 `Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures —
 and interprets it over `json.loads` output. When `dec` is a **syntactically-known composition** of the
-simple combinators (`string`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
+simple combinators (`str`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
 `succeed`/`fail`/`oneOf`, including through *top-level* `let` decoder names), the pass
 (`src/lowering/decode_spec.rs`, hooked in `lower_application`, default-on with `PYFUN_NO_DECODE_OPT`
 as the kill switch) deforests the interpreter into **direct dict/list access with inline error
@@ -456,7 +456,7 @@ stdio. All features reuse the existing front end:
   `textDocument/publishDiagnostics` on open/change (full document sync).
 - **Hover-for-type** — the inferred type of the narrowest expression, binding name, **parameter, or
   pattern variable** under the cursor, **with latent effects** shown on arrows (e.g.
-  `string ->{io} unit`) plus a **dedicated `Effect:` line** summarizing the concrete effect performed
+  `str ->{io} unit`) plus a **dedicated `Effect:` line** summarizing the concrete effect performed
   on full application (the union of the type's *result-spine* arrows — `io`/`async`; argument arrows
   are a callback's effect, not the value's, and pure values omit the line — `types::effect_summary`).
   (The same pass hands lowering the derived codecs: `types::check_collecting` returns a

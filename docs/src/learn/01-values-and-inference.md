@@ -24,7 +24,7 @@ pi is about 3.14
 True
 ```
 
-You never wrote a type. The compiler infers one for every binding: `name` is a `string`,
+You never wrote a type. The compiler infers one for every binding: `name` is a `str`,
 `age` is an `int`, `pi` is a `float`, and `isAdmin` is a `bool`. There are no type
 annotations on `let`, and that is a deliberate design choice, not a missing feature. You
 get the safety of static types without writing them out.
@@ -42,7 +42,7 @@ error: `+` is numeric and does not concatenate strings — use `String.concat a 
   |             ^^^^^^^
 ```
 
-The compiler saw that `"age: "` is a `string` and that `+` works on numbers, so it stopped.
+The compiler saw that `"age: "` is a `str` and that `+` works on numbers, so it stopped.
 `print` and f-strings (`f"{x}"`, the same interpolation Python 3.12 uses) are how you
 observe a value once it is bound. Because a `let` binding is immutable, there is no
 statement that overwrites it in place. That capability exists, and it arrives in

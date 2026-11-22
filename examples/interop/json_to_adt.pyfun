@@ -8,18 +8,18 @@
 # `Decoder a` is a pure, total recipe, and `Decode.decodeString` runs it over a JSON
 # string to yield `Result a Exception`. Bad input is a value you handle, never a crash.
 
-type User = { name: string, age: int, roles: List string }
+type User = { name: str, age: int, roles: List str }
 
 # A decoder is built compositionally: `Decode.field` pulls one object field and runs
 # a decoder on it; `Decode.map3` combines three field decoders into one that builds
 # the record. No hand-written field access, no per-field error handling — the module
-# threads the `Result` railway for you. `Decode.string`/`int` are strict: a JSON
+# threads the `Result` railway for you. `Decode.str`/`int` are strict: a JSON
 # number where a string is expected is an `Error`, not a silent coercion.
 let userDecoder =
   Decode.map3 (fun name age roles -> User { name = name, age = age, roles = roles })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
-    (Decode.field "roles" (Decode.list Decode.string))
+    (Decode.field "roles" (Decode.list Decode.str))
 
 # Consuming the result is an exhaustive `match` — the compiler makes you handle both
 # outcomes. `Exception` exposes `errorKind` (the Python class name) and `errorMessage`.

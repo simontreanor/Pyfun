@@ -398,7 +398,7 @@ fn e2e_derived_codecs_cross_a_module_import() {
             ),
             (
                 "Rules",
-                "type Placed = { letter: string, score: int }\ntype Player = Ann | Bob\n\
+                "type Placed = { letter: str, score: int }\ntype Player = Ann | Bob\n\
                  type View = { board: Map (int, int) Placed, turn: Option Player }\n\
                  let sample = View { board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })], turn = Some Bob }",
             ),
@@ -662,7 +662,7 @@ fn e2e_a_parameterized_cross_module_record_round_trips() {
     let files = compile(
         "Main",
         &[
-            ("Store", "type Box a = { item: a, label: string }"),
+            ("Store", "type Box a = { item: a, label: str }"),
             (
                 "Main",
                 "import Store\n\
@@ -696,7 +696,7 @@ fn e2e_a_local_type_declaration_can_name_an_imported_type() {
             (
                 "Main",
                 "import Shapes\n\
-                 type Holder = { item: Shapes.Placed, tag: string }\n\
+                 type Holder = { item: Shapes.Placed, tag: str }\n\
                  type Slot = Empty | Filled Placed\n\
                  let describe s =\n  match s:\n    case Empty: 0\n    case Filled p: Shapes.rowOf p\n\
                  let h = Holder { item = Shapes.mk 3, tag = \"a\" }\n\
@@ -911,7 +911,7 @@ fn an_imported_impure_extern_keeps_its_effect_across_the_boundary() {
         &[
             (
                 "Logx",
-                "extern log : string -> unit = builtins.print\n\
+                "extern log : str -> unit = builtins.print\n\
                  extern pure ident : int -> int = builtins.abs",
             ),
             ("Main", "import Logx\nlet pure bad s = Logx.log s"),
@@ -931,7 +931,7 @@ fn an_imported_impure_extern_keeps_its_effect_across_the_boundary() {
         &[
             (
                 "Logx",
-                "extern log : string -> unit = builtins.print\n\
+                "extern log : str -> unit = builtins.print\n\
                  extern pure ident : int -> int = builtins.abs",
             ),
             ("Main", "import Logx\nlet pure ok n = Logx.ident n"),
@@ -1048,7 +1048,7 @@ fn a_cross_module_newtype_erases_in_the_consumer_too() {
         &[
             (
                 "Ids",
-                "opaque type UserId = string\n\
+                "opaque type UserId = str\n\
                  let greet u =\n  match u:\n    case UserId s: String.concat \"hi \" s",
             ),
             (
@@ -1079,7 +1079,7 @@ fn e2e_a_cross_module_newtype_round_trips() {
         &[
             (
                 "Ids",
-                "opaque type UserId = string\n\
+                "opaque type UserId = str\n\
                  let greet u =\n  match u:\n    case UserId s: String.concat \"hi \" s",
             ),
             (
@@ -1108,7 +1108,7 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
         &[
             (
                 "Ids",
-                "opaque type UserId = string\n\
+                "opaque type UserId = str\n\
                  let greet u =\n  match u:\n    case UserId s: s",
             ),
             ("Main", "import Ids\nlet bad = Ids.greet \"raw\""),
@@ -1120,7 +1120,7 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
     assert!(
         errors[0].errors[0]
             .message
-            .contains("expected UserId, found string"),
+            .contains("expected UserId, found str"),
         "got: {}",
         errors[0].errors[0].message
     );

@@ -51,7 +51,7 @@ fn extern_lowers_to_its_python_target_with_import() {
 
 #[test]
 fn extern_with_name_equal_target_needs_no_import() {
-    let py = pyfun::compile("extern show: a -> string = str\nlet r = show 42").unwrap();
+    let py = pyfun::compile("extern show: a -> str = str\nlet r = show 42").unwrap();
     assert!(!py.contains("import"), "{py}");
     assert!(py.contains("r = str(42)"), "{py}");
 }
@@ -76,7 +76,7 @@ fn extern_in_submodule_imports_the_submodule() {
     // declaration is what says so; the compiler will not guess (`DESIGN.md` §6).
     let py = pyfun::compile(
         "extern import urllib.parse\n\
-         extern q: string -> string = urllib.parse.quote\n\
+         extern q: str -> str = urllib.parse.quote\n\
          let r = q \"a b\"",
     )
     .unwrap();
@@ -89,7 +89,7 @@ fn extern_type_declares_an_opaque_handle_and_emits_no_class() {
     // `extern type` registers a nominal type usable in extern signatures but erases
     // at lowering — no Python class, no constructor.
     let py = pyfun::compile(
-        "extern type Conn\nextern connect: string -> Conn = sqlite3.connect\nlet db = connect \":memory:\"",
+        "extern type Conn\nextern connect: str -> Conn = sqlite3.connect\nlet db = connect \":memory:\"",
     )
     .unwrap();
     assert!(py.contains("db = sqlite3.connect(\":memory:\")"), "{py}");
@@ -101,7 +101,7 @@ fn extern_type_declares_an_opaque_handle_and_emits_no_class() {
 fn extern_type_replaces_the_phantom_adt_in_the_instance_extern_pattern() {
     // The opaque-handle idiom works end-to-end with instance-method externs.
     let py = pyfun::compile(
-        "extern type C\nextern ex: C -> string -> C = .execute()\nlet f c = ex c \"select 1\"",
+        "extern type C\nextern ex: C -> str -> C = .execute()\nlet f c = ex c \"select 1\"",
     )
     .unwrap();
     assert!(py.contains("c.execute(\"select 1\")"), "{py}");
@@ -115,7 +115,7 @@ fn newtype_erases_to_the_bare_underlying_value() {
     // No Python class is emitted; a wrap is the bare argument and the single
     // newtype case erases to a bare capture pattern.
     let py = pyfun::compile(
-        "opaque type UserId = string\n\
+        "opaque type UserId = str\n\
          let uid = UserId \"u-1001\"\n\
          let f u =\n  match u:\n    case UserId s: s",
     )
@@ -130,8 +130,7 @@ fn newtype_erases_to_the_bare_underlying_value() {
 fn first_class_newtype_constructor_is_the_identity_helper() {
     // `List.map UserId xs` cannot erase the ctor at the call site, so the
     // reference lowers to the emitted `_pf_id` identity helper.
-    let py =
-        pyfun::compile("opaque type UserId = string\nlet ids = List.map UserId [\"a\"]").unwrap();
+    let py = pyfun::compile("opaque type UserId = str\nlet ids = List.map UserId [\"a\"]").unwrap();
     assert!(py.contains("_pf_map(_pf_id,"), "{py}");
     assert!(!py.contains("class UserId"), "{py}");
 }
@@ -158,7 +157,7 @@ fn irrefutable_newtype_case_truncates_later_arms_and_the_guard() {
 fn e2e_newtype_wrap_unwrap_round_trips() {
     run_and_check(
         "
-        opaque type UserId = string
+        opaque type UserId = str
         let uid = UserId \"u-1001\"
         let unwrapped =
           match uid:
@@ -191,7 +190,7 @@ fn e2e_mapping_a_newtype_constructor_is_identity() {
     // Wrap a whole list first-class, then unwrap each element in a fold.
     run_and_check(
         "
-        opaque type UserId = string
+        opaque type UserId = str
         let total =
           [\"ab\", \"c\"]
           |> List.map UserId
@@ -208,8 +207,8 @@ fn e2e_newtype_crosses_the_extern_boundary_bare() {
     // An extern typed with the newtype receives the bare underlying value.
     run_and_check(
         "
-        opaque type UserId = string
-        extern pure upperId: UserId -> string = str.upper
+        opaque type UserId = str
+        extern pure upperId: UserId -> str = str.upper
         let r = upperId (UserId \"abc\")
         ",
         &[("r", "ABC")],
@@ -220,7 +219,7 @@ fn e2e_newtype_crosses_the_extern_boundary_bare() {
 fn instance_method_extern_lowers_to_a_method_call() {
     // `= .read()` calls the method on the first argument (the receiver).
     let py =
-        pyfun::compile("type R = RH\nextern readBody: R -> string = .read()\nlet f r = readBody r")
+        pyfun::compile("type R = RH\nextern readBody: R -> str = .read()\nlet f r = readBody r")
             .unwrap();
     assert!(py.contains("return r.read()"), "{py}");
 }
@@ -228,7 +227,7 @@ fn instance_method_extern_lowers_to_a_method_call() {
 #[test]
 fn instance_method_extern_passes_remaining_args() {
     let py = pyfun::compile(
-        "type C = CH\nextern ex: C -> string -> C = .execute()\nlet f c = ex c \"select 1\"",
+        "type C = CH\nextern ex: C -> str -> C = .execute()\nlet f c = ex c \"select 1\"",
     )
     .unwrap();
     assert!(py.contains("c.execute(\"select 1\")"), "{py}");
@@ -238,9 +237,8 @@ fn instance_method_extern_passes_remaining_args() {
 fn instance_method_receiver_only_partial_is_the_bound_method() {
     // Applying just the receiver yields the Python bound method — the curried
     // partial with no `functools.partial` wrapper.
-    let py =
-        pyfun::compile("type C = CH\nextern ex: C -> string -> C = .execute()\nlet g c = ex c")
-            .unwrap();
+    let py = pyfun::compile("type C = CH\nextern ex: C -> str -> C = .execute()\nlet g c = ex c")
+        .unwrap();
     assert!(py.contains("return c.execute"), "{py}");
     assert!(!py.contains("functools.partial"), "{py}");
 }
@@ -248,9 +246,8 @@ fn instance_method_receiver_only_partial_is_the_bound_method() {
 #[test]
 fn instance_property_extern_reads_the_attribute() {
     // `= .scheme` (no `()`) reads the attribute — no call.
-    let py =
-        pyfun::compile("type U = UH\nextern scheme: U -> string = .scheme\nlet f u = scheme u")
-            .unwrap();
+    let py = pyfun::compile("type U = UH\nextern scheme: U -> str = .scheme\nlet f u = scheme u")
+        .unwrap();
     assert!(py.contains("return u.scheme"), "{py}");
     assert!(!py.contains("u.scheme("), "{py}");
 }
@@ -322,7 +319,7 @@ fn a_unit_extern_combines_with_a_kwarg_slot_and_a_thunk() {
 fn a_receiver_method_with_a_unit_parameter_drops_it() {
     let py = pyfun::compile(
         "extern type C\n\
-         extern ping: C -> unit -> string = .m()\n\
+         extern ping: C -> unit -> str = .m()\n\
          let f c = ping c ()",
     )
     .unwrap();
@@ -365,7 +362,7 @@ fn e2e_a_unit_extern_thread_runs_its_pyfun_target() {
 #[test]
 fn extern_on_builtin_type_imports_nothing() {
     // A dotted target rooted at a builtin type is always in scope — no `import`.
-    let py = pyfun::compile("extern up: string -> string = str.upper\nlet r = up \"hi\"").unwrap();
+    let py = pyfun::compile("extern up: str -> str = str.upper\nlet r = up \"hi\"").unwrap();
     assert!(py.contains("r = str.upper(\"hi\")"), "{py}");
     assert!(!py.contains("import str"), "{py}");
 }
@@ -376,7 +373,7 @@ fn extern_on_class_method_imports_only_the_module() {
     // stops before it: `sqlite3.Connection.execute` imports `sqlite3`, not
     // `sqlite3.Connection` (which is not importable).
     let py = pyfun::compile(
-        "type C = CH\nextern ex: C -> string -> C = sqlite3.Connection.execute\nlet f c = ex c \"x\"",
+        "type C = CH\nextern ex: C -> str -> C = sqlite3.Connection.execute\nlet f c = ex c \"x\"",
     )
     .unwrap();
     assert!(
@@ -408,7 +405,7 @@ fn extern_import_covers_a_fully_applied_value_attribute_target() {
     // `extern import sys` roots `sys.stdout.write` (a value attribute the
     // heuristic would read as a submodule); the call goes through the full path.
     let py = pyfun::compile(
-        "extern import sys\nextern write: string -> int = sys.stdout.write\nlet r = write \"hi\"",
+        "extern import sys\nextern write: str -> int = sys.stdout.write\nlet r = write \"hi\"",
     )
     .unwrap();
     assert!(
@@ -424,7 +421,7 @@ fn bare_reference_to_a_declared_import_extern_still_records_it() {
     // A bare (unapplied) reference must still record the declared module — the
     // reference lowers to the dotted path, which needs `sys` bound.
     let py = pyfun::compile(
-        "extern import sys\nextern write: string -> int = sys.stdout.write\nlet w = write",
+        "extern import sys\nextern write: str -> int = sys.stdout.write\nlet w = write",
     )
     .unwrap();
     assert!(
@@ -439,7 +436,7 @@ fn extern_import_alias_emits_import_as_and_roots_targets() {
     // `extern import json as j` mirrors Python's aliased import: the emitted
     // import carries the alias, and targets root at the alias name.
     let py = pyfun::compile(
-        "extern import json as j\nextern dumps: List int -> string = j.dumps\nlet s = dumps [1]",
+        "extern import json as j\nextern dumps: List int -> str = j.dumps\nlet s = dumps [1]",
     )
     .unwrap();
     assert!(py.contains("import json as j"), "{py}");
@@ -451,7 +448,7 @@ fn extern_import_composes_with_pinned_kwargs() {
     // A declared import and pinned kwargs coexist: import the declared module
     // and append the kwargs to the emitted call as usual.
     let py = pyfun::compile(
-        "extern import sqlite3\nextern conn: string -> a = sqlite3.dbapi2.connect(timeout=5)\nlet c = conn \":memory:\"",
+        "extern import sqlite3\nextern conn: str -> a = sqlite3.dbapi2.connect(timeout=5)\nlet c = conn \":memory:\"",
     )
     .unwrap();
     assert!(
@@ -471,7 +468,7 @@ fn an_undecidable_target_is_rejected_rather_than_guessed() {
     // (`sys.stdout` is one). The text cannot say which, and the answer belongs to
     // the running environment, so the compiler asks instead of emitting an import
     // that may not exist (`ROADMAP.md` finding #7).
-    let err = pyfun::compile("extern get: string -> a = urllib.request.urlopen\nlet r = get \"x\"")
+    let err = pyfun::compile("extern get: str -> a = urllib.request.urlopen\nlet r = get \"x\"")
         .unwrap_err();
     let msg = err.message();
     assert!(msg.contains("cannot tell which part"), "{msg}");
@@ -483,7 +480,7 @@ fn a_declared_import_settles_an_undecidable_target() {
     // The same target, with the one line the diagnostic asks for.
     let py = pyfun::compile(
         "extern import urllib.request\n\
-         extern get: string -> a = urllib.request.urlopen\n\
+         extern get: str -> a = urllib.request.urlopen\n\
          let r = get \"x\"",
     )
     .unwrap();
@@ -496,7 +493,7 @@ fn a_capitalised_segment_needs_no_declaration() {
     // PEP 8 settles this one: `Path` is a class, so the module is `pathlib` and
     // nothing is in doubt.
     let py = pyfun::compile(
-        "extern type P\nextern read: P -> string = pathlib.Path.read_text\nlet r = read p",
+        "extern type P\nextern read: P -> str = pathlib.Path.read_text\nlet r = read p",
     );
     let msg = format!("{:?}", py.as_ref().err());
     assert!(!msg.contains("cannot tell which part"), "{msg}");
@@ -521,7 +518,7 @@ fn unused_extern_import_emits_nothing() {
 fn extern_kwargs_are_appended_to_the_call() {
     // A plain extern with pinned kwargs appends them to every call.
     let py = pyfun::compile(
-        "extern openText : string -> Seq string = builtins.open(mode=\"rt\", encoding=\"utf-8\")\n\
+        "extern openText : str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")\n\
          let f path = openText path",
     )
     .unwrap();
@@ -537,7 +534,7 @@ fn receiver_method_extern_kwargs_follow_the_positional_args() {
     // positional method arguments.
     let py = pyfun::compile(
         "type P = PH\n\
-         extern writeText : P -> string -> int = .write_text(encoding=\"utf-8\")\n\
+         extern writeText : P -> str -> int = .write_text(encoding=\"utf-8\")\n\
          let f p text = writeText p text",
     )
     .unwrap();
@@ -550,7 +547,7 @@ fn receiver_method_extern_kwargs_follow_the_positional_args() {
 #[test]
 fn extern_kwargs_support_int_negative_bool_and_float_values() {
     let py = pyfun::compile(
-        "extern g : string -> a = gzip.open(compresslevel=9, buffering=-1, text=True, ratio=2.5)\n\
+        "extern g : str -> a = gzip.open(compresslevel=9, buffering=-1, text=True, ratio=2.5)\n\
          let f path = g path",
     )
     .unwrap();
@@ -565,7 +562,7 @@ fn extern_kwargs_partial_application_pins_kwargs_via_functools_partial() {
     // Under-application (partial or bare) must NOT drop the pinned kwargs: they
     // ride along on `functools.partial`, so a later application still supplies them.
     let py = pyfun::compile(
-        "extern openText : string -> int -> Seq string = builtins.open(mode=\"rt\")\n\
+        "extern openText : str -> int -> Seq str = builtins.open(mode=\"rt\")\n\
          let bare = openText\n\
          let partial = openText \"a.txt\"",
     )
@@ -585,7 +582,7 @@ fn e2e_extern_kwargs_produce_observable_output() {
     // `int` takes a real Python kwarg (`base`); pinning `base=16` proves the kwargs
     // reach the live call — `parseHex "ff"` evaluates to 255, not a parse error.
     run_and_check(
-        "extern parseHex : string -> int = int(base=16)\n\
+        "extern parseHex : str -> int = int(base=16)\n\
          let n = parseHex \"ff\"\n\
          let m = parseHex \"10\"",
         &[("n", "255"), ("m", "16")],
@@ -597,7 +594,7 @@ fn extern_kwarg_slot_takes_a_trailing_argument() {
     // `kw = ...` makes the keyword's value come from the caller: the target takes
     // the leading arguments positionally and the slots take the trailing ones.
     let py = pyfun::compile(
-        "extern openText : string -> string -> Seq string = builtins.open(mode=\"rt\", encoding=...)\n\
+        "extern openText : str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)\n\
          let f path enc = openText path enc",
     )
     .unwrap();
@@ -612,7 +609,7 @@ fn extern_kwarg_slots_fill_in_the_order_the_keywords_are_written() {
     // Pinned literals consume no argument; the slots take the trailing arguments
     // left to right, wherever they sit among the literals.
     let py = pyfun::compile(
-        "extern mix : string -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)\n\
+        "extern mix : str -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)\n\
          let f s i b = mix s i b",
     )
     .unwrap();
@@ -624,7 +621,7 @@ fn receiver_method_extern_kwarg_slot_takes_a_trailing_argument() {
     // The receiver still claims the first argument; a slot claims one of the rest.
     let py = pyfun::compile(
         "extern type P\n\
-         extern writeText : P -> string -> string -> int = .write_text(encoding=...)\n\
+         extern writeText : P -> str -> str -> int = .write_text(encoding=...)\n\
          let f p text enc = writeText p text enc",
     )
     .unwrap();
@@ -640,7 +637,7 @@ fn extern_kwarg_slot_partial_application_becomes_a_lambda() {
     // under-applied slot extern closes over a lambda that takes the rest. A bare
     // reference takes every argument, including the positional ones.
     let py = pyfun::compile(
-        "extern parseInt : string -> int -> int = int(base=...)\n\
+        "extern parseInt : str -> int -> int = int(base=...)\n\
          let bare = parseInt\n\
          let partial = parseInt \"ff\"",
     )
@@ -666,8 +663,8 @@ fn extern_kwarg_slot_partial_evaluates_supplied_arguments_eagerly() {
     // are bound to temporaries, and the lambda closes over those. The receiver of a
     // method extern is bound the same way.
     let py = pyfun::compile(
-        "extern parseInt : string -> int -> int = int(base=...)\n\
-         extern src : unit -> string = get.line\n\
+        "extern parseInt : str -> int -> int = int(base=...)\n\
+         extern src : unit -> str = get.line\n\
          let partial = parseInt (src ())",
     )
     .unwrap();
@@ -679,8 +676,8 @@ fn extern_kwarg_slot_partial_evaluates_supplied_arguments_eagerly() {
 
     let py = pyfun::compile(
         "extern type P\n\
-         extern toPath : string -> P = pathlib.Path\n\
-         extern writeText : P -> string -> string -> int = .write_text(encoding=...)\n\
+         extern toPath : str -> P = pathlib.Path\n\
+         extern writeText : P -> str -> str -> int = .write_text(encoding=...)\n\
          let partial = writeText (toPath \"a.txt\") \"body\"",
     )
     .unwrap();
@@ -696,11 +693,11 @@ fn extern_kwarg_slot_rejects_a_type_with_no_argument_to_spare() {
     // A slot consumes an argument of the declared arrow, so the type must have one
     // going spare: a receiver takes the first, and a nullary extern's only argument
     // is the `unit` that lowering drops.
-    let err = pyfun::compile("extern bad : string -> a = f(x=..., y=...)").unwrap_err();
+    let err = pyfun::compile("extern bad : str -> a = f(x=..., y=...)").unwrap_err();
     assert!(err.to_string().contains("2 `...` slots"), "{err}");
     assert!(err.to_string().contains("only 1 argument"), "{err}");
 
-    let err = pyfun::compile("extern bad : string -> a = .attr(k=...)").unwrap_err();
+    let err = pyfun::compile("extern bad : str -> a = .attr(k=...)").unwrap_err();
     assert!(err.to_string().contains("1 `...` slot,"), "{err}");
     assert!(err.to_string().contains("only 0 arguments"), "{err}");
 
@@ -716,7 +713,7 @@ fn e2e_extern_kwarg_slot_produces_observable_output() {
     // `int`'s real `base` kwarg, supplied by the caller rather than pinned: the same
     // extern parses hex and binary, and a partial application of it still works.
     run_and_check(
-        "extern parseIn : string -> int -> int = int(base=...)\n\
+        "extern parseIn : str -> int -> int = int(base=...)\n\
          let hex = parseIn \"ff\" 16\n\
          let bin = parseIn \"1011\" 2\n\
          let ff = parseIn \"ff\"\n\
@@ -853,7 +850,7 @@ fn e2e_zip_into_a_map_and_back() {
 #[test]
 fn try_lowers_to_a_try_except_yielding_ok_or_error() {
     let py = pyfun::compile(
-        "extern parseInt : string -> int = int\n\
+        "extern parseInt : str -> int = int\n\
          let safe s = try (parseInt s)",
     )
     .unwrap();
@@ -871,7 +868,7 @@ fn try_lowers_to_a_try_except_yielding_ok_or_error() {
 fn e2e_try_catches_and_recovers() {
     run_and_check(
         "
-        extern parseInt : string -> int = int
+        extern parseInt : str -> int = int
         let orZero s = Result.withDefault 0 (try (parseInt s))
         let good = orZero \"42\"
         let bad = orZero \"oops\"
@@ -884,7 +881,7 @@ fn e2e_try_catches_and_recovers() {
 fn e2e_try_exposes_exception_kind_and_message() {
     run_and_check(
         "
-        extern parseInt : string -> int = int
+        extern parseInt : str -> int = int
         let kindOf s =
           match try (parseInt s):
             case Ok n: \"ok\"
@@ -2555,7 +2552,7 @@ fn dataclass_fields_get_python_type_annotations() {
     // maps to `object` (mapping a user type name would risk a forward reference).
     let py = pyfun::compile(
         "type Opt a = None2 | Has a\n\
-         type Rec = { count: int, ratio: float, label: string, tags: List string, maybe: Opt int }\n\
+         type Rec = { count: int, ratio: float, label: str, tags: List str, maybe: Opt int }\n\
          let r = Rec { count = 1, ratio = 2.0, label = \"x\", tags = [], maybe = None2 }",
     )
     .unwrap();
@@ -2755,8 +2752,8 @@ fn e2e_a_deferred_field_reads_the_right_attribute() {
     // attribute read on the record that won.
     run_and_check(
         "
-        type Placed = { row: int, col: int, letter: string }
-        type Cell = { row: int, col: int, letter: string, blank: bool }
+        type Placed = { row: int, col: int, letter: str }
+        type Cell = { row: int, col: int, letter: str, blank: bool }
         let describe c =
             let l = c.letter
             let flag = c.blank
@@ -3221,7 +3218,7 @@ fn a_record_parameter_reads_the_fields_it_names() {
     // One attribute read per named field — the same attribute a `p.field` access
     // reads — and nothing for the fields it does not name.
     let py = pyfun::compile(
-        "type Cell = { row: int, col: int, letter: string }
+        "type Cell = { row: int, col: int, letter: str }
          let describe (Cell { letter, row }) = letter",
     )
     .unwrap();
@@ -3234,7 +3231,7 @@ fn a_record_parameter_reads_the_fields_it_names() {
 #[test]
 fn a_nested_record_parameter_reads_through_a_temp() {
     let py = pyfun::compile(
-        "type Cell = { letter: string }
+        "type Cell = { letter: str }
          type Pair = { left: Cell, right: Cell }
          let leftLetter (Pair { left = Cell { letter } }) = letter",
     )
@@ -3247,7 +3244,7 @@ fn a_nested_record_parameter_reads_through_a_temp() {
 fn e2e_record_parameters_round_trip() {
     run_and_check(
         "
-        type Cell = { row: int, col: int, letter: string }
+        type Cell = { row: int, col: int, letter: str }
         type Pair = { left: Cell, right: Cell }
         let describe (Cell { letter, row }) = letter
         let leftLetter (Pair { left = Cell { letter } }) = letter
@@ -3897,7 +3894,7 @@ fn native_lowers_user_sum_type_matches_to_isinstance_ladders() {
 fn native_compiles_nested_tuple_record_literal_and_as_patterns() {
     let src = "type Expr = Num int | Add Expr Expr\n\
                type Point = { x: int, y: int }\n\
-               opaque type Id = string\n\
+               opaque type Id = str\n\
                let simp e =\n  \
                  match e:\n    \
                    case Add (Num 0) b: b\n    \
@@ -4283,15 +4280,15 @@ fn e2e_an_async_callback_handed_to_python_runs() {
                extern type Writer\n\
                extern type Server\n\
                extern type Bytes\n\
-               extern startServer: (Reader -> Writer ->{e} Async unit) -> string -> int -> Async Server = asyncio.start_server\n\
-               extern openConnection: string -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
+               extern startServer: (Reader -> Writer ->{e} Async unit) -> str -> int -> Async Server = asyncio.start_server\n\
+               extern openConnection: str -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
                extern readline: Reader -> Async Bytes = .readline()\n\
                extern write: Writer -> Bytes -> unit = .write\n\
                extern drain: Writer -> Async unit = .drain()\n\
                extern closeWriter: Writer -> unit = .close()\n\
                extern closeServer: Server -> unit = .close()\n\
-               extern encode: string -> Bytes = .encode()\n\
-               extern decode: Bytes -> string = .decode()\n\
+               extern encode: str -> Bytes = .encode()\n\
+               extern decode: Bytes -> str = .decode()\n\
                let shout reader writer = async {\n  \
                  let! line = readline reader\n  \
                  write writer (encode (String.upper (decode line)))\n  \
@@ -4677,7 +4674,7 @@ fn e2e_nested_record_update() {
     run_and_check(
         "
         type Inner = { a: int, b: int }
-        type Outer = { inner: Inner, tag: string }
+        type Outer = { inner: Inner, tag: str }
         let o = Outer { inner = Inner { a = 1, b = 2 }, tag = \"x\" }
         let o2 = { o with inner.a = 99 }
         let both = { o with inner.a = 10, tag = \"y\" }
@@ -4885,7 +4882,7 @@ fn e2e_async_module_members_run_over_asyncio() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
                extern runAsync: Async a -> a = asyncio.run\n\
-               extern failing: string -> Async unit = asyncio.sleep\n\
+               extern failing: str -> Async unit = asyncio.sleep\n\
                let slow n = async { do! Async.sleep 0.01  return n }\n\
                let main = async {\n  \
                  let! xs = Async.parallel [slow 1, slow 2, slow 3]\n  \
@@ -4988,11 +4985,11 @@ fn e2e_derived_codecs_round_trip_a_rich_type() {
     // #110: a record holding a Map with tuple keys, nested cases, an Option, a
     // recursive tree, a tuple and a set survives Encode.auto → Decode.auto.
     let Some(python) = python_cmd() else { return };
-    let src = "type Placed = { letter: string, score: int }\n\
+    let src = "type Placed = { letter: str, score: int }\n\
                type Player = Ann | Bob\n\
-               type Msg = Hello Player | Move string | Resign\n\
+               type Msg = Hello Player | Move str | Resign\n\
                type Tree = Leaf | Node Tree int Tree\n\
-               type View = { board: Map (int, int) Placed, players: List Player, turn: Option Player, last: Msg, tree: Tree, pair: (string, float), tags: Set string }\n\
+               type View = { board: Map (int, int) Placed, players: List Player, turn: Option Player, last: Msg, tree: Tree, pair: (str, float), tags: Set str }\n\
                let view = View {\n  \
                  board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })],\n  \
                  players = [Ann, Bob],\n  turn = Some Bob,\n  last = Move \"K11 a QUIZ\",\n  \
@@ -5028,8 +5025,8 @@ fn e2e_derived_codecs_round_trip_a_rich_type() {
 #[test]
 fn e2e_derived_codecs_read_through_a_newtype_and_a_keyword_field() {
     let Some(python) = python_cmd() else { return };
-    let src = "opaque type UserId = string\n\
-               type Row = { class: string, id: UserId, ok: Result int string }\n\
+    let src = "opaque type UserId = str\n\
+               type Row = { class: str, id: UserId, ok: Result int str }\n\
                let row = Row { class = \"a\", id = UserId \"u1\", ok = Error \"no\" }\n\
                let wire = Encode.auto row\n\
                print wire\n\
@@ -5211,8 +5208,8 @@ fn e2e_boolean_logic() {
 #[test]
 fn e2e_extern_calls_python() {
     run_and_check(
-        "extern show: a -> string = str\n\
-         extern ord: string -> int\n\
+        "extern show: a -> str = str\n\
+         extern ord: str -> int\n\
          extern pure tan: float -> float = math.tan\n\
          let label = show 42\n\
          let code = ord \"A\"\n\
@@ -5228,7 +5225,7 @@ fn e2e_extern_import_calls_python() {
     // whose `str(...)` is stable.
     run_and_check(
         "extern import datetime\n\
-         extern parse: string -> a = datetime.datetime.fromisoformat\n\
+         extern parse: str -> a = datetime.datetime.fromisoformat\n\
          let d = parse \"2020-01-02\"",
         &[("d", "2020-01-02 00:00:00")],
     );
@@ -5710,8 +5707,8 @@ fn e2e_decode_primitives_and_totality() {
 fn e2e_decode_record_via_map_and_field() {
     // The headline: decode a heterogeneous object into your own record, totally.
     run_and_check(
-        "type Pair = { name: string, age: int }\n\
-         let dec =\n  Decode.map2 (fun name age -> Pair { name = name, age = age })\n    (Decode.field \"name\" Decode.string)\n    (Decode.field \"age\" Decode.int)\n\
+        "type Pair = { name: str, age: int }\n\
+         let dec =\n  Decode.map2 (fun name age -> Pair { name = name, age = age })\n    (Decode.field \"name\" Decode.str)\n    (Decode.field \"age\" Decode.int)\n\
          let good =\n  match Decode.decodeString dec \"\"\"{\"name\": \"ada\", \"age\": 36}\"\"\":\n    case Ok p: p.name\n    case Error e: \"?\"\n\
          let missing = Result.isError (Decode.decodeString dec \"\"\"{\"name\": \"bob\"}\"\"\")",
         &[("good", "ada"), ("missing", "True")],
@@ -5722,7 +5719,7 @@ fn e2e_decode_record_via_map_and_field() {
 fn e2e_decode_list_nullable_oneof_andthen() {
     run_and_check(
         "let nums = Result.withDefault [] (Decode.decodeString (Decode.list Decode.int) \"[1, 2, 3]\")\n\
-         let flex = Decode.oneOf [Decode.string, Decode.map String.fromInt Decode.int]\n\
+         let flex = Decode.oneOf [Decode.str, Decode.map String.fromInt Decode.int]\n\
          let fromStr = Result.withDefault \"?\" (Decode.decodeString flex \"\\\"hi\\\"\")\n\
          let fromInt = Result.withDefault \"?\" (Decode.decodeString flex \"7\")\n\
          let n = Result.withDefault (0 - 1) (Decode.decodeString (Decode.oneOf []) \"1\")",
@@ -5788,7 +5785,7 @@ fn decode_spec_fires_on_inline_field() {
     // An inline `field` + primitive decoder deforests: json.loads + an isinstance guard,
     // no combinator interpreter.
     let py = assert_decode_specialized(
-        r#"let r = Decode.decodeString (Decode.field "name" Decode.string) """{"name": "ada"}"""
+        r#"let r = Decode.decodeString (Decode.field "name" Decode.str) """{"name": "ada"}"""
 "#,
     );
     assert!(
@@ -5801,10 +5798,10 @@ fn decode_spec_fires_on_inline_field() {
 fn decode_spec_fires_through_named_decoder() {
     // A NAMED top-level decoder (through `let`) is inlined and specialized too.
     let py = assert_decode_specialized(
-        r#"type Pair = { name: string, age: int }
+        r#"type Pair = { name: str, age: int }
 let user =
   Decode.map2 (fun name age -> Pair { name = name, age = age })
-    (Decode.field "name" Decode.string)
+    (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
 let r = Decode.decodeString user """{"name": "ada", "age": 36}"""
 "#,
@@ -5824,8 +5821,8 @@ fn e2e_decode_spec_success_and_missing_field() {
   match r:
     case Ok v: f"ok: {v}"
     case Error e: f"{e.errorKind}: {e.errorMessage}"
-let good = show (Decode.decodeString (Decode.field "name" Decode.string) """{"name": "ada"}""")
-let missing = show (Decode.decodeString (Decode.field "name" Decode.string) """{"other": 1}""")
+let good = show (Decode.decodeString (Decode.field "name" Decode.str) """{"name": "ada"}""")
+let missing = show (Decode.decodeString (Decode.field "name" Decode.str) """{"other": 1}""")
 "#,
         &[("good", "ok: ada"), ("missing", "KeyError: 'name'")],
     );
@@ -5908,7 +5905,7 @@ fn e2e_decode_spec_oneof_first_match_and_all_fail() {
 let tagOf = Decode.oneOf [Decode.map (fun b -> "bool") Decode.bool, Decode.map (fun n -> "int") Decode.int]
 let firstMatch = show (Decode.decodeString tagOf "true")
 let secondMatch = show (Decode.decodeString tagOf "5")
-let allFail = show (Decode.decodeString (Decode.oneOf [Decode.string, Decode.map (fun b -> "b") Decode.bool]) "5")
+let allFail = show (Decode.decodeString (Decode.oneOf [Decode.str, Decode.map (fun b -> "b") Decode.bool]) "5")
 "#,
         &[
             ("firstMatch", "ok: bool"),
@@ -6572,7 +6569,7 @@ fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
     // block-local tuple-accumulator folder whose arm opens a block with a plain
     // value `let k = …` (a whitelisted read of `seen` via `Map.tryFind`), storing
     // the fresh element into the list slot.
-    let src = "type Leg = { depMin: int, dest: string }\n\
+    let src = "type Leg = { depMin: int, dest: str }\n\
                let dedupLegs legs =\n  \
                  let step acc leg =\n    \
                    match acc:\n      \
@@ -7032,14 +7029,14 @@ fn an_aliased_or_dotted_extern_import_re_roots_around_a_collision() {
     // `import os.path as _pf_os` makes the reference `_pf_os.join`, not
     // `_pf_os.path.join`.
     let aliased = pyfun::compile(
-        "extern import numpy as np\nextern zeros : int -> string = np.zeros\nlet np = 1\nprint (zeros 3)",
+        "extern import numpy as np\nextern zeros : int -> str = np.zeros\nlet np = 1\nprint (zeros 3)",
     )
     .unwrap();
     assert!(aliased.contains("import numpy as _pf_np"), "{aliased}");
     assert!(aliased.contains("_pf_np.zeros(3)"), "{aliased}");
 
     let dotted = pyfun::compile(
-        "extern import os.path\nextern joinp : string -> string -> string = os.path.join\nlet os = 1\nprint (joinp \"a\" \"b\")",
+        "extern import os.path\nextern joinp : str -> str -> str = os.path.join\nlet os = 1\nprint (joinp \"a\" \"b\")",
     )
     .unwrap();
     assert!(dotted.contains("import os.path as _pf_os"), "{dotted}");

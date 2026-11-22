@@ -23,7 +23,7 @@ extern take: Queue -> Async a = .get()
 
 # The protocol is one ADT: spectators, reconnection or a clock are new
 # constructors, not new plumbing.
-type Msg = Said string | Tick | Quit
+type Msg = Said str | Tick | Quit
 
 # One step of the agent's state: an effect and the next count. Sync, so the
 # recursive call below stays a *direct* tail call.

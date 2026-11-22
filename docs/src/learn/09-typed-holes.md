@@ -18,7 +18,7 @@ names |> headline |> print
 Running `pyfun check` reports the gap rather than a failure:
 
 ```console
-note: hole `?upper` has type `'a -> string` — try: String.upper, input, String.trimStart, String.trimEnd, String.rev, String.ofList, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.withDefault ?, and 18 more
+note: hole `?upper` has type `'a -> str` — try: String.upper, input, String.trimStart, String.trimEnd, String.rev, String.ofList, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.withDefault ?, and 18 more
  --> 5:15
   |
 5 |   |> List.map ?upper
@@ -75,5 +75,5 @@ print (report "ada")
 print (report "cy")
 ```
 
-`?missing` has type `int`, so `0` fits. `?render` has type `int -> 'a`, and `String.fromInt` is one of its suggested fits. Filling the second hole pins `'a` to `string`.
+`?missing` has type `int`, so `0` fits. `?render` has type `int -> 'a`, and `String.fromInt` is one of its suggested fits. Filling the second hole pins `'a` to `str`.
 </details>

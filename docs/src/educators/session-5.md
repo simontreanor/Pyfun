@@ -32,8 +32,8 @@ The thread is the boundary versus the engine: Pyfun earns its keep where the out
 and can fail, and it stays out of the way of fast native code.
 
 1. Open the [Lesson 12 exercise](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyaW5nLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg).
-   Run `check` and read the `?titleDec` note: it has type `Decoder string` and suggests
-   `Decode.string`. Fill both holes (`Decode.string`, `Decode.int`) and Run. The well-formed object
+   Run `check` and read the `?titleDec` note: it has type `Decoder str` and suggests
+   `Decode.str`. Fill both holes (`Decode.str`, `Decode.int`) and Run. The well-formed object
    becomes a typed `Book`, and the object missing `pages` becomes `failed (KeyError): 'pages'`.
 2. Make the boundary-versus-engine point: the JSON is the untyped, failable edge, and decoding turns
    it into a `Book` or a structured error before the rest of the program sees it. Contrast with

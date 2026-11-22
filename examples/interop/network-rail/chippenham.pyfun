@@ -6,7 +6,7 @@
 #
 # This is the boundary-vs-engine interop pattern taken to its limit — even the
 # streaming boundary is Pyfun. The file object from `open`/`gzip.open` is consumed
-# as a lazy `Seq string`, so a ~3 GB NDJSON snapshot streams in constant memory; a
+# as a lazy `Seq str`, so a ~3 GB NDJSON snapshot streams in constant memory; a
 # substring prefilter skips JSON parsing on the lines that can't match; and the
 # `Decode` module turns each surviving line into typed data — no dict-poking, no
 # bespoke Python. `open`/`gzip.open`'s mode + encoding and `write_text`'s encoding
@@ -31,15 +31,15 @@
 # the platform locale (cp1252 on Windows) — both correct for the feed and ~5s
 # faster on the full file. Pinning them as `extern` keyword arguments reaches
 # `encoding` (a keyword-only / deep-positional arg) with no positional filler.
-extern openText : string -> Seq string = builtins.open(mode="rt", encoding="utf-8")
-extern gzipText : string -> Seq string = gzip.open(mode="rt", encoding="utf-8")
+extern openText : str -> Seq str = builtins.open(mode="rt", encoding="utf-8")
+extern gzipText : str -> Seq str = gzip.open(mode="rt", encoding="utf-8")
 extern type Path
-extern toPath : string -> Path = pathlib.Path
-extern writeText : Path -> string -> int = pathlib.Path.write_text(encoding="utf-8", newline="\n")
+extern toPath : str -> Path = pathlib.Path
+extern writeText : Path -> str -> int = pathlib.Path.write_text(encoding="utf-8", newline="\n")
 
-type Stop = { tiploc: string, arr: string, dep: string }
-type Run  = { uid: string, days: string, stp: string, stops: List Stop }
-type Leg  = { dest: string, finalDest: string, rdays: string, depMin: int, arrMin: int, jt: int, via: List string }
+type Stop = { tiploc: str, arr: str, dep: str }
+type Run  = { uid: str, days: str, stp: str, stops: List Stop }
+type Leg  = { dest: str, finalDest: str, rdays: str, depMin: int, arrMin: int, jt: int, via: List str }
 
 let dataFile = "examples/interop/network-rail/sample.ndjson"
 let outFile  = "examples/interop/network-rail/chippenham-routes.md"
@@ -49,24 +49,24 @@ let lines path =
   if String.endsWith ".gz" path then gzipText path else openText path
 
 # --- decode the relevant lines into typed data (parse, don't validate) ---
-let optStr key = Decode.oneOf [Decode.field key Decode.string, Decode.succeed ""]
+let optStr key = Decode.oneOf [Decode.field key Decode.str, Decode.succeed ""]
 
 let tipDec =
   Decode.field "TiplocV1"
     (Decode.map2 (fun c n -> (c, n))
-      (Decode.field "tiploc_code" Decode.string)
+      (Decode.field "tiploc_code" Decode.str)
       (optStr "tps_description"))
 
 let stopDec =
   Decode.map3 (fun t a d -> (t, a, d))
-    (Decode.field "tiploc_code" Decode.string)
+    (Decode.field "tiploc_code" Decode.str)
     (optStr "public_arrival")
     (optStr "public_departure")
 
 let schedDec =
   Decode.field "JsonScheduleV1"
     (Decode.map4 (fun uid days stp stops -> (uid, days, stp, stops))
-      (Decode.field "CIF_train_uid" Decode.string)
+      (Decode.field "CIF_train_uid" Decode.str)
       (optStr "schedule_days_runs")
       (optStr "CIF_stp_indicator")
       (Decode.field "schedule_segment" (Decode.field "schedule_location" (Decode.list stopDec))))

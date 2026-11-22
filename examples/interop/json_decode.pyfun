@@ -8,8 +8,8 @@
 
 # A JSON array of one type decodes to a `List`; a flat object to a `Map`. `= json.loads`
 # auto-imports `json`; the boundary is effectful, so both are `io`.
-extern parseFloats: string -> List float = json.loads
-extern parseScores: string -> Map string float = json.loads
+extern parseFloats: str -> List float = json.loads
+extern parseScores: str -> Map str float = json.loads
 
 # `try` catches a malformed string into `Error`; the `match` forces you to handle it.
 let sumJson s =
