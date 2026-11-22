@@ -2336,8 +2336,42 @@ pub fn check_reporting(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<TypeSpan>, Vec<Hole>, Vec<Warning>) {
-    let (errors, types, _exports, holes, _ordered, _codecs, warnings) = run(module, true, imports);
+    let (errors, types, holes, warnings, _missing) = check_for_editor(module, imports);
     (errors, types, holes, warnings)
+}
+
+/// What a non-exhaustive `match` leaves out, for an editor's "add the missing
+/// cases" (`DESIGN.md` §9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingCases {
+    /// The span of the `match` expression, which is also its error's.
+    pub span: Span,
+    /// A pattern for each case no arm takes, as source text (`None`,
+    /// `Rect { width = _, height = _ }`, `(False, _)`), in the order the
+    /// checker finds them. Together with the arms already written they cover
+    /// the type, unless the list was cut short at [`MAX_MISSING_CASES`].
+    pub cases: Vec<String>,
+}
+
+/// The most cases [`MissingCases`] lists for one `match`.
+pub const MAX_MISSING_CASES: usize = 24;
+
+/// [`check_reporting`], with the missing cases of each non-exhaustive `match`.
+#[allow(clippy::type_complexity)]
+pub fn check_for_editor(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (
+    Vec<TypeError>,
+    Vec<TypeSpan>,
+    Vec<Hole>,
+    Vec<Warning>,
+    Vec<MissingCases>,
+) {
+    let mut missing = Vec::new();
+    let (errors, types, _exports, holes, _ordered, _codecs, warnings) =
+        run_inner(module, true, imports, &mut missing);
+    (errors, types, holes, warnings, missing)
 }
 
 /// The imports of `module` that nothing in it uses. An import is used by a
@@ -2452,6 +2486,16 @@ type RunResult = (
 );
 
 fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) -> RunResult {
+    run_inner(module, record, imports, &mut Vec::new())
+}
+
+/// [`run`], also handing back what each non-exhaustive `match` leaves out.
+fn run_inner(
+    module: &Module,
+    record: bool,
+    imports: &HashMap<String, ModuleExports>,
+    missing_cases: &mut Vec<MissingCases>,
+) -> RunResult {
     let mut errors = Vec::new();
     // `build_decls` registers imported type *names* mid-way through, so a local
     // `type` declaration can be written in terms of an imported type; it hands back
@@ -2815,6 +2859,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
     // Warnings: the checker's own (an arm that cannot match), an import nothing
     // here uses, and the ones the syntax alone shows ([`crate::lint`]).
     let mut warnings = std::mem::take(&mut inf.warnings);
+    *missing_cases = std::mem::take(&mut inf.missing_cases);
     warnings.extend(unused_imports(module, imports, &inf.touched_records));
     warnings.extend(crate::lint::lint(module, !holes.is_empty()));
     warnings.sort_by_key(|w| (w.span.start, w.span.end));
@@ -6886,6 +6931,8 @@ struct Infer {
     auto_sites: Vec<(Span, Ty)>,
     /// Warnings found while inferring (today, a `case` arm that cannot match).
     warnings: Vec<Warning>,
+    /// What each non-exhaustive `match` leaves out ([`MissingCases`]).
+    missing_cases: Vec<MissingCases>,
     /// Records and sum types whose fields some access, update, literal or
     /// pattern resolved to. A field read by name uses its record's module
     /// without naming it, which the unused-import warning has to know.
@@ -10236,6 +10283,26 @@ impl Infer {
         } else {
             format!("non-exhaustive match: `{pat}` is not matched")
         };
+        // Every case the arms leave out, for an editor to write in: the witness
+        // joins the arms and the search runs again, until nothing is left out.
+        let mut cases = vec![pat.clone()];
+        let mut rows = matrix.clone();
+        rows.push(vec![self.witness_pattern(&witness[0])]);
+        while cases.len() < MAX_MISSING_CASES {
+            self.seq_guard = rows.iter().flatten().any(has_suffix_star);
+            self.seq_visiting.clear();
+            let Some(next) = self.useful(&rows, &types) else {
+                break;
+            };
+            let text = self.render_witness(&next[0], false);
+            // A witness the search cannot get past would repeat for ever.
+            if cases.contains(&text) {
+                break;
+            }
+            cases.push(text);
+            rows.push(vec![self.witness_pattern(&next[0])]);
+        }
+        self.missing_cases.push(MissingCases { span, cases });
         // When the arms would cover the type if their guards always held, the
         // reader can see an arm for the "missing" value and the message above
         // looks wrong. Say why that arm does not count.
@@ -10739,6 +10806,82 @@ impl Infer {
 
     /// Render a witness value as a Pyfun pattern for a diagnostic. `atom` requests
     /// parenthesization where a constructor application would bind too loosely.
+    /// The pattern that matches exactly the values a witness stands for: what
+    /// an arm written from [`Infer::render_witness`]'s text would parse to.
+    fn witness_pattern(&self, w: &Wit) -> Pattern {
+        let span = crate::parser::ast::NodeSpan::new(Span::new(0, 0));
+        let fields = |names: Vec<String>, args: &[Wit]| -> Vec<crate::parser::ast::FieldPattern> {
+            names
+                .into_iter()
+                .zip(args)
+                .map(|(name, arg)| crate::parser::ast::FieldPattern {
+                    name,
+                    name_span: span,
+                    pattern: self.witness_pattern(arg),
+                })
+                .collect()
+        };
+        match w {
+            Wit::Wild => Pattern::Wildcard,
+            Wit::Con(Tag::Bool(b), _) => Pattern::Bool(*b),
+            Wit::Con(Tag::Int(n), _) => Pattern::Int(*n),
+            Wit::Con(Tag::Str(s), _) => Pattern::Str(s.clone()),
+            Wit::Con(Tag::Sum(name), args) => match self.named_ctor_fields(name) {
+                Some(names) => Pattern::Record {
+                    ty: name.clone(),
+                    ty_span: span,
+                    fields: fields(names.clone(), args),
+                },
+                None => Pattern::Ctor {
+                    name: name.clone(),
+                    name_span: span,
+                    args: args.iter().map(|a| self.witness_pattern(a)).collect(),
+                },
+            },
+            Wit::Con(Tag::Record(name), args) => Pattern::Record {
+                ty: name.clone(),
+                ty_span: span,
+                fields: fields(
+                    self.decls.records[name]
+                        .fields
+                        .iter()
+                        .map(|(f, _)| f.clone())
+                        .collect(),
+                    args,
+                ),
+            },
+            Wit::Con(Tag::Tuple(_), args) => Pattern::Tuple {
+                elems: args.iter().map(|a| self.witness_pattern(a)).collect(),
+            },
+            Wit::Con(Tag::Nil, _) => Pattern::List {
+                prefix: Vec::new(),
+                rest: None,
+                suffix: Vec::new(),
+            },
+            // Walk the `Cons` spine: `[a, b]` when it ends at `Nil`, `[a, *_]`
+            // when the tail is open.
+            Wit::Con(Tag::Cons, _) => {
+                let mut prefix = Vec::new();
+                let mut cur = w;
+                let rest = loop {
+                    match cur {
+                        Wit::Con(Tag::Cons, args) => {
+                            prefix.push(self.witness_pattern(&args[0]));
+                            cur = &args[1];
+                        }
+                        Wit::Con(Tag::Nil, _) => break None,
+                        _ => break Some(Box::new(Pattern::Wildcard)),
+                    }
+                };
+                Pattern::List {
+                    prefix,
+                    rest,
+                    suffix: Vec::new(),
+                }
+            }
+        }
+    }
+
     fn render_witness(&self, w: &Wit, atom: bool) -> String {
         match w {
             Wit::Wild => "_".to_string(),

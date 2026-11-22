@@ -31,6 +31,7 @@
 //! message-handling core ([`Server::handle`]) is pure — JSON in, JSON out — so it
 //! is tested directly without spawning a process or touching stdio.
 
+pub mod actions;
 pub mod hints;
 pub mod json;
 pub mod resolve;
@@ -307,6 +308,10 @@ impl Server {
             }
             Some("textDocument/signatureHelp") => {
                 let result = self.signature_help(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/codeAction") => {
+                let result = self.code_actions(msg);
                 vec![response(id, result)]
             }
             Some("workspace/symbol") => {
@@ -1397,6 +1402,67 @@ impl Server {
         Json::Array(symbols)
     }
 
+    /// Code actions: the quick fixes for the diagnostics the requested range
+    /// touches (the missing arms of a `match`, an unused name, an unused
+    /// import), each as a `WorkspaceEdit` on this document. See [`actions`] and
+    /// `DESIGN.md` §9.
+    fn code_actions(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let (Some(uri), Some(analysis)) = (uri, uri.and_then(|u| self.analysis(u))) else {
+            return Json::Array(vec![]);
+        };
+        let (Some(text), Some(module)) = (self.text(uri), analysis.module.as_ref()) else {
+            return Json::Array(vec![]);
+        };
+        let bound = |end: &str| {
+            let at = params
+                .and_then(|p| p.get("range"))
+                .and_then(|r| r.get(end))?;
+            Some(position_to_byte(
+                text,
+                at.get("line").and_then(Json::as_i64)? as u32,
+                at.get("character").and_then(Json::as_i64)? as u32,
+            ))
+        };
+        let (Some(from), Some(to)) = (bound("start"), bound("end")) else {
+            return Json::Array(vec![]);
+        };
+        Json::Array(
+            actions::fixes(module, text, &analysis.missing_cases, &analysis.warnings)
+                .into_iter()
+                .filter(|fix| fix.answers.start <= to && from <= fix.answers.end)
+                .map(|fix| {
+                    let edits = fix
+                        .edits
+                        .into_iter()
+                        .map(|(span, new_text)| {
+                            obj(vec![
+                                ("range", span_range(text, span)),
+                                ("newText", str(new_text)),
+                            ])
+                        })
+                        .collect();
+                    obj(vec![
+                        ("title", str(fix.title)),
+                        ("kind", str("quickfix")),
+                        ("isPreferred", Json::Bool(true)),
+                        (
+                            "edit",
+                            obj(vec![(
+                                "changes",
+                                Json::Object(vec![(uri.to_string(), Json::Array(edits))]),
+                            )]),
+                        ),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
     /// Signature help: while a call's arguments are being written, the
     /// function's type as hover shows it (`name : type`), with the parameter the
     /// cursor is on marked as active, and the function's documentation. The
@@ -1801,6 +1867,13 @@ fn initialize_result() -> Json {
                 ("completionProvider", obj(vec![])),
                 ("documentSymbolProvider", Json::Bool(true)),
                 ("inlayHintProvider", Json::Bool(true)),
+                (
+                    "codeActionProvider",
+                    obj(vec![(
+                        "codeActionKinds",
+                        Json::Array(vec![str("quickfix")]),
+                    )]),
+                ),
                 // A call is juxtaposition, so a space is what opens an argument.
                 (
                     "signatureHelpProvider",
@@ -3246,6 +3319,84 @@ let n = max 1",
         assert!(
             server.exports.borrow().is_empty(),
             "cycle-context interfaces must not be cached"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_the_fix_for_the_diagnostic_under_the_cursor() {
+        let mut server = Server::default();
+        let uri = "file:///fix.pyfun";
+        let text = "type Light = Red | Amber | Green\nlet go light =\n    match light:\n        case Red: False\nlet unused _ =\n    let spare = 1\n    2";
+        server.handle(&json::parse(&open_msg(uri, text)).unwrap());
+        let actions = |server: &mut Server, line: i64| -> Vec<Json> {
+            let req = obj(vec![
+                ("jsonrpc", str("2.0")),
+                ("id", int(1)),
+                ("method", str("textDocument/codeAction")),
+                (
+                    "params",
+                    obj(vec![
+                        ("textDocument", obj(vec![("uri", str(uri))])),
+                        (
+                            "range",
+                            obj(vec![
+                                (
+                                    "start",
+                                    obj(vec![("line", int(line)), ("character", int(8))]),
+                                ),
+                                ("end", obj(vec![("line", int(line)), ("character", int(8))])),
+                            ]),
+                        ),
+                        ("context", obj(vec![("diagnostics", Json::Array(vec![]))])),
+                    ]),
+                ),
+            ]);
+            server.handle(&req)[0]
+                .get("result")
+                .and_then(Json::as_array)
+                .expect("an array of actions")
+                .to_vec()
+        };
+        // On the `match`: one quick fix, inserting both arms after the last.
+        let found = actions(&mut server, 3);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let fix = &found[0];
+        assert_eq!(
+            fix.get("title").and_then(Json::as_str),
+            Some("Add the 2 missing cases")
+        );
+        assert_eq!(fix.get("kind").and_then(Json::as_str), Some("quickfix"));
+        let edits = fix
+            .get("edit")
+            .and_then(|e| e.get("changes"))
+            .and_then(|c| c.get(uri))
+            .and_then(Json::as_array)
+            .expect("edits for this document");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].get("newText").and_then(Json::as_str),
+            Some("\n        case Amber: ?\n        case Green: ?")
+        );
+        let start = edits[0].get("range").and_then(|r| r.get("start")).unwrap();
+        assert_eq!(start.get("line").and_then(Json::as_i64), Some(3));
+        assert_eq!(start.get("character").and_then(Json::as_i64), Some(23));
+
+        // On the unused name: the rename, and nothing about the `match`.
+        let found = actions(&mut server, 5);
+        let titles: Vec<&str> = found
+            .iter()
+            .filter_map(|a| a.get("title").and_then(Json::as_str))
+            .collect();
+        assert_eq!(titles, vec!["Rename to `_spare`"]);
+
+        // Nothing to fix on the type declaration.
+        assert!(actions(&mut server, 0).is_empty());
+        // The server says it has quick fixes.
+        assert!(
+            initialize_result()
+                .get("capabilities")
+                .and_then(|c| c.get("codeActionProvider"))
+                .is_some()
         );
     }
 

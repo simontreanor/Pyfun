@@ -2618,7 +2618,7 @@ the Rust crate layout and how each of these is built; the language-relevant surf
 
 **Language server (`pyfun lsp`).** A dependency-free stdio server that reuses the front end: live
 diagnostics; hover showing the inferred type and its effects (the only way to *see* an inferred type
-without provoking an error, since types are never written); inlay hints; signature help;
+without provoking an error, since types are never written); inlay hints; signature help; quick fixes;
 go-to-definition, find-references, rename, completion, and document symbols; cross-file across a
 project's modules (§6.1); over resilient parsing, so a half-typed file still navigates. A thin VS Code
 client launches it.
@@ -2641,6 +2641,15 @@ it sharpens as arguments pin its variables: `List.map` reads `(a -> b) -> List a
 function is written and `(str -> str) -> List str -> List str` after. The call is the innermost one the
 cursor is in; a function passed as an argument is not being called, so after `List.map double ` the
 help is still `List.map`'s. Once every parameter has its argument there is nothing left to show.
+
+**Quick fixes.** Where the compiler has said what is wrong and the remedy is mechanical, the editor
+offers to apply it. A non-exhaustive `match` gets "Add the missing cases": an arm for every case the
+arms leave out, written after the last arm at its indentation, each with a typed hole for a body (`case
+Amber: ?`), so the match is complete at once and each hole reports the type its arm has to produce. The
+cases are the exhaustiveness checker's own witnesses, found by adding each to the arms and searching
+again, so they reach inside a constructor or a tuple (`(False, _)`) and stop when the type is covered.
+An unused local `let` gets "Rename to `_name`", and an unused `import` or `extern import` gets "Remove
+the unused import".
 
 **Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
 infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP

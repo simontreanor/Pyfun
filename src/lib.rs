@@ -74,6 +74,9 @@ pub struct Analysis {
     /// Warnings (an unreachable arm, an unused binding or import, a top-level
     /// name bound twice), surfaced by the LSP at `Warning` severity.
     pub warnings: Vec<diagnostics::Warning>,
+    /// What each non-exhaustive `match` leaves out, for the LSP's "add the
+    /// missing cases".
+    pub missing_cases: Vec<types::MissingCases>,
     /// Whether the document lexed and parsed with no syntax errors. Mutating
     /// features (rename) require this — a partial module could hide occurrences.
     pub parse_ok: bool,
@@ -119,7 +122,8 @@ pub fn analyze_with_imports(
     let (tokens, lex_errors) = lexer::lex_recover(source);
     let (module, parse_errors) = parser::parse_recover(tokens);
     let imports = resolve(&module);
-    let (type_errors, types, holes, warnings) = types::check_reporting(&module, &imports);
+    let (type_errors, types, holes, warnings, missing_cases) =
+        types::check_for_editor(&module, &imports);
     // Syntax errors (lex + parse) take precedence and suppress type errors; sorted
     // by position so cascading errors read top-to-bottom.
     let mut syntax_errors: Vec<_> = lex_errors
@@ -141,6 +145,8 @@ pub fn analyze_with_imports(
         holes: if parse_ok { holes } else { Vec::new() },
         // So do warnings: a half-typed file has unused names everywhere.
         warnings: if parse_ok { warnings } else { Vec::new() },
+        // And a fix for an error that is not being shown.
+        missing_cases: if parse_ok { missing_cases } else { Vec::new() },
         parse_ok,
     }
 }
