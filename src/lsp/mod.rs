@@ -34,6 +34,7 @@
 pub mod hints;
 pub mod json;
 pub mod resolve;
+pub mod signature;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -302,6 +303,10 @@ impl Server {
             }
             Some("textDocument/inlayHint") => {
                 let result = self.inlay_hints(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/signatureHelp") => {
+                let result = self.signature_help(msg);
                 vec![response(id, result)]
             }
             Some("workspace/symbol") => {
@@ -1392,6 +1397,95 @@ impl Server {
         Json::Array(symbols)
     }
 
+    /// Signature help: while a call's arguments are being written, the
+    /// function's type as hover shows it (`name : type`), with the parameter the
+    /// cursor is on marked as active, and the function's documentation. The
+    /// type is the one recorded at this use, so it sharpens as arguments pin
+    /// its variables. Nothing is shown once every parameter has its argument.
+    /// See [`signature`] and `DESIGN.md` §9.
+    fn signature_help(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let position = params.and_then(|p| p.get("position"));
+        let (Some(uri), Some(position)) = (uri, position) else {
+            return Json::Null;
+        };
+        let (Some(text), Some(analysis)) = (self.text(uri), self.analysis(uri)) else {
+            return Json::Null;
+        };
+        let Some(module) = analysis.module.as_ref() else {
+            return Json::Null;
+        };
+        let line = position.get("line").and_then(Json::as_i64).unwrap_or(0) as u32;
+        let character = position
+            .get("character")
+            .and_then(Json::as_i64)
+            .unwrap_or(0) as u32;
+        let offset = position_to_byte(text, line, character);
+        let Some(call) = signature::call_at(module, text, offset) else {
+            return Json::Null;
+        };
+        // The function's type at this use: the outermost node recorded at its
+        // span (a desugared node reuses its span for its parts).
+        let Some(shown) = analysis
+            .types
+            .iter()
+            .rev()
+            .find(|t| t.span == call.head)
+            .map(|t| t.ty.as_str())
+        else {
+            return Json::Null;
+        };
+        let arrows = crate::types::shown_arrows(shown);
+        // Every part but the last is a parameter; a value has none, and a call
+        // with all of its arguments written has nothing left to show.
+        let parameters = &arrows.parts[..arrows.parts.len() - 1];
+        if call.active >= parameters.len() {
+            return Json::Null;
+        }
+        let name = &text[call.head.start..call.head.end];
+        let label = format!("{name} : {shown}");
+        let lead = label.len() - shown.len();
+        // Label offsets are counted in UTF-16 code units.
+        let utf16 = |byte: usize| label[..byte].encode_utf16().count() as i64;
+        let parameters: Vec<Json> = parameters
+            .iter()
+            .map(|part| {
+                obj(vec![(
+                    "label",
+                    Json::Array(vec![
+                        int(utf16(lead + part.start)),
+                        int(utf16(lead + part.end)),
+                    ]),
+                )])
+            })
+            .collect();
+        let doc = crate::types::member_doc(name)
+            .map(str::to_string)
+            .or_else(|| item_doc(module, name));
+        let mut info = vec![
+            ("label", str(label)),
+            ("parameters", Json::Array(parameters)),
+        ];
+        if let Some(doc) = doc {
+            info.push((
+                "documentation",
+                obj(vec![
+                    ("kind", str("markdown")),
+                    ("value", str(doc_to_markdown(&doc))),
+                ]),
+            ));
+        }
+        obj(vec![
+            ("signatures", Json::Array(vec![obj(info)])),
+            ("activeSignature", int(0)),
+            ("activeParameter", int(call.active as i64)),
+        ])
+    }
+
     /// Inlay hints: the inferred type of each binding in the requested range,
     /// written beside it in Python's notation (`total: int`, `shape: Shape`,
     /// `-> float`). See [`hints`] and `DESIGN.md` §9.
@@ -1707,6 +1801,14 @@ fn initialize_result() -> Json {
                 ("completionProvider", obj(vec![])),
                 ("documentSymbolProvider", Json::Bool(true)),
                 ("inlayHintProvider", Json::Bool(true)),
+                // A call is juxtaposition, so a space is what opens an argument.
+                (
+                    "signatureHelpProvider",
+                    obj(vec![(
+                        "triggerCharacters",
+                        Json::Array(vec![str(" "), str("(")]),
+                    )]),
+                ),
                 ("workspaceSymbolProvider", Json::Bool(true)),
             ]),
         ),
@@ -3145,6 +3247,58 @@ let n = max 1",
             server.exports.borrow().is_empty(),
             "cycle-context interfaces must not be cached"
         );
+    }
+
+    #[test]
+    fn signature_help_marks_the_parameter_being_written() {
+        let mut server = Server::default();
+        let uri = "file:///sig.pyfun";
+        let text = "## Join `word` to itself `times` times.\nlet shout times word = String.repeat times (String.upper word)\nlet a = shout 3 \nlet b = List.map (fun x -> String.upper x) \nlet c = shout 3 \"hey\" ";
+        server.handle(&json::parse(&open_msg(uri, text)).unwrap());
+        let help = |server: &mut Server, line: i64, character: i64| {
+            let req = pos_msg("textDocument/signatureHelp", uri, line, character);
+            server.handle(&json::parse(&req).unwrap())[0]
+                .get("result")
+                .cloned()
+                .unwrap()
+        };
+        let range = |param: &Json| -> (i64, i64) {
+            let label = param.get("label").and_then(Json::as_array).unwrap();
+            (label[0].as_i64().unwrap(), label[1].as_i64().unwrap())
+        };
+
+        // `shout 3 ▮`: the second parameter, `str`, with the `##` doc.
+        let shown = help(&mut server, 2, 16);
+        let sig = &shown.get("signatures").and_then(Json::as_array).unwrap()[0];
+        let label = sig.get("label").and_then(Json::as_str).unwrap();
+        assert_eq!(label, "shout : int -> str -> str");
+        assert_eq!(shown.get("activeParameter").and_then(Json::as_i64), Some(1));
+        let params = sig.get("parameters").and_then(Json::as_array).unwrap();
+        let cut = |(from, to): (i64, i64)| &label[from as usize..to as usize];
+        assert_eq!(cut(range(&params[0])), "int");
+        assert_eq!(cut(range(&params[1])), "str");
+        assert_eq!(
+            sig.get("documentation")
+                .and_then(|d| d.get("value"))
+                .and_then(Json::as_str),
+            Some("Join `word` to itself `times` times.")
+        );
+
+        // A built-in, at this use: the lambda has pinned its element type.
+        let shown = help(&mut server, 3, 43);
+        let sig = &shown.get("signatures").and_then(Json::as_array).unwrap()[0];
+        let label = sig.get("label").and_then(Json::as_str).unwrap();
+        assert!(
+            label.starts_with("List.map : (str -> str) -> List str"),
+            "{label}"
+        );
+        assert_eq!(shown.get("activeParameter").and_then(Json::as_i64), Some(1));
+        assert!(sig.get("documentation").is_some(), "List.map is documented");
+
+        // Every parameter has its argument: nothing to show.
+        assert_eq!(help(&mut server, 4, 22), Json::Null);
+        // Not in a call.
+        assert_eq!(help(&mut server, 1, 3), Json::Null);
     }
 
     #[test]

@@ -513,8 +513,9 @@ after the release.
     docstrings.
 18. **LSP: inlay hints, code actions, signature help** (M each). **Inlay hints DONE 2026-11-22**:
     `total: int`, `shape: Shape` and `-> float` beside each binding, in Python's notation
-    (`DESIGN.md` §9). Still to come: signature help and code actions. "Add missing cases" can
-    reuse the exhaustiveness witnesses.
+    (`DESIGN.md` §9). **Signature help DONE 2026-11-22**: the function's type while its arguments
+    are written, the active parameter picked out. Still to come: code actions. "Add missing
+    cases" can reuse the exhaustiveness witnesses.
 
 **Larger**
 
