@@ -1557,7 +1557,8 @@ fingers, and most Python-shaped mistakes are errors anyway, at a token that says
 expression, found =`). So the compiler reads the shape and names the form that replaces it: `x = 5`
 (`let x = …`, or `x <- …` for a `let mut`), `x += 1`, a `for` or `while` statement, `class`, `def`,
 `import math` and `from … import` (`extern import`), `lambda x: …` (`fun x -> …`), a `{x:.2f}` format
-spec (the `Format` module), `xs[0]` (`List.get i xs`), `s.upper()` (`String.upper s`), and a member
+spec (the `Format` module), `xs[0]` (`List.get i xs`), `s.upper()` (`String.upper s`), a call written
+`f(a, b)` (`f a b`), the conditional expression `a if c else b` (`if c then a else b`), and a member
 called by another language's word (`Map.get` is answered with `Map.find`, `List.append` with
 `List.concat`). Two rules keep this honest. A hint needs the whole Python shape, so a program that
 merely names something `lambda` or `for` is untouched; and a type-directed hint fires only on a
