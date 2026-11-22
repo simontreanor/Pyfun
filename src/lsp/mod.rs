@@ -31,6 +31,7 @@
 //! message-handling core ([`Server::handle`]) is pure — JSON in, JSON out — so it
 //! is tested directly without spawning a process or touching stdio.
 
+pub mod hints;
 pub mod json;
 pub mod resolve;
 
@@ -297,6 +298,10 @@ impl Server {
             }
             Some("textDocument/documentSymbol") => {
                 let result = self.document_symbols(msg);
+                vec![response(id, result)]
+            }
+            Some("textDocument/inlayHint") => {
+                let result = self.inlay_hints(msg);
                 vec![response(id, result)]
             }
             Some("workspace/symbol") => {
@@ -1387,6 +1392,54 @@ impl Server {
         Json::Array(symbols)
     }
 
+    /// Inlay hints: the inferred type of each binding in the requested range,
+    /// written beside it in Python's notation (`total: int`, `shape: Shape`,
+    /// `-> float`). See [`hints`] and `DESIGN.md` §9.
+    fn inlay_hints(&self, msg: &Json) -> Json {
+        let params = msg.get("params");
+        let uri = params
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let (Some(uri), Some(analysis)) = (uri, uri.and_then(|u| self.analysis(u))) else {
+            return Json::Array(vec![]);
+        };
+        let (Some(text), Some(module)) = (self.text(uri), analysis.module.as_ref()) else {
+            return Json::Array(vec![]);
+        };
+        // The range the editor is showing; without one, the whole document.
+        let bound = |end: &str| {
+            let at = params
+                .and_then(|p| p.get("range"))
+                .and_then(|r| r.get(end))?;
+            Some(position_to_byte(
+                text,
+                at.get("line").and_then(Json::as_i64)? as u32,
+                at.get("character").and_then(Json::as_i64)? as u32,
+            ))
+        };
+        let (from, to) = (
+            bound("start").unwrap_or(0),
+            bound("end").unwrap_or(text.len()),
+        );
+        Json::Array(
+            hints::hints(module, &analysis.types)
+                .into_iter()
+                .filter(|hint| from <= hint.offset && hint.offset <= to)
+                .map(|hint| {
+                    let (line, character) = byte_to_position(text, hint.offset);
+                    obj(vec![
+                        ("position", position(line, character)),
+                        ("label", str(hint.label)),
+                        // 1 = Type.
+                        ("kind", int(1)),
+                        ("paddingLeft", Json::Bool(hint.padding_left)),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
     /// Workspace symbols: every module-level definition across the project's
     /// `.pyfun` files (the flat single-directory namespace), filtered by the query
     /// substring (case-insensitive), as `SymbolInformation[]` with cross-file
@@ -1653,6 +1706,7 @@ fn initialize_result() -> Json {
                 // An (empty) CompletionOptions object enables completion.
                 ("completionProvider", obj(vec![])),
                 ("documentSymbolProvider", Json::Bool(true)),
+                ("inlayHintProvider", Json::Bool(true)),
                 ("workspaceSymbolProvider", Json::Bool(true)),
             ]),
         ),
@@ -3090,6 +3144,82 @@ let n = max 1",
         assert!(
             server.exports.borrow().is_empty(),
             "cycle-context interfaces must not be cached"
+        );
+    }
+
+    #[test]
+    fn inlay_hints_show_inferred_types_in_the_requested_range() {
+        let mut server = Server::default();
+        let uri = "file:///hints.pyfun";
+        let text =
+            "let xs = [1, 2, 3]\nlet shout times word = String.repeat times (String.upper word)";
+        server.handle(&json::parse(&open_msg(uri, text)).unwrap());
+        let request = |from: i64, to: i64| {
+            obj(vec![
+                ("jsonrpc", str("2.0")),
+                ("id", int(1)),
+                ("method", str("textDocument/inlayHint")),
+                (
+                    "params",
+                    obj(vec![
+                        ("textDocument", obj(vec![("uri", str(uri))])),
+                        (
+                            "range",
+                            obj(vec![
+                                (
+                                    "start",
+                                    obj(vec![("line", int(from)), ("character", int(0))]),
+                                ),
+                                ("end", obj(vec![("line", int(to)), ("character", int(0))])),
+                            ]),
+                        ),
+                    ]),
+                ),
+            ])
+        };
+        let shown = |server: &mut Server, from: i64, to: i64| -> Vec<(i64, i64, String, bool)> {
+            let out = server.handle(&request(from, to));
+            out[0]
+                .get("result")
+                .and_then(Json::as_array)
+                .expect("an array of hints")
+                .iter()
+                .map(|hint| {
+                    let at = hint.get("position").unwrap();
+                    (
+                        at.get("line").and_then(Json::as_i64).unwrap(),
+                        at.get("character").and_then(Json::as_i64).unwrap(),
+                        hint.get("label")
+                            .and_then(Json::as_str)
+                            .unwrap()
+                            .to_string(),
+                        hint.get("paddingLeft") == Some(&Json::Bool(true)),
+                    )
+                })
+                .collect()
+        };
+        // The whole document: the value's type after its name, then each
+        // parameter's and the result ahead of the `=`.
+        assert_eq!(
+            shown(&mut server, 0, 2),
+            vec![
+                (0, 6, ": List int".to_string(), false),
+                (1, 15, ": int".to_string(), false),
+                (1, 20, ": str".to_string(), false),
+                (1, 20, "-> str".to_string(), true),
+            ]
+        );
+        // Only the first line.
+        assert_eq!(
+            shown(&mut server, 0, 1),
+            vec![(0, 6, ": List int".to_string(), false)]
+        );
+        // The server says it has them.
+        let init = initialize_result();
+        assert_eq!(
+            init.get("capabilities")
+                .and_then(|c| c.get("inlayHintProvider")),
+            Some(&Json::Bool(true))
         );
     }
 

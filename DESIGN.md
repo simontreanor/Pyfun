@@ -2618,9 +2618,19 @@ the Rust crate layout and how each of these is built; the language-relevant surf
 
 **Language server (`pyfun lsp`).** A dependency-free stdio server that reuses the front end: live
 diagnostics; hover showing the inferred type and its effects (the only way to *see* an inferred type
-without provoking an error, since types are never written); go-to-definition, find-references, rename,
-completion, and document symbols; cross-file across a project's modules (§6.1); over resilient parsing,
+without provoking an error, since types are never written); inlay hints; go-to-definition,
+find-references, rename, completion, and document symbols; cross-file across a project's modules (§6.1); over resilient parsing,
 so a half-typed file still navigates. A thin VS Code client launches it.
+
+**Inlay hints.** Types are never written in a `let`, so the editor writes them in for the reader:
+`total: int` after a value's name, `shape: Shape` after each parameter, and `-> float` ahead of the `=`
+of a function, with the effect the call performs on that last arrow (`->{io} unit`). The notation is
+the one Python annotates with, because that is where a Python reader looks for a type. The pieces of a
+function's hints are cut from its one displayed type, so a type variable reads the same in each (`x:
+a`, `y: b`, `-> (a, b)`); the constraints on those variables (`num a`) stay with hover, which shows the
+whole type. A name bound to a literal gets no hint, and neither does a name that opens with `_`. A hint
+is the editor's text and none of it is Pyfun syntax: typed into a `let`, it is answered with "a `let`
+is written without a type".
 
 **Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
 infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP
