@@ -42,7 +42,7 @@ let bad = describe (Email "ana@example.org")
 ```
 
 ```console
-error: type mismatch: expected UserId, found Email
+error: type mismatch: expected `UserId`, found `Email`
 ```
 
 The distinction exists only during type checking. Like units of measure, an opaque type erases at
@@ -108,7 +108,7 @@ print label
 The checker reports:
 
 ```console
-error: type mismatch: expected OrderId, found str
+error: type mismatch: expected `OrderId`, found `str`
   --> 11:13
    |
 11 | let label = order_label raw

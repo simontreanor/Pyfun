@@ -666,7 +666,7 @@ substitution maps, instantiates each candidate scheme, unifies against the resol
 restores). Fits are ranked by the hole's own name first (`name_affinity`: `?upper` puts a member named
 `upper` ahead, then names containing it), then most-specific (fewest generalized variables), unqualified
 names before qualified module members, and prelude declaration order (`prelude_rank`) rather than the
-alphabet. The list is capped at 6 and says `and N more` when it cuts; a fully-unconstrained hole (`'a`)
+alphabet. The list is capped at 6 and says `and N more` when it cuts; a fully-unconstrained hole (`a`)
 lists none. **Refinement fits**
 go further: a function binding whose *result* — after applying one or two arguments — unifies with the
 hole's type is reported *applied to that many further holes* (`String.upper ?`, `String.concat ? ?`).

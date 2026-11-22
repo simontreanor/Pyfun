@@ -6804,7 +6804,7 @@ impl Infer {
                 Ok((NumRef::Var(v), u))
             }
             other => Err(TypeError {
-                message: format!("expected int, found {}", show(&other)),
+                message: format!("expected `int`, found `{}`", show(&other)),
                 span,
             }),
         }
@@ -6903,7 +6903,7 @@ impl Infer {
     ) -> Result<(), TypeError> {
         let applied = self.apply(ty);
         let unsupported = |t: &Ty| TypeError {
-            message: format!("type {} does not support comparison (`<`)", show(t)),
+            message: format!("type `{}` does not support comparison (`<`)", show(t)),
             span,
         };
         match &applied {
@@ -6950,7 +6950,7 @@ impl Infer {
                 if visiting.len() > MAX_ORD_DEPTH {
                     return Err(TypeError {
                         message: format!(
-                            "type {} is too deeply nested to check for comparison",
+                            "type `{}` is too deeply nested to check for comparison",
                             show(&applied)
                         ),
                         span,
@@ -7316,7 +7316,7 @@ impl Infer {
                     return Err(TypeError {
                         message: format!(
                             "a partial active pattern's body must return `Option a` (a \
-                             binding case) or `bool` (a predicate), found {}",
+                             binding case) or `bool` (a predicate), found `{}`",
                             show(&other)
                         ),
                         span: decl.value.span(),
@@ -7695,7 +7695,7 @@ impl Infer {
                     Ty::Num(v, _) => Ok(Ty::Num(v, u)),
                     other => Err(TypeError {
                         message: format!(
-                            "unit annotations apply only to numeric values, not {}",
+                            "unit annotations apply only to numeric values, not `{}`",
                             show(&other)
                         ),
                         span,
@@ -7981,7 +7981,7 @@ impl Infer {
                         if self.unify(&Ty::Unit, &applied, e.span()).is_err() {
                             return Err(TypeError {
                                 message: format!(
-                                    "this statement has type {} but must be `unit`; bind it with `let` or make it the block's final expression",
+                                    "this statement has type `{}` but must be `unit`; bind it with `let` or make it the block's final expression",
                                     show(&applied)
                                 ),
                                 span: e.span(),
@@ -9960,7 +9960,7 @@ impl Infer {
                 if occurs(*x, t) {
                     return Err(TypeError {
                         message: format!(
-                            "cannot construct the infinite type {} = {}",
+                            "cannot construct the infinite type `{} = {}`",
                             show(&a),
                             show(&b)
                         ),
@@ -9982,7 +9982,7 @@ impl Infer {
                 } else {
                     Err(TypeError {
                         message: format!(
-                            "effect mismatch: cannot unify {} with {}",
+                            "effect mismatch: cannot unify `{}` with `{}`",
                             show(&a),
                             show(&b)
                         ),
@@ -10441,7 +10441,7 @@ impl Infer {
 
 fn mismatch(a: &Ty, b: &Ty, span: Span) -> TypeError {
     TypeError {
-        message: format!("type mismatch: expected {}, found {}", show(a), show(b)),
+        message: format!("type mismatch: expected `{}`, found `{}`", show(a), show(b)),
         span,
     }
 }
@@ -10578,7 +10578,12 @@ impl Namer {
 
     fn unit(&mut self, id: u32) -> String {
         let n = self.units.len();
-        self.units.entry(id).or_insert_with(|| var_name(n)).clone()
+        // A unit variable keeps its quote, as it is written in a signature
+        // (`float<'u>`): bare, it would read as a measure of that name.
+        self.units
+            .entry(id)
+            .or_insert_with(|| format!("'{}", var_name(n)))
+            .clone()
     }
 }
 
@@ -10599,7 +10604,7 @@ fn show_with_effect_var(ty: &Ty, arrow: usize) -> String {
     let mut cur = ty;
     let mut i = 0;
     while let Ty::Fun(domain, ret, eff) = cur {
-        show_into(domain, &mut namer, &mut out, true);
+        show_domain(domain, &mut namer, &mut out);
         if i == arrow {
             out.push_str(" ->{e} ");
         } else if eff.labels.is_empty() {
@@ -10614,6 +10619,12 @@ fn show_with_effect_var(ty: &Ty, arrow: usize) -> String {
     }
     show_into(cur, &mut namer, &mut out, false);
     out
+}
+
+/// Show the left side of an arrow. Type application binds tighter than `->`
+/// (`List a -> Option a`), so only a function there needs its parentheses.
+fn show_domain(ty: &Ty, namer: &mut Namer, out: &mut String) {
+    show_into(ty, namer, out, matches!(ty, Ty::Fun(..)));
 }
 
 fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
@@ -10643,7 +10654,7 @@ fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
             if atom {
                 out.push('(');
             }
-            show_into(a, namer, out, true);
+            show_domain(a, namer, out);
             // Render the latent effect only when it carries concrete labels
             // (`->{io}`, `->{async}`, `->{io, async}` — canonical order, so the
             // display is deterministic); a pure or purely-polymorphic arrow stays
@@ -10720,9 +10731,9 @@ fn show_unit(unit: &Unit, namer: &mut Namer) -> String {
 fn var_name(index: usize) -> String {
     let letter = (b'a' + (index % 26) as u8) as char;
     if index < 26 {
-        format!("'{letter}")
+        letter.to_string()
     } else {
-        format!("'{letter}{}", index / 26)
+        format!("{letter}{}", index / 26)
     }
 }
 

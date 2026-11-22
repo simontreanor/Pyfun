@@ -172,7 +172,7 @@ lines |> String.join ", " |> print
 The checker reports:
 
 ```console
-note: hole `?` has type `'a`
+note: hole `?` has type `a`
  --> 6:25
   |
 6 |     case (name, score): ?

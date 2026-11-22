@@ -150,7 +150,7 @@ the loop.
 ## Exercise
 
 Fill the two holes so `multiply` parses both strings and returns their product as a `Result`. Each
-hole has type `Result int 'a`, so reach for the same `Option.to_result ... (String.to_int ...)` bridge
+hole has type `Result int a`, so reach for the same `Option.to_result ... (String.to_int ...)` bridge
 the worked example used. When both parse you get `Ok`, and a bad string short-circuits to `Error`.
 
 ```pyfun

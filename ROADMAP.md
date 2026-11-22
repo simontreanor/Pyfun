@@ -462,9 +462,10 @@ after the release.
    `a if c else b` were answered in #197.
 5. ~~**Guards in the exhaustiveness message**~~ **DONE 2026-11-22** (#197): when the arms would cover the
    type if their guards always held, the message says a guarded arm does not count.
-6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
-   also print `(List 'a) -> Option 'a` with parentheses the grammar does not need. Print what the
-   user would write.
+6. ~~**Type display**~~ **DONE 2026-11-22** (#199): a type variable prints bare (`a`, as it is written),
+   a type in a message is backticked, and a type application left of an arrow drops its
+   parentheses (`DESIGN.md` §7). Still open: a constraint is not shown at all (`fun a b -> a < b`
+   prints `a -> a -> bool` with no `comparison`, and a `num` variable prints as `int`).
 
 **Consistency (breaking, 0.11.0)**
 

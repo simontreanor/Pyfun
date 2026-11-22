@@ -18,7 +18,7 @@ names |> headline |> print
 Running `pyfun check` reports the gap rather than a failure:
 
 ```console
-note: hole `?upper` has type `'a -> str` — try: String.upper, input, String.lstrip, String.rstrip, String.rev, String.of_list, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.with_default ?, and 18 more
+note: hole `?upper` has type `a -> str` — try: String.upper, input, String.lstrip, String.rstrip, String.rev, String.of_list, and 9 more — or: String.repeat ?, String.concat ?, String.join ?, Option.with_default ?, and 18 more
  --> 5:15
   |
 5 |   |> List.map ?upper
@@ -36,7 +36,7 @@ This is the workflow: sketch the whole pipeline with holes, let the compiler nam
 Fill both holes. `report` looks a score up in a map, supplies a fallback when the name is absent, and turns the number into a string. `pyfun check` reports each hole with a `try:` value that fits. The first report is:
 
 ```console
-note: hole `?render` has type `int -> 'a` — try: List.range, Seq.range, String.get, String.repeat, String.from_int, String.from_float, and 59 more — or: String.slice ?, List.replicate ?, List.update_at ?, List.insert_at ?, and 16 more
+note: hole `?render` has type `int -> a` — try: List.range, Seq.range, String.get, String.repeat, String.from_int, String.from_float, and 59 more — or: String.slice ?, List.replicate ?, List.update_at ?, List.insert_at ?, and 16 more
 ```
 
 ```pyfun
@@ -75,5 +75,5 @@ print (report "ada")
 print (report "cy")
 ```
 
-`?missing` has type `int`, so `0` fits. `?render` has type `int -> 'a`, and `String.from_int` is one of its suggested fits. Filling the second hole pins `'a` to `str`.
+`?missing` has type `int`, so `0` fits. `?render` has type `int -> a`, and `String.from_int` is one of its suggested fits. Filling the second hole pins `a` to `str`.
 </details>

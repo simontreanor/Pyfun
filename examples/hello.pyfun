@@ -26,8 +26,8 @@ let fact n =
   if n == 0 then 1
   else n * fact (n - 1)
 
-# Standard combinators are built in (`DESIGN.md` §6): `id : 'a -> 'a`,
-# `const : 'a -> 'b -> 'a`, `ignore : 'a -> unit`, `flip` swaps a function's
+# Standard combinators are built in (`DESIGN.md` §6): `id : a -> a`,
+# `const : a -> b -> a`, `ignore : a -> unit`, `flip` swaps a function's
 # first two arguments. `flip` is effect-polymorphic; the rest are pure. (A user
 # `let id x = x` would shadow the builtin, like any other prelude name.)
 let same = id 42                       # 42
@@ -147,7 +147,7 @@ let grade n =
   elif n >= 70 then "C"
   else "F"
 
-# Higher-order composition: ('b -> 'c) -> ('a -> 'b) -> 'a -> 'c.
+# Higher-order composition: (b -> c) -> (a -> b) -> a -> c.
 let compose = fun f g x -> f (g x)
 let inc2 = compose inc inc
 let seven = inc2 five
@@ -439,7 +439,7 @@ a\tb"""                                # backslashes + newline all literal
 # break back to the left margin), not braces or semicolons. Units erase, so the
 # printed numbers are plain Python numbers.
 print answer                         # 42
-print dropped                        # None  (ignore : 'a -> unit)
+print dropped                        # None  (ignore : a -> unit)
 print still_forty_two                   # Some(42)  (as-pattern binds the whole value)
 print ten_even                          # True  (mutual recursion: is_even/is_odd)
 print (fact 5)                       # 120  (recursive)
@@ -469,7 +469,7 @@ print (max distance 50<m>)           # 100
 print depth                          # -20                   (negative literal)
 print rebound                        # -7                    (`-(3 + 4)`)
 
-# Comparison (`comparison 'a => …`) and equality (`'a -> 'a -> bool`, structural
+# Comparison (`comparison a => …`) and equality (`a -> a -> bool`, structural
 # for ADTs) both yield bool. `<` is comparison here because of the space; `5<m>`
 # without a space is a unit annotation.
 print (answer == 42)                 # True

@@ -1120,7 +1120,7 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
     assert!(
         errors[0].errors[0]
             .message
-            .contains("expected UserId, found str"),
+            .contains("expected `UserId`, found `str`"),
         "got: {}",
         errors[0].errors[0].message
     );

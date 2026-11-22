@@ -53,7 +53,7 @@ directly. That call has type `int`, not `Result`, so the match does not fit. Run
 `pyfun check`:
 
 ```console
-error: type mismatch: expected Result 'a 'b, found int
+error: type mismatch: expected `Result a b`, found `int`
  --> 4:9
   |
 4 |   match parse_int s:

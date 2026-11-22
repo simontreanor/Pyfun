@@ -47,7 +47,7 @@ fn repl_echoes_definition_types() {
 fn repl_reports_type_errors_without_committing() {
     // A type error is shown and the bad binding is not remembered.
     let out = repl("let x = 5\nlet y = x + True\ny\n:quit\n");
-    assert!(out.contains("found bool"), "type error shown:\n{out}");
+    assert!(out.contains("found `bool`"), "type error shown:\n{out}");
     assert!(out.contains("unbound name `y`"), "y not committed:\n{out}");
 }
 
@@ -177,7 +177,7 @@ fn repl_rejected_definition_does_not_poison_session() {
     }
     // An ill-typed definition is rejected outright; the session keeps working.
     let out = repl("let bad = 1 + True\nlet ok = 2\nok + 40\n:quit\n");
-    assert!(out.contains("found bool"), "type error shown:\n{out}");
+    assert!(out.contains("found `bool`"), "type error shown:\n{out}");
     assert!(out.contains("42"), "session still evaluates:\n{out}");
 }
 

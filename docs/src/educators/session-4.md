@@ -23,7 +23,7 @@ The thread is the day-to-day loop of writing Pyfun: sketch with holes, let types
 reach for mutation only when it is genuinely clearest, and let the compiler track effects for you.
 
 1. Open the [Lesson 9 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IHNjb3JlcyA9IE1hcC5hZGQgImFkYSIgMTAgKE1hcC5hZGQgImFsYW4iIDkgTWFwLmVtcHR5KQoKbGV0IHJlcG9ydCBuYW1lID0KICBNYXAuZmluZCBuYW1lIHNjb3JlcwogIHw-IE9wdGlvbi53aXRoX2RlZmF1bHQgP21pc3NpbmcKICB8PiA_cmVuZGVyCgpwcmludCAocmVwb3J0ICJhZGEiKQpwcmludCAocmVwb3J0ICJjeSIpCg).
-   Run `check`. Two holes report at once. Read the `?render` note aloud: it has type `int -> 'a` and
+   Run `check`. Two holes report at once. Read the `?render` note aloud: it has type `int -> a` and
    suggests `String.from_int` among the fits. This is type-driven development in one screen.
 2. Fill `?missing` with `0` and `?render` with `String.from_int`, then Run to get `10` and `0`. Make
    the point that you never looked up a signature: each hole reported exactly what belonged there.

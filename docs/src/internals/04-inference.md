@@ -52,7 +52,7 @@ surface the inferred type, so the type is always available even though it is nev
 
 The type machinery is a little richer than textbook HM because Pyfun's numbers and units ride the
 same inference. A single built-in `num` constraint keeps arithmetic polymorphic over `int` and
-`float`, so `let add a b = a + b` infers `num 'a => 'a -> 'a -> 'a` and works at both. Units are an
+`float`, so `let add a b = a + b` infers `num a => a -> a -> a` and works at both. Units are an
 abelian group carried on numeric types and generalized like type variables, so `let area w h = w *
 h` infers a unit-polymorphic `int<'u> -> int<'v> -> int<'u 'v>`. Both are still Algorithm W; they
 just extend what a variable can be constrained by, and both are solved during the same walk.
@@ -74,7 +74,7 @@ pub enum EffLabel {
 }
 ```
 
-The rules are propagation rules. `print` is `'a ->{io} unit`, impurity flows outward (calling an
+The rules are propagation rules. `print` is `a ->{io} unit`, impurity flows outward (calling an
 impure function makes the caller impure), and labels from different calls union. A pure function
 reads exactly as it always did, with a plain `->`. The one opt-in is the definition-level
 assertion `let pure f ... = ...`, which is a compile error if the binding introduces any concrete
