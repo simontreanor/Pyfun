@@ -6334,6 +6334,8 @@ fn lower_binop(op: BinOp) -> PyBinOp {
         BinOp::Ge => PyBinOp::Ge,
         BinOp::And => PyBinOp::And,
         BinOp::Or => PyBinOp::Or,
+        BinOp::In => PyBinOp::In,
+        BinOp::NotIn => PyBinOp::NotIn,
     }
 }
 

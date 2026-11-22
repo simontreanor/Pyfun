@@ -5050,3 +5050,43 @@ fn python_call_syntax_names_juxtaposition() {
         "{msgs:?}"
     );
 }
+
+#[test]
+fn membership_is_typed_by_what_is_searched() {
+    // The five containers Python's own `in` covers: an element of a List, Set
+    // or Seq, a key of a Map, a substring of a str.
+    assert!(
+        pyfun::check(
+            "let xs = [1, 2, 3]\n\
+             let a = 2 in xs\n\
+             let b = 5 not in xs\n\
+             let c = 3 in {1, 2}\n\
+             let d = \"Ada\" in {\"Ada\": 36}\n\
+             let e = \"ell\" in \"hello\"\n\
+             let f = 4 in Seq.of_list xs\n\
+             let g = not 1 in xs and a"
+        )
+        .is_ok()
+    );
+    // The left side has to be what the right side holds.
+    assert_error_contains("let bad = \"a\" in [1, 2]", "expected int, found str");
+    assert_error_contains("let bad = 1 in {\"Ada\": 36}", "expected str, found int");
+    assert_error_contains("let bad = 1 in \"hello\"", "expected str, found int");
+    assert_error_contains(
+        "let bad = 1 in 5",
+        "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`",
+    );
+    // The container may be pinned by a later line of the same binding.
+    assert!(
+        pyfun::check("let deferred xs =\n  let found = 1 in xs\n  let n = List.len xs\n  found")
+            .is_ok()
+    );
+    assert!(pyfun::check("let has_two ys = 2 in ys or List.len ys > 5").is_ok());
+    // But `in` is resolved, not generalized: a helper over "any container"
+    // names the module function it means.
+    assert_error_contains(
+        "let has x xs = x in xs",
+        "cannot tell what this `in` searches: its right side could be a `List`, `Set`, `Seq`, \
+         `Map` or `str`. Say which with the module's function",
+    );
+}

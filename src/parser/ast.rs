@@ -907,6 +907,11 @@ pub enum BinOp {
     /// `and` / `or` — logical and/or, result `bool` (short-circuiting in Python).
     And,
     Or,
+    /// `x in xs` / `x not in xs` — membership, result `bool`. The right operand
+    /// is a `List`, `Set`, `Seq`, `Map` (tested by key) or `str` (tested for a
+    /// substring), the same five Python's own `in` covers (`DESIGN.md` §7.1).
+    In,
+    NotIn,
 }
 
 impl BinOp {
@@ -928,6 +933,8 @@ impl BinOp {
             BinOp::Ge => ">=",
             BinOp::And => "and",
             BinOp::Or => "or",
+            BinOp::In => "in",
+            BinOp::NotIn => "not in",
         }
     }
 }

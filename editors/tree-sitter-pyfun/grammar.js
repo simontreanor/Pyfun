@@ -380,7 +380,7 @@ module.exports = grammar({
 
     comparison_expression: $ => prec.left(6, seq(
       field('left', $._comparison_expression),
-      field('operator', choice('==', '!=', '<', '>', '<=', '>=')),
+      field('operator', choice('==', '!=', '<', '>', '<=', '>=', 'in', seq('not', 'in'))),
       field('right', $._additive_expression),
     )),
 

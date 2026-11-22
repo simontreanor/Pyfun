@@ -445,7 +445,7 @@ impl Parser {
         };
         let has_colon = line().any(|t| matches!(t, Tok::Colon));
         match first.as_str() {
-            "for" if has_colon && line().any(|t| matches!(t, Tok::Ident(n) if n == "in")) => {
+            "for" if has_colon && line().any(|t| matches!(t, Tok::In)) => {
                 return at(
                     "Pyfun has no `for` statement: run an effect per element with \
                      `xs |> List.iter (fun x -> …)`, or build a value with `List.map` or \
@@ -1696,10 +1696,31 @@ impl Parser {
                 Tok::Gt => BinOp::Gt,
                 Tok::Le => BinOp::Le,
                 Tok::Ge => BinOp::Ge,
+                // Membership sits at comparison precedence, as in Python.
+                Tok::In => BinOp::In,
+                Tok::Not if *self.peek2() == Tok::In => {
+                    self.bump(); // `not`; the `in` goes below
+                    BinOp::NotIn
+                }
                 _ => break,
             };
+            let op_span = self.span();
             self.bump();
             rest.push((op, self.parse_additive()?));
+            // A membership test does not chain: `a < b in c` has no reading a
+            // reader would guess, so it is spelled out with `and`.
+            if rest.len() > 1
+                && rest
+                    .iter()
+                    .any(|(op, _)| matches!(op, BinOp::In | BinOp::NotIn))
+            {
+                return Err(ParseError {
+                    message: "`in` does not chain with another comparison: \
+                              join the two tests with `and`"
+                        .to_string(),
+                    span: op_span,
+                });
+            }
         }
         match rest.len() {
             0 => Ok(first),
@@ -2396,12 +2417,7 @@ impl Parser {
         let (_, for_col) = self.token_pos(self.pos);
         self.bump(); // `for`
         let (target, target_span) = self.parse_binding_target()?;
-        match self.peek() {
-            Tok::Ident(name) if name == "in" => {
-                self.bump();
-            }
-            _ => return Err(self.error("expected `in` after the `for` target")),
-        }
+        self.expect(&Tok::In, "`in` after the `for` target")?;
         let source = self.parse_expr()?;
         self.expect(&Tok::Colon, "`:` after the `for` source")?;
         let mut body = Vec::new();
@@ -2986,6 +3002,7 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Module => "module",
         Tok::Import => "import",
         Tok::Not => "not",
+        Tok::In => "in",
         Tok::And => "and",
         Tok::Or => "or",
         Tok::Bang => "!",

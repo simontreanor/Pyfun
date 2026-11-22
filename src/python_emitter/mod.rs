@@ -358,8 +358,11 @@ pub enum PyBinOp {
     And,
     Or,
     /// `x in container` — membership, used by the collection prelude
-    /// (`set_contains`/`map_contains`). Comparison-precedence, like in Python.
+    /// (`set_contains`/`map_contains`) and by Pyfun's own `in`.
+    /// Comparison-precedence, like in Python.
     In,
+    /// `x not in container`.
+    NotIn,
     /// `x is y` — identity, used by the `Decode` prelude's `nullable` (`v is None`).
     /// Comparison-precedence, like in Python.
     Is,
@@ -386,6 +389,7 @@ impl PyBinOp {
             PyBinOp::And => "and",
             PyBinOp::Or => "or",
             PyBinOp::In => "in",
+            PyBinOp::NotIn => "not in",
             PyBinOp::Is => "is",
         }
     }
@@ -403,6 +407,7 @@ impl PyBinOp {
             | PyBinOp::Le
             | PyBinOp::Ge
             | PyBinOp::In
+            | PyBinOp::NotIn
             | PyBinOp::Is => 5,
             PyBinOp::Add | PyBinOp::Sub => 10,
             PyBinOp::Mul | PyBinOp::Div | PyBinOp::FloorDiv | PyBinOp::Mod => 20,

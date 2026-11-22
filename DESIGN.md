@@ -1734,6 +1734,21 @@ down.
    evaluate-once and short-circuit come for free rather than via a desugaring to `and`. Each adjacent
    pair is typed independently (operands unify; ordering links carry `comparison`, equality links
    don't), and links may mix operators (`0 <= i < n`, `a == b == c`).
+   **Membership** is Python's `in` and `not in`, at the same precedence as the comparisons:
+   `2 in xs`, `x not in {1, 2}`, `"Ada" in ages`, `"ell" in "hello"`. The right operand says what is
+   searched, and so what the left one must be: an element of a `List`, `Set` or `Seq`, a key of a
+   `Map`, a substring of a `str`. Those are the five Python's own `in` covers, and the set is closed
+   in the manner of `num` and `comparison`. It **lowers 1:1** to the Python operator (`BinOp::In`
+   and `NotIn` map to `in` and `not in`), which already means the right thing for each of the five,
+   so lowering consults no type. Typing differs from the two constraints in one respect: `in` is
+   *resolved*, not generalized. The checker reads the container's type where the test is written; if
+   that is still an unsolved variable it waits for the rest of the enclosing binding, the same
+   deferral a field access gets (§8.3), and a container that is never pinned down is an error
+   naming the module function to write instead (`List.contains x xs`). So `let has x xs = x in xs`
+   is rejected: a relation between two types would need a multi-parameter constraint, and a helper
+   over "any container" is rare enough to spell out. A membership test does not chain with another
+   comparison (`a < b in c` is an error asking for `and`). `in` is a keyword; a computation
+   expression's `for x in xs:` uses the same token.
 7. **Logical operators.** `and` / `or` / `not` — all keywords, lowering to the same
    Python keywords. Spelled the Python way rather than F#'s `&&`/`||` to stay consistent with the
    Python-familiarity theme of this section (and to lower 1:1). `not` is `bool -> bool`, `and`/`or`

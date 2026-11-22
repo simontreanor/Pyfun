@@ -28,6 +28,7 @@ print third
 print missing
 uniq |> Set.len |> print
 scores |> Map.find "ada" |> print
+print (3 in ns, 9 in uniq, "bo" in scores)
 ```
 
 ```console
@@ -39,6 +40,7 @@ scores |> Map.find "ada" |> print
 0
 3
 Some(10)
+(True, False, False)
 ```
 
 `fun x -> x * x` is a lambda, the same anonymous function you met in lesson 2 written inline. Where
@@ -46,6 +48,9 @@ the function is just an operator, an operator section is shorter: `(+)` is addit
 argument function, and `(*) 2` is multiplication with one argument already supplied, so
 `List.map ((*) 2) ns` doubles every element. `List.fold` walks the list carrying an accumulator,
 starting from `0` here and adding each element, which is how you reduce a list to a single value.
+
+The last line asks a question you already know how to ask in Python. `in` tests whether a value is
+in a list or a set, and for a map it tests the keys, so `"bo" in scores` is `False`.
 
 There is a fourth collection, and it is the lazy one. A `Seq` describes elements that are produced
 as they are asked for rather than stored, which is Python's own iterator idea with a type on it.

@@ -52,6 +52,7 @@ pub enum Tok {
     Import,
     Try,
     As, // `as` — the binder in an as-pattern (`case P as x:`)
+    In, // `in` — membership (`x in xs`, `x not in xs`), and a `for x in xs:` source
     Not,
     And,
     Or,
@@ -149,6 +150,7 @@ impl Tok {
             "import" => Tok::Import,
             "try" => Tok::Try,
             "as" => Tok::As,
+            "in" => Tok::In,
             "not" => Tok::Not,
             "and" => Tok::And,
             "or" => Tok::Or,

@@ -316,6 +316,26 @@ struct PendingField {
     span: Span,
 }
 
+/// An `x in xs` test waiting for the type of `xs` to become known
+/// (`Infer::pending_members`), the same wait a field access gets.
+struct PendingMember {
+    elem: Ty,
+    container: Ty,
+    elem_span: Span,
+    span: Span,
+}
+
+/// The error for an `in` whose right operand is never pinned down.
+fn unknown_container(span: Span) -> TypeError {
+    TypeError {
+        message: "cannot tell what this `in` searches: its right side could be a `List`, `Set`, \
+                  `Seq`, `Map` or `str`. Say which with the module's function \
+                  (`List.contains x xs`, `Set.contains x s`)"
+            .to_string(),
+        span,
+    }
+}
+
 /// A type scheme, generalized over type variables, unit variables, and `num`
 /// (numeric base) variables.
 #[derive(Debug, Clone)]
@@ -6535,6 +6555,9 @@ struct Infer {
     /// enclosing top-level binding is fully inferred, by which point HM may have
     /// learned the answer from a later statement. See [`Infer::resolve_pending_fields`].
     pending_fields: Vec<PendingField>,
+    /// `in` tests whose right operand was still an unsolved variable where they
+    /// were written. Settled with the deferred field accesses.
+    pending_members: Vec<PendingMember>,
     /// How many `let` bindings deep inference currently is. Obligations float up to
     /// the outermost one: an inner binding cannot resolve them (that is the whole
     /// point) and must not generalize over them either.
@@ -7035,6 +7058,7 @@ impl Infer {
         self.binding_depth -= 1;
         if self.binding_depth == 0 {
             self.resolve_pending_fields()?;
+            self.resolve_pending_members()?;
         }
 
         // `let pure` asserts the binding introduces no concrete effect of its own
@@ -7712,6 +7736,27 @@ impl Infer {
                     self.require_ord(&lt, span)?;
                     Ok(Ty::Bool)
                 }
+                // Membership: the right operand says what is searched, and so what
+                // the left one must be (`DESIGN.md` §7.1).
+                BinOp::In | BinOp::NotIn => {
+                    let elem = self.infer_expr(lhs, env)?;
+                    let container = self.infer_expr(rhs, env)?;
+                    if !self.settle_member(&elem, &container, lhs.span(), rhs.span())? {
+                        // Not known yet. Inside a binding a later statement may
+                        // still say (the same wait a field access gets); at the
+                        // top level nothing will.
+                        if self.binding_depth == 0 {
+                            return Err(unknown_container(rhs.span()));
+                        }
+                        self.pending_members.push(PendingMember {
+                            elem,
+                            container,
+                            elem_span: lhs.span(),
+                            span: rhs.span(),
+                        });
+                    }
+                    Ok(Ty::Bool)
+                }
                 // Logical: both operands `bool`, result `bool`.
                 BinOp::And | BinOp::Or => {
                     let lt = self.infer_expr(lhs, env)?;
@@ -8056,6 +8101,51 @@ impl Infer {
         } else {
             direct
         }
+    }
+
+    /// Type an `x in xs` test from the type of `xs`, if it is known: a `List`,
+    /// `Set` or `Seq` is searched for an element, a `Map` for a key, and a `str`
+    /// for a substring. These are the five Python's own `in` covers, and the
+    /// set is closed, like `num` and `comparison` (`DESIGN.md` §7.1). Returns
+    /// `false` when the container is still an unsolved variable.
+    fn settle_member(
+        &mut self,
+        elem: &Ty,
+        container: &Ty,
+        elem_span: Span,
+        span: Span,
+    ) -> Result<bool, TypeError> {
+        match self.apply(container) {
+            Ty::Var(_) => return Ok(false),
+            Ty::Con(name, args) if matches!(name.as_str(), "List" | "Set" | "Seq" | "Map") => {
+                // A `Map` is searched by key, its first argument, as in Python.
+                self.unify(&args[0], elem, elem_span)?;
+            }
+            Ty::Str => self.unify(&Ty::Str, elem, elem_span)?,
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `{}`",
+                        show(&other)
+                    ),
+                    span,
+                });
+            }
+        }
+        Ok(true)
+    }
+
+    /// Settle every deferred `in` test, now that the enclosing binding is fully
+    /// inferred. One whose container is still unknown is an error: Pyfun
+    /// resolves `in` rather than generalizing over it, so a helper that takes
+    /// "any container" names the module function it means.
+    fn resolve_pending_members(&mut self) -> Result<(), TypeError> {
+        for p in std::mem::take(&mut self.pending_members) {
+            if !self.settle_member(&p.elem, &p.container, p.elem_span, p.span)? {
+                return Err(unknown_container(p.span));
+            }
+        }
+        Ok(())
     }
 
     /// Settle every deferred field access, now that the enclosing binding is fully
@@ -10250,6 +10340,15 @@ impl Infer {
                 deferred.insert(v);
             });
             free_type_vars(&self.apply(&p.result), &mut |v| {
+                deferred.insert(v);
+            });
+        }
+        // The same holds for an `in` test still waiting on its container.
+        for p in &self.pending_members {
+            free_type_vars(&self.apply(&p.container), &mut |v| {
+                deferred.insert(v);
+            });
+            free_type_vars(&self.apply(&p.elem), &mut |v| {
                 deferred.insert(v);
             });
         }

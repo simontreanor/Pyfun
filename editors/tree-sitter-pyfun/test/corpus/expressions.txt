@@ -355,3 +355,37 @@ let moved = { p with x = 3 }
       (field_update
         (identifier)
         (integer)))))
+
+================================================================================
+membership tests
+================================================================================
+
+let a = 2 in xs
+let b = x not in {1, 2}
+let c = not 1 in xs and "k" in ages
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (comparison_expression
+      (integer)
+      (identifier)))
+  (let_binding
+    (identifier)
+    (comparison_expression
+      (identifier)
+      (set_expression
+        (integer)
+        (integer))))
+  (let_binding
+    (identifier)
+    (and_expression
+      (not_expression
+        (comparison_expression
+          (integer)
+          (identifier)))
+      (comparison_expression
+        (string)
+        (identifier)))))

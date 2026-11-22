@@ -8646,3 +8646,25 @@ fn e2e_if_with_colon_block_branches() {
         "positive\n(1, -1, 0)\n(9, 0)"
     );
 }
+
+#[test]
+fn e2e_membership_lowers_to_pythons_own_in() {
+    let src = "let xs = [1, 2, 3]\n\
+               let ages = {\"Ada\": 36}\n\
+               let small = List.filter (fun x -> x not in {2, 3}) xs\n\
+               print (2 in xs, 5 not in xs, \"Ada\" in ages, \"ell\" in \"hello\", 4 in Seq.of_list xs)\n\
+               print small";
+    let program = pyfun::compile(src).unwrap();
+    // The operator is the Python one, with no helper in between.
+    assert!(
+        program.contains("2 in xs, 5 not in xs, \"Ada\" in ages, \"ell\" in \"hello\""),
+        "{program}"
+    );
+    assert!(program.contains("lambda x: x not in {2, 3}"), "{program}");
+    let Some(python) = python_cmd() else { return };
+    let out = run_python(&python, &program);
+    assert_eq!(
+        out.trim().replace("\r\n", "\n"),
+        "(True, True, True, True, False)\n[1]"
+    );
+}
