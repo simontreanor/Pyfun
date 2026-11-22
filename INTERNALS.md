@@ -512,6 +512,15 @@ stdio. All features reuse the existing front end:
   place of displaying each parameter's type on its own, is what keeps a type variable's letter the same
   across the hints; the same splitter gives signature help its parameter ranges. A literal's binding
   and a `_`-led name are skipped.
+- **Signature help** — `lsp/signature.rs::call_at` finds the call a cursor is in. It walks the AST
+  collecting application spines (`f a b` is `App(App(f, a), b)`), and a spine is a candidate when its
+  head is a name or `Module.member`, the cursor is past the head, and the cursor is no further than the
+  spaces that follow the spine on its line. A bare name with nothing applied yet is a spine of no
+  arguments, unless it is itself an argument. The narrowest candidate wins, and the active parameter is
+  the number of arguments that end before the cursor. The handler shows the type recorded at the head's
+  span, labelled `name : type`, with each parameter's range from `types::shown_arrows` in UTF-16 units.
+  An item the recovering parser had to drop (an unclosed parenthesis) has no AST and so no help until
+  it parses.
 
 **Cross-file navigation** (with file-based modules, DESIGN §6.1): go-to-definition on a qualified
 reference to an imported file module (`Geometry.area`, `Geometry.Circle`) jumps to the definition in
