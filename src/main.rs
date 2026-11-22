@@ -52,7 +52,7 @@ fn main() -> ExitCode {
             }
         }
         Some("compile") => match parse_compile_args(&args[1..]) {
-            Ok((path, out, target, native)) => compile(path, out.as_deref(), target, native),
+            Ok(args) => compile(&args),
             Err(msg) => fail(&msg),
         },
         Some("run") => match args.get(1) {
@@ -85,7 +85,13 @@ fn main() -> ExitCode {
         Some("repl") => repl::run(),
         Some("kernel-engine") => kernel::run(),
         // Shorthand: a bare path means `compile <path>` to stdout.
-        Some(path) => compile(path, None, PyTarget::default(), false),
+        Some(path) => compile(&CompileArgs {
+            path,
+            out: None,
+            target: PyTarget::default(),
+            native: false,
+            typed: false,
+        }),
     }
 }
 
@@ -110,6 +116,12 @@ fn help() {
         "                [--native]                  lower matches on your own types to isinstance"
     );
     eprintln!("                                            ladders, the form mypyc compiles");
+    eprintln!(
+        "                [--typed]                   annotate functions, values and classes with"
+    );
+    eprintln!(
+        "                                            their inferred types, for a type checker"
+    );
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
     eprintln!(
         "  pyfun build   --native <file.pyfun> -o <dir>  compile to a C extension with mypyc;"
@@ -236,16 +248,22 @@ fn check(path: &str, strict: bool) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn compile(path: &str, out: Option<&str>, target: PyTarget, native: bool) -> ExitCode {
+fn compile(args: &CompileArgs) -> ExitCode {
+    let (path, out, target, native) = (args.path, args.out.as_deref(), args.target, args.native);
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
     if let Ok(module) = pyfun::parse(&source)
         && has_imports(&module)
     {
-        return compile_project(path, out, target, native);
+        return compile_project(args);
     }
-    let python = match pyfun::compile_with(&source, target, native) {
+    let compiled = if args.typed {
+        pyfun::compile_typed(&source)
+    } else {
+        pyfun::compile_with(&source, target, native)
+    };
+    let python = match compiled {
         Ok((py, notes)) => {
             report_warnings(&source, &pyfun::warnings(&source));
             report_notes(&notes);
@@ -541,7 +559,8 @@ fn lower_project(
     }
 }
 
-fn compile_project(entry: &str, out: Option<&str>, target: PyTarget, native: bool) -> ExitCode {
+fn compile_project(args: &CompileArgs) -> ExitCode {
+    let (entry, out) = (args.path, args.out.as_deref());
     let project = match resolve_project(entry) {
         Ok(p) => p,
         Err(code) => return code,
@@ -550,9 +569,26 @@ fn compile_project(entry: &str, out: Option<&str>, target: PyTarget, native: boo
     if !check_project_ok(&project) {
         return ExitCode::FAILURE;
     }
-    let files = match lower_project(&project, target, native) {
-        Ok(f) => f,
-        Err(code) => return code,
+    let files = if args.typed {
+        match project::compile_typed(&project) {
+            Ok(compiled) => {
+                report_notes(&compiled.notes);
+                let mut files = compiled.files;
+                // The marker that tells a type checker the package ships its
+                // own types (PEP 561).
+                files.push(("py.typed".to_string(), String::new()));
+                files
+            }
+            Err(e) => {
+                eprintln!("error: lowering failed: {}", e.message);
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        match lower_project(&project, args.target, args.native) {
+            Ok(f) => f,
+            Err(code) => return code,
+        }
     };
     match out {
         // For a project, `-o` names a directory holding the whole `.py` tree.
@@ -680,13 +716,25 @@ fn parse_only(path: &str) -> ExitCode {
     }
 }
 
-/// Parse `compile` arguments: a required path, an optional `-o <out>`, and an
-/// optional `--target 3.11|3.12` (default 3.12 — see `python_emitter::PyTarget`).
-fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget, bool), String> {
+/// What `compile` was asked for.
+struct CompileArgs<'a> {
+    path: &'a str,
+    out: Option<String>,
+    target: PyTarget,
+    native: bool,
+    typed: bool,
+}
+
+/// Parse `compile` arguments: a required path, an optional `-o <out>`, an
+/// optional `--target 3.11|3.12` (default 3.12 — see `python_emitter::PyTarget`),
+/// and `--native` or `--typed`.
+fn parse_compile_args(args: &[String]) -> Result<CompileArgs<'_>, String> {
     let mut path = None;
     let mut out = None;
     let mut target = PyTarget::default();
     let mut native = false;
+    let mut typed = false;
+    let mut targeted = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -695,8 +743,10 @@ fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget
                 out = Some(args.get(i).ok_or("`-o` needs a path")?.clone());
             }
             "--native" => native = true,
+            "--typed" => typed = true,
             "--target" => {
                 i += 1;
+                targeted = true;
                 target = match args.get(i).map(String::as_str) {
                     Some("3.11") => PyTarget::Py311,
                     Some("3.12") => PyTarget::Py312,
@@ -711,12 +761,27 @@ fn parse_compile_args(args: &[String]) -> Result<(&str, Option<String>, PyTarget
         }
         i += 1;
     }
-    Ok((
-        path.ok_or("`compile` needs a file path")?,
+    if typed && native {
+        return Err(
+            "`--typed` and `--native` are two outputs: `--native` annotates what mypyc needs, \
+             `--typed` what a type checker reads. Choose one"
+                .to_string(),
+        );
+    }
+    if typed && targeted && !matches!(target, PyTarget::Py312) {
+        return Err(
+            "`--typed` writes type parameters the way Python 3.12 does (`def f[A](x: A)`), \
+             so it cannot be combined with `--target 3.11`"
+                .to_string(),
+        );
+    }
+    Ok(CompileArgs {
+        path: path.ok_or("`compile` needs a file path")?,
         out,
         target,
         native,
-    ))
+        typed,
+    })
 }
 
 fn read(path: &str) -> Option<String> {

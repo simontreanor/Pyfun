@@ -289,7 +289,20 @@ pub fn compile_with(
     target: crate::python_emitter::PyTarget,
     native: bool,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
-    compile_project(project, target, native, false)
+    compile_project(project, target, native, false, false)
+}
+
+/// [`compile`] with **typed output** (`--typed`, `DESIGN.md` §5.7): every
+/// module's functions, values and classes carry their types as annotations,
+/// and the shared runtime's `Some`/`Ok`/`Error` are generic.
+pub fn compile_typed(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_project(
+        project,
+        crate::python_emitter::PyTarget::default(),
+        false,
+        false,
+        true,
+    )
 }
 
 /// [`compile`], also building each module's line map (see
@@ -301,6 +314,7 @@ pub fn compile_traced(project: &Project) -> Result<CompiledProject, crate::lower
         crate::python_emitter::PyTarget::default(),
         false,
         true,
+        false,
     )
 }
 
@@ -309,6 +323,7 @@ fn compile_project(
     target: crate::python_emitter::PyTarget,
     native: bool,
     trace: bool,
+    typed: bool,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
@@ -383,7 +398,7 @@ fn compile_project(
             let (_errors, types, module_exports, codecs) =
                 crate::types::check_module_collecting(&module.ast, &imports);
             spans.insert(module.name.clone(), crate::float_literal_spans(&types));
-            if native {
+            if native || typed {
                 types_by_module.insert(
                     module.name.clone(),
                     types.iter().map(|t| (t.span, t.raw.clone())).collect(),
@@ -464,7 +479,14 @@ fn compile_project(
         }
         let floats = float_spans.get(&module.name).unwrap_or(&no_floats);
         let codecs = codecs_by_module.get(&module.name).unwrap_or(&no_codecs);
-        let binding_types = types_by_module.remove(&module.name).unwrap_or_default();
+        let recorded_types = types_by_module.remove(&module.name).unwrap_or_default();
+        // Native lowering reads the types as it goes; typed output is a pass
+        // over the finished module.
+        let binding_types = if native {
+            recorded_types.clone()
+        } else {
+            HashMap::new()
+        };
         let traced = trace
             .then(|| {
                 lowering::lower_in_project_tracing(
@@ -488,7 +510,29 @@ fn compile_project(
                 .iter()
                 .map(|n| format!("in `{}`: {n}", module.name)),
         );
-        let python = python_emitter::emit_for(&lowered.py, target);
+        let lowered_py = if typed {
+            // Every module this one imports, directly or through another: a
+            // type of any of them can turn up in a signature here.
+            let mut reach: Vec<&LoadedModule> = Vec::new();
+            let mut pending: Vec<&String> = module.imports.iter().collect();
+            while let Some(name) = pending.pop() {
+                if reach.iter().any(|m| &m.name == name) {
+                    continue;
+                }
+                if let Some(found) = project.modules.iter().find(|m| &m.name == name) {
+                    reach.push(found);
+                    pending.extend(found.imports.iter());
+                }
+            }
+            let imported: Vec<(String, &crate::syntax::Module)> = reach
+                .iter()
+                .map(|m| (module_stem(&m.name), &m.ast))
+                .collect();
+            lowering::annotate_typed(&module.ast, lowered.py, &recorded_types, &imported)
+        } else {
+            lowered.py
+        };
+        let python = python_emitter::emit_for(&lowered_py, target);
         if let Some(map) = traced
             .and_then(|t| crate::line_map_of(&python_emitter::emit_for(&t.py, target), &python))
         {
@@ -502,6 +546,8 @@ fn compile_project(
             python_emitter::emit_for(
                 &if native {
                     lowering::runtime_module_native()
+                } else if typed {
+                    lowering::annotate_typed_runtime(lowering::runtime_module())
                 } else {
                     lowering::runtime_module()
                 },
