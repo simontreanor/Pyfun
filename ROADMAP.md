@@ -475,10 +475,21 @@ after the release.
 9. **`True` and `False`.** Every other constructor is capitalized, Python's are capitalized, and the
    emitted code is capitalized. `true` and `false` are the exception.
 10. **`str` for `string`.** The emitted annotation is already `str`.
-11. **snake_case.** The standard library and every example use camelCase (`tryFind`, `ofList`,
-    `sortBy`), so emitted modules read as un-Pythonic to a Python caller. The largest breaking
-    change on this list, mechanical to migrate, and cheapest before 1.0. Where Python has the word,
-    use Python's (`startswith`, `endswith`). User code keeps whatever case its author writes.
+11. **snake_case, one rule.** Every value name is snake_case with an underscore at every word
+    boundary: 68 of the 241 standard library names change (`sort_by`, `of_list`, `is_empty`,
+    `with_default`). Python supplies the *word* and this rule supplies the spelling, so it is
+    `starts_with`, `split_lines`, `is_subset` and `take_while` where Python runs the words together
+    (`startswith`, `splitlines`, `issubset`, `takewhile`); mirroring Python letter for letter would
+    import its inconsistency (`group_by` beside `groupby`). The member suggestion already bridges
+    those spellings. The same rule settles four loose ends: CE builder methods (`return_from` and
+    `yield_from`, beside the existing `return_` and `yield_`), the `Exception` fields (`error_kind`,
+    `error_message`), multi-word module files (`import TrainTimes` reads `train_times.pyfun`), and
+    `String.trimStart`/`trimEnd`, which become Python's `lstrip`/`rstrip` beside `strip`. Types,
+    constructors and modules stay PascalCase, and a measure keeps its author's case because SI
+    symbols need it (`N`, `Pa`, `mm`). User code compiles in any case; once warnings exist (item 1)
+    a camelCase value name gets one. An `extern` names its Pyfun side freely, so Python's own
+    mixed casing stops at the boundary (`extern get_logger: … = logging.getLogger`). The largest
+    breaking change on this list, mechanical to migrate, and cheapest before 1.0.
 
 **Python-familiar additions**
 
