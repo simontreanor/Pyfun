@@ -2507,10 +2507,10 @@ type Shape =
 A named constructor reuses the two record forms, tagged with the constructor: it is **built** with
 the literal (`Rect { name = "r", width = 2.0, height = 3.0 }`, the fields in any order, each exactly
 once) and **matched** with the record pattern (`case Rect { width, height = h }:`, naming the fields
-the arm needs). `case Dot {}:` names none and matches any `Dot`; the empty pattern is refused on a
-plain record, where it would match every value and say nothing. Python is the model: a dataclass
-is built `Rect(width=2.0, height=3.0)` and matched `case Rect(width=w):`, and `case Dot():` is its
-match-any.
+the arm needs). `case Dot {}:` names none and matches any `Dot`. The subset a tagged pattern names
+may be empty for a record too (`case Point {}:` is any `Point`), so the two tags follow one rule.
+Python is the model: a dataclass is built `Rect(width=2.0, height=3.0)` and matched
+`case Rect(width=w):`, and `case Dot():` is its match-any.
 
 - **One spelling per constructor.** A named constructor is not a function. `Rect "r" 2.0 3.0`,
   `List.map Dot names` and `case Dot n:` are errors that show the form to write, and a positional
@@ -2519,9 +2519,10 @@ match-any.
   one type.
 - **Exhaustiveness** treats the tagged pattern as its constructor's, with omitted fields as
   wildcards, and prints a witness in the same form (`` `Rect { name = _, width = _, height = _ }` ``).
-- **In a parameter or a `let`** the pattern is allowed only when its type has no other constructor
-  (`let unwrap (Wrap { value }) = value`), since there is nowhere to go when it fails. The parser
-  admits the shape and the checker decides, because only the checker knows the tag is a constructor.
+- **No constructor pattern in a parameter or a `let`**, named or positional, however many
+  constructors the type has: those positions take a name, `_`, or a tuple or record of those (§7).
+  The parser refuses the positional form by its shape. The named form has a record pattern's shape,
+  so the checker refuses it, in the parser's words, once it knows the tag is a constructor.
 - **A field every constructor shares belongs to the whole type.** When every constructor of a sum
   type declares a field at the same type (`name` above), a value of the type has it: `s.name` reads
   it and `{ s with name = "big" }` copies the value with it replaced, keeping whichever constructor

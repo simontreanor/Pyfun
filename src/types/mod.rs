@@ -6794,9 +6794,9 @@ struct Infer {
     auto_sites: Vec<(Span, Ty)>,
     /// Whether the pattern being bound may fail to match: true in a `match` arm,
     /// false in a parameter or a `let` target. The parser rejects every shape
-    /// that is refutable by its syntax; a record pattern tagged with a
-    /// constructor is refutable only when its type has other constructors,
-    /// which the checker sees here.
+    /// that is refutable by its syntax, a constructor pattern among them; a
+    /// record pattern tagged with a constructor has a record pattern's shape, so
+    /// the checker applies the same rule to it here.
     refutable_ok: bool,
     /// The record each update rebuilds, by identity name: the update's span,
     /// the path walked so far, and the record found there. Becomes
@@ -9862,62 +9862,38 @@ impl Infer {
                 // the tag is the constructor and the fields are its own.
                 let (what, owner, record_ty, field_tys) = match self.ctor_tag(ty) {
                     Some(info) => {
+                        // A parameter or a `let` takes no constructor pattern,
+                        // of either kind: the parser refuses the positional
+                        // form by its shape, and this is the same rule for the
+                        // form only the checker can tell from a record's.
+                        if !self.refutable_ok {
+                            return Err(TypeError {
+                                message: format!(
+                                    "a parameter or a `let` must always match, so it takes a \
+                                     name, `_`, or a tuple or record of those, not a \
+                                     constructor pattern, and `{ty}` is a constructor (use \
+                                     `match` instead, which has somewhere to fall through to)"
+                                ),
+                                span: ty_span.span(),
+                            });
+                        }
                         let Some(names) = info.field_names.clone() else {
-                            // In a `match` the fix is the positional form; in a
-                            // parameter or a `let` no constructor pattern fits.
-                            let message = if self.refutable_ok {
-                                format!(
+                            return Err(TypeError {
+                                message: format!(
                                     "constructor `{ty}` takes its fields by position, not by \
                                      name: match it as `{ty}{}`",
                                     " _".repeat(info.arity)
-                                )
-                            } else {
-                                format!(
-                                    "`{ty}` is a constructor, not a record type: a parameter \
-                                     or a `let` takes a pattern that always matches, so take \
-                                     the value whole and `match` on it"
-                                )
-                            };
-                            return Err(TypeError {
-                                message,
+                                ),
                                 span: ty_span.span(),
                             });
                         };
                         let cty = self.instantiate(&info.scheme);
                         let (tys, result) = split_fun(&cty, info.arity);
-                        // In a parameter or a `let` there is nowhere to go when
-                        // the value was built by another constructor.
-                        if !self.refutable_ok
-                            && let Ty::Con(sum, _) = &result
-                            && let Some(all) = self.decls.type_ctors.get(sum)
-                            && all.len() > 1
-                        {
-                            let others: Vec<String> = all
-                                .iter()
-                                .filter(|c| *c != ty)
-                                .map(|c| format!("`{c}`"))
-                                .collect();
-                            return Err(TypeError {
-                                message: format!(
-                                    "a `{ty}` pattern can fail to match here: a `{sum}` may also be {}. Take the value whole and `match` on it",
-                                    others.join(" or ")
-                                ),
-                                span: ty_span.span(),
-                            });
-                        }
                         let fields: Vec<(String, Ty)> = names.into_iter().zip(tys).collect();
                         ("constructor", ty.clone(), result, fields)
                     }
                     None => {
                         let owner = self.resolve_record_tag(ty, ty_span.span(), "match")?;
-                        if fields.is_empty() {
-                            return Err(TypeError {
-                                message: format!(
-                                    "a record pattern needs at least one field: every `{owner}` matches `{owner} {{}}`, so write `_` or a name instead"
-                                ),
-                                span: ty_span.span(),
-                            });
-                        }
                         let (record_ty, field_tys) = self.instantiate_record(&owner);
                         ("record", owner, record_ty, field_tys)
                     }

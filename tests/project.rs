@@ -2073,7 +2073,7 @@ fn e2e_record_bodied_constructors_cross_a_module_boundary() {
                  print (Shapes.area r, moved, far.at.x)\n\
                  [r, moved, far] |> List.map describe |> print\n\
                  let w = Shapes.Wrap { value = 1, class = \"a\" }\n\
-                 let unwrap (Shapes.Wrap { value }) = value\n\
+                 let unwrap x =\n  match x:\n    case Shapes.Wrap { value }: value\n\
                  print (unwrap w, w.class, { w with class = \"b\" })\n\
                  let wire = Encode.auto [r, far]\n\
                  print wire\n\
@@ -2120,7 +2120,7 @@ fn e2e_record_bodied_constructors_cross_a_module_boundary() {
         ),
         (
             "let f (Shapes.Circle { radius }) = radius",
-            "can fail to match here",
+            "not a constructor pattern, and `Shapes.Circle` is a constructor",
         ),
     ] {
         let project = build_mem(

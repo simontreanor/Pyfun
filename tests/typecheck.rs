@@ -3206,7 +3206,7 @@ fn a_sum_constructor_is_not_a_record_parameter() {
     assert_error_contains(
         "type Shape = Circle float | Square float
 let f (Circle { r }) = r",
-        "not a record type",
+        "not a constructor pattern, and `Circle` is a constructor",
     );
 }
 
@@ -5365,34 +5365,54 @@ fn a_named_constructor_pattern_counts_toward_exhaustiveness() {
         ))
         .is_ok()
     );
-    // `Point {}` says nothing about a record, so it is not a pattern there.
-    assert_error_contains(
-        "type P = { x: int }\nlet f p =\n  match p:\n    case P {}: 1",
-        "a record pattern needs at least one field",
+    // The subset of fields a tagged pattern names may be empty for a record as
+    // for a constructor: `P {}` is any `P`, which is every value of the type.
+    assert!(
+        pyfun::check(
+            "type P = { x: int }\n\
+             let f p =\n  match p:\n    case P {}: 1\n\
+             let g (P {}) = 2\n\
+             let n = f (P { x = 1 }) + g (P { x = 2 })"
+        )
+        .is_ok()
     );
 }
 
 #[test]
-fn a_named_constructor_in_a_binding_must_be_the_only_one() {
-    // A parameter or a `let` has nowhere to go when the pattern fails, so a
-    // constructor pattern is allowed there only when the type has no other.
+fn no_constructor_pattern_binds_in_a_parameter_or_a_let() {
+    // One rule for both kinds of constructor: a parameter or a `let` takes a
+    // name, `_`, or a tuple or record of those. The parser refuses the
+    // positional form by its shape; the named form looks like a record
+    // pattern, so the checker refuses it with the same words. It makes no
+    // difference how many constructors the type has.
+    let rule = "must always match, so it takes a name, `_`, or a tuple or record of those, not";
+    for src in [
+        // positional, refused by the parser
+        "type W = Wrap int\nlet unwrap (Wrap v) = v",
+        "type W = Wrap int\nlet w = Wrap 1\nlet (Wrap v) = w",
+        // named, refused by the checker
+        "type W = Wrap { value: int }\nlet unwrap (Wrap { value }) = value",
+        "type W = Wrap { value: int }\nlet w = Wrap { value = 1 }\nlet Wrap { value } = w",
+        "type W = Wrap { value: int }\nlet f = fun (Wrap { value }) -> value",
+        "type S = Circle { radius: float } | Dot\nlet f (Circle { radius }) = radius",
+        // a positional constructor written with braces
+        "type Shape = Circle float | Square float\nlet f (Circle { r }) = r",
+    ] {
+        let message = match pyfun::parse(src) {
+            Err(e) => e.to_string(),
+            Ok(_) => errors(src).join("\n"),
+        };
+        assert!(message.contains(rule), "{src}\n{message}");
+        assert!(message.contains("constructor"), "{src}\n{message}");
+    }
+    // The value is taken whole and matched.
     assert!(
         pyfun::check(
-            "type W = Wrap { value: int, tag: bool }\n\
-             let unwrap (Wrap { value }) = value\n\
-             let w = Wrap { value = 1, tag = True }\n\
-             let Wrap { tag } = w\n\
-             let n = unwrap w + (if tag then 1 else 0)"
+            "type W = Wrap { value: int }\n\
+             let unwrap w =\n  match w:\n    case Wrap { value }: value\n\
+             let n = unwrap (Wrap { value = 1 }) + 1"
         )
         .is_ok()
-    );
-    assert_error_contains(
-        &format!("{NAMED_SHAPES}let f (Circle {{ radius }}) = radius"),
-        "a `Circle` pattern can fail to match here: a `Shape` may also be `Rect` or `Dot`. Take the value whole and `match` on it",
-    );
-    assert_error_contains(
-        "type Shape = Circle float | Square float\nlet f (Circle { r }) = r",
-        "`Circle` is a constructor, not a record type",
     );
 }
 

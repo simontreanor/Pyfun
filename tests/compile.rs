@@ -8877,16 +8877,15 @@ fn e2e_record_bodied_constructors_travel_as_json_with_named_fields() {
 }
 
 #[test]
-fn e2e_a_single_named_constructor_destructures_in_a_binding() {
-    // With no other constructor the pattern cannot fail, so it is allowed in a
-    // parameter and a `let`, where it reads the named attributes.
-    let src = "type Wrapper = Wrap { value: int, note: str }\n\
-               let unwrap (Wrap { value }) = value\n\
-               let w = Wrap { value = 41, note = \"n\" }\n\
-               let Wrap { note, value = v } = w\n\
-               print (unwrap w + 1, note, v)\n\
-               [w, { w with value = 1 }] |> List.map (fun (Wrap { value }) -> value) |> print";
+fn e2e_an_empty_tagged_pattern_matches_any_value_of_its_tag() {
+    // `Wrap {}` is any `Wrap`, and `P {}` any `P`: a record pattern that names
+    // no field binds nothing, in a `match` or in a parameter.
+    let src = "type W = Wrap { value: int, note: str } | Empty\n\
+               type P = { x: int }\n\
+               let kind w =\n  match w:\n    case Wrap {}: \"wrap\"\n    case Empty: \"empty\"\n\
+               let is_p (P {}) = True\n\
+               print (kind (Wrap { value = 1, note = \"n\" }), kind Empty, is_p (P { x = 1 }))";
     if let Some(out) = run_source(src) {
-        assert_eq!(out.trim(), "(42, 'n', 41)\n[41, 1]");
+        assert_eq!(out.trim(), "('wrap', 'empty', True)");
     }
 }

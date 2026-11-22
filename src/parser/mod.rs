@@ -2797,9 +2797,9 @@ impl Parser {
             }
         }
         self.expect(&Tok::RBrace, "`}`")?;
-        // No fields is `Rect {}`, which matches any value a record-bodied
-        // constructor built. The checker rejects it for a plain record, where
-        // it would match everything and say nothing.
+        // No fields is `Rect {}`: any value that record-bodied constructor
+        // built, or any value of that record type (the subset of fields a
+        // pattern names may be empty).
         Ok(Pattern::Record {
             ty,
             ty_span,
@@ -2964,9 +2964,9 @@ fn starts_param(tok: &Tok) -> bool {
 /// position has anywhere to fail *to*.
 ///
 /// A record pattern's tag is only *resolved* later, in the type checker. A tag
-/// that turns out to be a record-bodied constructor is admitted there only when
-/// its type has no other constructor, and a positional constructor's is
-/// rejected, so nothing refutable slips through this way.
+/// that turns out to be a constructor (record-bodied or positional) is rejected
+/// there in these positions, as a constructor pattern is here, so nothing
+/// refutable slips through this way.
 fn refutable_shape(pattern: &Pattern) -> Option<&'static str> {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => None,

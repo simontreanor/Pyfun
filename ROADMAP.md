@@ -513,6 +513,10 @@ after the release.
 
 19. **An `exn` effect label** on externs, discharged by `try` (L).
 20. **`from X import y` and nested packages** (M each), both deferred in `DESIGN.md` §6.1.
+21. **A sole constructor's pattern in a parameter or a `let`** (M), for both kinds at once:
+    `let unwrap (Wrap v) = v` and `let unwrap (Wrap { value }) = value`, where the type has no other
+    constructor and the pattern cannot fail (F# and Haskell allow it). Today neither kind binds
+    there. Found while building item 14, and left out so the two kinds keep one rule.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
