@@ -420,8 +420,117 @@ impl Parser {
         None
     }
 
+    /// A statement written the way Python writes it, where Pyfun has a different
+    /// form. Each of these is an error anyway, at a token that says little
+    /// (`expected an expression, found =`), so the statement's opening words are
+    /// read for the Python shape and answered with the Pyfun one. Like
+    /// [`Parser::def_hint`], every case needs the whole shape (`for … in … :`,
+    /// `name =`), so a program that merely calls something `for` is untouched.
+    fn python_statement_hint(&self) -> Option<ParseError> {
+        let Tok::Ident(first) = self.peek() else {
+            return None;
+        };
+        let at = |message: String| {
+            Some(ParseError {
+                message,
+                span: self.span(),
+            })
+        };
+        // The statement's first line.
+        let line = || {
+            self.tokens[self.pos..]
+                .iter()
+                .map(|t| &t.tok)
+                .take_while(|t| !matches!(t, Tok::Sep | Tok::Indent | Tok::Dedent | Tok::Eof))
+        };
+        let has_colon = line().any(|t| matches!(t, Tok::Colon));
+        match first.as_str() {
+            "for" if has_colon && line().any(|t| matches!(t, Tok::Ident(n) if n == "in")) => {
+                return at(
+                    "Pyfun has no `for` statement: run an effect per element with \
+                     `xs |> List.iter (fun x -> …)`, or build a value with `List.map` or \
+                     `List.fold` (inside a computation expression, `for x in xs:` is available)"
+                        .to_string(),
+                );
+            }
+            "while" if has_colon => {
+                return at(
+                    "Pyfun has no `while` loop: write a recursive function (a call to \
+                     itself in tail position compiles to a loop), or fold over a `List` or `Seq`"
+                        .to_string(),
+                );
+            }
+            "class" if has_colon && matches!(self.peek2(), Tok::Ident(_)) => {
+                return at(
+                    "Pyfun declares data with `type`: a record is `type Name = { field: type }`, \
+                     and a choice between shapes is `type Name = A | B`"
+                        .to_string(),
+                );
+            }
+            "from" if line().any(|t| matches!(t, Tok::Import)) => {
+                return at("a Python module is bound at the boundary: write \
+                     `extern import module`, then a typed `extern name: … = module.name` \
+                     for each function you call"
+                    .to_string());
+            }
+            _ => {}
+        }
+        match (self.peek2(), self.peek3()) {
+            (Tok::Eq, _) => at(format!(
+                "Pyfun binds a name with `let`: write `let {first} = …` \
+                 (to change a `let mut`, write `{first} <- …`)"
+            )),
+            (
+                op @ (Tok::Plus
+                | Tok::Minus
+                | Tok::Star
+                | Tok::StarStar
+                | Tok::Slash
+                | Tok::SlashSlash
+                | Tok::Percent),
+                Tok::Eq,
+            ) => {
+                let op = describe(op);
+                let op = op.trim_matches('`');
+                at(format!(
+                    "Pyfun has no `{op}=`: write `{first} <- {first} {op} …`, \
+                     on a name declared with `let mut`"
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    /// Python's `lambda x, y: body`, met where an expression is due. `lambda` is
+    /// an ordinary name in Pyfun, so only the full shape (names, then `:` on the
+    /// same line) is answered, with the same parameters in Pyfun's form.
+    fn lambda_hint(&self) -> Option<ParseError> {
+        let mut params = Vec::new();
+        for token in &self.tokens[self.pos + 1..] {
+            match &token.tok {
+                Tok::Ident(p) => params.push(p.clone()),
+                Tok::Underscore => params.push("_".to_string()),
+                Tok::Comma => {}
+                Tok::Colon => {
+                    if params.is_empty() {
+                        params.push("_".to_string());
+                    }
+                    return Some(ParseError {
+                        message: format!(
+                            "Pyfun writes a lambda as `fun {} -> …`",
+                            params.join(" ")
+                        ),
+                        span: self.span(),
+                    });
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     fn parse_item(&mut self) -> Result<Item, ParseError> {
-        if let Some(err) = self.def_hint() {
+        if let Some(err) = self.def_hint().or_else(|| self.python_statement_hint()) {
             return Err(err);
         }
         match self.peek() {
@@ -490,6 +599,20 @@ impl Parser {
     fn parse_import(&mut self) -> Result<Item, ParseError> {
         let start = self.cur_start();
         self.expect(&Tok::Import, "`import`")?;
+        // `import math`: Python's spelling for a Python module. A Pyfun module is
+        // capitalized, so a lowercase name here can only mean the Python one.
+        if let Tok::Ident(name) = self.peek()
+            && !is_upper(name)
+        {
+            return Err(ParseError {
+                message: format!(
+                    "`import` brings in a Pyfun module, whose name is capitalized \
+                     (`import Geometry`); a Python module is bound at the boundary: write \
+                     `extern import {name}`, then a typed `extern` for each function you call"
+                ),
+                span: self.span(),
+            });
+        }
         let name = self.parse_upper_ident("an imported module name")?;
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(Item::Import { name, span })
@@ -1106,7 +1229,7 @@ impl Parser {
         self.expect(&Tok::Indent, "an indented block")?;
         let mut stmts = Vec::new();
         loop {
-            if let Some(err) = self.def_hint() {
+            if let Some(err) = self.def_hint().or_else(|| self.python_statement_hint()) {
                 return Err(err);
             }
             let stmt = if matches!(self.peek(), Tok::Let) {
@@ -1689,6 +1812,11 @@ impl Parser {
                 ExprKind::Bool(false)
             }
             Tok::Ident(name) => {
+                if name == "lambda"
+                    && let Some(err) = self.lambda_hint()
+                {
+                    return Err(err);
+                }
                 // `async`/`seq`/`result`/`option` are computation-expression
                 // builders only when immediately followed by `{`; otherwise they are
                 // ordinary identifiers.
@@ -1842,6 +1970,18 @@ impl Parser {
                 FStrPart::Hole(tokens) => {
                     let mut sub = Parser::new(tokens);
                     let expr = sub.parse_expr()?;
+                    if matches!(sub.peek(), Tok::Colon | Tok::Bang) {
+                        // Python's `{x:.2f}` / `{x!r}`. The spec is a second
+                        // language inside the string that nothing checks, so
+                        // formatting is a function call (`DESIGN.md` §6).
+                        return Err(ParseError {
+                            message: "an f-string hole holds an expression only: Pyfun has no \
+                                      `{x:.2f}` format specs. Format the value with the `Format` \
+                                      module first, as in `{Format.fixed 2 x}`"
+                                .to_string(),
+                            span: sub.span(),
+                        });
+                    }
                     if !sub.at_eof() {
                         return Err(sub.error("unexpected token after f-string hole expression"));
                     }

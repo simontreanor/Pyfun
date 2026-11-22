@@ -453,11 +453,12 @@ after the release.
    closure, so `let pure` covers the accumulator style.
 3. **Tracebacks in `.pyfun` lines** (M). A runtime error under `pyfun run`, the REPL and the kernel
    names `_pyfun_main.py` in a temp directory. Map frames back to source spans.
-4. **Hints for Python habits** (S). `def` and `len` already get a tailored message. The same
-   treatment for `lambda x:`, `if c:`, `x = 5`, a top-level `for`, `import math`,
-   `"abc".upper()`, `x in xs`, `xs[0]`, `{"a": 1}`, `{1, 2}`, a `{x:>10}` format spec and an
-   `if` with no `else`. A synonym table consulted before edit distance fixes the member
-   suggestions (`Map.get` suggests `Map.len` today, and `List.item` suggests `List.iter`).
+4. **Hints for Python habits** (S). **Mostly DONE 2026-11-22** (#194): `x = 5` and `x += 1`, a `for`
+   or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
+   `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`
+   is answered with `Map.find`, `List.append` with `List.concat`). Still to come, each with the item
+   that settles its form: `x in xs` (item 13), `{"a": 1}` and `{1, 2}` (item 12), and an `if` with
+   no `else` or written `a if c else b` (item 8).
 5. **Guards in the exhaustiveness message** (S). When the missing witness has a guarded arm, say that
    a guarded arm does not count.
 6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
