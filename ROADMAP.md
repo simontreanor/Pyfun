@@ -466,9 +466,8 @@ after the release.
 
 **Consistency (breaking, 0.11.0)**
 
-7. **The `try` prefix.** `Map.tryFind` and `String.tryIndexOf` carry it. `List.find`, `List.head`,
-   `List.get`, `List.max`, `String.get` and `Seq.find` return `Option` without it. Every lookup is
-   total, so the prefix carries no information: rename the two to `Map.find` and `String.indexOf`.
+7. ~~**The `try` prefix.**~~ **DONE 2026-11-22** (#190): `Map.find` and `String.indexOf`. Every lookup is
+   total and returns an `Option`, so none is marked; the old names are answered with the new ones.
 8. **Block openers.** `match e:`, `case p:` and a CE's `for x in xs:` open a block with a colon.
    `if` takes `then`, while `elif` is already Python's word. Accept `if c:` / `elif c:` / `else:`
    for the block form and keep `then` for the one-line form.

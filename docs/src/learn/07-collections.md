@@ -86,7 +86,7 @@ your editor, or type `:type` in the REPL, to see what a module offers.
 Totality carries over from lesson 3. In Python, `ns[9]` on a five element list raises `IndexError`.
 Pyfun has no bracket indexing at all. Instead `List.get 9 ns` returns an `Option`, `None` when the
 index is out of range, and you supply a fallback with `Option.withDefault`. The lookup cannot crash,
-because the empty case is a value you have to handle. `Map.tryFind` works the same way, returning an
+because the empty case is a value you have to handle. `Map.find` works the same way, returning an
 `Option` so a missing key is data rather than an exception.
 
 ## Exercise

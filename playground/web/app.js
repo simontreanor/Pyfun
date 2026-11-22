@@ -39,8 +39,8 @@ print (f"total area: {total}")
 # so one failure arm covers the whole chain instead of one per step.
 let describe m =
   option {
-    let! name = Map.tryFind "name" m
-    let! age = Map.tryFind "age" m
+    let! name = Map.find "name" m
+    let! age = Map.find "age" m
     return f"{name} is {age}"
   }
 

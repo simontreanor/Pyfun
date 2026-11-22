@@ -271,7 +271,7 @@ not free in `x`) lowers to that scan: `_pf_index_of(x, xs)` (`xs.index(x)` under
 returns it), and `x in xs`. `x` is evaluated once, before `xs`, exactly as the helper call evaluated
 its arguments. Any other predicate, and any partial application, keeps the generic Python-level scan.
 
-**Match-consumed lookups.** `match Map.tryFind k m:` with the arms `Some v` and `None` is the language's
+**Match-consumed lookups.** `match Map.find k m:` with the arms `Some v` and `None` is the language's
 way to say "look it up, and here is what to do in each case", and the `Option` in the middle exists only
 to carry the answer from the helper to the `match`. When the two are adjacent it need not exist: the
 match lowers to `if k in m:` with `v` bound from `m[k]` in the first branch and the `None` arm in the
@@ -357,7 +357,7 @@ functions, which have no self tail call at all. Mechanics in `INTERNALS.md`.
 
 ### 5.5 `Option`/`Result` matches as `isinstance` ladders; nullary constructors as singletons
 
-`Option` is the return type of every stdlib accessor (`Map.tryFind`, `List.head`, `List.findIndex`),
+`Option` is the return type of every stdlib accessor (`Map.find`, `List.head`, `List.findIndex`),
 so a `match` on one is the commonest match in the language, and a real program asks it millions of
 times. A Python `match` resolves a class pattern through `__match_args__` and `isinstance` at
 runtime, then binds by position, which is structural machinery a two-case type with one payload does
@@ -366,8 +366,8 @@ not need. A match whose arms are the constructors of one built-in family (`Some 
 lowers to what a person writes:
 
 ```python
-def allowsLetter(checks, rc, l):      # match Map.tryFind rc checks:
-    _pf_t0 = _pf_map_try_find(rc, checks)
+def allowsLetter(checks, rc, l):      # match Map.find rc checks:
+    _pf_t0 = _pf_map_find(rc, checks)
     if isinstance(_pf_t0, None_):     #   case None: True
         return True
     else:                             #   case Some s: Set.contains l s
@@ -789,13 +789,13 @@ truth `types::SET_PRELUDE` / `MAP_PRELUDE` + `seed_set_prelude` / `seed_map_prel
 (unlike `List`'s higher-order trio, none take a function):
 `Set.empty`/`Set.add`/`Set.remove`/`Set.contains`/`Set.len`/`Set.union`/`Set.intersect`/
 `Set.difference`/`Set.ofList`/`Set.toList`, and `Map.empty`/`Map.add`/`Map.remove`/`Map.contains`/
-`Map.findOr`/`Map.tryFind`/`Map.len`/`Map.keys`/`Map.values`. `Set.len`/`Set.ofList`/`Set.toList`/
+`Map.findOr`/`Map.find`/`Map.len`/`Map.keys`/`Map.values`. `Set.len`/`Set.ofList`/`Set.toList`/
 `Map.len` route to bare Python builtins (`len`/`set`/`list`); the nullary `Set.empty`/`Map.empty` lower
 to `set()`/`dict()`; the rest lower to small **emitted helpers** (`_pf_set_add` = `s.union([x])`,
 `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) so the curried function is one callable (partial
 application → `functools.partial`). The collections are **immutable-style**: every operation returns a
 fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
-`Map.tryFind key m : Option v` is the optional form. `Map.ofList : List (k, v) -> Map k v` and
+`Map.find key m : Option v` is the optional form. `Map.ofList : List (k, v) -> Map k v` and
 `Map.toList : Map k v -> List (k, v)` convert to/from a list of key/value **tuples** (`Map.ofList` lowers
 to a bare `dict(pairs)`; `Map.toList` to `list(m.items())`), mirroring `Set.ofList`/`toList`. Element/key
 types are **unconstrained polymorphic**
@@ -810,22 +810,25 @@ is seeded exactly like `Result a e` (`Ok`/`Error`): a reserved type with global 
 to `Some`/`None_` (resp. `Ok`/`Error`) classes (`None` is mangled off the Python keyword), emitted on
 demand. Each has a module of combinators: `Option.map`/`bind`/`filter`/`withDefault`/`isSome`/`isNone`/
 `toResult`, and `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`. The
-mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Map.tryFind` returns an
+mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Map.find` returns an
 `Option`; the two bridge **both ways** — `Result.toOption` (`Ok v → Some v`, `Error _ → None`) and
 `Option.toResult e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
 
 **Strings — the `String` module.** Text operations over the built-in `str` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
 `upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
-`toFloat`/`toList`/`slice`/`tryIndexOf` (single source of truth `types::STRING_PRELUDE` +
+`toFloat`/`toList`/`slice`/`indexOf` (single source of truth `types::STRING_PRELUDE` +
 `seed_string_prelude`). `slice start end s` → `s[start:end]` (total Python slicing, end-exclusive,
-clamps out-of-range; emitted via a `PyExpr::Slice` node so the output reads `s[a:b]`); `tryIndexOf sub s
+clamps out-of-range; emitted via a `PyExpr::Slice` node so the output reads `s[a:b]`); `indexOf sub s
 : … -> Option int` uses `str.find` and returns `None` when absent (total — no `IndexError`, like
-`List.get`). **Naming follows the
+`List.get`). **A lookup is not marked `try`**: every one is total
+and returns an `Option` (`List.find`, `List.head`, `List.get`, `Map.find`, `String.indexOf`), so the
+prefix would say nothing the type does not; `Map.tryFind` and `String.tryIndexOf`, the two that
+carried it before 0.11, are answered with the new name. **Naming follows the
 `List` precedent** — use Python's word where it has a natural one (`len`/`upper`/`lower`/`strip`/`split`/
 `join`/`replace`, matching Python's `str` methods, and consistent with `List.len`), and Pyfun's own
 convention otherwise (the `contains`/`ofList`-style `toInt`/`toList`/`fromInt` family, and camelCase for
-multi-word `startsWith`/`endsWith` like `tryFind`/`withDefault`). Unlike the collection preludes these
+multi-word `startsWith`/`endsWith` like `findOr`/`withDefault`). Unlike the collection preludes these
 schemes are **monomorphic** (concrete over `str`/`int`/`float`/`bool`, no type variables) and all
 **pure**. There is **no `char` type** — a character is a length-1 string, so `String.toList : str ->
 List str` yields single-character strings and `String.join`/`concat` compose them back. Separator-first
@@ -1158,7 +1161,7 @@ which meant a fold could never print. They now read `(b -> a ->{e} b)`, which ac
 effect flow out to the call, as the one-argument members (`List.map`) always did.
 
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
-`Set.add`, `Map.tryFind`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
+`Set.add`, `Map.find`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The
 built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`/`String`/`Format`; members paired in
 `MODULE_PRELUDES`) and **user-declared in-file modules** (below) share one access syntax. The access

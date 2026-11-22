@@ -523,7 +523,7 @@ struct Lowerer {
     /// prelude), set when a `result {}` block or an `Ok`/`Error` reference is lowered.
     needs_result: bool,
     /// Whether the built-in `Some`/`None` classes must be emitted (the `Option`
-    /// prelude), set when `Some`/`None` or an `Option.*` / `Map.tryFind` member that
+    /// prelude), set when `Some`/`None` or an `Option.*` / `Map.find` member that
     /// constructs them is lowered.
     needs_option: bool,
     /// Whether the built-in `Exception` record class (`_Exception`) must be emitted,
@@ -3230,7 +3230,7 @@ impl Lowerer {
     }
 
     /// Match-consumed lookup (`DESIGN.md` §5.2): a `match` whose scrutinee is a
-    /// fully-applied `Map.tryFind k m` / `List.head xs` / `List.get i xs` and whose
+    /// fully-applied `Map.find k m` / `List.head xs` / `List.get i xs` and whose
     /// arms are exactly `None` and `Some v` (`v` a name, `_`, or a tuple of those)
     /// lowers to the `if` a person would write — `if k in m: v = m[k] …` — instead
     /// of building an `Option` the very next statement takes apart. The operands
@@ -3254,7 +3254,7 @@ impl Lowerer {
             return Ok(None);
         };
         let arity = match q.as_str() {
-            "Map.tryFind" | "List.get" => 2,
+            "Map.find" | "List.get" => 2,
             "List.head" => 1,
             _ => return Ok(None),
         };
@@ -3284,8 +3284,8 @@ impl Lowerer {
             index: Box::new(index),
         };
         let (test, payload) = match q.as_str() {
-            // `_pf_map_try_find`: `Some(m.get(k)) if k in m else None_()`
-            "Map.tryFind" => {
+            // `_pf_map_find`: `Some(m.get(k)) if k in m else None_()`
+            "Map.find" => {
                 let (k, m) = (vals[0].clone(), vals[1].clone());
                 (
                     PyExpr::Compare {
@@ -3639,7 +3639,7 @@ impl Lowerer {
         PyExpr::Name(helper.to_string())
     }
 
-    /// Lower a built-in module member (`List.map`, `Set.empty`, `Map.tryFind`, …) to
+    /// Lower a built-in module member (`List.map`, `Set.empty`, `Map.find`, …) to
     /// the Python it routes to: a bare builtin name (`len`/`set`/`list`), a fresh
     /// empty container (`set()`/`dict()`), or an emitted `_pf_*` helper (recorded so
     /// it is defined, and flagging `functools` / the `Option` prelude as needed).
@@ -3861,9 +3861,9 @@ impl Lowerer {
             "Map.remove" => coll(self, "_pf_map_remove"),
             "Map.contains" => coll(self, "_pf_map_contains"),
             "Map.findOr" => coll(self, "_pf_map_find_or"),
-            "Map.tryFind" => {
+            "Map.find" => {
                 self.needs_option = true;
-                coll(self, "_pf_map_try_find")
+                coll(self, "_pf_map_find")
             }
             "Map.keys" => coll(self, "_pf_map_keys"),
             "Map.values" => coll(self, "_pf_map_values"),
@@ -4131,7 +4131,7 @@ impl Lowerer {
                 coll(self, "_pf_str_get")
             }
             "String.slice" => coll(self, "_pf_str_slice"),
-            "String.tryIndexOf" => {
+            "String.indexOf" => {
                 self.needs_option = true;
                 coll(self, "_pf_str_index_of")
             }
@@ -9085,8 +9085,8 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 &["k", "default", "m"],
                 method(name("m"), "get", vec![name("k"), name("default")]),
             ),
-            // Map.tryFind(k, m) -> Some(m.get(k)) if k in m else None_()
-            "_pf_map_try_find" => def(
+            // Map.find(k, m) -> Some(m.get(k)) if k in m else None_()
+            "_pf_map_find" => def(
                 helper,
                 &["k", "m"],
                 vec![
@@ -9425,7 +9425,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     upper: Box::new(name("end")),
                 },
             ),
-            // String.tryIndexOf(sub, s): i = s.find(sub); Some(i) if i >= 0 else None_
+            // String.indexOf(sub, s): i = s.find(sub); Some(i) if i >= 0 else None_
             // (`find` returns -1 when absent, so this is total.)
             "_pf_str_index_of" => def(
                 helper,
@@ -10891,7 +10891,7 @@ fn is_lookup_match(scrutinee: &Expr, arms: &[crate::parser::ast::MatchArm]) -> b
     let mut args = Vec::new();
     let head = flatten_app(scrutinee, &mut args);
     match crate::types::qualified_name(head).as_deref() {
-        Some("Map.tryFind" | "List.get") => args.len() == 2,
+        Some("Map.find" | "List.get") => args.len() == 2,
         Some("List.head") => args.len() == 1,
         _ => false,
     }

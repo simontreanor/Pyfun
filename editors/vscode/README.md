@@ -26,7 +26,7 @@ you open a `.pyfun` file. If your `pyfun` lives somewhere else, point the extens
 - **Go-to-definition** and **find-references** — across files, for locals, parameters, pattern
   variables, top-level and module values, constructors, and type names.
 - **Rename** — project-wide, for values, constructors, and types.
-- **Completion** — module members (`List.map`, `Map.tryFind`), prelude builtins, constructors,
+- **Completion** — module members (`List.map`, `Map.find`), prelude builtins, constructors,
   type names, and keywords.
 - **Document and workspace symbols** — the file outline (including in-file `module` members) and a
   project-wide symbol search.

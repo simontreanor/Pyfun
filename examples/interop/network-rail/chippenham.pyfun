@@ -158,14 +158,14 @@ let dedupLegs legs =
     match acc:
       case (seen, out):
         let k = f"{leg.depMin}|{leg.dest}"
-        match Map.tryFind k seen:
+        match Map.find k seen:
           case Some _: (seen, out)
           case None: (Map.add k True seen, List.concat out [leg])
   match List.fold step (Map.empty, []) legs:
     case (_, out): out
 
 let groupByDest acc leg =
-  Map.add leg.dest (List.concat (Option.withDefault [] (Map.tryFind leg.dest acc)) [leg]) acc
+  Map.add leg.dest (List.concat (Option.withDefault [] (Map.find leg.dest acc)) [leg]) acc
 
 let insertByDep leg sorted =
   match sorted:
@@ -208,7 +208,7 @@ let titleHyphen w = String.join "-" (List.map capWord (String.split "-" w))
 let titleCase name = String.join " " (List.map titleHyphen (String.split " " (String.lower name)))
 
 # --- rendering (Markdown) ---
-let nameOf names tp = titleCase (Option.withDefault tp (Map.tryFind tp names))
+let nameOf names tp = titleCase (Option.withDefault tp (Map.find tp names))
 let plural n word = if n == 1 then f"{n} {word}" else f"{n} {word}s"
 let rangeStr lo hi = if lo == hi then f"{lo} min" else f"{lo}-{hi} min"
 

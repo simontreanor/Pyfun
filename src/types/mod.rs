@@ -573,7 +573,7 @@ pub const SET_PRELUDE: &[(&str, usize)] = &[
 /// lowers to a Python `dict`), accessed qualified (`Map.add`). Single source of
 /// truth shared with [`seed_map_prelude`] + lowering, all pure. Keys must be
 /// hashable at runtime. `Map.findOr key default m` is a total lookup with a
-/// fallback (`dict.get`); `Map.tryFind key m : Option v` is the optional form.
+/// fallback (`dict.get`); `Map.find key m : Option v` is the optional form.
 /// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). `Map.ofList`/
 /// `Map.toList` convert to/from a `List (k, v)` of key/value tuples (now that
 /// tuples exist), mirroring `Set.ofList`/`toList`.
@@ -591,7 +591,7 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("remove", 2),
     ("contains", 2),
     ("findOr", 3),
-    ("tryFind", 2),
+    ("find", 2),
     ("len", 1),
     ("keys", 1),
     ("values", 1),
@@ -634,7 +634,7 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("toFloat", 1),
     ("toList", 1),
     ("slice", 3),
-    ("tryIndexOf", 2),
+    ("indexOf", 2),
 ];
 
 /// The `Format` module (`DESIGN.md` §6): checked formatting functions, the typed
@@ -1180,7 +1180,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Map.findOr",
         "The value for a key, or the given default. O(1).",
     ),
-    ("Map.tryFind", "The value for a key, or `None`. O(1)."),
+    ("Map.find", "The value for a key, or `None`. O(1)."),
     ("Map.len", "How many entries. O(1)."),
     ("Map.keys", "The keys as a list, in insertion order. O(n)."),
     (
@@ -1451,7 +1451,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The characters between two positions, end-exclusive. O(k) in the slice length. Total: out-of-range bounds clamp.",
     ),
     (
-        "String.tryIndexOf",
+        "String.indexOf",
         "Where a substring first occurs, or `None`. O(n*m) worst case — it is a search.",
     ),
     (
@@ -1725,10 +1725,26 @@ fn levenshtein(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// Standard-library members renamed in 0.11, so the old spelling is answered with
+/// the new one however far apart the two are (`tryFind` and `find` are too far
+/// for the fuzzy match below). Every lookup returns an `Option`, so the `try`
+/// prefix two of them carried said nothing the type did not (`DESIGN.md` §6).
+fn renamed_member(module: &str, name: &str) -> Option<&'static str> {
+    match (module, name) {
+        ("Map", "tryFind") => Some("find"),
+        ("String", "tryIndexOf") => Some("indexOf"),
+        ("Decode", "string") => Some("str"),
+        _ => None,
+    }
+}
+
 /// The member of `module` closest to `name` by edit distance, when one is near
 /// enough to be a plausible typo or casing slip (`String.startswith` → `startsWith`).
 /// Scans the env's qualified keys, so it works for built-in *and* user modules alike.
 fn closest_member(module: &str, name: &str, env: &Env) -> Option<String> {
+    if let Some(new) = renamed_member(module, name) {
+        return Some(new.to_string());
+    }
     let prefix = format!("{module}.");
     let members = || env.keys().filter_map(|k| k.strip_prefix(&prefix));
     // Direct members only (qualified keys are single-dot).
@@ -5150,8 +5166,8 @@ fn seed_string_prelude(env: &mut Env) {
         "slice",
         pure_fn(int(), pure_fn(int(), pure_fn(str_(), str_()))),
     );
-    // String.tryIndexOf sub s -> Some i (first occurrence) or None if absent.
-    put("tryIndexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
+    // String.indexOf sub s -> Some i (first occurrence) or None if absent.
+    put("indexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
 
     // String.isEmpty : string -> bool   (the same name every other container uses)
     put("isEmpty", pure_fn(str_(), Ty::Bool));
@@ -5372,7 +5388,7 @@ fn seed_map_prelude(env: &mut Env) {
     put("remove", pure_fn(k(), pure_fn(mv(), mv())));
     put("contains", pure_fn(k(), pure_fn(mv(), Ty::Bool)));
     put("findOr", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
-    put("tryFind", pure_fn(k(), pure_fn(mv(), opt(v()))));
+    put("find", pure_fn(k(), pure_fn(mv(), opt(v()))));
     put("len", pure_fn(mv(), int()));
     put("keys", pure_fn(mv(), list(k())));
     put("values", pure_fn(mv(), list(v())));

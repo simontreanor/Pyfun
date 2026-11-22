@@ -245,8 +245,8 @@ fn accepts_discard_binding() {
 #[test]
 fn accepts_string_slice_and_index_of() {
     assert!(pyfun::check("let r = String.slice 0 3 \"hello\"").is_ok());
-    assert!(pyfun::check("let r = String.tryIndexOf \"l\" \"hello\"").is_ok()); // : Option int
-    assert!(pyfun::check("let r = Option.withDefault 0 (String.tryIndexOf \"l\" \"hi\")").is_ok());
+    assert!(pyfun::check("let r = String.indexOf \"l\" \"hello\"").is_ok()); // : Option int
+    assert!(pyfun::check("let r = Option.withDefault 0 (String.indexOf \"l\" \"hi\")").is_ok());
     // slice bounds are ints, not strings.
     assert_error_contains("let r = String.slice \"a\" 3 \"hello\"", "int");
 }
@@ -1926,7 +1926,7 @@ fn a_field_on_a_value_nothing_pins_is_still_ambiguous() {
 
 #[test]
 fn a_pinned_container_resolves_its_payload() {
-    // `Map.tryFind` on a map whose value type is known needs no pattern: the
+    // `Map.find` on a map whose value type is known needs no pattern: the
     // payload is pinned by the map.
     assert!(
         pyfun::check(
@@ -1934,7 +1934,7 @@ fn a_pinned_container_resolves_its_payload() {
              type Cell = { row: int, letter: str, blank: bool }\n\
              let board = Map.ofList [(1, Placed { row = 1, letter = \"A\" })]\n\
              let at k =\n\
-             \x20 match Map.tryFind k board:\n\
+             \x20 match Map.find k board:\n\
              \x20   case Some p: p.letter\n\
              \x20   case None: \"\""
         )
@@ -3332,7 +3332,7 @@ fn accepts_set_functions() {
 fn accepts_map_functions() {
     let src = "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\
                let v = Map.findOr \"a\" 0 m\n\
-               let o = Map.tryFind \"a\" m\n\
+               let o = Map.find \"a\" m\n\
                let m2 = Map.remove \"b\" m\n\
                let has = Map.contains \"a\" m2\n\
                let n = Map.len m2\n\
@@ -3548,7 +3548,7 @@ fn list_zip_pairs_elements_into_tuples() {
 fn map_of_list_and_to_list_round_trip_through_pairs() {
     // `Map.ofList : List (k, v) -> Map k v` and `Map.toList` its inverse.
     let src = "let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])\n\
-               let v = Option.withDefault 0 (Map.tryFind \"a\" m)\n\
+               let v = Option.withDefault 0 (Map.find \"a\" m)\n\
                let pairs = Map.toList m";
     assert!(pyfun::check(src).is_ok());
 }
@@ -3579,12 +3579,12 @@ fn map_find_or_default_must_match_the_value_type() {
 }
 
 #[test]
-fn try_find_returns_an_option() {
-    // `Map.tryFind : k -> Map k v -> Option v`, so `Option.withDefault` accepts it.
+fn map_find_returns_an_option() {
+    // `Map.find : k -> Map k v -> Option v`, so `Option.withDefault` accepts it.
     assert!(
         pyfun::check(
             "let m = Map.add \"a\" 1 Map.empty\n\
-             let v = Option.withDefault 0 (Map.tryFind \"a\" m)"
+             let v = Option.withDefault 0 (Map.find \"a\" m)"
         )
         .is_ok()
     );
@@ -4703,4 +4703,26 @@ fn the_string_type_is_str_and_the_old_name_is_reserved() {
     // The decoder follows the type's name, and the old member points at it.
     assert!(pyfun::check("let d = Decode.list Decode.str").is_ok());
     assert_error_contains("let d = Decode.string", "did you mean `Decode.str`?");
+}
+
+#[test]
+fn lookups_carry_no_try_prefix_and_the_old_names_point_at_the_new() {
+    // Every lookup is total and returns an `Option`, so none is marked `try`.
+    assert!(
+        pyfun::check(
+            "let m = Map.ofList [(\"a\", 1)]\n\
+             let hit = Option.withDefault 0 (Map.find \"a\" m)\n\
+             let at = Option.withDefault 0 (String.indexOf \"b\" \"abc\")"
+        )
+        .is_ok()
+    );
+    // Edit distance alone would not connect these, so the rename is named.
+    assert_error_contains(
+        "let r = Map.tryFind 1 Map.empty",
+        "`tryFind` is not a member of `Map` (did you mean `Map.find`?)",
+    );
+    assert_error_contains(
+        "let r = String.tryIndexOf \"a\" \"abc\"",
+        "`tryIndexOf` is not a member of `String` (did you mean `String.indexOf`?)",
+    );
 }

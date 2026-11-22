@@ -168,7 +168,7 @@ mostly the profiler's own per-call overhead on a ~1.87M-call trivial function, n
 fully-applied call is already `len(xs)` with no helper in between.)
 
 Two further call-site shapes ride on the same lever (found on a Scrabble move generator that asked
-`List.findIndex ((==) l) rack` two million times and `match Map.tryFind rc checks:` four million
+`List.findIndex ((==) l) rack` two million times and `match Map.find rc checks:` four million
 times per position).
 
 **Equality predicates** (`try_inline_eq_predicate`, right after `try_inline_stdlib` in
@@ -188,7 +188,7 @@ identity shortcut before `==`, the same trade `List.contains`→`x in xs` alread
 **Match-consumed lookups** (`try_lower_lookup_match`, an early return at the top of both the
 return-position and the value-position `Match` arms; `is_lookup_match` is the pure shape check the
 value-position caller runs before allocating its temp, so a rejected shape leaves temp numbering
-untouched): a match whose scrutinee flattens to a fully-applied `Map.tryFind k m`, `List.head xs`, or
+untouched): a match whose scrutinee flattens to a fully-applied `Map.find k m`, `List.head xs`, or
 `List.get i xs`, and whose arms `option_arms` accepts (exactly two, unguarded, `None` and `Some v`
 in either order, `v` a name, `_`, or a tuple of those) lowers to a `PyStmt::If`: the test and payload
 are taken verbatim from the helper body (`k in m`/`m[k]`; `xs`/`xs[0]`; `0 <= i < len(xs)`/`xs[i]`),

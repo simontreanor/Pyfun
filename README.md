@@ -290,7 +290,7 @@ let path = r"C:\Users\pyfun"    # raw string, backslashes literal
 ```
 
 And a standard library that reads like F#'s: module-qualified `List` / `Set` / `Map` / `Option` /
-`Result` / `Seq` / `String` / `Format` (`List.map`, `Map.tryFind`, `Result.bind`, lazy `Seq.take`,
+`Result` / `Seq` / `String` / `Format` (`List.map`, `Map.find`, `Result.bind`, lazy `Seq.take`,
 `String.split`), tuples, destructuring `let` bindings (`let (r, c) = coord`), active patterns,
 typed holes for type-driven development, and multi-file projects with `import`.
 

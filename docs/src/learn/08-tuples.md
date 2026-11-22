@@ -24,7 +24,7 @@ let line pair =
 let lines = List.zip names scores |> List.map line
 
 let byName = List.zip names scores |> Map.ofList
-let adaScore = Option.withDefault 0 (Map.tryFind "ada" byName)
+let adaScore = Option.withDefault 0 (Map.find "ada" byName)
 
 print (swap (1, 2))
 print lines
