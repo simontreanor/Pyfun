@@ -4988,3 +4988,65 @@ fn a_locally_mutating_callback_no_longer_fits_a_declared_io_arrow() {
         .is_ok()
     );
 }
+
+#[test]
+fn a_gap_left_only_by_guards_says_guards_do_not_count() {
+    let note = "an arm with an `if` guard does not count, because its guard may be false";
+    // Every case has an arm, so the witness alone would look wrong.
+    assert_error_contains(
+        "type Shape = Circle float | Rect float float\n\
+         let area s =\n  match s:\n    case Circle r if r > 0.0: r\n    case Rect w h: w * h",
+        "`Circle _` is not matched (an arm with an `if` guard does not count",
+    );
+    assert_error_contains(
+        "let sign n =\n  match n:\n    case x if x > 0: 1\n    case x if x <= 0: 0",
+        note,
+    );
+    // A case with no arm at all is an ordinary gap, guards or not.
+    let msgs = errors(
+        "type Shape = Circle float | Rect float float\n\
+         let area s =\n  match s:\n    case Circle r if r > 0.0: r",
+    );
+    assert!(
+        msgs.iter().any(|m| m.contains("is not matched")),
+        "{msgs:?}"
+    );
+    assert!(msgs.iter().all(|m| !m.contains(note)), "{msgs:?}");
+    // And a guarded match with a fallback arm is complete.
+    assert!(
+        pyfun::check("let sign n =\n  match n:\n    case x if x > 0: 1\n    case _: 0").is_ok()
+    );
+}
+
+#[test]
+fn python_call_syntax_names_juxtaposition() {
+    assert_error_contains(
+        "type Shape = Circle float | Rect float float\nlet r = Rect(2.0, 3.0)",
+        "write `Rect a b` (`Rect(…)` passes one tuple)",
+    );
+    assert_error_contains(
+        "let add a b = a + b\nlet n = add(1, 2)",
+        "Pyfun applies a function to its arguments one after another, without brackets or commas: \
+         write `add a b`",
+    );
+    assert_error_contains(
+        "let n = List.fold((+), 0, [1, 2])",
+        "write `List.fold a b c`",
+    );
+    // A function that really takes a tuple is called this way, and so is one
+    // argument in brackets.
+    assert!(
+        pyfun::check(
+            "let fst p =\n  match p:\n    case (a, b): a\n\
+             let one = fst(1, 2)\n\
+             let xs = List.map(fun x -> x + 1) [1]"
+        )
+        .is_ok()
+    );
+    // With a space it is an ordinary tuple argument and keeps its own message.
+    let msgs = errors("let add a b = a + b\nlet n = add (1, 2)");
+    assert!(
+        msgs.iter().all(|m| !m.contains("one after another")),
+        "{msgs:?}"
+    );
+}

@@ -1210,3 +1210,30 @@ fn an_if_without_an_else_says_what_to_write() {
     }
     assert!(parse("let g x = if x > 0 then print \"positive\" else ()").is_ok());
 }
+
+#[test]
+fn pythons_conditional_expression_names_the_pyfun_order() {
+    for source in [
+        "let x = 1 if ready else 2",
+        "let xs = [x if x > 0 else 0]",
+        "print (a if c else b)",
+    ] {
+        let err = parse(source).unwrap_err();
+        assert_eq!(
+            err.message(),
+            "Pyfun puts the condition first: write `if cond then value else other`",
+            "{source}"
+        );
+    }
+    // A `case` guard follows a pattern, and a new statement may start with `if`.
+    assert!(parse("let f n =\n  match n:\n    case x if x > 0: 1\n    case _: 0").is_ok());
+    assert!(parse("let a = 1\nif a > 0 then print a else ()").is_ok());
+}
+
+#[test]
+fn an_if_that_opens_a_line_in_a_block_is_the_next_item() {
+    // Inside a computation expression's braces there is no separator token, so
+    // the conditional-expression hint must look only at an `if` on the same line.
+    let source = "let job = async {\n  print 1\n  if ready then print 2 else ()\n}";
+    assert!(parse(source).is_ok(), "{:?}", parse(source).err());
+}

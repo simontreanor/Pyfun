@@ -458,9 +458,10 @@ after the release.
    or `while` statement, `class`, `import math` and `from … import`, `lambda x:`, `"abc".upper()`,
    `xs[0]`, a `{x:.2f}` format spec, and a synonym table consulted before edit distance (`Map.get`
    is answered with `Map.find`, `List.append` with `List.concat`). Still to come, each with the item
-   that settles its form: `x in xs` (item 13). Python's ternary `a if c else b` is still unanswered.
-5. **Guards in the exhaustiveness message** (S). When the missing witness has a guarded arm, say that
-   a guarded arm does not count.
+   that settles its form: `x in xs` (item 13). A call written `f(a, b)` and the ternary
+   `a if c else b` were answered in #197.
+5. ~~**Guards in the exhaustiveness message**~~ **DONE 2026-11-22** (#197): when the arms would cover the
+   type if their guards always held, the message says a guarded arm does not count.
 6. **Type display** (S). An `extern` signature writes `a`, and hover and the REPL print `'a`. They
    also print `(List 'a) -> Option 'a` with parentheses the grammar does not need. Print what the
    user would write.

@@ -1264,6 +1264,18 @@ impl Parser {
     fn parse_expr(&mut self) -> Result<Expr, ParseError> {
         let start = self.cur_start();
         let lhs = self.parse_expr_head()?;
+        // Python's conditional expression, `value if cond else other`. No Pyfun
+        // expression continues with `if` on the same line (a `case` guard follows
+        // a pattern, not an expression), so the shape is unmistakable. An `if`
+        // that opens its line is the next item of a computation expression,
+        // where brackets leave no separator token between items.
+        if matches!(self.peek(), Tok::If) && self.tokens[self.pos].line_start.is_none() {
+            return Err(ParseError {
+                message: "Pyfun puts the condition first: write `if cond then value else other`"
+                    .to_string(),
+                span: self.span(),
+            });
+        }
         // `target <- value` — reassignment, the lowest-precedence form.
         if matches!(self.peek(), Tok::LArrow) {
             self.bump();

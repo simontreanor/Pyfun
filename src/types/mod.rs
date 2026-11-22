@@ -8987,6 +8987,9 @@ impl Infer {
             if let Some(hint) = self.indexing_hint(func, arg, &func_ty, env) {
                 return Err(hint);
             }
+            if let Some(hint) = self.call_syntax_hint(func, arg, &func_ty) {
+                return Err(hint);
+            }
             return Err(self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e));
         }
         let latent = self.apply_eff(&latent);
@@ -9033,6 +9036,42 @@ impl Infer {
                 show(&ty)
             ),
             span: Span::new(indexed.span().start, arg.span().end),
+        })
+    }
+
+    /// Python's `f(a, b)`, which Pyfun reads as `f` applied to the tuple `(a, b)`.
+    /// When that application fails, the tuple literal sits hard against a
+    /// function, and the function does not take a tuple first, the program meant
+    /// a call with several arguments.
+    fn call_syntax_hint(&mut self, func: &Expr, arg: &Expr, func_ty: &Ty) -> Option<TypeError> {
+        let ExprKind::Tuple { elems } = &arg.kind else {
+            return None;
+        };
+        if func.span().end != arg.span().start {
+            return None;
+        }
+        let Ty::Fun(first, _, _) = self.apply(func_ty) else {
+            return None;
+        };
+        if matches!(self.apply(&first), Ty::Tuple(_) | Ty::Var(_)) {
+            return None;
+        }
+        let name = match &func.kind {
+            ExprKind::Var(name) => name.clone(),
+            _ => qualified_name(func).unwrap_or_else(|| "f".to_string()),
+        };
+        let args: Vec<&str> = ["a", "b", "c", "d"].into_iter().take(elems.len()).collect();
+        Some(TypeError {
+            message: format!(
+                "Pyfun applies a function to its arguments one after another, without brackets \
+                 or commas: write `{name} {}` (`{name}(…)` passes one tuple)",
+                if elems.len() <= 4 {
+                    args.join(" ")
+                } else {
+                    "a b …".to_string()
+                }
+            ),
+            span: Span::new(func.span().start, arg.span().end),
         })
     }
 
@@ -9380,7 +9419,26 @@ impl Infer {
         } else {
             format!("non-exhaustive match: `{pat}` is not matched")
         };
-        Err(TypeError { message, span })
+        // When the arms would cover the type if their guards always held, the
+        // reader can see an arm for the "missing" value and the message above
+        // looks wrong. Say why that arm does not count.
+        let guard_note = if arms.iter().any(|a| a.guard.is_some()) {
+            let all: Vec<Vec<Pattern>> = arms.iter().map(|a| vec![a.pattern.clone()]).collect();
+            self.seq_guard = all.iter().flatten().any(has_suffix_star);
+            self.seq_visiting.clear();
+            if self.useful(&all, &types).is_none() {
+                " (an arm with an `if` guard does not count, because its guard may be false: \
+                 add an arm for this case without one)"
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+        Err(TypeError {
+            message: format!("{message}{guard_note}"),
+            span,
+        })
     }
 
     /// Is a wildcard row useful against `matrix` over the column `types`? `Some`
