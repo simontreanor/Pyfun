@@ -492,8 +492,10 @@ after the release.
     element of a `List`, `Set` or `Seq`, a key of a `Map`, a substring of a `str`) and lowered to
     Python's own operators (`DESIGN.md` §7.1). Generalized in #200: `let has x xs = x in xs` is
     polymorphic in what it searches.
-14. **Named constructor fields**, so a Python caller reads `node.left` where it reads `node._0`
-    today.
+14. ~~**Named constructor fields**~~ **DONE 2026-11-22** (#202): a constructor may declare a record
+    body (`Rect { width: float, height: float }`), built and matched by name, with fields shared by
+    every constructor readable and updatable on the whole type; the emitted class names its fields,
+    so a Python caller reads `node.left` (`DESIGN.md` §8.3).
 
 **Tooling**
 
@@ -511,6 +513,10 @@ after the release.
 
 19. **An `exn` effect label** on externs, discharged by `try` (L).
 20. **`from X import y` and nested packages** (M each), both deferred in `DESIGN.md` §6.1.
+21. **A sole constructor's pattern in a parameter or a `let`** (M), for both kinds at once:
+    `let unwrap (Wrap v) = v` and `let unwrap (Wrap { value }) = value`, where the type has no other
+    constructor and the pattern cannot fail (F# and Haskell allow it). Today neither kind binds
+    there. Found while building item 14, and left out so the two kinds keep one rule.
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 

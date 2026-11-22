@@ -1030,7 +1030,8 @@ underlying value), and any recursion through them. **The shape** is the conventi
 (`#[serde(tag = "type")]`), Pydantic discriminated unions and System.Text.Json share: a record is an
 object keyed by its Pyfun field names; a sum-type case is `{"type": "Move", "fields": [...]}` with
 positional payloads (`{"type": "Resign"}` for a nullary case; F#'s `{"Case", "Fields"}` is the outlier
-and was not copied); `Option` is `null` or the value; tuples and `List`/`Set` are arrays; a `Map` with
+and was not copied), and a case with named fields (§8.3) writes `fields` as an object keyed by them,
+`{"type": "Rect", "fields": {"width": 2.0, "height": 3.0}}`; `Option` is `null` or the value; tuples and `List`/`Set` are arrays; a `Map` with
 string keys is an object and any other key type is a list of `[key, value]` pairs; `unit` is `null`.
 **Two mechanisms.** `Encode.auto` is a run-time helper: the emitted classes already carry a record's
 field names and a case's class name (the same knowledge `__repr__` uses), so `_pf_enc_value` reads
@@ -2492,6 +2493,54 @@ nominal), and gains no symmetry with construction-vs-pattern. Rejected in favour
 familiarity (dataclass/Haskell) and honesty. Neither option lifts field-uniqueness (decision 2).
 
 Derived ordering on records (§7.1) and shared field names across records (the use-site rule above) have both since shipped.
+
+**Record-bodied constructors: `Rect { width: float, height: float }`.** A constructor of a sum type
+declares its fields by position (`Circle float`) or by name, with a record declaration's body:
+
+```
+type Shape =
+    | Circle { name: str, radius: float }
+    | Rect { name: str, width: float, height: float }
+    | Dot { name: str }
+```
+
+A named constructor reuses the two record forms, tagged with the constructor: it is **built** with
+the literal (`Rect { name = "r", width = 2.0, height = 3.0 }`, the fields in any order, each exactly
+once) and **matched** with the record pattern (`case Rect { width, height = h }:`, naming the fields
+the arm needs). `case Dot {}:` names none and matches any `Dot`. The subset a tagged pattern names
+may be empty for a record too (`case Point {}:` is any `Point`), so the two tags follow one rule.
+Python is the model: a dataclass is built `Rect(width=2.0, height=3.0)` and matched
+`case Rect(width=w):`, and `case Dot():` is its match-any.
+
+- **One spelling per constructor.** A named constructor is not a function. `Rect "r" 2.0 3.0`,
+  `List.map Dot names` and `case Dot n:` are errors that show the form to write, and a positional
+  constructor written with braces is the same error the other way round. A reader who sees a
+  constructor's declaration knows how every use of it is written. The two kinds mix freely within
+  one type.
+- **Exhaustiveness** treats the tagged pattern as its constructor's, with omitted fields as
+  wildcards, and prints a witness in the same form (`` `Rect { name = _, width = _, height = _ }` ``).
+- **No constructor pattern in a parameter or a `let`**, named or positional, however many
+  constructors the type has: those positions take a name, `_`, or a tuple or record of those (§7).
+  The parser refuses the positional form by its shape. The named form has a record pattern's shape,
+  so the checker refuses it, in the parser's words, once it knows the tag is a constructor.
+- **A field every constructor shares belongs to the whole type.** When every constructor of a sum
+  type declares a field at the same type (`name` above), a value of the type has it: `s.name` reads
+  it and `{ s with name = "big" }` copies the value with it replaced, keeping whichever constructor
+  built it, both without a `match`. The sum type joins the field's owners in the use-site rule above,
+  so a base of unknown type resolves by name when one type declares the field and is ambiguous when
+  two do. A field that some constructor lacks, or declares at another type, is reachable only
+  through a `match`, and the error names the constructor that stands in the way.
+- **A constructor and a record type cannot share a name**, since each is a Python class of that
+  name. (A sum type may share its own constructor's: `type User = User { name: str }`.)
+- **Lowering.** The class is a dataclass with the declared field names and `kw_only=True`, which
+  states the one-spelling rule in Python's terms and is what distinguishes it from a record's class.
+  It keeps the generated repr (`Rect(name='r', width=2.0, height=3.0)`) and a variant's ordering
+  key. The literal is a keyword call in the order the source wrote the fields, the pattern a keyword
+  class pattern (`case Rect(width=width, height=h):`, `case Dot():`), a shared field an attribute,
+  and its update `dataclasses.replace(s, name=n)`. A dotted path through a shared field rebuilds the
+  record or value found there first, exactly as it does through a record's.
+- **The derived codec** (§6) keeps the case tag and writes `fields` as an object keyed by field
+  name: `{"type": "Rect", "fields": {"name": "r", "width": 2.0, "height": 3.0}}`.
 
 ## 9. Tooling
 

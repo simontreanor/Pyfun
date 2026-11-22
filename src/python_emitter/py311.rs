@@ -157,9 +157,11 @@ fn rewrite_expr(e: &mut PyExpr) {
             rewrite_expr(lower);
             rewrite_expr(upper);
         }
-        PyExpr::Await(inner) | PyExpr::Not(inner) | PyExpr::Neg(inner) | PyExpr::Starred(inner) => {
-            rewrite_expr(inner)
-        }
+        PyExpr::Await(inner)
+        | PyExpr::Not(inner)
+        | PyExpr::Neg(inner)
+        | PyExpr::Starred(inner)
+        | PyExpr::DoubleStarred(inner) => rewrite_expr(inner),
         PyExpr::List(elems) | PyExpr::Tuple(elems) | PyExpr::Set(elems) => {
             for el in elems {
                 rewrite_expr(el);

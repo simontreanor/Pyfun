@@ -201,6 +201,12 @@ pub enum PyStmt {
         /// class defines `__lt__` without its own `__eq__`, and mypy cannot see the
         /// `__le__`/`__ge__` that `total_ordering` derives.
         native: bool,
+        /// A sum variant whose fields have **names** (`Rect { width: float,
+        /// height: float }`). It is a variant in every way that matters to
+        /// ordering, but its fields are keyword-only, the way the source builds
+        /// it, and its repr names them (`Rect(width=2.0, height=3.0)`), which is
+        /// the one a dataclass generates.
+        named: bool,
     },
 }
 
@@ -320,6 +326,8 @@ pub enum PyExpr {
     Neg(Box<PyExpr>),
     /// `*value` — an iterable spread into a call's arguments (`gather(*xs)`).
     Starred(Box<PyExpr>),
+    /// `**mapping` in a call's arguments: the mapping's entries as keywords.
+    DoubleStarred(Box<PyExpr>),
     /// A list display `[a, b, c]`.
     List(Vec<PyExpr>),
     /// A dict display `{k: v, …}`.
@@ -629,6 +637,7 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             order,
             record,
             native,
+            named,
         } => emit_class(
             name,
             fields,
@@ -636,6 +645,7 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
             *order,
             *record,
             *native,
+            *named,
             depth,
             out,
         ),
@@ -664,6 +674,7 @@ fn emit_class(
     order: Option<usize>,
     record: bool,
     native: bool,
+    named: bool,
     depth: usize,
     out: &mut String,
 ) {
@@ -684,7 +695,14 @@ fn emit_class(
     // A record uses the dataclass-generated repr (`Point(x=1, y=2)`, which names the
     // fields); a sum variant / builtin keeps a positional one (`Circle(2.0)`, matching
     // the constructor form `Circle 2.0`), so it suppresses the generated repr.
-    if !record {
+    // A variant with named fields is built by keyword only, which is also how
+    // a reader of the emitted Python tells it from a record (`DESIGN.md` §8.3);
+    // it names its fields when printed, so it keeps the generated repr too.
+    let positional_repr = !record && !named;
+    if named {
+        args.push("kw_only=True".to_string());
+    }
+    if positional_repr {
         args.push("repr=False".to_string());
     }
     line(out, depth, &format!("@dataclass({})", args.join(", ")));
@@ -698,7 +716,7 @@ fn emit_class(
         line(out, depth + 1, &format!("{f}: {ty}"));
     }
 
-    if !record {
+    if positional_repr {
         // Positional `__repr__` (matches the constructor form: `Some(1)`, `Red`, `Ok("x")`).
         line(out, depth + 1, "def __repr__(self):");
         if fields.is_empty() {
@@ -825,7 +843,7 @@ fn prec(e: &PyExpr) -> u8 {
         PyExpr::Not(_) => 4,
         // Unary minus binds tighter than `*`/`/` (20), as in Python.
         PyExpr::Neg(_) => 30,
-        PyExpr::Starred(_) => 30,
+        PyExpr::Starred(_) | PyExpr::DoubleStarred(_) => 30,
         PyExpr::BinOp { op, .. } => op.precedence(),
         // A chained comparison sits at comparison precedence (5), like its links.
         PyExpr::Compare { .. } => 5,
@@ -951,6 +969,7 @@ fn emit_expr(e: &PyExpr, parent_prec: u8) -> String {
         // (`-(a + b)`).
         PyExpr::Neg(inner) => format!("-{}", emit_expr(inner, 30)),
         PyExpr::Starred(inner) => format!("*{}", emit_expr(inner, 30)),
+        PyExpr::DoubleStarred(inner) => format!("**{}", emit_expr(inner, 30)),
         PyExpr::Dict(items) => {
             let items: Vec<String> = items
                 .iter()

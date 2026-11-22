@@ -954,6 +954,18 @@ impl Parser {
         let start = self.cur_start();
         let name = self.parse_upper_ident("constructor name")?;
         let name_span = NodeSpan::new(Span::new(start, self.prev_end()));
+        // `Rect { width: float, height: float }`: a record-bodied constructor,
+        // whose fields have names. The body is a record declaration's.
+        if matches!(self.peek(), Tok::LBrace) {
+            let decls = self.parse_record_decl_fields()?;
+            let (names, fields) = decls.into_iter().map(|f| (f.name, f.ty)).unzip();
+            return Ok(VariantDecl {
+                name,
+                name_span,
+                fields,
+                field_names: Some(names),
+            });
+        }
         let mut fields = Vec::new();
         while starts_type_atom(self.peek()) {
             fields.push(self.parse_type_atom()?);
@@ -962,6 +974,7 @@ impl Parser {
             name,
             name_span,
             fields,
+            field_names: None,
         })
     }
 
@@ -2784,9 +2797,9 @@ impl Parser {
             }
         }
         self.expect(&Tok::RBrace, "`}`")?;
-        if fields.is_empty() {
-            return Err(self.error("a record pattern needs at least one field"));
-        }
+        // No fields is `Rect {}`: any value that record-bodied constructor
+        // built, or any value of that record type (the subset of fields a
+        // pattern names may be empty).
         Ok(Pattern::Record {
             ty,
             ty_span,
@@ -2950,9 +2963,10 @@ fn starts_param(tok: &Tok) -> bool {
 /// literal, a constructor, a list pattern, an or-pattern) can fail, and neither
 /// position has anywhere to fail *to*.
 ///
-/// A record pattern's tag is only *checked* to name a record later, in the type
-/// checker; a tag that turns out to be a sum-type constructor is rejected there as
-/// "not a record type", so nothing refutable slips through this way.
+/// A record pattern's tag is only *resolved* later, in the type checker. A tag
+/// that turns out to be a constructor (record-bodied or positional) is rejected
+/// there in these positions, as a constructor pattern is here, so nothing
+/// refutable slips through this way.
 fn refutable_shape(pattern: &Pattern) -> Option<&'static str> {
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => None,

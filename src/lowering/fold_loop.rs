@@ -473,7 +473,7 @@ impl Lowerer {
                         body,
                     });
                 }
-                super::seal_cases(arms, &mut cases);
+                super::seal_cases(arms, &mut cases, &self.ctor_fields);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }

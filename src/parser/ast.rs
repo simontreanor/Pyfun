@@ -241,6 +241,12 @@ pub struct VariantDecl {
     /// it. `NodeSpan` compares equal — invisible to roundtrip.
     pub name_span: NodeSpan,
     pub fields: Vec<TypeExpr>,
+    /// The field names of a record-bodied constructor
+    /// (`Rect { width: float, height: float }`), parallel to `fields`; `None` for
+    /// a positional one (`Rect float float`). A named constructor is built and
+    /// matched by name, with the tagged-record literal and record pattern, and
+    /// its fields keep their declared order everywhere else (`DESIGN.md` §8.3).
+    pub field_names: Option<Vec<String>>,
 }
 
 /// One field of a record [`TypeDecl`], e.g. `x: int`.

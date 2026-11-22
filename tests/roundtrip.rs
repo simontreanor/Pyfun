@@ -195,6 +195,13 @@ const PROGRAMS: &[&str] = &[
     "type Option a = None | Some a",
     "type Result a b = Ok a | Err b",
     "type List a = Nil | Cons a (List a)",
+    // Record-bodied constructors: a declaration, the literal, the pattern.
+    "type Shape = Circle { radius: float } | Rect { width: float, height: float } | Dot",
+    "type Tree a = Leaf | Node { left: Tree a, value: a, right: Tree a }",
+    "type Slot = Empty | Filled { at: Geometry.Point, by: str }",
+    "let r = Rect { width = 2.0, height = 3.0 }",
+    "let f s =\n  match s:\n    case Circle { radius }: radius\n    case Rect { width, height = h }: width * h\n    case Dot {}: 0.0",
+    "let g s =\n  match s:\n    case Shapes.Rect {}: 1\n    case _: 0",
     "type Option a = None | Some a\nlet unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
     // Offside union layout: one `| Variant` per line after `=` (the F#/ML form).
     // Prints back to the single-line canonical form, so roundtrip holds.
@@ -1271,4 +1278,36 @@ fn membership_parses_at_comparison_precedence_and_prints_back() {
     // `in` is a keyword now, and a computation expression's `for` still takes it.
     assert!(parse("let s = seq { for x in xs: yield x }").is_ok());
     assert!(parse("let in = 3").is_err());
+}
+
+#[test]
+fn a_constructor_declares_its_fields_by_position_or_by_name() {
+    use pyfun::syntax::TypeDeclKind;
+    let module =
+        parse("type Shape = Circle float | Rect { width: float, height: float } | Dot").unwrap();
+    let Item::Type(decl) = &module.items[0] else {
+        panic!("expected a type declaration")
+    };
+    let TypeDeclKind::Sum(variants) = &decl.kind else {
+        panic!("expected a sum type")
+    };
+    assert_eq!(variants[0].field_names, None);
+    assert_eq!(variants[0].fields.len(), 1);
+    assert_eq!(
+        variants[1].field_names,
+        Some(vec!["width".to_string(), "height".to_string()])
+    );
+    assert_eq!(variants[1].fields.len(), 2);
+    assert_eq!(variants[2].field_names, None);
+    assert!(variants[2].fields.is_empty());
+    // The printer writes each the way it was declared.
+    assert_eq!(
+        pyfun::ast::print_module(&module).trim(),
+        "type Shape = Circle float | Rect { width: float, height: float } | Dot"
+    );
+    // A body needs a field, as a record declaration does.
+    assert!(parse("type Shape = Rect {}").is_err());
+    // `Rect {}` is a pattern (any `Rect`), printed without the inner space.
+    let m = parse("let f s =\n  match s:\n    case Rect {}: 1\n    case _: 0").unwrap();
+    assert!(pyfun::ast::print_module(&m).contains("Rect {}"));
 }

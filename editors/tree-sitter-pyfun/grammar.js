@@ -144,9 +144,14 @@ module.exports = grammar({
       $._dedent,
     ),
 
+    // `Circle float` takes its fields by position; `Rect { width: float,
+    // height: float }` names them, with a record declaration's body.
     variant: $ => prec.right(seq(
       field('name', $.constructor_identifier),
-      repeat(field('field', $._type_atom)),
+      choice(
+        field('body', $.record_declaration),
+        repeat(field('field', $._type_atom)),
+      ),
     )),
 
     extern_type_definition: $ => seq(
@@ -641,10 +646,11 @@ module.exports = grammar({
 
     rest_pattern: $ => seq('*', choice($.identifier, $.wildcard)),
 
+    // No fields is `Rect {}`: any value that constructor built.
     record_pattern: $ => seq(
       field('tag', $._constructor_path),
       '{',
-      sep1($.field_pattern, ','),
+      optional(sep1($.field_pattern, ',')),
       '}',
     ),
 

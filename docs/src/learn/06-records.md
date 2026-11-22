@@ -69,6 +69,43 @@ elsewhere
 When a field itself holds a record, the update sugar nests: `{ seg with start.x = 99 }` reaches
 through `start` and rebuilds the path for you, copying the siblings along the way.
 
+## Constructors with named fields
+
+In lesson 5 a constructor carried its values by position: `Rect 2.0 3.0`, and you had to remember
+which number was the width. A constructor can name its fields instead. Give it a record's body:
+
+```pyfun
+type Shape =
+  | Circle { name: str, radius: float }
+  | Rect { name: str, width: float, height: float }
+
+let area s =
+  match s:
+    case Circle { radius }: 3.14 * radius * radius
+    case Rect { width, height }: width * height
+
+let door = Rect { name = "door", width = 2.0, height = 3.0 }
+let wide = { door with name = "gate" }
+
+print (area door)
+print door.name
+print wide
+```
+
+```console
+6.0
+door
+Rect(name='gate', width=2.0, height=3.0)
+```
+
+You build and match a named constructor exactly as you do a record, with the constructor's name in
+front. A pattern names the fields it needs and ignores the others, so `case Circle { radius }:`
+never looks at `name`.
+
+Look at `door.name`. Both constructors declare a `name` of type `str`, so every `Shape` has one, and
+you can read it or update it without a `match`. `radius` is different: only a `Circle` has it, so
+you reach it inside the `case Circle` arm, where you know which shape you hold.
+
 ## Exercise
 
 The hole marked `?` is the new balance for a funded account. Run `pyfun check`: it reports the type

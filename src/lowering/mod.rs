@@ -182,6 +182,9 @@ pub struct ImportContext {
     /// so its module must be recognized as a class source (and its Python import
     /// hoisted) even though no `import` names it here.
     pub record_class_modules: HashSet<String>,
+    /// Imported record-bodied constructors' declared field names, keyed by
+    /// **qualified** constructor (`Geometry.Rect` → `["width", "height"]`).
+    pub ctor_fields: HashMap<String, Vec<String>>,
 }
 
 /// A module lowered as part of a multi-file project.
@@ -242,6 +245,12 @@ pub fn lower_in_project(
             .field_to_record
             .entry(field.clone())
             .or_insert_with(|| tag.clone());
+    }
+    for (ctor, fields) in &ctx.ctor_fields {
+        lowerer
+            .ctor_fields
+            .entry(ctor.clone())
+            .or_insert_with(|| fields.clone());
     }
     let py = lowerer.lower_module(module)?;
     let uses_runtime = lowerer.needs_result
@@ -336,6 +345,12 @@ struct Lowerer {
     /// Field name → owning record type (mirrors the type checker's registry), to
     /// resolve which class a `{ … }` literal or update constructs.
     field_to_record: std::collections::HashMap<String, String>,
+    /// Record-bodied constructors (`Rect { width: float, height: float }`) →
+    /// their field names in declared order, keyed by the constructor as the
+    /// source writes it (bare, or `Module.Ctor` for an imported one). Such a
+    /// constructor's class has named, keyword-only fields; it is built with a
+    /// keyword call and matched with a keyword class pattern (`DESIGN.md` §8.3).
+    ctor_fields: std::collections::HashMap<String, Vec<String>>,
     /// `extern` name → its dotted Python target path (e.g. `["math", "sqrt"]`).
     /// A reference to one lowers to the target rather than the Pyfun name.
     extern_targets: std::collections::HashMap<String, Vec<String>>,
@@ -542,6 +557,7 @@ impl Lowerer {
         let mut ctor_arity = std::collections::HashMap::new();
         let mut record_fields = std::collections::HashMap::new();
         let mut field_to_record = std::collections::HashMap::new();
+        let mut ctor_fields = std::collections::HashMap::new();
         // The reserved `Exception` record (fields error_kind/error_message) — the
         // payload of a `try`'s `Error`. Seeded like a user record so its literals and
         // patterns lower through the same machinery (class name mangled by
@@ -657,6 +673,9 @@ impl Lowerer {
                     TypeDeclKind::Sum(variants) => {
                         for variant in variants {
                             ctor_arity.insert(variant.name.clone(), variant.fields.len());
+                            if let Some(names) = &variant.field_names {
+                                ctor_fields.insert(variant.name.clone(), names.clone());
+                            }
                         }
                     }
                     TypeDeclKind::Record(fields) => {
@@ -764,6 +783,7 @@ impl Lowerer {
             binder_names,
             record_fields,
             field_to_record,
+            ctor_fields,
             extern_targets,
             extern_module_imports,
             receiver_externs,
@@ -1105,6 +1125,7 @@ impl Lowerer {
                         order: None,
                         record: false,
                         native: false,
+                        named: false,
                     });
                 }
             }
@@ -1117,8 +1138,14 @@ impl Lowerer {
                         // The variant's declaration index is its ordering rank, so a
                         // compared sum type derives structural `<`.
                         for (index, variant) in variants.iter().enumerate() {
-                            let fields =
-                                (0..variant.fields.len()).map(|i| format!("_{i}")).collect();
+                            // A record-bodied variant's fields carry their names;
+                            // a positional one's are `_0`, `_1`, ….
+                            let fields = match &variant.field_names {
+                                Some(names) => names.iter().map(|n| py_field_name(n)).collect(),
+                                None => {
+                                    (0..variant.fields.len()).map(|i| format!("_{i}")).collect()
+                                }
+                            };
                             let class = py_ctor_name(&variant.name);
                             classes.push(PyStmt::ClassDef {
                                 name: class.clone(),
@@ -1127,6 +1154,7 @@ impl Lowerer {
                                 order: ordered.then_some(index),
                                 record: false,
                                 native: false,
+                                named: variant.field_names.is_some(),
                             });
                             // A field-less variant has one possible value, so it is
                             // built once (`_Red = Red()`) and every use loads it.
@@ -1144,6 +1172,7 @@ impl Lowerer {
                             order: ordered.then_some(0),
                             record: true,
                             native: false,
+                            named: false,
                         });
                     }
                     // An opaque handle type erases — it emits no Python class.
@@ -2119,7 +2148,7 @@ impl Lowerer {
                         body,
                     });
                 }
-                seal_cases(arms, &mut cases);
+                seal_cases(arms, &mut cases, &self.ctor_fields);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }
@@ -2327,7 +2356,7 @@ impl Lowerer {
                         body: with_assign(arm_stmts, &tmp, arm_val),
                     });
                 }
-                seal_cases(arms, &mut cases);
+                seal_cases(arms, &mut cases, &self.ctor_fields);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok((stmts, PyExpr::Name(tmp)))
             }
@@ -2579,6 +2608,25 @@ impl Lowerer {
         fields: &[FieldInit],
         locals: &HashSet<String>,
     ) -> Lowered {
+        // A record-bodied constructor is a keyword call, the fields in the order
+        // the source wrote them: `Rect { height = 3.0, width = 2.0 }` →
+        // `Rect(height=3.0, width=2.0)`.
+        if self.ctor_fields.contains_key(ty) {
+            let class = self.ctor_class_name(ty);
+            let (stmts, lowered) = self.lower_field_inits(fields, locals)?;
+            let kwargs = lowered
+                .into_iter()
+                .map(|(name, value)| (py_field_name(&name), value))
+                .collect();
+            return Ok((
+                stmts,
+                PyExpr::CallKw {
+                    func: Box::new(PyExpr::Name(class)),
+                    args: Vec::new(),
+                    kwargs,
+                },
+            ));
+        }
         let order = self.record_fields[ty].clone();
         let class = self.record_class_name(ty);
         let (stmts, mut lowered) = self.lower_field_inits(fields, locals)?;
@@ -2612,11 +2660,22 @@ impl Lowerer {
         // The base is bound to a temp so it is evaluated **once**; every field of the
         // reconstruction (updated or copied, at any depth) then reads from the temp.
         let (mut stmts, base_val) = self.lower_value(base, locals)?;
-        let tmp = self.fresh_tmp();
-        stmts.push(PyStmt::Assign {
-            target: tmp.clone(),
-            value: base_val,
-        });
+        // A copy of a sum-type value that sets whole fields reads its base once,
+        // as the first argument of `dataclasses.replace`, so a base that is
+        // already a name needs no temp.
+        let reads_once = self.codecs.sum_updates.contains(&(span, Vec::new()))
+            && fields.iter().all(|f| f.path.len() == 1)
+            && matches!(base_val, PyExpr::Name(_));
+        let base_py = if reads_once {
+            base_val
+        } else {
+            let tmp = self.fresh_tmp();
+            stmts.push(PyStmt::Assign {
+                target: tmp.clone(),
+                value: base_val,
+            });
+            PyExpr::Name(tmp)
+        };
         // Lower each update's value (hoisting any statements), keeping its path.
         let mut updates: Vec<(Vec<String>, PyExpr)> = Vec::with_capacity(fields.len());
         for fu in fields {
@@ -2624,10 +2683,72 @@ impl Lowerer {
             stmts.append(&mut s);
             updates.push((fu.path.clone(), v));
         }
-        let tag = self.update_owner(span, &[], &fields[0].path[0]);
-        let value =
-            self.build_record_update(PyExpr::Name(tmp.clone()), &tag, updates, span, Vec::new());
+        let value = self.build_update(base_py, updates, span, Vec::new());
         Ok((stmts, value))
+    }
+
+    /// Rebuild the value at `path` of an update with `updates` applied: a record
+    /// through its class ([`Self::build_record_update`]), a value of a sum type
+    /// through a copy ([`Self::build_sum_update`]), since only the value knows
+    /// which constructor built it.
+    fn build_update(
+        &mut self,
+        base_py: PyExpr,
+        updates: Vec<(Vec<String>, PyExpr)>,
+        span: Span,
+        path: Vec<String>,
+    ) -> PyExpr {
+        if self.codecs.sum_updates.contains(&(span, path.clone())) {
+            return self.build_sum_update(base_py, updates, span, path);
+        }
+        let tag = self.update_owner(span, &path, &updates[0].0[0]);
+        self.build_record_update(base_py, &tag, updates, span, path)
+    }
+
+    /// `{ s with name = v }` on a value of a sum type whose constructors all
+    /// declare `name` → `dataclasses.replace(s, name=v)`: the same constructor,
+    /// one field changed. A dotted path rebuilds the value in that field first.
+    fn build_sum_update(
+        &mut self,
+        base_py: PyExpr,
+        updates: Vec<(Vec<String>, PyExpr)>,
+        span: Span,
+        path: Vec<String>,
+    ) -> PyExpr {
+        self.needed_imports.insert("dataclasses".to_string());
+        // Group by first path segment, keeping the order the source wrote.
+        let mut groups: Vec<(String, Vec<PathUpdate>)> = Vec::new();
+        for (field_path, value) in updates {
+            let (head, rest) = field_path.split_first().expect("non-empty update path");
+            match groups.iter_mut().find(|(f, _)| f == head) {
+                Some((_, group)) => group.push((rest.to_vec(), value)),
+                None => groups.push((head.clone(), vec![(rest.to_vec(), value)])),
+            }
+        }
+        let mut kwargs = Vec::with_capacity(groups.len());
+        for (field, group) in groups {
+            let value = match group.iter().position(|(p, _)| p.is_empty()) {
+                Some(pos) => group.into_iter().nth(pos).expect("position found").1,
+                None => {
+                    let attr = PyExpr::Attribute {
+                        value: Box::new(base_py.clone()),
+                        attr: py_field_name(&field),
+                    };
+                    let mut sub_path = path.clone();
+                    sub_path.push(field.clone());
+                    self.build_update(attr, group, span, sub_path)
+                }
+            };
+            kwargs.push((py_field_name(&field), value));
+        }
+        PyExpr::CallKw {
+            func: Box::new(dotted_path(&[
+                "dataclasses".to_string(),
+                "replace".to_string(),
+            ])),
+            args: vec![base_py],
+            kwargs,
+        }
     }
 
     /// The tag of the record an update rebuilds at `path` (empty for the record
@@ -2689,8 +2810,7 @@ impl Lowerer {
                         // which is the record the checker found in that field.
                         let mut sub_path = path.clone();
                         sub_path.push(field.clone());
-                        let sub_tag = self.update_owner(span, &sub_path, &group[0].0[0]);
-                        args.push(self.build_record_update(attr, &sub_tag, group, span, sub_path));
+                        args.push(self.build_update(attr, group, span, sub_path));
                     }
                 }
             }
@@ -3622,12 +3742,24 @@ impl Lowerer {
                 for (ctor, payloads) in ctors {
                     let value = self.ctor_reference(ctor, payloads.is_empty());
                     let ds: Vec<PyExpr> = payloads.iter().map(|p| self.codec_desc(p)).collect();
+                    // A record-bodied constructor's fields travel by name, so its
+                    // payload descriptors are keyed by field instead of listed.
+                    let payload = match self.ctor_fields.get(ctor) {
+                        Some(names) => {
+                            self.needed_imports.insert("keyword".to_string());
+                            PyExpr::Dict(
+                                names
+                                    .iter()
+                                    .map(|n| PyExpr::Str(py_field_name(n)))
+                                    .zip(ds)
+                                    .collect(),
+                            )
+                        }
+                        None => PyExpr::List(ds),
+                    };
                     // The wire tag is the bare constructor name.
                     let bare = ctor.rsplit('.').next().unwrap_or(ctor).to_string();
-                    items.push((
-                        PyExpr::Str(bare),
-                        PyExpr::Tuple(vec![value, PyExpr::List(ds)]),
-                    ));
+                    items.push((PyExpr::Str(bare), PyExpr::Tuple(vec![value, payload])));
                 }
                 tup(vec![s("adt"), PyExpr::Dict(items)])
             }
@@ -4326,6 +4458,16 @@ impl Lowerer {
         }
     }
 
+    /// The class a record-shaped literal or pattern's tag names: a record
+    /// type's, or a record-bodied constructor's.
+    fn tag_class_name(&mut self, tag: &str) -> String {
+        if self.ctor_fields.contains_key(tag) {
+            self.ctor_class_name(tag)
+        } else {
+            self.record_class_name(tag)
+        }
+    }
+
     fn lower_pattern(&mut self, pattern: &Pattern) -> PyPattern {
         match pattern {
             Pattern::Wildcard => PyPattern::Wildcard,
@@ -4370,7 +4512,7 @@ impl Lowerer {
                     .map(|f| (py_field_name(&f.name), self.lower_pattern(&f.pattern)))
                     .collect();
                 PyPattern::ClassKw {
-                    name: self.record_class_name(ty),
+                    name: self.tag_class_name(ty),
                     fields: lowered,
                 }
             }
@@ -5309,7 +5451,7 @@ impl Lowerer {
                         body,
                     });
                 }
-                seal_cases(arms, &mut cases);
+                seal_cases(arms, &mut cases, &self.ctor_fields);
                 stmts.push(PyStmt::Match { subject, cases });
                 Ok(stmts)
             }
@@ -6171,7 +6313,7 @@ impl Lowerer {
                 }
             }
             Pattern::Record { ty, fields, .. } => {
-                conds.push(isinstance(&subject, self.record_class_name(ty)));
+                conds.push(isinstance(&subject, self.tag_class_name(ty)));
                 for f in fields {
                     let field = attr(&subject, py_field_name(&f.name));
                     self.native_pattern(&f.pattern, field, conds, binds);
@@ -6791,6 +6933,7 @@ fn subst_name(expr: &PyExpr, name: &str, value: &PyExpr) -> PyExpr {
         PyExpr::Not(e) => PyExpr::Not(boxed(e)),
         PyExpr::Neg(e) => PyExpr::Neg(boxed(e)),
         PyExpr::Starred(e) => PyExpr::Starred(boxed(e)),
+        PyExpr::DoubleStarred(e) => PyExpr::DoubleStarred(boxed(e)),
         PyExpr::List(es) => PyExpr::List(es.iter().map(go).collect()),
         PyExpr::Tuple(es) => PyExpr::Tuple(es.iter().map(go).collect()),
         PyExpr::Dict(items) => PyExpr::Dict(items.iter().map(|(k, v)| (go(k), go(v))).collect()),
@@ -7139,6 +7282,7 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             order: ordered.then_some(0),
             record: false,
             native: false,
+            named: false,
         },
         PyStmt::ClassDef {
             name: "Error".to_string(),
@@ -7147,6 +7291,7 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
             order: ordered.then_some(1),
             record: false,
             native: false,
+            named: false,
         },
     ]
 }
@@ -7163,6 +7308,7 @@ fn exception_prelude() -> Vec<PyStmt> {
         order: None,
         record: false,
         native: false,
+        named: false,
     }]
 }
 
@@ -7182,6 +7328,7 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             order: ordered.then_some(1),
             record: false,
             native: false,
+            named: false,
         },
         PyStmt::ClassDef {
             name: "None_".to_string(),
@@ -7190,6 +7337,7 @@ fn option_prelude(ordered: bool, singleton: bool) -> Vec<PyStmt> {
             order: ordered.then_some(0),
             record: false,
             native: false,
+            named: false,
         },
     ];
     if singleton {
@@ -7667,6 +7815,23 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
     let rec = |d: PyExpr, v: PyExpr| calln("_pf_dec_auto_value", vec![d, v]);
     // `k == "<kind>"` on the descriptor's tag.
     let kind = |k: &str| eq(name("k"), s(k));
+    // The JSON key of the field a class spells `n`: a field whose name Python
+    // reserves is `class_` on the class and travels as `class`.
+    let wire_key = |n: PyExpr| {
+        let stem = || PyExpr::Slice {
+            value: Box::new(n.clone()),
+            lower: Box::new(PyExpr::Int(0)),
+            upper: Box::new(PyExpr::Neg(Box::new(PyExpr::Int(1)))),
+        };
+        PyExpr::IfExp {
+            body: Box::new(stem()),
+            test: Box::new(and(
+                call(attr(n.clone(), "endswith"), vec![s("_")]),
+                call(attr(name("keyword"), "iskeyword"), vec![stem()]),
+            )),
+            orelse: Box::new(n.clone()),
+        }
+    };
     used.iter()
         .flat_map(|&helper| match helper {
             "_pf_dec_auto" => vec![
@@ -7901,6 +8066,49 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                                     targets: vec!["ctor".to_string(), "descs".to_string()],
                                     value: sub(idx(name("d"), 1), name("tag")),
                                 },
+                                // A case with named fields: `fields` is an object,
+                                // and the constructor takes keywords. A field whose
+                                // name Python reserves is `class_` on the class and
+                                // `class` on the wire, as for a record.
+                                if_(
+                                    isinst(name("descs"), name("dict")),
+                                    vec![
+                                        assign(
+                                            "fields",
+                                            call(
+                                                attr(name("v"), "get"),
+                                                vec![s("fields"), PyExpr::Dict(vec![])],
+                                            ),
+                                        ),
+                                        if_(
+                                            not(isinst(name("fields"), name("dict"))),
+                                            vec![raise(add(
+                                                add(s("case "), name("tag")),
+                                                s(" takes its fields by name"),
+                                            ))],
+                                        ),
+                                        assign("kwargs", PyExpr::Dict(vec![])),
+                                        for_(
+                                            "n",
+                                            name("descs"),
+                                            vec![
+                                                assign("key", wire_key(name("n"))),
+                                                PyStmt::SubscriptAssign {
+                                                    obj: name("kwargs"),
+                                                    index: name("n"),
+                                                    value: rec(
+                                                        sub(name("descs"), name("n")),
+                                                        sub(name("fields"), name("key")),
+                                                    ),
+                                                },
+                                            ],
+                                        ),
+                                        ret(call(
+                                            name("ctor"),
+                                            vec![PyExpr::DoubleStarred(Box::new(name("kwargs")))],
+                                        )),
+                                    ],
+                                ),
                                 assign(
                                     "fields",
                                     call(
@@ -8028,14 +8236,25 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                         // A dataclass: a sum-type case has positional `_0`… fields,
                         // a record has named ones (a keyword-mangled `class_`
                         // travels as `class`).
+                        // A sum-type case with named fields is the third kind:
+                        // its fields are keyword-only, which is how it is told from
+                        // a record, and it travels as a case whose `fields` is an
+                        // object.
                         assign("names", PyExpr::List(vec![])),
+                        assign("named", PyExpr::Bool(true)),
                         for_(
                             "f",
                             call(attr(name("dataclasses"), "fields"), vec![name("v")]),
-                            vec![PyStmt::Expr(call(
-                                attr(name("names"), "append"),
-                                vec![attr(name("f"), "name")],
-                            ))],
+                            vec![
+                                PyStmt::Expr(call(
+                                    attr(name("names"), "append"),
+                                    vec![attr(name("f"), "name")],
+                                )),
+                                if_(
+                                    not(attr(name("f"), "kw_only")),
+                                    vec![assign("named", PyExpr::Bool(false))],
+                                ),
+                            ],
                         ),
                         assign("positional", PyExpr::Bool(true)),
                         for_(
@@ -8088,30 +8307,7 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                             "n",
                             name("names"),
                             vec![
-                                assign(
-                                    "key",
-                                    PyExpr::IfExp {
-                                        body: Box::new(PyExpr::Slice {
-                                            value: Box::new(name("n")),
-                                            lower: Box::new(PyExpr::Int(0)),
-                                            upper: Box::new(PyExpr::Neg(Box::new(PyExpr::Int(1)))),
-                                        }),
-                                        test: Box::new(and(
-                                            call(attr(name("n"), "endswith"), vec![s("_")]),
-                                            call(
-                                                attr(name("keyword"), "iskeyword"),
-                                                vec![PyExpr::Slice {
-                                                    value: Box::new(name("n")),
-                                                    lower: Box::new(PyExpr::Int(0)),
-                                                    upper: Box::new(PyExpr::Neg(Box::new(
-                                                        PyExpr::Int(1),
-                                                    ))),
-                                                }],
-                                            ),
-                                        )),
-                                        orelse: Box::new(name("n")),
-                                    },
-                                ),
+                                assign("key", wire_key(name("n"))),
                                 PyStmt::SubscriptAssign {
                                     obj: name("out"),
                                     index: name("key"),
@@ -8121,6 +8317,13 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                                     ),
                                 },
                             ],
+                        ),
+                        if_(
+                            name("named"),
+                            vec![ret(PyExpr::Dict(vec![
+                                (s("type"), attr(calln("type", vec![name("v")]), "__name__")),
+                                (s("fields"), name("out")),
+                            ]))],
                         ),
                         ret(name("out")),
                     ],
@@ -10896,10 +11099,19 @@ fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
 /// irrefutable (a wildcard, a variable, a record pattern with all-irrefutable
 /// fields, or an or-pattern with an irrefutable alternative). A guarded arm can
 /// fail at runtime, so it never makes the match exhaustive (`DESIGN.md` §7.2).
-fn has_catch_all(arms: &[crate::parser::ast::MatchArm]) -> bool {
+fn has_catch_all(arms: &[crate::parser::ast::MatchArm], ctors: &CtorFields) -> bool {
     arms.iter()
-        .any(|arm| arm.guard.is_none() && is_irrefutable(&arm.pattern))
+        .any(|arm| arm.guard.is_none() && is_irrefutable(&arm.pattern, ctors))
 }
+
+/// One `path = value` of a record update: the dotted path still to walk, and the
+/// lowered value.
+type PathUpdate = (Vec<String>, PyExpr);
+
+/// Record-bodied constructors and their field names ([`Lowerer::ctor_fields`]):
+/// what tells a record pattern, which every value of its type matches, from one
+/// tagged with a constructor, which only that constructor's values do.
+type CtorFields = std::collections::HashMap<String, Vec<String>>;
 
 /// The value `x` of an equality predicate spelled as the section `(==) x` or as
 /// the lambda `fun y -> x == y` / `fun y -> y == x` (with `y` not free in `x`, so
@@ -10994,9 +11206,11 @@ fn option_arms(
     simple(v).then_some((v, some_arm, none_arm))
 }
 
-fn is_irrefutable(pattern: &Pattern) -> bool {
+fn is_irrefutable(pattern: &Pattern, ctors: &CtorFields) -> bool {
+    let is_irrefutable = |p: &Pattern| is_irrefutable(p, ctors);
     match pattern {
         Pattern::Wildcard | Pattern::Var { .. } => true,
+        Pattern::Record { ty, .. } if ctors.contains_key(ty) => false,
         Pattern::Record { fields, .. } => fields.iter().all(|f| is_irrefutable(&f.pattern)),
         Pattern::Tuple { elems } => elems.iter().all(is_irrefutable),
         // A list pattern is irrefutable only when it is a lone star `[*rest]`/`[*_]`
@@ -11523,10 +11737,10 @@ fn bind_irrefutable(
     }
 }
 
-fn seal_cases(arms: &[crate::parser::ast::MatchArm], cases: &mut Vec<PyCase>) {
+fn seal_cases(arms: &[crate::parser::ast::MatchArm], cases: &mut Vec<PyCase>, ctors: &CtorFields) {
     if let Some(i) = cases.iter().position(py_catch_all) {
         cases.truncate(i + 1);
-    } else if !has_catch_all(arms) {
+    } else if !has_catch_all(arms, ctors) {
         cases.push(non_exhaustive_guard());
     }
 }

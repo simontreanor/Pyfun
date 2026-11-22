@@ -305,6 +305,14 @@ pub fn compile_with(
         .iter()
         .map(|m| (m.name.clone(), export_records(&m.ast)))
         .collect();
+    // Each module's record-bodied constructors (name → declared field names),
+    // so a cross-module literal is a keyword call and a derived codec keys its
+    // fields by name.
+    let ctor_fields: HashMap<String, HashMap<String, Vec<String>>> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.clone(), export_ctor_fields(&m.ast)))
+        .collect();
 
     // Per-module spans of integer literals that inference resolved to `float`, so
     // lowering emits them as `7.0`. Computed in topological order (like `check`) so
@@ -368,6 +376,12 @@ pub fn compile_with(
             if let Some(names) = newtypes.get(import) {
                 for name in names {
                     ctx.newtype_ctors.insert(format!("{import}.{name}"));
+                }
+            }
+            if let Some(ctors) = ctor_fields.get(import) {
+                for (ctor, fields) in ctors {
+                    ctx.ctor_fields
+                        .insert(format!("{import}.{ctor}"), fields.clone());
                 }
             }
             if let Some(recs) = records.get(import) {
@@ -581,6 +595,24 @@ fn export_records(module: &Module) -> HashMap<String, Vec<String>> {
                 decl.name.clone(),
                 fields.iter().map(|f| f.name.clone()).collect(),
             );
+        }
+    }
+    out
+}
+
+/// A module's record-bodied constructors: name → declared field names.
+fn export_ctor_fields(module: &Module) -> HashMap<String, Vec<String>> {
+    use crate::parser::ast::TypeDeclKind;
+    let mut out = HashMap::new();
+    for item in &module.items {
+        if let Item::Type(decl) = item
+            && let TypeDeclKind::Sum(variants) = &decl.kind
+        {
+            for variant in variants {
+                if let Some(names) = &variant.field_names {
+                    out.insert(variant.name.clone(), names.clone());
+                }
+            }
         }
     }
     out

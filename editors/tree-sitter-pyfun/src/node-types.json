@@ -4268,7 +4268,7 @@
     },
     "children": {
       "multiple": true,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "field_pattern",
@@ -4829,6 +4829,16 @@
     "type": "variant",
     "named": true,
     "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "record_declaration",
+            "named": true
+          }
+        ]
+      },
       "field": {
         "multiple": true,
         "required": false,
