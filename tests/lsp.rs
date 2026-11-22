@@ -121,10 +121,10 @@ fn serves_initialize_diagnostics_and_hover() {
         .unwrap()
         .as_str()
         .unwrap();
-    // `add` is unit- and num-polymorphic: `int<'a> -> int<'a> -> int<'a>`
-    // (an unresolved `num` defaults to `int`; `'a` is the shared unit variable).
+    // `add` is unit- and num-polymorphic, and its whole type says so: `num a`
+    // is the constraint and `'u` the shared unit variable.
     assert!(
-        value.contains("int<'a> -> int<'a> -> int<'a>"),
+        value.contains("num a => a<'u> -> a<'u> -> a<'u>"),
         "hover value: {value:?}"
     );
 
@@ -568,7 +568,10 @@ fn reanalyzes_a_dependent_when_an_imported_buffer_changes() {
     };
     // Before the edit, `area` is the numeric two-argument function.
     let before = hover_value(2);
-    assert!(before.contains("int"), "hover before edit: {before:?}");
+    assert!(
+        before.contains("num a => a<'u> -> a<'v> -> a<'u 'v>"),
+        "hover before edit: {before:?}"
+    );
     // After editing only the imported buffer, the dependent re-analyzes.
     let after = hover_value(3);
     assert!(

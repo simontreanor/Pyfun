@@ -1608,6 +1608,26 @@ tighter than `->` in the type grammar (`Map a b -> Option b`); a function there 
 type inside a message is always in backticks (``expected `List a`, found `int` ``), like every other
 piece of code a message quotes, so a bare `a` is never mistaken for the English word.
 
+**A whole type is displayed with its constraints**, in front, the way this document has always
+written them: `lt : comparison a => a -> a -> bool`, `add : num a => a<'u> -> a<'u> -> a<'u>`,
+`has : a in b => a -> b -> bool`, and several in parentheses (`(comparison a, a in b) => a -> a ->
+b -> bool`). Without them a hover says less than the checker knows: `a -> a -> bool` reads as "any
+two values of one type", and the first call with a function argument is refused. "Whole" means the
+places that show a binding's or an expression's type on its own: hover, the REPL's echo, `:type`
+and a typed hole's note. A type quoted inside a message (``expected `List a`, found `int` ``) stays
+bare, since a constraint belongs to a binding and not to a fragment of its type.
+
+A **`num` variable is named only when the type is a function of it**, that is when it occurs to the
+left of an arrow in a type a binding was generalized over: `twice : num a => a<'u> -> a<'u>`, since
+the caller picks `int` or `float`. A number that only comes out displays as its default (`let x = 5`
+is `x : int`, `twice 3 : int`, `[1, 2] : List int`), which is what the value is unless something
+asks otherwise, and what a reader of lesson 1 should see. So does a literal's variable inside a body
+(the lambda in `List.map (fun x -> x + 1) xs` hovers as `int -> int`), and so do the numbers in a
+typed hole's note: `List.fold ? 0 ns` asks for `int -> int -> int`, because those numbers are the
+hole's context's and not the hole's to leave open. A hole's note does carry `comparison` and `in`.
+Unit variables are lettered from `'u` and type variables from `a`, so the two never share a letter
+(`a<'u>`, never `a<'a>`).
+
 **A Python habit is answered with the Pyfun form.** The audience arrives with Python in its
 fingers, and most Python-shaped mistakes are errors anyway, at a token that says little (`expected an
 expression, found =`). So the compiler reads the shape and names the form that replaces it: `x = 5`
@@ -1808,8 +1828,8 @@ down.
    reported at the use (`has 1 5`: `in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`).
    An exported scheme carries its obligations across modules. Only a container that is neither
    pinned down nor a variable of the binding's own type is an error, naming the module function to
-   write instead (`List.contains x xs`). The constraint is not shown when a type is displayed
-   (`has : a -> b -> bool`), which is true of `num` and `comparison` too (`ROADMAP.md`). A membership test does not chain with another
+   write instead (`List.contains x xs`). A displayed type carries the constraint
+   (`has : a in b => a -> b -> bool`, §7). A membership test does not chain with another
    comparison (`a < b in c` is an error asking for `and`). `in` is a keyword; a computation
    expression's `for x in xs:` uses the same token.
 7. **Logical operators.** `and` / `or` / `not` — all keywords, lowering to the same
@@ -2327,7 +2347,7 @@ Design intent:
  :** √area = length and ∛volume = length — `sqrt 16.0<m^2> :
   float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, `cbrt 27.0<m^3> : float<m>`, and a **non-square** (for
   `sqrt`) or **non-cube** (for `cbrt`) unit is a
-  compile-time dimensional error (`type mismatch: expected float<'a^2>, found float<m^3>`). These are
+  compile-time dimensional error (`type mismatch: expected float<'u^2>, found float<m^3>`). These are
   the *two* tractable unit-carrying power operations — F# special-cases the `sqrt` signature —
   because each exponent is a static rational constant (½, ⅓); general `x<'u> ** y` is impossible (a runtime
   exponent makes the result unit depend on a value → dependent types), which is why `**` stays

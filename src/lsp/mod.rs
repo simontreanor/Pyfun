@@ -1921,7 +1921,10 @@ let n = max 1",
         server.handle(&json::parse(&open_msg(uri, src)).unwrap());
         // Hover the declaration name `double` (line 1, char 5): type + doc.
         let value = hover_value(&mut server, uri, 1, 5);
-        assert!(value.contains("int"), "hover value was {value:?}");
+        assert!(
+            value.contains("num a => a<'u> -> a<'u>"),
+            "hover value was {value:?}"
+        );
         assert!(
             value.contains("Doubles a number."),
             "hover value was {value:?}"

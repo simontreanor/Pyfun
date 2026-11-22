@@ -2571,9 +2571,14 @@ fn a_recursive_function_of_arity_two_can_perform_io() {
         analysis.diagnostics
     );
     // The effect lands on the innermost arrow, exactly as for a declared extern.
+    // The counter is a `num` the caller chooses; the result only comes out, so
+    // it shows as its default.
     assert!(
-        analysis.types.iter().any(|t| t.ty == "a -> int ->{io} int"),
-        "expected `a -> int ->{{io}} int`, got {:?}",
+        analysis
+            .types
+            .iter()
+            .any(|t| t.ty == "num b => a -> b ->{io} int"),
+        "expected `num b => a -> b ->{{io}} int`, got {:?}",
         analysis.types
     );
 }
@@ -5533,4 +5538,93 @@ fn a_shared_field_and_a_record_field_resolve_by_type() {
         ),
         "`name` is declared by types `Shape` and `Tool`. Say which by matching on the value first (`case Circle { name }:`)",
     );
+}
+
+/// The displayed type of the top-level binding `name` in `src`.
+fn shown(src: &str, name: &str) -> String {
+    let analysis = pyfun::analyze(src);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}\n{src}",
+        analysis.diagnostics
+    );
+    let needle = format!("let {name} ");
+    let start = src.find(&needle).unwrap_or_else(|| panic!("no `{needle}`")) + 4;
+    analysis
+        .types
+        .iter()
+        .find(|t| t.span.start == start && t.span.end == start + name.len())
+        .unwrap_or_else(|| panic!("no type recorded for `{name}`"))
+        .ty
+        .clone()
+}
+
+#[test]
+fn a_whole_type_is_displayed_with_its_constraints() {
+    let src = "let lt a b = a < b\n\
+               let add a b = a + b\n\
+               let has x xs = x in xs\n\
+               let both a b xs = a < b and a in xs\n\
+               let scale k x = k * x\n\
+               let sqr v = v * v\n\
+               let smallest xs = List.min xs\n\
+               let apply_one f = f 1\n\
+               let ident v = v";
+    for (name, ty) in [
+        ("lt", "comparison a => a -> a -> bool"),
+        ("add", "num a => a<'u> -> a<'u> -> a<'u>"),
+        ("has", "a in b => a -> b -> bool"),
+        ("both", "(comparison a, a in b) => a -> a -> b -> bool"),
+        ("scale", "num a => a<'u> -> a<'v> -> a<'u 'v>"),
+        ("sqr", "num a => a<'u> -> a<'u^2>"),
+        ("smallest", "comparison a => List a -> Option a"),
+        ("apply_one", "num a => (a -> b) -> b"),
+        ("ident", "a -> a"),
+    ] {
+        assert_eq!(shown(src, name), ty, "`{name}`");
+    }
+}
+
+#[test]
+fn a_number_that_only_comes_out_displays_as_int() {
+    // A `num` variable is named only when the type is a function of it. A plain
+    // value, a result and a list of literals show the default they have unless
+    // something asks otherwise, though each still adapts (`x + 1.5` checks).
+    let src = "let x = 5\n\
+               let twice n = n + n\n\
+               let four = twice 2\n\
+               let xs = [1, 2]\n\
+               let constant _ = 5\n\
+               let mixed = x + 1.5\n\
+               let inc n = n + 1";
+    for (name, ty) in [
+        ("x", "int"),
+        ("twice", "num a => a<'u> -> a<'u>"),
+        ("four", "int"),
+        ("xs", "List int"),
+        ("constant", "a -> int"),
+        ("mixed", "float"),
+        ("inc", "num a => a -> a"),
+    ] {
+        assert_eq!(shown(src, name), ty, "`{name}`");
+    }
+}
+
+#[test]
+fn a_type_quoted_in_a_message_stays_bare() {
+    // A constraint belongs to a binding, not to a fragment of its type, so a
+    // mismatch quotes the types without one. Unit variables are lettered from
+    // `'u`, apart from type variables.
+    assert_error_contains(
+        "let lt a b = a < b\nlet bad = lt + 1",
+        "found `a -> a -> bool`",
+    );
+    assert_error_contains(
+        "let twice n = n + n\nlet bad = String.len twice",
+        "found `int<'u> -> int<'u>`",
+    );
+    // A typed hole's note is a whole type.
+    let analysis = pyfun::analyze("let smaller a b = if a < b then a else ?");
+    assert_eq!(analysis.holes.len(), 1);
+    assert_eq!(analysis.holes[0].ty, "comparison a => a");
 }
