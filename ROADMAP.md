@@ -474,7 +474,8 @@ after the release.
    for the block form and keep `then` for the one-line form.
 9. ~~**`True` and `False`.**~~ **DONE 2026-11-22** (#188). The lowercase spellings stay reserved
    and are an error naming the capitalized one (`DESIGN.md` §7).
-10. **`str` for `string`.** The emitted annotation is already `str`.
+10. ~~**`str` for `string`.**~~ **DONE 2026-11-22** (#189). `Decode.string` followed as `Decode.str`;
+    the old type name stays reserved and is an error naming the new one (`DESIGN.md` §7).
 11. **snake_case, one rule.** Every value name is snake_case with an underscore at every word
     boundary: 68 of the 241 standard library names change (`sort_by`, `of_list`, `is_empty`,
     `with_default`). Python supplies the *word* and this rule supplies the spelling, so it is
