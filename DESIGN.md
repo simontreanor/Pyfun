@@ -1750,13 +1750,20 @@ down.
    `Map`, a substring of a `str`. Those are the five Python's own `in` covers, and the set is closed
    in the manner of `num` and `comparison`. It **lowers 1:1** to the Python operator (`BinOp::In`
    and `NotIn` map to `in` and `not in`), which already means the right thing for each of the five,
-   so lowering consults no type. Typing differs from the two constraints in one respect: `in` is
-   *resolved*, not generalized. The checker reads the container's type where the test is written; if
-   that is still an unsolved variable it waits for the rest of the enclosing binding, the same
-   deferral a field access gets (§8.3), and a container that is never pinned down is an error
-   naming the module function to write instead (`List.contains x xs`). So `let has x xs = x in xs`
-   is rejected: a relation between two types would need a multi-parameter constraint, and a helper
-   over "any container" is rare enough to spell out. A membership test does not chain with another
+   so lowering consults no type. Like the two constraints, it **generalizes**: `let has x xs = x in
+   xs` is polymorphic in what it searches, and `has 2 [1, 2]`, `has 3 {1, 2}` and `has "ell" "hello"`
+   all check. A membership test relates two types (what is sought, what is searched), so it is not a
+   mark on one variable the way `num` and `comparison` are; it is a pending obligation
+   `(elem, container)`. Where the container's type is known the obligation is settled on the spot.
+   Where it is still a variable it waits for the rest of the enclosing binding, the same deferral a
+   field access gets (§8.3). And where that variable is one the binding is generalized over, the
+   obligation moves into the binding's scheme (`Scheme::members`) and every use poses it again
+   against its own instance, to be settled when that use says what its container is; a misuse is
+   reported at the use (`has 1 5`: `in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`).
+   An exported scheme carries its obligations across modules. Only a container that is neither
+   pinned down nor a variable of the binding's own type is an error, naming the module function to
+   write instead (`List.contains x xs`). The constraint is not shown when a type is displayed
+   (`has : a -> b -> bool`), which is true of `num` and `comparison` too (`ROADMAP.md`). A membership test does not chain with another
    comparison (`a < b in c` is an error asking for `and`). `in` is a keyword; a computation
    expression's `for x in xs:` uses the same token.
 7. **Logical operators.** `and` / `or` / `not` — all keywords, lowering to the same

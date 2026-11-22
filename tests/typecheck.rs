@@ -5085,11 +5085,138 @@ fn membership_is_typed_by_what_is_searched() {
             .is_ok()
     );
     assert!(pyfun::check("let has_two ys = 2 in ys or List.len ys > 5").is_ok());
-    // But `in` is resolved, not generalized: a helper over "any container"
-    // names the module function it means.
+    // A container nothing ever pins down, and that is not a variable of the
+    // binding's own type, is still an error.
     assert_error_contains(
-        "let has x xs = x in xs",
+        "let f _ =\n  let e = List.head []\n  match e:\n    case Some c: 1 in c\n    case None: False",
         "cannot tell what this `in` searches: its right side could be a `List`, `Set`, `Seq`, \
          `Map` or `str`. Say which with the module's function",
+    );
+}
+
+#[test]
+fn membership_generalizes_over_what_is_searched() {
+    // A helper written with `in` is polymorphic in its container, the way one
+    // written with `<` is polymorphic in what it compares: the test travels in
+    // the binding's scheme and is posed again at each use.
+    assert!(
+        pyfun::check(
+            "let has x xs = x in xs\n\
+             let missing x xs = x not in xs\n\
+             let a = has 2 [1, 2]\n\
+             let b = has 3 {1, 2}\n\
+             let c = has \"Ada\" {\"Ada\": 36}\n\
+             let d = has \"ell\" \"hello\"\n\
+             let e = missing 9 (Seq.of_list [1])\n\
+             let any_of xs ys = List.exists (fun x -> has x ys) xs\n\
+             let f = any_of [5, 2] {2, 3}\n\
+             let has_one = has 1\n\
+             let g = has_one [1] and has_one {2}"
+        )
+        .is_ok()
+    );
+    // A local helper, and a parameter searched by a nested binding.
+    assert!(
+        pyfun::check(
+            "let outer ys =\n  let inner x = x in ys\n  inner 1 or List.len ys > 3\n\
+             let f xs =\n  let found = 1 in xs\n  found\n\
+             let both = f [1] and f {1}"
+        )
+        .is_ok()
+    );
+    // Each use is checked against the five containers, at the use.
+    assert_error_contains(
+        "let has x xs = x in xs\nlet bad = has 1 5",
+        "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`",
+    );
+    assert_error_contains(
+        "let has x xs = x in xs\nlet bad = has \"a\" [1, 2]",
+        "expected `int`, found `str`",
+    );
+    // A top-level expression statement is settled the same way.
+    assert_error_contains("let has x xs = x in xs\nhas 1 5", "not `int`");
+    assert!(pyfun::check("let has x xs = x in xs\nprint (has 1 [1])").is_ok());
+}
+
+#[test]
+fn membership_stays_with_every_binding_that_shares_the_container() {
+    // Two functions defined together search the same container variable. Each
+    // keeps the test in its own scheme: handing it to the first alone would let
+    // the second accept anything, and `g 1 5` would reach Python.
+    let pair = "let f n xs = if n == 0 then 1 in xs else g (n - 1) xs\n\
+                let g n xs = if n == 0 then 2 in xs else f (n - 1) xs\n";
+    for call in ["f 1 5", "g 1 5", "f 0 5", "g 0 5"] {
+        assert_error_contains(
+            &format!("{pair}let bad = {call}"),
+            "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`, not `int`",
+        );
+    }
+    for call in ["f 1 [\"a\"]", "g 1 {\"a\"}"] {
+        assert_error_contains(
+            &format!("{pair}let bad = {call}"),
+            "expected `str`, found `int`",
+        );
+    }
+    assert!(
+        pyfun::check(&format!(
+            "{pair}let ok = (f 3 [1, 2], g 3 {{1, 2}}, f 0 {{1: \"one\"}}, g 2 (Seq.of_list [2]))"
+        ))
+        .is_ok()
+    );
+    // The names of a destructuring `let` share one too, whether the two
+    // functions are written apart or are one function bound twice.
+    for src in [
+        "let (f, g) = (fun xs -> 1 in xs, fun ys -> 2 in ys)\nlet bad = g 5",
+        "let (f, g) = (fun xs -> 1 in xs, fun ys -> 2 in ys)\nlet bad = f 5",
+        "let h = fun xs -> 1 in xs\nlet (f, g) = (h, h)\nlet bad = g 5",
+        "let (f, g) =\n  let h xs = 1 in xs\n  (h, h)\nlet bad = g 5",
+        "let (f, g) =\n  let h xs = 1 in xs\n  (h, h)\nlet bad = f 5",
+    ] {
+        assert_error_contains(src, "not `int`");
+    }
+    // A `str` is searched for a `str`, through either name.
+    assert_error_contains(
+        "let (f, g) =\n  let h xs = 1 in xs\n  (h, h)\nlet bad = (f [1], g \"one\")",
+        "type mismatch",
+    );
+    assert!(
+        pyfun::check(
+            "let (f, g) =\n  let h xs = 1 in xs\n  (h, h)\n\
+             let ok = (f [1], f {1}, g [1], g {1: 2})"
+        )
+        .is_ok()
+    );
+    // A helper nested in a function hands its test on to the function.
+    assert_error_contains(
+        "let outer ys =\n  let has x xs = x in xs\n  has 1 ys\nlet bad = outer 5",
+        "not `int`",
+    );
+}
+
+#[test]
+fn membership_settled_by_a_later_statement_holds_nothing_back() {
+    // The container is a variable when `in` is read and a `List` one test
+    // later. The membership is settled before the binding generalizes, so the
+    // function is as polymorphic in its element as `List.contains` would make it.
+    assert!(
+        pyfun::check(
+            "let f x xs = (x in xs) and List.len xs > 0\n\
+             let a = f 1 [1]\n\
+             let b = f \"a\" [\"a\"]\n\
+             let g x xs =\n  let found = x in xs\n  let n = Map.len xs\n  (found, n)\n\
+             let c = (g 1 {1: \"one\"}, g \"k\" {\"k\": 2.0})\n\
+             let outer z =\n  let h x xs = (x in xs) and List.len xs > 0\n  (h 1 [1], h \"a\" [\"a\"], h z [z])"
+        )
+        .is_ok()
+    );
+    // It is still a test: the element must be the list's.
+    assert_error_contains(
+        "let f x xs = (x in xs) and List.len xs > 0\nlet bad = f \"a\" [1]",
+        "type mismatch",
+    );
+    // And a later statement that makes the container a non-container says so.
+    assert_error_contains(
+        "let f x xs =\n  let found = x in xs\n  let n = xs + 1\n  found",
+        "`in` searches a `List`, `Set`, `Seq`, `Map` or `str`",
     );
 }

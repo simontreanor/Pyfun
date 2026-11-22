@@ -1937,3 +1937,68 @@ fn a_missing_multi_word_module_names_the_snake_case_file() {
     let err = project::build_from_path(&dir.path("main.pyfun")).unwrap_err();
     assert!(err.to_string().contains("train_times.pyfun"), "{err}");
 }
+
+#[test]
+fn e2e_a_membership_helper_keeps_its_constraint_across_modules() {
+    // The constraint is part of the exported scheme, so an importing module
+    // uses the helper at any container, and misuse is caught there.
+    let files = compile(
+        "Main",
+        &[
+            ("Search", "let has x xs = x in xs"),
+            (
+                "Main",
+                "import Search\nprint (Search.has 2 [1, 2], Search.has 3 {1, 2}, Search.has \"a\" \"cab\")",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_member_across_modules");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "(True, False, True)");
+    }
+    let bad = build_mem(
+        "Main",
+        &[
+            ("Search", "let has x xs = x in xs"),
+            ("Main", "import Search\nlet bad = Search.has 1 5"),
+        ],
+    );
+    let errors = project::check(&bad);
+    assert!(
+        !errors.is_empty(),
+        "misuse across a module boundary must be an error"
+    );
+    // Both members of a mutually recursive pair export the constraint.
+    let pair = "let f n xs = if n == 0 then 1 in xs else g (n - 1) xs\n\
+                let g n xs = if n == 0 then 2 in xs else f (n - 1) xs";
+    for member in ["f", "g"] {
+        let bad = build_mem(
+            "Main",
+            &[
+                ("Search", pair),
+                (
+                    "Main",
+                    &format!("import Search\nlet bad = Search.{member} 1 5"),
+                ),
+            ],
+        );
+        assert!(
+            !project::check(&bad).is_empty(),
+            "`Search.{member} 1 5` must be an error"
+        );
+        let good = build_mem(
+            "Main",
+            &[
+                ("Search", pair),
+                (
+                    "Main",
+                    &format!("import Search\nlet ok = Search.{member} 1 {{1, 2}}"),
+                ),
+            ],
+        );
+        assert!(
+            project::check(&good).is_empty(),
+            "`Search.{member} 1 {{1, 2}}` must check"
+        );
+    }
+}
