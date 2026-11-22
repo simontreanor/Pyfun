@@ -26,29 +26,55 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use pyfun::diagnostics::{self, Level};
 use pyfun::syntax::Item;
+use pyfun::traceback::Row;
 
-/// The driver program fed to `python -c`: a tiny framed-message loop that
-/// `exec`s each received blob in one persistent dict namespace, capturing
-/// stdout/stderr during the exec (any exception's traceback included) and sending
-/// the captured text back. Framing, both directions: 8 ASCII digits (the payload
-/// byte length) followed by that many UTF-8 bytes. EOF on stdin ends the loop.
-const DRIVER: &str = r#"
-import io, sys, traceback
+/// The driver program fed to `python -c`, after the traceback hook's source
+/// ([`driver`]): a tiny framed-message loop that `exec`s each received blob in
+/// one persistent dict namespace, capturing stdout/stderr during the exec and
+/// sending the captured text back. Each blob arrives with its table (which
+/// source statement each of its lines came from; empty when there is none), so
+/// an exception's traceback is rendered in the lines the user entered
+/// (`DESIGN.md` §9). Framing, both directions: 8 ASCII digits (the payload byte
+/// length) followed by that many UTF-8 bytes. EOF on stdin ends the loop.
+const DRIVER_LOOP: &str = r#"
+import io, json, traceback
 ns = {}
+tables = {}
+count = 0
 inp = sys.stdin.buffer
 out = sys.stdout.buffer
-while True:
+
+def lookup(filename):
+    if filename in tables:
+        return tables[filename]
+    # This driver's own frames (it is the `-c` program).
+    return HIDE if filename == "<string>" else None
+
+def read():
     header = inp.read(8)
     if len(header) < 8:
+        return None
+    return inp.read(int(header)).decode('utf-8')
+
+while True:
+    table = read()
+    code = read()
+    if table is None or code is None:
         break
-    code = inp.read(int(header)).decode('utf-8')
+    count += 1
+    name = "<pyfun-%d>" % count
+    if table:
+        tables[name] = json.loads(table)
     buf = io.StringIO()
     saved = sys.stdout, sys.stderr
     sys.stdout = sys.stderr = buf
     try:
-        exec(code, ns)
+        exec(compile(code, name, "exec"), ns)
     except BaseException:
-        traceback.print_exc()
+        try:
+            buf.write(render(*sys.exc_info(), lookup))
+        except Exception:
+            traceback.print_exc()
     finally:
         sys.stdout, sys.stderr = saved
     payload = buf.getvalue().encode('utf-8')
@@ -56,6 +82,11 @@ while True:
     out.write(payload)
     out.flush()
 "#;
+
+/// The whole `-c` program: the traceback hook's definitions, then the loop.
+fn driver() -> String {
+    format!("{}\n{DRIVER_LOOP}", pyfun::traceback::HOOK_SOURCE)
+}
 
 /// Run the REPL loop. Returns success unless the environment is unusable (no
 /// Python interpreter, or stdin closes — which is a normal exit).
@@ -148,6 +179,10 @@ struct Session {
     interp: String,
     /// Accumulated definition source (functions, types, values entered so far).
     defs: String,
+    /// Where each line of `defs` was entered: one [`SourceLine`] per line.
+    def_lines: Vec<SourceLine>,
+    /// How many entries have been evaluated; the next one's number.
+    entries: usize,
     /// Top-level Python chunks (see [`chunk_python`]) already executed in the
     /// worker's namespace — the emitter is deterministic, so recompiling the
     /// accumulated program re-yields these byte-for-byte and they are skipped.
@@ -162,6 +197,8 @@ impl Session {
         Session {
             interp,
             defs: String::new(),
+            def_lines: vec![opening_line()],
+            entries: 0,
             executed: HashSet::new(),
             worker: None,
         }
@@ -178,6 +215,7 @@ impl Session {
             "h" | "help" | "?" => print_help(),
             "reset" => {
                 self.defs.clear();
+                self.def_lines = vec![opening_line()];
                 self.executed.clear();
                 self.worker = None; // drop kills the process; a fresh one spawns on demand
                 println!("(session reset)");
@@ -211,10 +249,13 @@ impl Session {
         };
         let is_expression = module.items.len() == 1 && matches!(module.items[0], Item::Expr(_));
 
+        // What a traceback calls this entry (`DESIGN.md` §9).
+        self.entries += 1;
+        let label = format!("<input {}>", self.entries);
         if is_expression {
-            self.eval_expression(entry);
+            self.eval_expression(entry, &label);
         } else {
-            self.add_definitions(entry, module.items.len());
+            self.add_definitions(entry, module.items.len(), &label);
         }
     }
 
@@ -225,7 +266,7 @@ impl Session {
     /// so re-entering the same expression re-runs it. Infrastructure chunks it
     /// pulled in (imports, `_pf_*` helpers, classes) *are* remembered — they are
     /// idempotent, and resending a class would break `isinstance` identity.
-    fn eval_expression(&mut self, entry: &str) {
+    fn eval_expression(&mut self, entry: &str, label: &str) {
         let combined = format!("{}\n{entry}", self.defs);
         let analysis = pyfun::analyze(&combined);
         if !analysis.diagnostics.is_empty() {
@@ -241,15 +282,16 @@ impl Session {
         } else {
             format!("{}\nprint ({entry})", self.defs)
         };
-        match pyfun::compile(&program_src) {
-            Ok(python) => {
-                let chunks = chunk_python(&python);
-                let output = self.run_program(&chunks);
+        let mut lines = self.def_lines.clone();
+        lines.extend(entry_lines(label, 1, entry));
+        match Program::compile(&program_src, lines) {
+            Ok(program) => {
+                let output = self.run_program(&program);
                 print!("{output}");
                 let _ = io::stdout().flush();
-                for chunk in chunks {
-                    if is_infrastructure(&chunk) {
-                        self.executed.insert(chunk);
+                for chunk in program.chunks() {
+                    if is_infrastructure(chunk) {
+                        self.executed.insert(chunk.clone());
                     }
                 }
             }
@@ -264,7 +306,7 @@ impl Session {
     /// them, echo each new binding's inferred type, and execute the definitions'
     /// not-yet-run chunks in the worker — so a definition's effects run exactly
     /// once, at entry.
-    fn add_definitions(&mut self, entry: &str, new_count: usize) {
+    fn add_definitions(&mut self, entry: &str, new_count: usize, label: &str) {
         let combined = format!("{}\n{entry}", self.defs);
         let analysis = pyfun::analyze(&combined);
         if !analysis.diagnostics.is_empty() {
@@ -294,14 +336,16 @@ impl Session {
         }
         // Compile the whole accumulated program; only the chunks the worker hasn't
         // seen (the new definitions and anything they pulled in) are executed.
-        match pyfun::compile(&combined) {
-            Ok(python) => {
-                let chunks = chunk_python(&python);
-                let output = self.run_program(&chunks);
+        let mut lines = self.def_lines.clone();
+        lines.extend(entry_lines(label, 1, entry));
+        match Program::compile(&combined, lines) {
+            Ok(program) => {
+                let output = self.run_program(&program);
                 print!("{output}");
                 let _ = io::stdout().flush();
-                self.executed.extend(chunks);
+                self.executed.extend(program.chunks().cloned());
                 self.defs = combined;
+                self.def_lines = program.into_lines();
             }
             Err(e) => eprintln!(
                 "{}",
@@ -347,13 +391,13 @@ impl Session {
     /// the captured output. If the worker died, respawn it, rebuild the namespace
     /// by re-running the accumulated definitions (warning that their effects
     /// re-ran), and retry the entry once against the rebuilt state.
-    fn run_program(&mut self, chunks: &[String]) -> String {
-        let blob = blob_of_new(chunks, &self.executed);
+    fn run_program(&mut self, program: &Program) -> String {
+        let (blob, rows) = program.pending(&self.executed);
         if blob.is_empty() {
             return String::new();
         }
         let had_worker = self.worker.is_some();
-        match self.try_exec(&blob) {
+        match self.try_exec(&table_of(&rows), &blob) {
             Ok(output) => output,
             Err(e) => {
                 if had_worker {
@@ -369,25 +413,25 @@ impl Session {
                     eprintln!(
                         "(python worker restarted — definitions re-executed to rebuild state)"
                     );
-                    let Ok(python) = pyfun::compile(&self.defs) else {
+                    let Ok(defs) = Program::compile(&self.defs, self.def_lines.clone()) else {
                         // Cannot happen: `defs` only ever grows through successful compiles.
                         return output;
                     };
-                    let def_chunks = chunk_python(&python);
-                    match self.try_exec(&blob_of_new(&def_chunks, &self.executed)) {
+                    let (blob, rows) = defs.pending(&self.executed);
+                    match self.try_exec(&table_of(&rows), &blob) {
                         Ok(out) => output.push_str(&out),
                         Err(e) => {
                             eprintln!("cannot restart python worker: {e}");
                             return output;
                         }
                     }
-                    self.executed.extend(def_chunks);
+                    self.executed.extend(defs.chunks().cloned());
                 }
                 // Retry the entry, re-diffed against the rebuilt namespace (it may
                 // need chunks that only earlier *expressions* had pulled in).
-                let blob = blob_of_new(chunks, &self.executed);
+                let (blob, rows) = program.pending(&self.executed);
                 if !blob.is_empty() {
-                    match self.try_exec(&blob) {
+                    match self.try_exec(&table_of(&rows), &blob) {
                         Ok(out) => output.push_str(&out),
                         Err(e) => eprintln!("python worker failed again: {e}"),
                     }
@@ -400,11 +444,15 @@ impl Session {
     /// One protocol round-trip with the worker (spawning it if needed). On any
     /// I/O failure the worker is discarded (and killed) so the caller can retry
     /// against a fresh one.
-    fn try_exec(&mut self, blob: &str) -> io::Result<String> {
+    fn try_exec(&mut self, table: &str, blob: &str) -> io::Result<String> {
         if self.worker.is_none() {
             self.worker = Some(Worker::spawn(&self.interp)?);
         }
-        let result = self.worker.as_mut().expect("just spawned").exec(blob);
+        let result = self
+            .worker
+            .as_mut()
+            .expect("just spawned")
+            .exec(table, blob);
         if result.is_err() {
             self.worker = None; // drop kills the dead/wedged process
         }
@@ -452,21 +500,182 @@ fn render_errors(source: &str, errors: &[pyfun::types::TypeError]) {
     }
 }
 
-/// Split emitted Python into top-level chunks: a chunk starts at a column-0 line
-/// and includes every following blank or indented line; column-0 decorator lines
+/// One line of a session's source, as its author entered it: what a
+/// traceback names when a statement on that line fails.
+#[derive(Debug, Clone)]
+pub(crate) struct SourceLine {
+    /// The entry the line belongs to (`<input 3>`, `In[3]`); empty for the
+    /// blank line a session's source opens with.
+    pub(crate) label: String,
+    /// The line's number within what the author sees of that entry, 1-based.
+    pub(crate) line: usize,
+    pub(crate) text: String,
+}
+
+/// The line a session's source opens with: the definitions start empty, and
+/// every entry is joined to them by a newline.
+pub(crate) fn opening_line() -> SourceLine {
+    SourceLine {
+        label: String::new(),
+        line: 0,
+        text: String::new(),
+    }
+}
+
+/// The lines of one entry. `first_line` is the line it starts on as its author
+/// sees it: 1, or further down for the expression that closes a notebook cell.
+pub(crate) fn entry_lines(label: &str, first_line: usize, entry: &str) -> Vec<SourceLine> {
+    entry
+        .split('\n')
+        .enumerate()
+        .map(|(i, text)| SourceLine {
+            label: label.to_string(),
+            line: first_line + i,
+            text: text.trim_end_matches('\r').to_string(),
+        })
+        .collect()
+}
+
+/// A compiled session program: the accumulated definitions with one entry on
+/// the end, as emitted Python chunks that know where they came from.
+pub(crate) struct Program {
+    /// The emitted Python's top-level chunks ([`chunk_python`]).
+    chunks: Vec<(usize, String)>,
+    /// Where the emitted lines came from, when the compiler could say.
+    map: Option<pyfun::LineMap>,
+    /// The source that was compiled.
+    source: String,
+    /// One [`SourceLine`] for each line of `source`.
+    lines: Vec<SourceLine>,
+}
+
+impl Program {
+    /// Compile `source`, whose lines were entered as `lines` says.
+    pub(crate) fn compile(
+        source: &str,
+        lines: Vec<SourceLine>,
+    ) -> Result<Program, pyfun::CompileError> {
+        let (python, _notes, map) = pyfun::compile_traced(source)?;
+        Ok(Program {
+            chunks: chunk_python(&python),
+            map,
+            source: source.to_string(),
+            lines,
+        })
+    }
+
+    /// Every chunk of the program, in order.
+    pub(crate) fn chunks(&self) -> impl Iterator<Item = &String> {
+        self.chunks.iter().map(|(_, chunk)| chunk)
+    }
+
+    /// The lines the program was compiled from.
+    pub(crate) fn into_lines(self) -> Vec<SourceLine> {
+        self.lines
+    }
+
+    /// The chunks not yet in `executed`, joined into one exec-able blob (in
+    /// program order), with the rows of the blob's table: which entered
+    /// statement each of its lines came from. The blob is empty when the
+    /// namespace has already run everything; the rows are empty when the
+    /// program has no line map.
+    pub(crate) fn pending(&self, executed: &HashSet<String>) -> (String, Vec<Row>) {
+        let mut blob = String::new();
+        let mut rows = Vec::new();
+        let mut blob_line = 1;
+        for (start, chunk) in &self.chunks {
+            if executed.contains(chunk) {
+                continue;
+            }
+            let count = chunk.lines().count();
+            if let Some(map) = &self.map {
+                // A chunk is cut from the program and joined to others, so its
+                // first line always opens a row, even one that says "no source".
+                let mut current = None;
+                for i in 0..count {
+                    let span = statement_of(map, start + i);
+                    if current != Some(span) {
+                        rows.push(self.row(blob_line + i, span));
+                        current = Some(span);
+                    }
+                }
+            }
+            blob.push_str(chunk);
+            blob.push('\n');
+            blob_line += count;
+        }
+        (blob, rows)
+    }
+
+    /// The row for blob lines from `emitted` on, lowered from the statement at
+    /// `span` (or from no statement).
+    fn row(&self, emitted: usize, span: Option<pyfun::lexer::Span>) -> Row {
+        let none = Row {
+            emitted,
+            line: 0,
+            text: Vec::new(),
+            label: None,
+        };
+        let Some(span) = span else {
+            return none;
+        };
+        let (first, last) = pyfun::traceback::statement_lines(&self.source, span);
+        let Some(head) = self.lines.get(first - 1).filter(|l| !l.label.is_empty()) else {
+            return none;
+        };
+        Row {
+            emitted,
+            line: head.line,
+            text: self
+                .lines
+                .iter()
+                .skip(first - 1)
+                .take(last + 1 - first)
+                .take_while(|l| l.label == head.label)
+                .map(|l| l.text.clone())
+                .collect(),
+            label: Some(head.label.clone()),
+        }
+    }
+}
+
+/// The statement the emitted line `py_line` came from: the nearest entry of
+/// the line map at or above it.
+fn statement_of(map: &pyfun::LineMap, py_line: usize) -> Option<pyfun::lexer::Span> {
+    map.iter()
+        .take_while(|(line, _)| *line <= py_line)
+        .last()
+        .map(|(_, span)| *span)
+}
+
+/// The table that travels with a blob: one line of JSON, or nothing when there
+/// are no rows.
+pub(crate) fn table_of(rows: &[Row]) -> String {
+    if rows.is_empty() {
+        String::new()
+    } else {
+        pyfun::traceback::chunk_table(rows)
+    }
+}
+
+/// Split emitted Python into top-level chunks, each with the line it starts
+/// on (1-based): a chunk starts at a column-0 line and includes every
+/// following blank or indented line; column-0 decorator lines
 /// (`@dataclass(...)`) attach to the *following* `class`/`def` chunk. Chunks are
 /// stored with trailing whitespace trimmed (so the same statement compares equal
 /// whether or not later statements follow it) and no trailing newline.
-pub(crate) fn chunk_python(src: &str) -> Vec<String> {
+pub(crate) fn chunk_python(src: &str) -> Vec<(usize, String)> {
     let mut chunks = Vec::new();
     let mut current = String::new();
+    let mut start = 1;
     // True while `current` holds only decorator lines — the next column-0 line
     // (the decorated def/class) then continues the chunk instead of opening one.
     let mut decorators_open = false;
-    for line in src.lines() {
+    for (index, line) in src.lines().enumerate() {
         let col0 = !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t');
         if col0 && !decorators_open {
-            push_chunk(&mut chunks, &mut current);
+            push_chunk(&mut chunks, &mut current, start);
+            start = index + 1;
         }
         current.push_str(line);
         current.push('\n');
@@ -474,32 +683,18 @@ pub(crate) fn chunk_python(src: &str) -> Vec<String> {
             decorators_open = line.starts_with('@');
         }
     }
-    push_chunk(&mut chunks, &mut current);
+    push_chunk(&mut chunks, &mut current, start);
     chunks
 }
 
-/// Finish the chunk in `current` (trimmed; empty chunks are dropped).
-fn push_chunk(chunks: &mut Vec<String>, current: &mut String) {
+/// Finish the chunk in `current`, which started on line `start` (trimmed;
+/// empty chunks are dropped).
+fn push_chunk(chunks: &mut Vec<(usize, String)>, current: &mut String, start: usize) {
     let trimmed = current.trim_end();
     if !trimmed.is_empty() {
-        chunks.push(trimmed.to_string());
+        chunks.push((start, trimmed.to_string()));
     }
     current.clear();
-}
-
-/// The not-yet-executed chunks of a program, joined into one exec-able blob (in
-/// program order). Empty when the worker has already run everything.
-pub(crate) fn blob_of_new(chunks: &[String], executed: &HashSet<String>) -> String {
-    let new: Vec<&str> = chunks
-        .iter()
-        .filter(|c| !executed.contains(*c))
-        .map(|s| s.as_str())
-        .collect();
-    if new.is_empty() {
-        String::new()
-    } else {
-        new.join("\n") + "\n"
-    }
 }
 
 /// Whether a chunk is session infrastructure — imports, `_pf_*` helper defs, and
@@ -523,7 +718,7 @@ struct Worker {
 impl Worker {
     fn spawn(interp: &str) -> io::Result<Worker> {
         let mut child = Command::new(interp)
-            .args(["-c", DRIVER])
+            .args(["-c", &driver()])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // stderr inherited: a crash of the driver itself surfaces to the user.
@@ -537,13 +732,15 @@ impl Worker {
         })
     }
 
-    /// Send one blob of Python statements to be `exec`'d in the worker's
-    /// namespace; return the output (stdout+stderr, tracebacks included) it
-    /// captured while running them.
-    fn exec(&mut self, blob: &str) -> io::Result<String> {
-        let bytes = blob.as_bytes();
-        write!(self.stdin, "{:08}", bytes.len())?;
-        self.stdin.write_all(bytes)?;
+    /// Send one blob of Python statements, with its table, to be `exec`'d in
+    /// the worker's namespace; return the output (stdout+stderr, tracebacks
+    /// included) it captured while running them.
+    fn exec(&mut self, table: &str, blob: &str) -> io::Result<String> {
+        for part in [table, blob] {
+            let bytes = part.as_bytes();
+            write!(self.stdin, "{:08}", bytes.len())?;
+            self.stdin.write_all(bytes)?;
+        }
         self.stdin.flush()?;
         let mut header = [0u8; 8];
         self.stdout.read_exact(&mut header)?;

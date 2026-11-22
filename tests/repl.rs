@@ -250,3 +250,70 @@ fn repl_unit_expression_prints_no_none() {
     assert!(out.contains("hello repl"), "effect ran:\n{out}");
     assert!(!out.contains("None"), "no None printed:\n{out}");
 }
+
+#[test]
+fn repl_reports_a_runtime_error_in_the_lines_entered() {
+    if !have_python() {
+        eprintln!("skipping repl traceback test: no python interpreter");
+        return;
+    }
+    // Three entries: a one-line definition, a block, and the expression that
+    // fails. Each frame names the entry it was written in and the line there,
+    // and shows the statement; the worker's own frames are left out.
+    let out = repl(
+        "let ratio a b = a // b\n\
+         :{\n\
+         let describe n =\n    let total = n + 1\n    ratio total (n - n)\n\
+         :}\n\
+         describe 3\n\
+         1 + 1\n\
+         :quit\n",
+    )
+    .replace("\r\n", "\n");
+    let expected = "\
+Traceback (most recent call last):
+  File \"<input 3>\", line 1, in <module>
+    describe 3
+  File \"<input 2>\", line 3, in describe
+    ratio total (n - n)
+  File \"<input 1>\", line 1, in ratio
+    let ratio a b = a // b
+ZeroDivisionError: ";
+    assert!(out.contains(expected), "traceback in entered lines:\n{out}");
+    assert!(
+        !out.contains("<string>"),
+        "the worker's frames show:\n{out}"
+    );
+    assert!(
+        !out.contains("<pyfun-"),
+        "an emitted chunk's name shows:\n{out}"
+    );
+    // The session carries on.
+    assert!(out.contains("pyfun> 2\n"), "next entry evaluates:\n{out}");
+}
+
+#[test]
+fn repl_traceback_survives_a_reset() {
+    if !have_python() {
+        eprintln!("skipping repl traceback test: no python interpreter");
+        return;
+    }
+    // After `:reset` the worker is new and the definitions are gone; entries
+    // keep counting, so a name in a traceback is never reused.
+    let out = repl(
+        "let ratio a b = a // b\n\
+         :reset\n\
+         let half n = n // (n - n)\n\
+         half 4\n\
+         :quit\n",
+    )
+    .replace("\r\n", "\n");
+    assert!(
+        out.contains("  File \"<input 3>\", line 1, in <module>\n    half 4\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  File \"<input 2>\", line 1, in half\n    let half n = n // (n - n)\n"),
+        "{out}"
+    );
+}

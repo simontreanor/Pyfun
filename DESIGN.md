@@ -2631,9 +2631,9 @@ leftover hole is caught. `check` also lists in-scope bindings that would fill th
 *refinement* fits reported applied to further holes (`String.concat ? ?`). This reaches beyond F#, which
 has no typed holes.
 
-**Tracebacks in `.pyfun` lines (`pyfun run`).** A well-typed program can still fail when it runs: a
-library raises, a file is missing, a division is by zero. Under `pyfun run` the traceback names the
-source. Each frame of the program gives its `.pyfun` file, the line of the statement that was running
+**Tracebacks in `.pyfun` lines.** A well-typed program can still fail when it runs: a library
+raises, a file is missing, a division is by zero. Under `pyfun run`, in the REPL and in a notebook
+the traceback names the source. Each frame of the program gives its `.pyfun` file, the line of the statement that was running
 and that statement's text:
 
 ```text
@@ -2667,7 +2667,25 @@ built from a second lowering whose statements carry source positions, and it is 
 lowering emits exactly the Python that runs; a program for which it does not keeps Python's own
 traceback. `PYFUN_TRACEBACK=python` asks for Python's own traceback over the emitted code, which is the
 view to attach to a compiler bug report. Python emitted by `pyfun compile` and run with `python`
-reports its own lines, as any Python file does. The REPL and the Jupyter kernel are next (`ROADMAP.md`).
+reports its own lines, as any Python file does.
+
+In the REPL and in a notebook the source is what was entered, so a frame names the entry and the line
+within it: `File "<input 3>", line 1` for the third entry of a REPL session, `File "In[7]", line 2` for
+the second line of the notebook cell Jupyter numbered 7. A function defined in one entry and failing
+when a later one calls it is shown where it was written, with its statement, however many entries ago
+that was. The frames of the REPL's worker and of the kernel are left out.
+
+```text
+pyfun> describe 3
+Traceback (most recent call last):
+  File "<input 3>", line 1, in <module>
+    describe 3
+  File "<input 2>", line 3, in describe
+    ratio total (n - n)
+  File "<input 1>", line 1, in ratio
+    let ratio a b = a // b
+ZeroDivisionError: division by zero
+```
 
 **Syntax highlighting.** A TextMate grammar flags the escape-hatch tokens (`mut`, `<-`, `extern`) in a
 caution colour, marking the opt-outs from the immutable-by-default / effect-checked defaults; `pure`

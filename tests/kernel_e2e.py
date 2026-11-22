@@ -130,6 +130,26 @@ def main():
             status, out, _ = run_cell(kc, "n")
             check("session unchanged after error", status == "ok" and "42" in out, out.strip())
 
+            # --- a runtime error is reported in the lines the cells were written in ---
+            status, out, _ = run_cell(kc, "let ratio a b =\n    a // b")
+            check("helper for the failing cell defined", status == "ok", out.strip())
+            status, _, err = run_cell(kc, "let total = 3\nratio total (n - n)")
+            where = [line for line in err.splitlines() if line.startswith("  File ")]
+            check(
+                "runtime error names the cells' own lines",
+                status == "error"
+                and len(where) == 2
+                and where[0].endswith("line 2, in <module>")
+                and where[1].endswith("line 2, in ratio")
+                and all('File "In[' in line for line in where)
+                and "    ratio total (n - n)" in err
+                and "    a // b" in err
+                and "ZeroDivisionError" in err,
+                err.strip()[-400:],
+            )
+            status, out, _ = run_cell(kc, "n")
+            check("kernel usable after a runtime error", status == "ok" and "42" in out, out.strip())
+
             # --- KeyboardInterrupt during a long-running cell ---
             # A CPU-bound cell: interruptible at Python bytecode level on every
             # OS. (A cell blocked in a C call like time.sleep does NOT interrupt
