@@ -50,7 +50,7 @@ Expected output:
 
 ```pyfun
 let label s =
-  match String.toInt s:
+  match String.to_int s:
     case Some n: f"number: {n}"
     case None: "no number"
 
@@ -70,12 +70,12 @@ no number
 [Lesson page](../learn/04-result.md)
 
 ```pyfun
-extern parseInt: str -> int = int
+extern parse_int: str -> int = int
 
 let describe s =
-  match try (parseInt s):
+  match try (parse_int s):
     case Ok n: f"ok: {n}"
-    case Error e: f"bad: {e.errorKind}"
+    case Error e: f"bad: {e.error_kind}"
 
 print (describe "88")
 print (describe "bad")
@@ -150,10 +150,10 @@ Ada
 let ns = [4, 8, 15, 16, 23]
 
 let total = List.fold (+) 0 ns
-let atTen = Option.withDefault 0 (List.get 10 ns)
+let at_ten = Option.with_default 0 (List.get 10 ns)
 
 print total
-print atTen
+print at_ten
 ```
 
 Expected output:
@@ -197,8 +197,8 @@ let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
 
 let report name =
   Map.find name scores
-  |> Option.withDefault 0
-  |> String.fromInt
+  |> Option.with_default 0
+  |> String.from_int
 
 print (report "ada")
 print (report "cy")
@@ -257,7 +257,7 @@ Hello, ada
 ```pyfun
 type Book = { title: str, pages: int }
 
-let bookDecoder =
+let book_decoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
     (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
@@ -265,13 +265,13 @@ let bookDecoder =
 let describe r =
   match r:
     case Ok b: f"{b.title}, {b.pages} pages"
-    case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
+    case Error e: f"failed ({e.error_kind}): {e.error_message}"
 
-let wellFormed = """{"title": "Dune", "pages": 412}"""
-let missingField = """{"title": "Dune"}"""
+let well_formed = """{"title": "Dune", "pages": 412}"""
+let missing_field = """{"title": "Dune"}"""
 
-wellFormed |> Decode.decodeString bookDecoder |> describe |> print
-missingField |> Decode.decodeString bookDecoder |> describe |> print
+well_formed |> Decode.decode_string book_decoder |> describe |> print
+missing_field |> Decode.decode_string book_decoder |> describe |> print
 ```
 
 Expected output:
@@ -288,8 +288,8 @@ failed (KeyError): 'pages'
 ```pyfun
 let multiply a b =
   result {
-    let! x = Option.toResult "not a number" (String.toInt a)
-    let! y = Option.toResult "not a number" (String.toInt b)
+    let! x = Option.to_result "not a number" (String.to_int a)
+    let! y = Option.to_result "not a number" (String.to_int b)
     return x * y
   }
 
@@ -333,11 +333,11 @@ Expected output:
 
 ```pyfun
 module Temp =
-  let cToF c = c * 9 // 5 + 32
-  let fToC f = (f - 32) * 5 // 9
+  let c_to_f c = c * 9 // 5 + 32
+  let f_to_c f = (f - 32) * 5 // 9
 
-print (Temp.cToF 100)
-print (Temp.fToC 212)
+print (Temp.c_to_f 100)
+print (Temp.f_to_c 212)
 ```
 
 Expected output:
@@ -357,7 +357,7 @@ measure s
 
 type Run = { name: str, distance: float, time: float }
 
-let runDecoder =
+let run_decoder =
   Decode.map3 (fun n d t -> Run { name = n, distance = d, time = t })
     (Decode.field "name" Decode.str)
     (Decode.field "distance" Decode.float)
@@ -369,14 +369,14 @@ let input = """[
 ]"""
 
 let report =
-  match Decode.decodeString (Decode.list runDecoder) input:
+  match Decode.decode_string (Decode.list run_decoder) input:
     case Ok runs:
       let names = runs |> List.map (fun r -> r.name) |> String.join ", "
       let dist = runs |> List.fold (fun a r -> a + r.distance * 1.0<m>) 0.0<m>
       let time = runs |> List.fold (fun a r -> a + r.time * 1.0<s>) 0.0<s>
       let avg = dist / time
       f"{names}: average speed {avg} m/s over {List.len runs} runs"
-    case Error e: f"could not read input ({e.errorKind})"
+    case Error e: f"could not read input ({e.error_kind})"
 
 print report
 ```

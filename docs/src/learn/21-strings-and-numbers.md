@@ -7,7 +7,7 @@ two built-in types offer, grouped so you can find a feature when you need it.
 
 There is no `char` type, so everything is a `str`, and the operations live in a `String` module.
 Concatenation, case, splitting, joining and slicing are all pure, and the parses are total:
-`String.toInt` and `String.toFloat` return an `Option`, `None` when the text does not parse, so they
+`String.to_int` and `String.to_float` return an `Option`, `None` when the text does not parse, so they
 can never raise.
 
 ```pyfun
@@ -22,9 +22,9 @@ print loud
 print words
 print csv
 print first5
-print (Option.withDefault 0 (String.toInt "41"))
-print (Option.withDefault 0 (String.toInt "x"))
-print (Option.withDefault 0.0 (String.toFloat "2.5"))
+print (Option.with_default 0 (String.to_int "41"))
+print (Option.with_default 0 (String.to_int "x"))
+print (Option.with_default 0.0 (String.to_float "2.5"))
 ```
 
 ```console
@@ -39,11 +39,11 @@ Hello
 ```
 
 `String.slice 0 5` is total Python slicing, so an out-of-range bound clamps rather than raising, and
-`String.toInt "x"` hands back `None`, defaulted to `0` here.
+`String.to_int "x"` hands back `None`, defaulted to `0` here.
 
 The module covers the rest of the everyday string work too, with the names a Python programmer
-expects: `String.startsWith`, `String.endsWith`, `String.contains`, `String.replace`,
-`String.splitLines`, `String.trimStart` and `String.trimEnd`, among others.
+expects: `String.starts_with`, `String.ends_with`, `String.contains`, `String.replace`,
+`String.split_lines`, `String.lstrip` and `String.rstrip`, among others.
 
 ## Formatting numbers for people
 
@@ -56,7 +56,7 @@ print (Format.fixed 2 3.14159)
 print (Format.thousands 2 1234567.891)
 print (Format.grouped 1234567)
 print (Format.percent 1 0.256)
-print (Format.padLeft 8 " " "42")
+print (Format.pad_left 8 " " "42")
 ```
 
 ```console
@@ -69,7 +69,7 @@ print (Format.padLeft 8 " " "42")
 
 `Format.fixed` sets the decimal places, `Format.thousands` adds grouping to a float and `grouped`
 does the same for an integer, `Format.percent` turns a fraction into a percentage, and
-`padLeft`/`padRight` align text in a field of a given width using a fill string. `Format.currency`
+`pad_left`/`pad_right` align text in a field of a given width using a fill string. `Format.currency`
 takes the symbol first, so `Format.currency "£" 2` partially applies into a reusable formatter.
 
 These are ordinary functions, which is the reason they exist. A format specifier inside a string
@@ -92,7 +92,7 @@ let score = 41
 let line = f"{who} scored {score} ({String.upper who})"
 let debug = f"{score=}"
 let braces = f"{{literal braces}} around {score}"
-let winPath = r"C:\Users\pyfun\data.csv"
+let win_path = r"C:\Users\pyfun\data.csv"
 let banner = """== pyfun ==
 a "quoted" word"""
 let emoji = "hi \u{1F600}"
@@ -100,7 +100,7 @@ let emoji = "hi \u{1F600}"
 print line
 print debug
 print braces
-print winPath
+print win_path
 print banner
 print (String.len "café")
 print (String.len emoji)
@@ -135,21 +135,21 @@ let million = 1_000_000
 let mask = 0xFF
 let bits = 0b1010
 let perm = 0o17
-let lightSpeed = 3.0e8
+let light_speed = 3.0e8
 let tower = 2.0 ** 3.0 ** 2.0
 let q = 17 // 5
 let r = 17 % 5
-let inRange = 0 <= 7 < 10
+let in_range = 0 <= 7 < 10
 
 print million
 print mask
 print bits
 print perm
-print lightSpeed
+print light_speed
 print tower
 print q
 print r
-print inRange
+print in_range
 ```
 
 ```console
@@ -170,13 +170,13 @@ bases. `2.0 ** 3.0 ** 2.0` is 512 because the right-hand `**` binds first, givin
 
 ## Exercise
 
-`String.toInt` gives back an `Option`, and this program formats the parse into a sentence. The
-default supplied to `Option.withDefault` is a hole. Run `pyfun check` to confirm its type, then fill
+`String.to_int` gives back an `Option`, and this program formats the parse into a sentence. The
+default supplied to `Option.with_default` is a hole. Run `pyfun check` to confirm its type, then fill
 it so a string that does not parse falls back to `0`.
 
 ```pyfun
 let label raw =
-  let n = Option.withDefault ? (String.toInt raw)
+  let n = Option.with_default ? (String.to_int raw)
   f"{raw} parses to {n}"
 
 print (label "42")
@@ -189,7 +189,7 @@ The checker reports:
 note: hole `?` has type `int` — or: List.sum ?, Seq.sum ?, String.len ?, ceil ?
  --> 2:30
   |
-2 |   let n = Option.withDefault ? (String.toInt raw)
+2 |   let n = Option.with_default ? (String.to_int raw)
   |                              ^
 1 unfilled hole
 ```
@@ -201,20 +201,20 @@ Expected output:
 oops parses to 0
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHJhdyA9CiAgbGV0IG4gPSBPcHRpb24ud2l0aERlZmF1bHQgPyAoU3RyaW5nLnRvSW50IHJhdykKICBmIntyYXd9IHBhcnNlcyB0byB7bn0iCgpwcmludCAobGFiZWwgIjQyIikKcHJpbnQgKGxhYmVsICJvb3BzIikK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHJhdyA9CiAgbGV0IG4gPSBPcHRpb24ud2l0aF9kZWZhdWx0ID8gKFN0cmluZy50b19pbnQgcmF3KQogIGYie3Jhd30gcGFyc2VzIHRvIHtufSIKCnByaW50IChsYWJlbCAiNDIiKQpwcmludCAobGFiZWwgIm9vcHMiKQo)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
 let label raw =
-  let n = Option.withDefault 0 (String.toInt raw)
+  let n = Option.with_default 0 (String.to_int raw)
   f"{raw} parses to {n}"
 
 print (label "42")
 print (label "oops")
 ```
 
-`String.toInt "42"` is `Some 42`, so the default is ignored and the line reads `42 parses to 42`.
-`String.toInt "oops"` is `None`, so `Option.withDefault 0` supplies the `0`.
+`String.to_int "42"` is `Some 42`, so the default is ignored and the line reads `42 parses to 42`.
+`String.to_int "oops"` is `None`, so `Option.with_default 0` supplies the `0`.
 </details>

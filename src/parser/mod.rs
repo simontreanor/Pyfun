@@ -2793,7 +2793,7 @@ mod tests {
         // parsed as extra arguments to `x * 2` and surfaced as a type error on
         // the line above. It is now the third item, `let _ = print …`.
         assert_statement_line_is_an_item(
-            "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n    print f\"y is {y}\"\n    return y\n  }",
+            "let f n =\n  result {\n    let! x = Option.to_result \"bad\" (String.to_int n)\n    let y = x * 2\n    print f\"y is {y}\"\n    return y\n  }",
             4,
         );
     }
@@ -2876,7 +2876,7 @@ mod tests {
         // continued by keyword and line, and offers both fixes without column
         // numbers. The new-item fix must include the binding: an atom start
         // can never begin a CE item, so un-indenting alone is not a fix.
-        let src = "let f n =\n  result {\n    let! x = Option.toResult \"bad\" (String.toInt n)\n    let y = x * 2\n      print f\"y is {y}\"\n    return y\n  }";
+        let src = "let f n =\n  result {\n    let! x = Option.to_result \"bad\" (String.to_int n)\n    let y = x * 2\n      print f\"y is {y}\"\n    return y\n  }";
         let (_, errors) = parse_recover(lex(src).unwrap());
         let err = errors
             .first()
@@ -2897,7 +2897,7 @@ mod tests {
 
         // The bracket-opening shape: no item spelling exists for a `(` line at
         // all, so the same message (naming the `let!` item) must carry it.
-        let src = "let f n =\n  result {\n    let! x = Option.toResult \"bad\"\n      (String.toInt n)\n    return x\n  }";
+        let src = "let f n =\n  result {\n    let! x = Option.to_result \"bad\"\n      (String.to_int n)\n    return x\n  }";
         let (_, errors) = parse_recover(lex(src).unwrap());
         let err = errors
             .first()
@@ -2926,7 +2926,7 @@ mod tests {
         // Legal multi-line items keep parsing: a value continued on deeper
         // lines, a pipeline broken across lines, a multi-line `match`, and a
         // nested CE.
-        let src = "let f n =\n  result {\n    let! x =\n      Option.toResult \"bad\"\n        (String.toInt n)\n    let y = x\n      |> (fun v -> v * 2)\n    let z =\n      match y:\n        case 0: 0\n        case other: other\n    let! w = result { return z }\n    return w\n  }";
+        let src = "let f n =\n  result {\n    let! x =\n      Option.to_result \"bad\"\n        (String.to_int n)\n    let y = x\n      |> (fun v -> v * 2)\n    let z =\n      match y:\n        case 0: 0\n        case other: other\n    let! w = result { return z }\n    return w\n  }";
         let (module, errors) = parse_recover(lex(src).unwrap());
         assert!(errors.is_empty(), "errors: {errors:?}");
         assert_eq!(names(&module), ["f"]);

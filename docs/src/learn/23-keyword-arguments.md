@@ -8,18 +8,18 @@ the value comes in two kinds.
 The first kind is a literal, fixed once at the declaration:
 
 ```pyfun
-extern parseHex: str -> int = int(base = 16)
+extern parse_hex: str -> int = int(base = 16)
 
 let raw = "ff"
 
-raw |> parseHex |> print
+raw |> parse_hex |> print
 ```
 
 ```console
 255
 ```
 
-`parseHex` reads hexadecimal and nothing else, because the `16` belongs to the declaration rather
+`parse_hex` reads hexadecimal and nothing else, because the `16` belongs to the declaration rather
 than the call. The emitted Python puts the keyword back where Python wants it:
 
 ```python
@@ -31,16 +31,16 @@ That suits a value which never changes. When it does change, `...` in place of t
 value from the caller:
 
 ```pyfun
-extern parseIn: str -> int -> int = int(base = ...)
+extern parse_in: str -> int -> int = int(base = ...)
 
-let fromHex s = parseIn s 16
-let fromBinary s = parseIn s 2
+let from_hex s = parse_in s 16
+let from_binary s = parse_in s 2
 
 let a = "ff"
 let b = "1011"
 
-a |> fromHex |> print
-b |> fromBinary |> print
+a |> from_hex |> print
+b |> from_binary |> print
 ```
 
 ```console
@@ -49,13 +49,13 @@ b |> fromBinary |> print
 ```
 
 One extern now covers every base. The type gained an argument for the slot to claim, and
-`parseIn : str -> int -> int` is an ordinary curried arrow, so inference, effects, and the checker
+`parse_in : str -> int -> int` is an ordinary curried arrow, so inference, effects, and the checker
 treat it like any other function. What changes is where the argument lands in the emitted call:
 
 ```python
-def fromHex(s):
+def from_hex(s):
     return int(s, base=16)
-def fromBinary(s):
+def from_binary(s):
     return int(s, base=2)
 ```
 
@@ -69,9 +69,9 @@ Currying holds across the boundary. A slot extern applied to some of its argumen
 awaiting the rest, like any other Pyfun function:
 
 ```pyfun
-extern parseIn: str -> int -> int = int(base = ...)
+extern parse_in: str -> int -> int = int(base = ...)
 
-let ff = parseIn "ff"
+let ff = parse_in "ff"
 
 ff 16 |> print
 ```
@@ -91,14 +91,14 @@ a single extern whose base comes from the caller, and keep the output the same.
 
 ```pyfun
 # Two externs that differ only in the base each one pins.
-extern parseHex: str -> int = int(base = 16)
-extern parseBinary: str -> int = int(base = 2)
+extern parse_hex: str -> int = int(base = 16)
+extern parse_binary: str -> int = int(base = 2)
 
 let hex = "ff"
 let binary = "1011"
 
-hex |> parseHex |> print
-binary |> parseBinary |> print
+hex |> parse_hex |> print
+binary |> parse_binary |> print
 ```
 
 Expected output:
@@ -108,25 +108,25 @@ Expected output:
 11
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=IyBUd28gZXh0ZXJucyB0aGF0IGRpZmZlciBvbmx5IGluIHRoZSBiYXNlIGVhY2ggb25lIHBpbnMuCmV4dGVybiBwYXJzZUhleDogc3RyIC0-IGludCA9IGludChiYXNlID0gMTYpCmV4dGVybiBwYXJzZUJpbmFyeTogc3RyIC0-IGludCA9IGludChiYXNlID0gMikKCmxldCBoZXggPSAiZmYiCmxldCBiaW5hcnkgPSAiMTAxMSIKCmhleCB8PiBwYXJzZUhleCB8PiBwcmludApiaW5hcnkgfD4gcGFyc2VCaW5hcnkgfD4gcHJpbnQK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=IyBUd28gZXh0ZXJucyB0aGF0IGRpZmZlciBvbmx5IGluIHRoZSBiYXNlIGVhY2ggb25lIHBpbnMuCmV4dGVybiBwYXJzZV9oZXg6IHN0ciAtPiBpbnQgPSBpbnQoYmFzZSA9IDE2KQpleHRlcm4gcGFyc2VfYmluYXJ5OiBzdHIgLT4gaW50ID0gaW50KGJhc2UgPSAyKQoKbGV0IGhleCA9ICJmZiIKbGV0IGJpbmFyeSA9ICIxMDExIgoKaGV4IHw-IHBhcnNlX2hleCB8PiBwcmludApiaW5hcnkgfD4gcGFyc2VfYmluYXJ5IHw-IHByaW50Cg)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-extern parseIn: str -> int -> int = int(base = ...)
+extern parse_in: str -> int -> int = int(base = ...)
 
-let fromHex s = parseIn s 16
-let fromBinary s = parseIn s 2
+let from_hex s = parse_in s 16
+let from_binary s = parse_in s 2
 
 let hex = "ff"
 let binary = "1011"
 
-hex |> fromHex |> print
-binary |> fromBinary |> print
+hex |> from_hex |> print
+binary |> from_binary |> print
 ```
 
 One declaration replaces both, and the base moves from the declaration to the call. The two named
 helpers keep the call sites reading as pipelines, and either one can be passed around on its own,
-because `parseIn s` is a function awaiting a base.
+because `parse_in s` is a function awaiting a base.
 </details>

@@ -9,11 +9,11 @@ change, so the program reads as a set of definitions rather than a sequence of u
 let name = "Ada"
 let age = 36
 let pi = 3.14
-let isAdmin = True
+let is_admin = True
 
 print (f"{name} is {age}")
 print (f"pi is about {pi}")
-print isAdmin
+print is_admin
 ```
 
 Running this prints:
@@ -25,7 +25,7 @@ True
 ```
 
 You never wrote a type. The compiler infers one for every binding: `name` is a `str`,
-`age` is an `int`, `pi` is a `float`, and `isAdmin` is a `bool`. There are no type
+`age` is an `int`, `pi` is a `float`, and `is_admin` is a `bool`. There are no type
 annotations on `let`, and that is a deliberate design choice, not a missing feature. You
 get the safety of static types without writing them out.
 

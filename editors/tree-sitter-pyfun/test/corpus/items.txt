@@ -194,7 +194,7 @@ extern pure loads : str -> Json = json.loads(strict=True, offset=-2, sep=", ")
 extern with a caller-supplied kwarg slot
 ================================================================================
 
-extern openText : str -> str -> Seq str = builtins.open(mode="rt", encoding=...)
+extern open_text : str -> str -> Seq str = builtins.open(mode="rt", encoding=...)
 
 --------------------------------------------------------------------------------
 
@@ -410,7 +410,7 @@ let Point { x, y } = origin
 destructuring parameter
 ================================================================================
 
-let tileScore (t, sq) = t * sq
+let tile_score (t, sq) = t * sq
 
 --------------------------------------------------------------------------------
 

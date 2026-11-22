@@ -92,15 +92,15 @@ the program type-checks.
 ```pyfun
 opaque type OrderId = str
 
-let orderLabel o =
+let order_label o =
   match o:
     case OrderId s: String.concat "order " s
 
 # The id arrives as a plain string from the outside world.
 let raw = "o-9"
 
-# This line does not type-check yet: orderLabel wants an OrderId.
-let label = orderLabel raw
+# This line does not type-check yet: order_label wants an OrderId.
+let label = order_label raw
 
 print label
 ```
@@ -111,7 +111,7 @@ The checker reports:
 error: type mismatch: expected OrderId, found str
   --> 11:13
    |
-11 | let label = orderLabel raw
+11 | let label = order_label raw
    |             ^^^^^^^^^^^^^^
 ```
 
@@ -121,7 +121,7 @@ Expected output:
 order o-9
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=b3BhcXVlIHR5cGUgT3JkZXJJZCA9IHN0cgoKbGV0IG9yZGVyTGFiZWwgbyA9CiAgbWF0Y2ggbzoKICAgIGNhc2UgT3JkZXJJZCBzOiBTdHJpbmcuY29uY2F0ICJvcmRlciAiIHMKCiMgVGhlIGlkIGFycml2ZXMgYXMgYSBwbGFpbiBzdHJpbmcgZnJvbSB0aGUgb3V0c2lkZSB3b3JsZC4KbGV0IHJhdyA9ICJvLTkiCgojIFRoaXMgbGluZSBkb2VzIG5vdCB0eXBlLWNoZWNrIHlldDogb3JkZXJMYWJlbCB3YW50cyBhbiBPcmRlcklkLgpsZXQgbGFiZWwgPSBvcmRlckxhYmVsIHJhdwoKcHJpbnQgbGFiZWwK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=b3BhcXVlIHR5cGUgT3JkZXJJZCA9IHN0cgoKbGV0IG9yZGVyX2xhYmVsIG8gPQogIG1hdGNoIG86CiAgICBjYXNlIE9yZGVySWQgczogU3RyaW5nLmNvbmNhdCAib3JkZXIgIiBzCgojIFRoZSBpZCBhcnJpdmVzIGFzIGEgcGxhaW4gc3RyaW5nIGZyb20gdGhlIG91dHNpZGUgd29ybGQuCmxldCByYXcgPSAiby05IgoKIyBUaGlzIGxpbmUgZG9lcyBub3QgdHlwZS1jaGVjayB5ZXQ6IG9yZGVyX2xhYmVsIHdhbnRzIGFuIE9yZGVySWQuCmxldCBsYWJlbCA9IG9yZGVyX2xhYmVsIHJhdwoKcHJpbnQgbGFiZWwK)
 
 <details>
 <summary>Show solution</summary>
@@ -129,14 +129,14 @@ order o-9
 ```pyfun
 opaque type OrderId = str
 
-let orderLabel o =
+let order_label o =
   match o:
     case OrderId s: String.concat "order " s
 
 # The id arrives as a plain string from the outside world.
 let raw = "o-9"
 
-let label = orderLabel (OrderId raw)
+let label = order_label (OrderId raw)
 
 print label
 ```

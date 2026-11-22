@@ -255,7 +255,7 @@ Mechanics and the full precondition set are in `INTERNALS.md`.
 
 A pure one-liner stdlib member that is **fully applied** lowers to the Python idiom directly rather than
 through its `_pf_*` helper: `String.contains n s`—`n in s`, `List`/`Set`/`Map.contains`—`x in xs`,
-`String.startsWith`/`endsWith`—`s.startswith(…)`/`s.endswith(…)`, `List.isEmpty xs`—`not xs`. The
+`String.starts_with`/`ends_with`—`s.startswith(…)`/`s.endswith(…)`, `List.is_empty xs`—`not xs`. The
 inline form is value-identical to the helper. A partial application (`String.contains "x"`) keeps the
 helper, so `List.map (String.contains "x") xs` still works. This is a readability win first; mechanics
 in `INTERNALS.md`.
@@ -263,8 +263,8 @@ in `INTERNALS.md`.
 The same lever covers two call-site shapes where the idiomatic Pyfun spelling and the fastest Python
 answer differ by more than a function call.
 
-**Equality predicates.** `List.findIndex ((==) x) xs` is the way to ask "where is `x`", and Python
-answers that in C with `list.index`. A fully-applied `List.findIndex`, `List.find`, or `List.exists`
+**Equality predicates.** `List.find_index ((==) x) xs` is the way to ask "where is `x`", and Python
+answers that in C with `list.index`. A fully-applied `List.find_index`, `List.find`, or `List.exists`
 whose predicate is the section `(==) x` (or the lambda `fun y -> x == y` / `fun y -> y == x`, with `y`
 not free in `x`) lowers to that scan: `_pf_index_of(x, xs)` (`xs.index(x)` under a `try`),
 `_pf_find_eq(x, xs)` (`xs[xs.index(x)]`, so the *element* found is returned, as the generic helper
@@ -284,11 +284,11 @@ those); anything else, including the `Option` escaping into a variable, keeps th
 
 ### 5.3 Specializing statically-known `Decode` decoders
 
-A `Decode.decodeString` whose decoder is a **syntactically-known composition** of the simple combinators
+A `Decode.decode_string` whose decoder is a **syntactically-known composition** of the simple combinators
 compiles to direct dict/list access with inline error handling — a validating parser that reads like
 hand-written Python — instead of building and interpreting a runtime decoder value. The resulting
 `Result` is **byte-identical** to the interpreter's on every input (same `Ok` payload, same error kind
-and message). Anything dynamic (`andThen`, a decoder passed as a value, a non-literal `oneOf`) falls
+and message). Anything dynamic (`and_then`, a decoder passed as a value, a non-literal `one_of`) falls
 back to the interpreter. Measured ~2.8x end-to-end on a decode-dominated workload. Mechanics in
 `INTERNALS.md`.
 
@@ -357,7 +357,7 @@ functions, which have no self tail call at all. Mechanics in `INTERNALS.md`.
 
 ### 5.5 `Option`/`Result` matches as `isinstance` ladders; nullary constructors as singletons
 
-`Option` is the return type of every stdlib accessor (`Map.find`, `List.head`, `List.findIndex`),
+`Option` is the return type of every stdlib accessor (`Map.find`, `List.head`, `List.find_index`),
 so a `match` on one is the commonest match in the language, and a real program asks it millions of
 times. A Python `match` resolves a class pattern through `__match_args__` and `isinstance` at
 runtime, then binds by position, which is structural machinery a two-case type with one payload does
@@ -366,7 +366,7 @@ not need. A match whose arms are the constructors of one built-in family (`Some 
 lowers to what a person writes:
 
 ```python
-def allowsLetter(checks, rc, l):      # match Map.find rc checks:
+def allows_letter(checks, rc, l):      # match Map.find rc checks:
     _pf_t0 = _pf_map_find(rc, checks)
     if isinstance(_pf_t0, None_):     #   case None: True
         return True
@@ -585,7 +585,7 @@ LSP are untouched. Receiver-reachable members can of course still use the instan
 instead. A `unit` **parameter contributes no argument**, wherever it sits along the arrow: a
 **nullary** extern (`unit -> a`, e.g. `time.time`) applied to `()` lowers to a zero-argument call
 (`time.time()`), not `time.time(None)`; a leading unit before real parameters drops the same way
-(`extern myAbs : unit -> int -> int = abs` lowers `myAbs () (-5)` to `abs(-5)`, never the split
+(`extern my_abs : unit -> int -> int = abs` lowers `my_abs () (-5)` to `abs(-5)`, never the split
 `abs()(-5)`); and a mid-list unit simply vanishes from the call (`int -> unit -> int -> int = max`
 emits `max(3, 5)`). One rule, three shapes. The dropped argument is still evaluated when it could
 have effects, and a partial application closes over a lambda rather than `functools.partial`, which
@@ -644,9 +644,9 @@ forms coexist; the plain dotted form stays right for genuine module functions an
 
 **Pinned keyword arguments (`= target(kw = lit, …)`).** A trailing `(kw = lit, …)` on an
 extern target pins **fixed Python keyword arguments**, appended to every emitted call:
-`extern openText : str -> Seq str = builtins.open(mode="rt", encoding="utf-8")` lowers `openText path`
+`extern open_text : str -> Seq str = builtins.open(mode="rt", encoding="utf-8")` lowers `open_text path`
 to `builtins.open(path, mode="rt", encoding="utf-8")`, and the receiver-method form
-`extern writeText : Path -> str -> int = pathlib.Path.write_text(encoding="utf-8")` lowers `writeText p text`
+`extern write_text : Path -> str -> int = pathlib.Path.write_text(encoding="utf-8")` lowers `write_text p text`
 to `p.write_text(text, encoding="utf-8")`. This reaches Python keyword-only / deep-positional arguments
 (such as `open`'s `encoding`) *without* the ugly positional fillers that would otherwise be needed to
 skip past intervening parameters. Each `kw` is a lowercase identifier and each `lit` a string / int
@@ -656,7 +656,7 @@ appear in the Pyfun arrow type (the type above is still `str -> Seq str`), they 
 inference and effects, and the parens compose with all three target forms (an empty `()` after a leading
 dot is still just the method marker). The feature is **strictly additive** — an extern with no `(…)`
 behaves exactly as before. Under-application never *drops* the kwargs: a partial or bare reference to a
-kwargs-extern carries them through `functools.partial` (`openText` → `functools.partial(builtins.open,
+kwargs-extern carries them through `functools.partial` (`open_text` → `functools.partial(builtins.open,
 mode="rt", encoding="utf-8")`), so a later application still supplies them; only a full (or over-)
 application emits the direct `f(a, kw=v)` call.
 
@@ -665,9 +665,9 @@ arguments with defaults, and pinning a literal only covers the value that is fix
 `...` in place of the literal makes the keyword's value come from the **caller** instead:
 
 ```
-extern parseInt : str -> int -> int = int(base = ...)          # parseInt "ff" 16 → int("ff", base=16)
-extern openText : str -> str -> Seq str = builtins.open(mode = "rt", encoding = ...)
-extern writeText : Path -> str -> str -> int = .write_text(encoding = ...)
+extern parse_int : str -> int -> int = int(base = ...)          # parse_int "ff" 16 → int("ff", base=16)
+extern open_text : str -> str -> Seq str = builtins.open(mode = "rt", encoding = ...)
+extern write_text : Path -> str -> str -> int = .write_text(encoding = ...)
 ```
 
 The spelling is Python's own stub-file placeholder (`def get(url, timeout=...)`), lexed as one token.
@@ -680,11 +680,11 @@ argument and a `unit` parameter contributes none, so a type left with nothing fo
 rejected with a diagnostic rather than silently mis-lowered.
 
 A slot changes only *where* an argument lands in the emitted call, so like a pinned literal it stays
-**invisible to the type** (`parseInt` is an ordinary `str -> int -> int`), to inference, and to
+**invisible to the type** (`parse_int` is an ordinary `str -> int -> int`), to inference, and to
 effects. Under-application still never drops anything, but it cannot use `functools.partial`, which has
 no way to carry a keyword whose value has not arrived. An under-applied slot extern becomes a **lambda**
-over the remaining arguments (`parseInt "ff"` → `lambda _pf_k0: int("ff", base=_pf_k0)`; a bare
-`parseInt` → `lambda _pf_k0, _pf_k1: int(_pf_k0, base=_pf_k1)`). The arguments already supplied are
+over the remaining arguments (`parse_int "ff"` → `lambda _pf_k0: int("ff", base=_pf_k0)`; a bare
+`parse_int` → `lambda _pf_k0, _pf_k1: int(_pf_k0, base=_pf_k1)`). The arguments already supplied are
 bound to temporaries first, so they evaluate at application time exactly as `functools.partial` would
 have evaluated them, rather than once per later call; a receiver is bound the same way.
 
@@ -716,23 +716,23 @@ before it starts, so the module covers the F# core set rather than growing one f
 (`ROADMAP.md`). Three conventions decide the shapes, and the first two were already the house style:
 
 - **Total, never raising.** Anything F# raises on, Pyfun answers with `Option` under the *plain* name,
-  following `get`/`find`: `head`/`last`/`tail`, `max`/`min`/`maxBy`/`minBy`, `average`, `reduce`,
-  `findIndex`. `sumBy` is not among them — an empty sum is zero, so it needs no `Option`.
-- **Counts clamp** rather than erroring, like `String.slice`: `take`/`drop`/`splitAt` past either end
-  give everything or nothing, a negative count reads as none of it, and `updateAt`/`removeAt` outside
-  the list leave it unchanged (`insertAt` clamps to the ends). `windowed`/`chunkBySize` answer `[]`
+  following `get`/`find`: `head`/`last`/`tail`, `max`/`min`/`max_by`/`min_by`, `average`, `reduce`,
+  `find_index`. `sum_by` is not among them — an empty sum is zero, so it needs no `Option`.
+- **Counts clamp** rather than erroring, like `String.slice`: `take`/`drop`/`split_at` past either end
+  give everything or nothing, a negative count reads as none of it, and `update_at`/`remove_at` outside
+  the list leave it unchanged (`insert_at` clamps to the ends). `windowed`/`chunk_by_size` answer `[]`
   for a non-positive size.
 - **`take`/`drop`**, not F#'s `take`/`skip` — the same kind of divergence as `concat`, chosen for the
   more obvious word.
 
-Access and slicing: `head`, `last`, `tail`, `take`, `drop`, `splitAt`. Transform: `map2` (stopping at
+Access and slicing: `head`, `last`, `tail`, `take`, `drop`, `split_at`. Transform: `map2` (stopping at
 the shorter input, where F# raises, matching the existing `zip`), `indexed`, `iter` (effect-carrying,
-like `map`). Query: `exists`, `forall`, `findIndex`. Order: `sortBy`, `sortDescending`, `distinct`
-(first occurrence wins, order kept), `distinctBy`, `groupBy` (in first-seen key order). Aggregate:
-`max`, `min`, `maxBy`, `minBy`, `sumBy`, `average`, `reduce`. Structure: `partition` (testing each
-element once), `unzip`, `flatten`, `init`, `replicate`. Positional update: `updateAt`, `insertAt`,
-`removeAt`, each returning a fresh list. Windows: `pairwise`, `windowed`, `chunkBySize`. The
-`comparison` constraint lands on the *key* where there is one (`sortBy`/`maxBy`/`minBy` constrain what
+like `map`). Query: `exists`, `forall`, `find_index`. Order: `sort_by`, `sort_descending`, `distinct`
+(first occurrence wins, order kept), `distinct_by`, `group_by` (in first-seen key order). Aggregate:
+`max`, `min`, `max_by`, `min_by`, `sum_by`, `average`, `reduce`. Structure: `partition` (testing each
+element once), `unzip`, `flatten`, `init`, `replicate`. Positional update: `update_at`, `insert_at`,
+`remove_at`, each returning a fresh list. Windows: `pairwise`, `windowed`, `chunk_by_size`. The
+`comparison` constraint lands on the *key* where there is one (`sort_by`/`max_by`/`min_by` constrain what
 the function returns, not the element), and every higher-order member is effect-polymorphic like `map`.
 
 `average : List float -> Option float` is deliberately float-in/float-out: averaging integers would
@@ -742,10 +742,10 @@ silently change type, and an integer literal that must be a float is already inf
 Destructuring in a parameter or a `match` covers most uses, but a projection you can *pass*
 (`List.map fst pairs`) cannot be written point-free without them.
 
-The **completeness ops** — `get`/`isEmpty`/`contains`/`concat`/`sort`/`find` — round out the array,
+The **completeness ops** — `get`/`is_empty`/`contains`/`concat`/`sort`/`find` — round out the array,
 each with big-O faithful to a Python `list`: `get : int -> List a -> Option a` is **O(1)** and
 **bounds-checked → total** (there is deliberately *no* `xs[i]` surface syntax, since bare indexing would
-risk a Python `IndexError`, violating the no-runtime-surprises rule); `isEmpty` is O(1); `contains` is
+risk a Python `IndexError`, violating the no-runtime-surprises rule); `is_empty` is O(1); `contains` is
 **O(n)** linear (use `Set` for O(1) membership); `concat` is O(n+m) returning a fresh list; `sort :
 comparison a => List a -> List a` is O(n log n) (`sorted`, so it carries the `comparison` constraint —
 ADT ordering is out of scope); and `find : (a ->{e} bool) -> List a ->{e} Option a` is O(n),
@@ -778,7 +778,7 @@ tuples** (`PyExpr::Tuple` → `(a, b)`; `Pattern::Tuple` → a sequence pattern 
 exhaustive on its own, and **deep exhaustiveness recurses into the element columns** (`Tag::Tuple(arity)`
 in the Maranget matrix), reporting witnesses like `` `(False, _)` is not matched ``. Tuples unblock
 multi-value return and pair lists; the stdlib follow-ons that need them — `List.zip : List a -> List b ->
-List (a, b)` and `Map.ofList`/`Map.toList` (to/from a `List (k, v)`) (see the list and map
+List (a, b)` and `Map.of_list`/`Map.to_list` (to/from a `List (k, v)`) (see the list and map
 sections above).
 
 **Sets and maps — the hashed collections.** `Set a` and `Map k v` are built-in types
@@ -788,16 +788,16 @@ no lexer/parser/AST changes, only seeded schemes + emitted helpers. The two modu
 truth `types::SET_PRELUDE` / `MAP_PRELUDE` + `seed_set_prelude` / `seed_map_prelude`) are all **pure**
 (unlike `List`'s higher-order trio, none take a function):
 `Set.empty`/`Set.add`/`Set.remove`/`Set.contains`/`Set.len`/`Set.union`/`Set.intersect`/
-`Set.difference`/`Set.ofList`/`Set.toList`, and `Map.empty`/`Map.add`/`Map.remove`/`Map.contains`/
-`Map.findOr`/`Map.find`/`Map.len`/`Map.keys`/`Map.values`. `Set.len`/`Set.ofList`/`Set.toList`/
+`Set.difference`/`Set.of_list`/`Set.to_list`, and `Map.empty`/`Map.add`/`Map.remove`/`Map.contains`/
+`Map.find_or`/`Map.find`/`Map.len`/`Map.keys`/`Map.values`. `Set.len`/`Set.of_list`/`Set.to_list`/
 `Map.len` route to bare Python builtins (`len`/`set`/`list`); the nullary `Set.empty`/`Map.empty` lower
 to `set()`/`dict()`; the rest lower to small **emitted helpers** (`_pf_set_add` = `s.union([x])`,
 `_pf_map_add` = `dict(list(m.items()) + [[k, v]])`, …) so the curried function is one callable (partial
 application → `functools.partial`). The collections are **immutable-style**: every operation returns a
-fresh container. `Map.findOr key default m` is a **total lookup with a fallback** (`dict.get`);
-`Map.find key m : Option v` is the optional form. `Map.ofList : List (k, v) -> Map k v` and
-`Map.toList : Map k v -> List (k, v)` convert to/from a list of key/value **tuples** (`Map.ofList` lowers
-to a bare `dict(pairs)`; `Map.toList` to `list(m.items())`), mirroring `Set.ofList`/`toList`. Element/key
+fresh container. `Map.find_or key default m` is a **total lookup with a fallback** (`dict.get`);
+`Map.find key m : Option v` is the optional form. `Map.of_list : List (k, v) -> Map k v` and
+`Map.to_list : Map k v -> List (k, v)` convert to/from a list of key/value **tuples** (`Map.of_list` lowers
+to a bare `dict(pairs)`; `Map.to_list` to `list(m.items())`), mirroring `Set.of_list`/`to_list`. Element/key
 types are **unconstrained polymorphic**
 but must be **hashable at runtime** — Pyfun primitives are, and ADT/record values are too: generated
 classes get a structural `__hash__` (a tuple of the type and field values, consistent with the
@@ -808,35 +808,47 @@ is itself unhashable raises at hash time, the same way Python rejects an unhasha
 **Option and Result — the built-in sum helpers.** `Option a` (constructors `Some`/`None`)
 is seeded exactly like `Result a e` (`Ok`/`Error`): a reserved type with global constructors that lower
 to `Some`/`None_` (resp. `Ok`/`Error`) classes (`None` is mangled off the Python keyword), emitted on
-demand. Each has a module of combinators: `Option.map`/`bind`/`filter`/`withDefault`/`isSome`/`isNone`/
-`toResult`, and `Result.map`/`mapError`/`bind`/`withDefault`/`isOk`/`isError`/`toOption`. The
+demand. Each has a module of combinators: `Option.map`/`bind`/`filter`/`with_default`/`is_some`/`is_none`/
+`to_result`, and `Result.map`/`map_error`/`bind`/`with_default`/`is_ok`/`is_error`/`to_option`. The
 mapping/binding/filtering ones are **effect-polymorphic** (like `List.map`). `Map.find` returns an
-`Option`; the two bridge **both ways** — `Result.toOption` (`Ok v → Some v`, `Error _ → None`) and
-`Option.toResult e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
+`Option`; the two bridge **both ways** — `Result.to_option` (`Ok v → Some v`, `Error _ → None`) and
+`Option.to_result e` (`Some v → Ok v`, `None → Error e`). A user `type Option`/`Result` is rejected (reserved).
 
 **Strings — the `String` module.** Text operations over the built-in `str` type (which
 lowers to a Python `str`), module-qualified like the collections: `String.len`/`concat`/`join`/`split`/
-`upper`/`lower`/`strip`/`contains`/`startsWith`/`endsWith`/`replace`/`fromInt`/`fromFloat`/`toInt`/
-`toFloat`/`toList`/`slice`/`indexOf` (single source of truth `types::STRING_PRELUDE` +
+`upper`/`lower`/`strip`/`contains`/`starts_with`/`ends_with`/`replace`/`from_int`/`from_float`/`to_int`/
+`to_float`/`to_list`/`slice`/`index_of` (single source of truth `types::STRING_PRELUDE` +
 `seed_string_prelude`). `slice start end s` → `s[start:end]` (total Python slicing, end-exclusive,
 clamps out-of-range; emitted via a `PyExpr::Slice` node so the output reads `s[a:b]`); `indexOf sub s
 : … -> Option int` uses `str.find` and returns `None` when absent (total — no `IndexError`, like
 `List.get`). **A lookup is not marked `try`**: every one is total
-and returns an `Option` (`List.find`, `List.head`, `List.get`, `Map.find`, `String.indexOf`), so the
+and returns an `Option` (`List.find`, `List.head`, `List.get`, `Map.find`, `String.index_of`), so the
 prefix would say nothing the type does not; `Map.tryFind` and `String.tryIndexOf`, the two that
-carried it before 0.11, are answered with the new name. **Naming follows the
-`List` precedent** — use Python's word where it has a natural one (`len`/`upper`/`lower`/`strip`/`split`/
-`join`/`replace`, matching Python's `str` methods, and consistent with `List.len`), and Pyfun's own
-convention otherwise (the `contains`/`ofList`-style `toInt`/`toList`/`fromInt` family, and camelCase for
-multi-word `startsWith`/`endsWith` like `findOr`/`withDefault`). Unlike the collection preludes these
+carried it before 0.11, are answered with the new name. **Naming is one rule: Python's
+word, snake_case spelling.** A name uses Python's word where it has a natural one (`len`/`upper`/`lower`/
+`strip`/`lstrip`/`rstrip`/`split`/`join`/`replace`, matching Python's `str` methods, and consistent with
+`List.len`) and Pyfun's own otherwise (the `contains`/`of_list`-style `to_int`/`to_list`/`from_int` family).
+Every multi-word name is snake_case with an underscore at each word boundary (`sort_by`, `with_default`,
+`find_or`), and that holds where Python itself runs the words together: `starts_with`, `split_lines`,
+`is_subset` and `take_while` for Python's `startswith`, `splitlines`, `issubset` and `takewhile`. Mirroring
+Python letter for letter would import its inconsistency (`group_by` beside `groupby`), and a reader could
+not predict a name without having memorised Python's; the run-together spelling is a short edit from
+the member, so the suggestion bridges it (`String.startswith` is answered with `String.starts_with`). The
+camelCase names of releases before 0.11 are answered the same way, whatever the edit distance
+(`List.sort_by` with `List.sort_by`, `String.lstrip` with `String.lstrip`). The rule reaches every
+compiler-known value name: a computation-expression builder's `return_from` and `yield_from` (§8.1) and
+the `Exception` record's `error_kind` and `error_message`. Types, constructors and modules stay
+PascalCase, which the grammar relies on, and a measure keeps its author's case because SI symbols need
+it (`N`, `Pa`, `mm`). An `extern` names its Pyfun side freely, so Python's own mixed casing stops at the
+boundary: `extern get_logger: str -> Logger = logging.getLogger`. Unlike the collection preludes these
 schemes are **monomorphic** (concrete over `str`/`int`/`float`/`bool`, no type variables) and all
-**pure**. There is **no `char` type** — a character is a length-1 string, so `String.toList : str ->
+**pure**. There is **no `char` type** — a character is a length-1 string, so `String.to_list : str ->
 List str` yields single-character strings and `String.join`/`concat` compose them back. Separator-first
 argument order (`String.join ", " xs`, `String.split "," s`) keeps partial application natural. Lowering
-mirrors the other modules: `len`/`fromInt`/`fromFloat`/`toList` route to bare Python builtins
+mirrors the other modules: `len`/`from_int`/`from_float`/`to_list` route to bare Python builtins
 (`len`/`str`/`list`); the rest lower to emitted `_pf_str_*` helpers (`_pf_str_upper` = `s.upper()`,
 `_pf_str_split` = `s.split(sep)`, …) so each curried function is one callable. The one total parse,
-`String.toInt : str -> Option int`, lowers to a `try`/`except ValueError` helper returning
+`String.to_int : str -> Option int`, lowers to a `try`/`except ValueError` helper returning
 `Some(int(s))`/`None_` (the first use of the general `PyStmt::Try` IR node) and pulls in the `Option`
 prelude. Overloading `+` for strings is deferred — `String.concat` is the concatenation path.
 
@@ -845,7 +857,7 @@ prelude. Overloading `+` for strings is deferred — `String.concat` is the conc
 a `.2f`→`.f2` typo is impossible. First cut (single source of truth `types::FORMAT_PRELUDE` +
 `seed_format_prelude`): `Format.fixed n x` (n decimals, no grouping), `Format.thousands n x` (decimals +
 grouping), `Format.percent n x` (ratio → percent), `Format.currency sym n x` (symbol + grouped amount),
-`Format.grouped x` (grouped integer), and `Format.padLeft`/`padRight w fill s` (alignment, replacing
+`Format.grouped x` (grouped integer), and `Format.pad_left`/`pad_right w fill s` (alignment, replacing
 `:>N`/`:<N`). The numeric formatters are **unit-polymorphic** over `float<'u>`/`int<'u>` — the unit is
 compile-time only and erases at lowering — so `Format.currency "£" 2 19.5<gbp>` checks; padding is
 monomorphic over `str` (`fill` is a length-1 string, per the no-`char` rule). All **pure**; each
@@ -883,7 +895,7 @@ to `Async.parallel` (or `race`) together, which starts every element before awai
 of what F#'s `Async` offers that `asyncio` can supply, typed once
 (single source of truth `types::ASYNC_PRELUDE` + `seed_async_prelude`): `Async.sleep secs`,
 `Async.timeout secs c : Async (Option a)` (`asyncio.wait_for`, `None` on the deadline),
-`Async.toThread thunk` (a blocking call off the event loop, `asyncio.to_thread`), `Async.parallel
+`Async.to_thread thunk` (a blocking call off the event loop, `asyncio.to_thread`), `Async.parallel
 xs : Async (List a)` (`gather`, results in order), `Async.race xs : Async a` (`wait(FIRST_COMPLETED)`,
 the losers cancelled; the list must be non-empty — racing nothing would wait forever, so the empty
 list raises `ValueError("Async.race needs at least one value")` at the await, the module's one
@@ -892,7 +904,7 @@ catches at *call* time, and an async extern does not throw when called, it retur
 throws when awaited, so `try` would wrap the coroutine and the `TimeoutError` would escape at the
 `let!`. `catch` catches `Exception`, not `BaseException`, so `asyncio.CancelledError` passes through
 and structured cancellation keeps working. Building any of these is pure (an `Async` is a value);
-the `async` effect is attributed where the value is awaited, except `toThread`, whose arrow carries
+the `async` effect is attributed where the value is awaited, except `to_thread`, whose arrow carries
 the thunk's effect. Each is an emitted helper returning a `_pf_Async` (a fully applied
 `Async.sleep secs` builds `_pf_Async(asyncio.sleep, secs)` directly),
 because `gather(*xs)` spreads a list the extern syntax cannot, `wait` returns task sets, and two of
@@ -928,7 +940,7 @@ that adding `run` to the protocol waits for demand. A failed child raises an `Ex
 the scope, which `Async.catch` reports as one `Exception` (kind `ExceptionGroup`); a
 `Result a (List Exception)` reading of the scope stays open until a program needs the members. The
 lowering is two emitted helpers over `asyncio` and one Python IR node, `PyStmt::AsyncWith`. A
-blocking `input()` on a worker thread cannot be cancelled, so a keyboard task under `Async.toThread`
+blocking `input()` on a worker thread cannot be cancelled, so a keyboard task under `Async.to_thread`
 outlives its scope until the process exits; that is the platform's limit, not the scope's.
 
 A mailbox **agent** (F#'s `MailboxProcessor`) is deliberately *not* a prelude module: it is an
@@ -941,19 +953,19 @@ library over an opaque built-in `Decoder a`, module-qualified like the others (s
 `types::DECODE_PRELUDE` + `seed_decode_prelude`). It is the batteries-included form of the "parse, don't
 validate" pattern: instead of casting an untyped `dict` into a record (which type-checks but crashes,
 since `json` yields subscript-access dicts and a Pyfun record is an attribute-access class), you build a
-**decoder** — a total recipe — and run it with `Decode.decodeString : Decoder a -> str ->
+**decoder** — a total recipe — and run it with `Decode.decode_string : Decoder a -> str ->
 Result a Exception`, so malformed input is a value you `match`, never a crash. Primitives
 `Decode.str`/`int`/`float`/`bool` are **strict** (a JSON number does not decode as a string;
 `Decode.int` rejects a JSON bool — a Python `bool` is an `int` subclass — while `Decode.float` accepts a
 JSON int); structure combinators `Decode.field name dec`, `Decode.list dec`, `Decode.nullable dec` (JSON
 `null` → `Option`); and composition `Decode.map`/`map2`/`map3`/`map4` (the fan-in that builds a record
-from several field decoders at once), `Decode.andThen` (a decoder chosen from an already-decoded value),
-`Decode.oneOf` (first decoder that succeeds — decode a union), `Decode.succeed`/`Decode.fail`. **Every
+from several field decoders at once), `Decode.and_then` (a decoder chosen from an already-decoded value),
+`Decode.one_of` (first decoder that succeeds — decode a union), `Decode.succeed`/`Decode.fail`. **Every
 arrow is `pure`** — decoders are a pure, total sublanguage, so composing *and running* them introduces no
-effect even though the runner parses JSON; a `let pure` over `Decode.decodeString` type-checks, where the
+effect even though the runner parses JSON; a `let pure` over `Decode.decode_string` type-checks, where the
 raw `extern json.loads` boundary is conservatively `io`. Representation: a `Decoder a` is a Python callable
 `parsed -> a` that **raises** on a shape/type mismatch (the `Decoder` type erases, no runtime class); the
-combinators build such callables (closures), and `decodeString` runs one inside `try`, catching any raise
+combinators build such callables (closures), and `decode_string` runs one inside `try`, catching any raise
 into `Ok`/`Error(_Exception(kind, message))` exactly like the `try e` boundary form. Lowering routes each
 member to an emitted `_pf_dec_*` helper (built from the IR, not string-spliced — the strict primitives use
 the new general `PyStmt::Raise` node and the `is` comparison for `null`). The generalized decoder story
@@ -968,7 +980,7 @@ stages the files into the in-browser file system, and runs the entry with stdout
 `<pre>` panes; `--page <fragment.html>` puts the program's own markup above them. A shareable link
 with no server, which is how two players get a game whose interface is the browser. The page is
 reachable through Pyodide's `js` module like any Python library: `extern import js`, then
-`extern byId: str -> Element = js.document.getElementById`, instance-access externs for methods
+`extern by_id: str -> Element = js.document.getElementById`, instance-access externs for methods
 (`.replaceChildren`, `.addEventListener`), and `pyodide.ffi.create_proxy` for a callback the page
 holds (a lifetime detail a façade hides). The cookbook's `browser/` entry is that façade, a
 `Dom` module a program imports, with a counter page as its consumer. Two things fall out of work
@@ -982,7 +994,7 @@ Signalling for a peer-to-peer transport is the program's problem, not the langua
 **Derived codecs — `Decode.auto` and `Encode.auto`.** A program that speaks to itself over a wire
 (or a save file) has the same Pyfun type on both ends, and writing the two halves by hand is where
 they drift. `Encode.auto : a -> str` and `Decode.auto : Decoder a` are derived from the type, so
-both ends are one line and the property the tests state once is `Decode.decodeString Decode.auto
+both ends are one line and the property the tests state once is `Decode.decode_string Decode.auto
 (Encode.auto v) == Ok v` for every type the derivation accepts: the primitives, records, sum types,
 tuples, `List`, `Set`, `Map`, `Option`, `Result`, newtypes (erased, so the wire carries the
 underlying value), and any recursion through them. **The shape** is the convention serde
@@ -1002,12 +1014,12 @@ the instantiated type, newtypes read through); lowering turns it into a descript
 [("str",)])})`), user-declared types living in a per-module `_pf_codecs` table under their displayed
 type so a recursive `Tree` is a `("ref", "Tree")` back into it. The derived decoder is a `Decoder`
 like any other (a callable that raises on a mismatch, strict like the primitives, `unknown case Nope`
-/ `expected an object, got list` as the message), so it composes with `Decode.field`/`map2`/`andThen`
-and runs under `decodeString`'s `try`. An `a` still open at the site is an error there, with the ways
+/ `expected an object, got list` as the message), so it composes with `Decode.field`/`map2`/`and_then`
+and runs under `decode_string`'s `try`. An `a` still open at the site is an error there, with the ways
 to pin it named; a function, an extern type, a lazy `Seq` or an `Async` have no JSON form and say so.
 Because the codec is derived from the *resolved* type, a `Decode.auto` site's type variable stays
 **weak** at `let`-generalization (OCaml's `'_a`, the same discipline a deferred field access already
-follows), so `let back = Decode.decodeString Decode.auto wire` at the top level is pinned by the
+follows), so `let back = Decode.decode_string Decode.auto wire` at the top level is pinned by the
 `match` that follows rather than each use getting a copy that pins nothing. Cross-module types work
 when the declaring module is imported directly (the descriptor names `rules.View`); a transitively
 carried record says to import its module. Type classes stay rejected: this is one derivation for one
@@ -1084,11 +1096,11 @@ than importing Python's imperative `try/except/finally/raise` (and an exception 
 no types for), the feature is a single **expression**: `try e : Result <e> Exception` (`ExprKind::Try`). It
 runs `e`, and a thrown Python exception becomes `Error`; success is `Ok`. `try` is a prefix keyword binding
 looser than `+`/comparison but tighter than `|>`, so `try parse s` is `try (parse s)` while `try parse s
-|> Result.withDefault 0` pipes the `Result` out; parens capture a wider body. It does **not** change
+|> Result.with_default 0` pipes the `Result` out; parens capture a wider body. It does **not** change
 effects — the body's `io` still happens (`try` catches a *thrown* exception, it doesn't suppress the
-call). The `Error` payload is a **reserved built-in record `Exception`** with `errorKind : str` (the
-class name, `type(e).__name__`) and `errorMessage : str` (`str(e)`) — read by field access (`e.errorKind`)
-or matched (`case Error (Exception { errorKind = "ValueError" }): …`). It reuses the ordinary record
+call). The `Error` payload is a **reserved built-in record `Exception`** with `error_kind : str` (the
+class name, `type(e).__name__`) and `error_message : str` (`str(e)`) — read by field access (`e.error_kind`)
+or matched (`case Error (Exception { error_kind = "ValueError" }): …`). It reuses the ordinary record
 machinery (so its two fields join the global field registry, and a user `type Exception` is rejected as
 reserved), lowered to a class emitted as **`_Exception`** so it does not shadow Python's builtin
 `Exception` that the handler catches. Lowering reuses the `PyStmt::Try` node (extended with an `as <name>`
@@ -1101,8 +1113,8 @@ still needs a wildcard).
 **Seq — the lazy module.** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/
 `take`/`range` are **lazy** (they route to Python's own lazy `map`/`filter`/`itertools.islice`/`range`,
-*not* the eager `_pf_*` wrappers `List` uses); `Seq.fold`/`toList` force the sequence (`Seq.fold` reuses
-the list `_pf_fold` = `reduce`; `Seq.toList` = `list`). `Seq.ofList` = `iter`. `Seq.map`/`filter`/`fold`
+*not* the eager `_pf_*` wrappers `List` uses); `Seq.fold`/`to_list` force the sequence (`Seq.fold` reuses
+the list `_pf_fold` = `reduce`; `Seq.to_list` = `list`). `Seq.of_list` = `iter`. `Seq.map`/`filter`/`fold`
 are effect-polymorphic like `List.map` — since the effect system can't model *deferred* effects, the
 function's effect is attributed at the call (sound, slightly conservative for the lazy ops). Caveat:
 Python iterators are **single-pass**, unlike F#'s re-enumerable `seq` — consistent with the one-shot
@@ -1110,21 +1122,21 @@ generator the `seq {}` CE already produces.
 
 The module splits cleanly in two, and each member's hover documentation says which half it is in,
 because single-pass makes the difference matter. **Lazy** (a new sequence, nothing pulled yet):
-`drop`, `takeWhile`, `dropWhile`, `concat` (append, as in `List.concat`), `flatten`, `collect`, `zip`,
-`indexed`, `distinct`, `pairwise`, `init`, `initInfinite`, `unfold`. Most route to Python's own lazy
+`drop`, `take_while`, `drop_while`, `concat` (append, as in `List.concat`), `flatten`, `collect`, `zip`,
+`indexed`, `distinct`, `pairwise`, `init`, `init_infinite`, `unfold`. Most route to Python's own lazy
 machinery (`itertools.islice`/`takewhile`/`dropwhile`/`chain`/`pairwise`/`count`); `distinct` and
 `unfold` are emitted **generators**, since they carry state while staying lazy. **Consuming** (each
-pulls, and what it pulls is gone): `head`, `isEmpty`, `len`, `exists`, `forall`, `contains`, `sum`,
+pulls, and what it pulls is gone): `head`, `is_empty`, `len`, `exists`, `forall`, `contains`, `sum`,
 `iter`, `find` — several short-circuit, so they consume only as far as the answer.
 
-`initInfinite` and `unfold` are the members with no list behind them at all, which is the reason the
-lazy module exists: `Seq.initInfinite (fun i -> i * 2) |> Seq.take 5 |> Seq.toList` terminates, and
+`init_infinite` and `unfold` are the members with no list behind them at all, which is the reason the
+lazy module exists: `Seq.init_infinite (fun i -> i * 2) |> Seq.take 5 |> Seq.to_list` terminates, and
 `Seq.find` over an endless sequence stops at the first match. Anything that forces the whole sequence
-(`len`, `sum`, `toList`) does not terminate on one, which its documentation says.
+(`len`, `sum`, `to_list`) does not terminate on one, which its documentation says.
 
 **Set and Map — the traversal half.** Both started as containers with membership and construction
-but no way to *walk* them, so transforming either meant a round trip through `toList`. They now carry
-`isEmpty`/`map`/`filter`/`fold`/`exists`/`forall`/`partition`, plus `isSubset`/`isSuperset`/`max`/`min`
+but no way to *walk* them, so transforming either meant a round trip through `to_list`. They now carry
+`is_empty`/`map`/`filter`/`fold`/`exists`/`forall`/`partition`, plus `is_subset`/`is_superset`/`max`/`min`
 for `Set` (the last two `Option`-answering and `comparison`-constrained, like `List.max`) and `union`
 for `Map` (the second map winning a shared key). Every `Map` member takes the **key and the value**,
 since a map's element is the pair, and walks `m.items()` so each entry is read once — a loop over keys
@@ -1134,20 +1146,20 @@ only the value type (`Map k v -> Map k w`). `Set.fold` walks in Python's set ord
 — a fold whose result depends on order should sort first. All the higher-order members are
 effect-polymorphic like `List.map`.
 
-**String — the text module.** Beyond the operations already there, the sweep added `isEmpty` (the same
+**String — the text module.** Beyond the operations already there, the sweep added `is_empty` (the same
 name every other container uses), `get` (one character by index, bounds-checked and `Option`-answering
 exactly like `List.get` — there is no `char` type, so a character is a one-character string), `repeat`,
-`trimStart`/`trimEnd` (`strip` does both ends), `splitLines`, `rev`, and `ofList` (the inverse of
-`toList`). Padding is deliberately *not* here: `Format.padLeft`/`padRight` already take a width and a
+`lstrip`/`rstrip` (`strip` does both ends), `split_lines`, `rev`, and `of_list` (the inverse of
+`to_list`). Padding is deliberately *not* here: `Format.pad_left`/`pad_right` already take a width and a
 fill character, and a second spelling in `String` would be one way too many.
 
-**Option and Result — combining and bridging.** Both had `map`/`bind`/`withDefault` and the
+**Option and Result — combining and bridging.** Both had `map`/`bind`/`with_default` and the
 predicates, which cover one value at a time, and now carry the members for *two* values and for
 crossing into other types. `map2` combines a pair (`Some` only when both are; `Ok` only when both are,
 otherwise the **first** `Error`, so the earliest failure is the one reported) — the shape for two
-independent lookups without nesting two matches. `orElse` takes the **fallback first**, matching
-`withDefault`, so it reads as `primary |> Option.orElse fallback`. `iter` runs a function for its
-effect on a payload that may not be there, `toList` turns either into a zero-or-one-element list, and
+independent lookups without nesting two matches. `or_else` takes the **fallback first**, matching
+`with_default`, so it reads as `primary |> Option.or_else fallback`. `iter` runs a function for its
+effect on a payload that may not be there, `to_list` turns either into a zero-or-one-element list, and
 `Option.flatten`/`Option.exists` finish the set. Every member of both modules is O(1) — they hold one
 value, so there is nothing to traverse and nothing to say about cost. All the higher-order members are
 effect-polymorphic like `List.map`.
@@ -1161,7 +1173,7 @@ which meant a fold could never print. They now read `(b -> a ->{e} b)`, which ac
 effect flow out to the call, as the one-argument members (`List.map`) always did.
 
 **Modules — qualified namespaces.** Collection operations are **module-qualified** (`List.map`,
-`Set.add`, `Map.find`, `Option.withDefault`, `Seq.take`). This is what lets `len`/`contains`/`map`
+`Set.add`, `Map.find`, `Option.with_default`, `Seq.take`). This is what lets `len`/`contains`/`map`
 reuse one name across collections without overloading or type classes (which the MVP rules out). The
 built-in modules (`types::MODULES` = `List`/`Set`/`Map`/`Option`/`Result`/`Seq`/`String`/`Format`; members paired in
 `MODULE_PRELUDES`) and **user-declared in-file modules** (below) share one access syntax. The access
@@ -1172,11 +1184,11 @@ lowercase value), and the checker + lowering resolve the dotted member against t
 record-field access. A genuinely global handful stay unqualified (`print`/`input`/`abs`/`min`/`max` in
 `PRELUDE`), matching F# (`List.map` qualified, `abs` global). `input : str ->{io} str` is
 Python's `input(prompt)` name-for-name (`input ""` for promptless) — the io effect coming *in*,
-pairing with `print`'s going out; `input "n? " |> String.toInt : Option int` is the idiomatic total
+pairing with `print`'s going out; `input "n? " |> String.to_int : Option int` is the idiomatic total
 parse. Environment caveats: the REPL's worker protocol runs over stdin, so `input` inside the REPL
 consumes protocol bytes (the documented stdin hazard), and the Pyodide playground cannot block on
 stdin — scripts via `pyfun run` (and Jupyter, whose kernel routes stdin) are its home turf. An unknown member gets a **"did you
-mean"** hint — `` `startswith` is not a member of `String` (did you mean `String.startsWith`?) `` —
+mean"** hint — `` `startswith` is not a member of `String` (did you mean `String.starts_with`?) `` —
 computed by `closest_member` (a case-insensitive match first, then edit distance ≤ ~⅓ the name, then a
 prefix relation for abbreviation slips like `length`→`len`). It scans the env's qualified keys, so it
 serves built-in *and* user modules, and rides the shared inference path so it surfaces in `pyfun check`
@@ -1236,7 +1248,7 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   extends this to *groups*: `run` builds the dependency graph among top-level `let` bindings
   (scope-accurate free variables, `collect_free`), finds cycles by SCC (`strongly_connected`), and infers
   each all-function cycle together (`infer_mutual_group`) — pre-bind every member monomorphically, infer
-  all bodies (so `isEven` sees `isOdd` and vice versa, in any order), tie each knot, then generalize each
+  all bodies (so `is_even` sees `is_odd` and vice versa, in any order), tie each knot, then generalize each
   against the *outer* env. Grouping only genuine cycles keeps let-polymorphism intact (an independent
   helper stays its own singleton SCC and generalizes normally). It's **implicit — no `and` keyword**
   (which would clash with the boolean `and`). A value cycle (`let a = b\nlet b = a`) is not a function
@@ -1344,7 +1356,7 @@ Graph errors (missing file, cycle, a lex/parse failure in some module) are rende
 below the type and attaches to completion items alongside the rendered signature. Complexity is
 stated wherever it is not obvious or not what a reader would assume — a `List` backed by a Python
 list makes cost easy to misjudge (`List.contains` is a linear scan where `Set.contains` is O(1);
-`updateAt` copies). A user's own `##` doc always wins over a built-in of the same name. A test pins
+`update_at` copies). A user's own `##` doc always wins over a built-in of the same name. A test pins
 the table to the prelude constants in both directions, so a new member cannot ship undocumented and a
 renamed one cannot leave a stale entry behind.
 
@@ -1426,7 +1438,7 @@ checking and compiling need neither Python nor the network, and the vendored dir
 commit for fully reproducible builds (or to leave out, since `pyfun install` recreates it).
 
 A façade is ordinary Pyfun, so beside its `extern`s it can hold small functions that give a
-Python API a pipe-friendly argument order (`let fill width text = fillText text width`), which
+Python API a pipe-friendly argument order (`let fill width text = fill_text text width`), which
 keyword slots alone cannot, since a slot takes a trailing parameter. One naming rule matters: the
 façade's module name must differ from the Python package it wraps, because the module lowers to a
 `.py` file of its own name (`Wrap` becomes `wrap.py`, which would shadow a real `wrap` package).
@@ -1460,7 +1472,7 @@ makes `|>` and point-free style pay off. Inference handles curried arrows and pa
 boundary stays n-ary (§6).
 
 **A parameter may destructure**, so long as it cannot fail to match: a name, `_`, a tuple, or a
-**record** pattern, over those, nested — `let tileScore (t, sq) = t * sq`,
+**record** pattern, over those, nested — `let tile_score (t, sq) = t * sq`,
 `fun acc (a, b) -> acc + a * b`, `let const42 _ = 42`, `let describe (Cell { letter }) = letter`. A
 record has exactly one shape, so naming a subset of its fields still matches every value of that
 type. A parameter has no second arm to fall through to, which is why refutable shapes (a literal, a
@@ -1471,13 +1483,13 @@ a record type" and nothing refutable slips through. Only a **parenthesized**
 parameter takes the pattern grammar: a bare uppercase identifier stays a parameter *name*, so
 `let f Some x = …` keeps meaning two parameters rather than silently becoming one constructor
 pattern. Python 3 removed tuple parameters, so a destructuring parameter lowers to a synthetic
-argument name unpacked on the body's first line (`def tileScore(_pf_arg0): t, sq = _pf_arg0`), one
+argument name unpacked on the body's first line (`def tile_score(_pf_arg0): t, sq = _pf_arg0`), one
 statement per nesting level; a record parameter reads one attribute per field it names
 (`letter = _pf_arg0.letter`) and nothing for the fields it does not. A destructuring *lambda*
 therefore lowers to a named `def` rather than a Python `lambda`, which cannot hold a statement.
 
 **A `let` binding may destructure too**, under exactly the rule above and for exactly the same
-reason — `let (r, c) = parseCoord tok`, `let Point { x, y } = origin`, `let (a, (b, c)) = nested`.
+reason — `let (r, c) = parse_coord tok`, `let Point { x, y } = origin`, `let (a, (b, c)) = nested`.
 Python spells this `a, b = f()`, and Pyfun emits precisely that: a tuple of plain names unpacks in a
 single statement straight from the value, with no temp in the way. Anything deeper reads through a
 reserved temp, one statement per level (`a, _pf_t0_1 = p` then `b, c = _pf_t0_1`), and a record
@@ -2030,9 +2042,9 @@ The protocol (F#'s, lowercased and keyword-safe); a builder need only define wha
 | `let x = e` …   | `(fun x -> …) e`                                     |
 | `e` …           | `let _ = e` (a bare expression item; `e : unit`)     |
 | `return e`      | `B.return_ e`        (must be last)                  |
-| `return! e`     | `B.returnFrom e`     (must be last)                  |
+| `return! e`     | `B.return_from e`     (must be last)                  |
 | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
-| `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+| `yield! e` …    | `B.combine (B.yield_from e) (B.delay (fun _ -> …))`   |
 | `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 | (empty)         | `B.zero`                                             |
 
@@ -2207,7 +2219,7 @@ Parameterized records (`type Box a = { item: a }`) are polymorphic.
 **Motivation.** A bare literal spelling `{ x = 1, y = 2 }` would be a *false friend*
 to Python readers: it reads as a `dict`, but a Python dict is `{ "x": 1 }` (colons, string keys) and a
 Pyfun record is nominal with `=` and bare field names. Pyfun has no dict/map literal (maps are built
-with `Map.ofList` / `Map.add`), so the collision is only against a reader's Python knowledge — but that
+with `Map.of_list` / `Map.add`), so the collision is only against a reader's Python knowledge — but that
 is exactly the "basic stuff should feel familiar" surface we care about (§7.1). Tagging the literal with
 its type constructor kills the false friend, is **explicit about nominality** (§ decision 1), matches
 Haskell's record syntax (functional pedigree) *and* Python's dataclass call `Point(x=1, y=2)` (familiar),

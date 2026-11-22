@@ -389,7 +389,7 @@ struct Lowerer {
     /// §5.3). Consulted only for names not shadowed by a local.
     top_val_defs: HashMap<String, Expr>,
     /// The *block-local* counterpart of `top_fn_defs`: 2-ary `let` bindings of the
-    /// blocks currently being lowered, so a local named folder (`dedupLegs`'s
+    /// blocks currently being lowered, so a local named folder (`dedup_legs`'s
     /// inner `step`) can be inlined too. Scope-correct by construction: each block
     /// saves/restores the map around its statements, a non-folder rebinding
     /// removes the name, and every shadowing binder introduction (function
@@ -542,16 +542,16 @@ impl Lowerer {
         let mut ctor_arity = std::collections::HashMap::new();
         let mut record_fields = std::collections::HashMap::new();
         let mut field_to_record = std::collections::HashMap::new();
-        // The reserved `Exception` record (fields errorKind/errorMessage) — the
+        // The reserved `Exception` record (fields error_kind/error_message) — the
         // payload of a `try`'s `Error`. Seeded like a user record so its literals and
         // patterns lower through the same machinery (class name mangled by
         // `py_record_class` to dodge Python's builtin `Exception`).
         record_fields.insert(
             "Exception".to_string(),
-            vec!["errorKind".to_string(), "errorMessage".to_string()],
+            vec!["error_kind".to_string(), "error_message".to_string()],
         );
-        field_to_record.insert("errorKind".to_string(), "Exception".to_string());
-        field_to_record.insert("errorMessage".to_string(), "Exception".to_string());
+        field_to_record.insert("error_kind".to_string(), "Exception".to_string());
+        field_to_record.insert("error_message".to_string(), "Exception".to_string());
         let mut extern_targets = std::collections::HashMap::new();
         let mut extern_module_imports: Vec<(Vec<String>, Option<String>)> = Vec::new();
         let mut receiver_externs = std::collections::HashMap::new();
@@ -736,7 +736,7 @@ impl Lowerer {
         for (name, arity) in crate::types::PRELUDE {
             arities.entry((*name).to_string()).or_insert(*arity);
         }
-        // Module members (`List.map`, `Set.add`, `Map.findOr`, `Option.map`, …):
+        // Module members (`List.map`, `Set.add`, `Map.find_or`, `Option.map`, …):
         // register their arity under the dotted name so partial application lowers
         // to `functools.partial`. Each routes to a bare Python builtin, an emitted
         // `_pf_*` helper, or a fresh empty container in `lower_module_member`.
@@ -2827,13 +2827,13 @@ impl Lowerer {
         }
 
         // Decode specialization (`DESIGN.md` §5.3): a fully-applied
-        // `Decode.decodeString` over a statically-known decoder composition
+        // `Decode.decode_string` over a statically-known decoder composition
         // deforests the combinator interpreter into direct dict/list access.
         // On any doubt the analysis returns `None` and we fall through to the
         // byte-identical interpreter lowering.
         if self.decode_opt
             && args_ast.len() == 2
-            && crate::types::qualified_name(head).is_some_and(|q| q == "Decode.decodeString")
+            && crate::types::qualified_name(head).is_some_and(|q| q == "Decode.decode_string")
             && let Some(result) = self.try_lower_decode_spec(&args_ast, locals)?
         {
             return Ok(result);
@@ -2854,7 +2854,7 @@ impl Lowerer {
         }
 
         // Equality-predicate specialization (`DESIGN.md` §5.2): a fully-applied
-        // `List.findIndex`/`List.find`/`List.exists` whose predicate is the section
+        // `List.find_index`/`List.find`/`List.exists` whose predicate is the section
         // `(==) x` routes to the C-level list scan (`xs.index(x)` / `x in xs`)
         // instead of a Python-level scan driving a lambda per element.
         if let ExprKind::Field { .. } = &head.kind
@@ -2998,7 +2998,7 @@ impl Lowerer {
         }
 
         // A plain (non-receiver, non-nullary) extern carrying Python kwargs:
-        // `openText path` → `builtins.open(path, mode="rt", encoding="utf-8")`.
+        // `open_text path` → `builtins.open(path, mode="rt", encoding="utf-8")`.
         // Full/over-application places them on the direct call, a `...` slot taking
         // its value from the trailing arguments; under-application carries pinned
         // literals through `functools.partial` and an unfilled slot through a lambda
@@ -3127,9 +3127,9 @@ impl Lowerer {
         // Required arity for each inlinable member; anything else (a partial
         // application) is left to the helper path.
         let arity = match qualified {
-            "String.contains" | "String.startsWith" | "String.endsWith" | "List.contains"
+            "String.contains" | "String.starts_with" | "String.ends_with" | "List.contains"
             | "Set.contains" | "Map.contains" => 2,
-            "List.isEmpty" => 1,
+            "List.is_empty" => 1,
             _ => return Ok(None),
         };
         if args_ast.len() != arity {
@@ -3164,9 +3164,9 @@ impl Lowerer {
             // `_pf_str_contains(sub, s) -> sub in s`
             "String.contains" => membership(a, it.next().unwrap()),
             // `_pf_str_starts_with(pre, s) -> s.startswith(pre)`
-            "String.startsWith" => method(it.next().unwrap(), "startswith", a),
+            "String.starts_with" => method(it.next().unwrap(), "startswith", a),
             // `_pf_str_ends_with(suf, s) -> s.endswith(suf)`
-            "String.endsWith" => method(it.next().unwrap(), "endswith", a),
+            "String.ends_with" => method(it.next().unwrap(), "endswith", a),
             // `_pf_list_contains(x, xs) -> x in xs`
             "List.contains" => membership(a, it.next().unwrap()),
             // `_pf_set_contains(x, s) -> x in s`
@@ -3174,14 +3174,14 @@ impl Lowerer {
             // `_pf_map_contains(k, m) -> k in m`
             "Map.contains" => membership(a, it.next().unwrap()),
             // `_pf_is_empty(xs) -> len(xs) == 0`, inlined to the equivalent `not xs`.
-            "List.isEmpty" => PyExpr::Not(Box::new(a)),
+            "List.is_empty" => PyExpr::Not(Box::new(a)),
             _ => unreachable!("try_inline_stdlib arity gate admitted {qualified}"),
         };
         Ok(Some((stmts, value)))
     }
 
     /// Equality-predicate specialization (`DESIGN.md` §5.2): a fully-applied
-    /// `List.findIndex`/`List.find`/`List.exists` whose predicate is `(==) x` (or
+    /// `List.find_index`/`List.find`/`List.exists` whose predicate is `(==) x` (or
     /// the lambda `fun y -> x == y` / `fun y -> y == x`) lowers to the C-level scan
     /// Python answers fastest — `_pf_index_of(x, xs)` (`xs.index`), `_pf_find_eq(x,
     /// xs)` (`xs[xs.index(x)]`, so the *element* is returned, exactly as the helper
@@ -3194,7 +3194,7 @@ impl Lowerer {
         args_ast: &[&Expr],
         locals: &HashSet<String>,
     ) -> Result<Option<(Vec<PyStmt>, PyExpr)>, LowerError> {
-        if !matches!(qualified, "List.findIndex" | "List.find" | "List.exists")
+        if !matches!(qualified, "List.find_index" | "List.find" | "List.exists")
             || args_ast.len() != 2
         {
             return Ok(None);
@@ -3213,7 +3213,7 @@ impl Lowerer {
                 comparators: vec![xs_val],
             },
             helper_owner => {
-                let helper = if helper_owner == "List.findIndex" {
+                let helper = if helper_owner == "List.find_index" {
                     "_pf_index_of"
                 } else {
                     "_pf_find_eq"
@@ -3403,7 +3403,7 @@ impl Lowerer {
             }
             // A bare reference to an extern with `unit` parameters is a lambda
             // that accepts and drops them (`now` → `lambda *_: time.time()`,
-            // `myAbs` → `lambda _pf_a0, _pf_a1: abs(_pf_a1)`); applied
+            // `my_abs` → `lambda _pf_a0, _pf_a1: abs(_pf_a1)`); applied
             // references are handled directly in `lower_application`.
             if let Some(units) = self.extern_unit_slots.get(name).cloned() {
                 let target = self.extern_path(&self.extern_targets[name].clone());
@@ -3416,7 +3416,7 @@ impl Lowerer {
                 };
             }
             // A bare reference to a plain extern carrying kwargs keeps them via
-            // `functools.partial` (`openText` → `functools.partial(builtins.open,
+            // `functools.partial` (`open_text` → `functools.partial(builtins.open,
             // mode="rt", encoding="utf-8")`), or via a lambda when a `...` slot has
             // yet to be filled, so they survive later application. Applied
             // references are handled in `lower_application`.
@@ -3675,7 +3675,7 @@ impl Lowerer {
                 self.needs_option = true;
                 asy(self, "_pf_async_timeout")
             }
-            "Async.toThread" => asy(self, "_pf_async_to_thread"),
+            "Async.to_thread" => asy(self, "_pf_async_to_thread"),
             "Async.parallel" => asy(self, "_pf_async_parallel"),
             "Async.race" => asy(self, "_pf_async_race"),
             "Async.catch" => {
@@ -3714,7 +3714,7 @@ impl Lowerer {
             "List.rev" => list(self, "_pf_rev"),
             "List.range" => list(self, "_pf_range"),
             "List.zip" => list(self, "_pf_zip"),
-            "List.isEmpty" => list(self, "_pf_is_empty"),
+            "List.is_empty" => list(self, "_pf_is_empty"),
             "List.contains" => list(self, "_pf_list_contains"),
             "List.concat" => list(self, "_pf_concat"),
             "List.sort" => list(self, "_pf_sort"),
@@ -3749,7 +3749,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_tail")
             }
-            "List.findIndex" => {
+            "List.find_index" => {
                 self.needs_option = true;
                 coll(self, "_pf_find_index")
             }
@@ -3761,11 +3761,11 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_min")
             }
-            "List.maxBy" => {
+            "List.max_by" => {
                 self.needs_option = true;
                 coll(self, "_pf_max_by")
             }
-            "List.minBy" => {
+            "List.min_by" => {
                 self.needs_option = true;
                 coll(self, "_pf_min_by")
             }
@@ -3780,44 +3780,44 @@ impl Lowerer {
             }
             "List.take" => list(self, "_pf_take"),
             "List.drop" => list(self, "_pf_drop"),
-            "List.splitAt" => list(self, "_pf_split_at"),
+            "List.split_at" => list(self, "_pf_split_at"),
             "List.map2" => list(self, "_pf_map2"),
             "List.indexed" => list(self, "_pf_indexed"),
             "List.iter" => list(self, "_pf_iter"),
             "List.exists" => list(self, "_pf_exists"),
             "List.forall" => list(self, "_pf_forall"),
-            "List.sortBy" => list(self, "_pf_sort_by"),
-            "List.sortDescending" => list(self, "_pf_sort_desc"),
+            "List.sort_by" => list(self, "_pf_sort_by"),
+            "List.sort_descending" => list(self, "_pf_sort_desc"),
             "List.distinct" => list(self, "_pf_distinct"),
-            "List.distinctBy" => list(self, "_pf_distinct_by"),
-            "List.groupBy" => list(self, "_pf_group_by"),
-            "List.sumBy" => list(self, "_pf_sum_by"),
+            "List.distinct_by" => list(self, "_pf_distinct_by"),
+            "List.group_by" => list(self, "_pf_group_by"),
+            "List.sum_by" => list(self, "_pf_sum_by"),
             "List.partition" => list(self, "_pf_partition"),
             "List.unzip" => list(self, "_pf_unzip"),
             "List.flatten" => list(self, "_pf_flatten"),
             "List.init" => list(self, "_pf_init"),
             "List.replicate" => list(self, "_pf_replicate"),
-            "List.updateAt" => list(self, "_pf_update_at"),
-            "List.insertAt" => list(self, "_pf_insert_at"),
-            "List.removeAt" => list(self, "_pf_remove_at"),
+            "List.update_at" => list(self, "_pf_update_at"),
+            "List.insert_at" => list(self, "_pf_insert_at"),
+            "List.remove_at" => list(self, "_pf_remove_at"),
             "List.pairwise" => list(self, "_pf_pairwise"),
             "List.windowed" => list(self, "_pf_windowed"),
-            "List.chunkBySize" => list(self, "_pf_chunk"),
-            "List.takeWhile" => {
+            "List.chunk_by_size" => list(self, "_pf_chunk"),
+            "List.take_while" => {
                 self.needed_imports.insert("itertools".to_string());
                 list(self, "_pf_take_while")
             }
-            "List.dropWhile" => {
+            "List.drop_while" => {
                 self.needed_imports.insert("itertools".to_string());
                 list(self, "_pf_drop_while")
             }
-            "List.sortByDescending" => list(self, "_pf_sort_by_desc"),
-            "List.countBy" => list(self, "_pf_count_by"),
+            "List.sort_by_descending" => list(self, "_pf_sort_by_desc"),
+            "List.count_by" => list(self, "_pf_count_by"),
             // Set
             "Set.empty" => empty("set"),
             "Set.len" => bare("len"),
-            "Set.ofList" => bare("set"),
-            "Set.isEmpty" => coll(self, "_pf_set_is_empty"),
+            "Set.of_list" => bare("set"),
+            "Set.is_empty" => coll(self, "_pf_set_is_empty"),
             "Set.iter" => coll(self, "_pf_set_iter"),
             "Set.map" => coll(self, "_pf_set_map"),
             "Set.filter" => coll(self, "_pf_set_filter"),
@@ -3828,8 +3828,8 @@ impl Lowerer {
             "Set.exists" => coll(self, "_pf_set_exists"),
             "Set.forall" => coll(self, "_pf_set_forall"),
             "Set.partition" => coll(self, "_pf_set_partition"),
-            "Set.isSubset" => coll(self, "_pf_set_is_subset"),
-            "Set.isSuperset" => coll(self, "_pf_set_is_superset"),
+            "Set.is_subset" => coll(self, "_pf_set_is_subset"),
+            "Set.is_superset" => coll(self, "_pf_set_is_superset"),
             "Set.max" => {
                 self.needs_option = true;
                 coll(self, "_pf_set_max")
@@ -3838,7 +3838,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_set_min")
             }
-            "Map.isEmpty" => coll(self, "_pf_map_is_empty"),
+            "Map.is_empty" => coll(self, "_pf_map_is_empty"),
             "Map.iter" => coll(self, "_pf_map_iter"),
             "Map.map" => coll(self, "_pf_map_map"),
             "Map.filter" => coll(self, "_pf_map_filter"),
@@ -3847,7 +3847,7 @@ impl Lowerer {
             "Map.forall" => coll(self, "_pf_map_forall"),
             "Map.partition" => coll(self, "_pf_map_partition"),
             "Map.union" => coll(self, "_pf_map_union"),
-            "Set.toList" => bare("list"),
+            "Set.to_list" => bare("list"),
             "Set.add" => coll(self, "_pf_set_add"),
             "Set.remove" => coll(self, "_pf_set_remove"),
             "Set.contains" => coll(self, "_pf_set_contains"),
@@ -3860,7 +3860,7 @@ impl Lowerer {
             "Map.add" => coll(self, "_pf_map_add"),
             "Map.remove" => coll(self, "_pf_map_remove"),
             "Map.contains" => coll(self, "_pf_map_contains"),
-            "Map.findOr" => coll(self, "_pf_map_find_or"),
+            "Map.find_or" => coll(self, "_pf_map_find_or"),
             "Map.find" => {
                 self.needs_option = true;
                 coll(self, "_pf_map_find")
@@ -3868,8 +3868,8 @@ impl Lowerer {
             "Map.keys" => coll(self, "_pf_map_keys"),
             "Map.values" => coll(self, "_pf_map_values"),
             // `dict([(k, v), ...])` builds straight from a list of pair tuples.
-            "Map.ofList" => bare("dict"),
-            "Map.toList" => coll(self, "_pf_map_to_list"),
+            "Map.of_list" => bare("dict"),
+            "Map.to_list" => coll(self, "_pf_map_to_list"),
             // Option (helpers construct `Some`/`None`, so flag the Option prelude)
             "Option.map" => {
                 self.needs_option = true;
@@ -3883,13 +3883,13 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_option_filter")
             }
-            // toResult constructs Ok/Error (and inspects Some), so flag both.
-            "Option.toResult" => {
+            // to_result constructs Ok/Error (and inspects Some), so flag both.
+            "Option.to_result" => {
                 self.needs_option = true;
                 self.needs_result = true;
                 coll(self, "_pf_option_to_result")
             }
-            "Option.withDefault" => {
+            "Option.with_default" => {
                 self.needs_option = true;
                 coll(self, "_pf_option_with_default")
             }
@@ -3897,7 +3897,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_opt_map2")
             }
-            "Option.orElse" => {
+            "Option.or_else" => {
                 self.needs_option = true;
                 coll(self, "_pf_opt_or_else")
             }
@@ -3909,7 +3909,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_opt_iter")
             }
-            "Option.toList" => {
+            "Option.to_list" => {
                 self.needs_option = true;
                 coll(self, "_pf_opt_to_list")
             }
@@ -3941,7 +3941,7 @@ impl Lowerer {
                 self.needs_result = true;
                 coll(self, "_pf_res_map2")
             }
-            "Result.orElse" => {
+            "Result.or_else" => {
                 self.needs_result = true;
                 coll(self, "_pf_res_or_else")
             }
@@ -3949,25 +3949,25 @@ impl Lowerer {
                 self.needs_result = true;
                 coll(self, "_pf_res_iter")
             }
-            "Result.toList" => {
+            "Result.to_list" => {
                 self.needs_result = true;
                 coll(self, "_pf_res_to_list")
             }
-            "Option.isSome" => {
+            "Option.is_some" => {
                 self.needs_option = true;
                 coll(self, "_pf_option_is_some")
             }
-            "Option.isNone" => {
+            "Option.is_none" => {
                 self.needs_option = true;
                 coll(self, "_pf_option_is_none")
             }
             // Result (helpers inspect/construct `Ok`/`Error`, so flag the Result
-            // prelude; `toOption` also constructs `Some`/`None`).
+            // prelude; `to_option` also constructs `Some`/`None`).
             "Result.map" => {
                 self.needs_result = true;
                 coll(self, "_pf_result_map")
             }
-            "Result.mapError" => {
+            "Result.map_error" => {
                 self.needs_result = true;
                 coll(self, "_pf_result_map_error")
             }
@@ -3975,19 +3975,19 @@ impl Lowerer {
                 self.needs_result = true;
                 coll(self, "_pf_result_bind")
             }
-            "Result.withDefault" => {
+            "Result.with_default" => {
                 self.needs_result = true;
                 coll(self, "_pf_result_with_default")
             }
-            "Result.isOk" => {
+            "Result.is_ok" => {
                 self.needs_result = true;
                 coll(self, "_pf_result_is_ok")
             }
-            "Result.isError" => {
+            "Result.is_error" => {
                 self.needs_result = true;
                 coll(self, "_pf_result_is_error")
             }
-            "Result.toOption" => {
+            "Result.to_option" => {
                 self.needs_result = true;
                 self.needs_option = true;
                 coll(self, "_pf_result_to_option")
@@ -3997,8 +3997,8 @@ impl Lowerer {
             // list `_pf_fold` (reduce); take needs `itertools.islice`.
             "Seq.map" => bare("map"),
             "Seq.filter" => bare("filter"),
-            "Seq.ofList" => bare("iter"),
-            "Seq.toList" => bare("list"),
+            "Seq.of_list" => bare("iter"),
+            "Seq.to_list" => bare("list"),
             "Seq.range" => bare("range"),
             "Seq.fold" => {
                 self.needs_functools = true;
@@ -4016,12 +4016,12 @@ impl Lowerer {
                 func: Box::new(PyExpr::Name("iter".to_string())),
                 args: vec![PyExpr::List(vec![])],
             },
-            "Seq.distinctBy" => coll(self, "_pf_seq_distinct_by"),
+            "Seq.distinct_by" => coll(self, "_pf_seq_distinct_by"),
             "Seq.replicate" => {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_replicate")
             }
-            "Seq.sumBy" => coll(self, "_pf_seq_sum_by"),
+            "Seq.sum_by" => coll(self, "_pf_seq_sum_by"),
             "Seq.get" => {
                 self.needs_option = true;
                 self.needed_imports.insert("itertools".to_string());
@@ -4051,11 +4051,11 @@ impl Lowerer {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_drop")
             }
-            "Seq.takeWhile" => {
+            "Seq.take_while" => {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_take_while")
             }
-            "Seq.dropWhile" => {
+            "Seq.drop_while" => {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_drop_while")
             }
@@ -4076,7 +4076,7 @@ impl Lowerer {
                 coll(self, "_pf_seq_pairwise")
             }
             "Seq.init" => coll(self, "_pf_seq_init"),
-            "Seq.initInfinite" => {
+            "Seq.init_infinite" => {
                 self.needed_imports.insert("itertools".to_string());
                 coll(self, "_pf_seq_init_inf")
             }
@@ -4094,7 +4094,7 @@ impl Lowerer {
                 self.needs_option = true;
                 coll(self, "_pf_seq_find")
             }
-            "Seq.isEmpty" => {
+            "Seq.is_empty" => {
                 self.needs_option = true;
                 coll(self, "_pf_seq_is_empty")
             }
@@ -4106,8 +4106,8 @@ impl Lowerer {
             // routes reuse Python builtins (`len`/`str`/`list`); the rest lower to
             // emitted `_pf_str_*` helpers so each curried function is one callable.
             "String.len" => bare("len"),
-            "String.fromInt" | "String.fromFloat" => bare("str"),
-            "String.toList" => bare("list"),
+            "String.from_int" | "String.from_float" => bare("str"),
+            "String.to_list" => bare("list"),
             "String.concat" => coll(self, "_pf_str_concat"),
             "String.join" => coll(self, "_pf_str_join"),
             "String.split" => coll(self, "_pf_str_split"),
@@ -4115,33 +4115,33 @@ impl Lowerer {
             "String.lower" => coll(self, "_pf_str_lower"),
             "String.strip" => coll(self, "_pf_str_strip"),
             "String.contains" => coll(self, "_pf_str_contains"),
-            "String.startsWith" => coll(self, "_pf_str_starts_with"),
-            "String.endsWith" => coll(self, "_pf_str_ends_with"),
+            "String.starts_with" => coll(self, "_pf_str_starts_with"),
+            "String.ends_with" => coll(self, "_pf_str_ends_with"),
             "String.replace" => coll(self, "_pf_str_replace"),
-            "String.isEmpty" => coll(self, "_pf_str_is_empty"),
+            "String.is_empty" => coll(self, "_pf_str_is_empty"),
             "String.repeat" => coll(self, "_pf_str_repeat"),
-            "String.trimStart" => coll(self, "_pf_str_trim_start"),
-            "String.trimEnd" => coll(self, "_pf_str_trim_end"),
-            "String.splitLines" => coll(self, "_pf_str_split_lines"),
+            "String.lstrip" => coll(self, "_pf_str_trim_start"),
+            "String.rstrip" => coll(self, "_pf_str_trim_end"),
+            "String.split_lines" => coll(self, "_pf_str_split_lines"),
             "String.rev" => coll(self, "_pf_str_rev"),
-            "String.ofList" => coll(self, "_pf_str_of_list"),
+            "String.of_list" => coll(self, "_pf_str_of_list"),
             // `get` answers with `Option`, like `List.get`.
             "String.get" => {
                 self.needs_option = true;
                 coll(self, "_pf_str_get")
             }
             "String.slice" => coll(self, "_pf_str_slice"),
-            "String.indexOf" => {
+            "String.index_of" => {
                 self.needs_option = true;
                 coll(self, "_pf_str_index_of")
             }
-            // `String.toFloat` is total (guarded `float(s)`), like `toInt`.
-            "String.toFloat" => {
+            // `String.to_float` is total (guarded `float(s)`), like `to_int`.
+            "String.to_float" => {
                 self.needs_option = true;
                 coll(self, "_pf_str_to_float")
             }
-            // `String.toInt` is total (guarded `int(s)`), so it constructs Some/None.
-            "String.toInt" => {
+            // `String.to_int` is total (guarded `int(s)`), so it constructs Some/None.
+            "String.to_int" => {
                 self.needs_option = true;
                 coll(self, "_pf_str_to_int")
             }
@@ -4153,13 +4153,13 @@ impl Lowerer {
             "Format.percent" => coll(self, "_pf_fmt_percent"),
             "Format.currency" => coll(self, "_pf_fmt_currency"),
             "Format.grouped" => coll(self, "_pf_fmt_grouped"),
-            "Format.padLeft" => coll(self, "_pf_fmt_pad_left"),
-            "Format.padRight" => coll(self, "_pf_fmt_pad_right"),
+            "Format.pad_left" => coll(self, "_pf_fmt_pad_left"),
+            "Format.pad_right" => coll(self, "_pf_fmt_pad_right"),
             // Decode — JSON decoder combinators. Each member is (or builds) a Python
-            // callable `parsed_json -> value` that raises on mismatch; `decodeString`
+            // callable `parsed_json -> value` that raises on mismatch; `decode_string`
             // parses + runs one and catches into a `Result`. Routed to emitted
             // `_pf_dec_*` helpers (recorded so they are defined). `nullable` builds
-            // `Some`/`None_`; `decodeString` builds `Ok`/`Error`/`_Exception` and
+            // `Some`/`None_`; `decode_string` builds `Ok`/`Error`/`_Exception` and
             // needs `json` — so flag the corresponding preludes/imports.
             "Decode.str" => self.decode_helper("_pf_dec_str"),
             "Decode.int" => self.decode_helper("_pf_dec_int"),
@@ -4177,9 +4177,9 @@ impl Lowerer {
             "Decode.map4" => self.decode_helper("_pf_dec_map4"),
             "Decode.succeed" => self.decode_helper("_pf_dec_succeed"),
             "Decode.fail" => self.decode_helper("_pf_dec_fail"),
-            "Decode.andThen" => self.decode_helper("_pf_dec_and_then"),
-            "Decode.oneOf" => self.decode_helper("_pf_dec_one_of"),
-            "Decode.decodeString" => {
+            "Decode.and_then" => self.decode_helper("_pf_dec_and_then"),
+            "Decode.one_of" => self.decode_helper("_pf_dec_one_of"),
+            "Decode.decode_string" => {
                 self.needs_result = true;
                 self.needs_exception = true;
                 self.needed_imports.insert("json".to_string());
@@ -6821,7 +6821,7 @@ const PY_KEYWORDS: &[&str] = &[
 
 /// Python builtins **this emitter calls** in code that runs after user bindings
 /// are in scope: prelude helper bodies (`_pf_map` calls `list`/`map`) and inline
-/// stdlib expansions (`Set.ofList` → `set([…])`). A user binding claiming one of
+/// stdlib expansions (`Set.of_list` → `set([…])`). A user binding claiming one of
 /// these names shadows it at module scope, so the emitted call finds the user's
 /// value instead of the builtin — `'int' object is not callable`, far from the
 /// binding that caused it.
@@ -7103,7 +7103,7 @@ fn result_prelude(ordered: bool) -> Vec<PyStmt> {
 fn exception_prelude() -> Vec<PyStmt> {
     vec![PyStmt::ClassDef {
         name: "_Exception".to_string(),
-        fields: vec!["errorKind".to_string(), "errorMessage".to_string()],
+        fields: vec!["error_kind".to_string(), "error_message".to_string()],
         field_types: vec!["str".to_string(), "str".to_string()],
         order: None,
         record: false,
@@ -7360,7 +7360,7 @@ fn async_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                 vec![cold(vec![asyncio("sleep"), name("secs")])],
                 false,
             ),
-            // Async.toThread(f) -> _pf_Async(asyncio.to_thread, f, None): the thunk
+            // Async.to_thread(f) -> _pf_Async(asyncio.to_thread, f, None): the thunk
             // takes the unit value.
             "_pf_async_to_thread" => def(
                 helper,
@@ -8260,7 +8260,7 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                 &["msg"],
                 vec![raise_(calln("ValueError", vec![name("msg")]))],
             ),
-            // Decode.andThen f dec -> f(dec(v))(v): pick the next decoder from the value.
+            // Decode.and_then f dec -> f(dec(v))(v): pick the next decoder from the value.
             "_pf_dec_and_then" => factory(
                 "_pf_dec_and_then",
                 &["f", "dec"],
@@ -8269,7 +8269,7 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     vec![name("v")],
                 ))],
             ),
-            // Decode.oneOf decs -> the first decoder that does not raise (recursive so
+            // Decode.one_of decs -> the first decoder that does not raise (recursive so
             // no `for`-loop IR node is needed).
             "_pf_dec_one_of" => factory(
                 "_pf_dec_one_of",
@@ -8283,7 +8283,7 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                                 binop(PyBinOp::Ge, name("i"), calln("len", vec![name("decs")])),
                                 vec![raise_(calln(
                                     "ValueError",
-                                    vec![str_("Decode.oneOf: no decoder matched")],
+                                    vec![str_("Decode.one_of: no decoder matched")],
                                 ))],
                             ),
                             PyStmt::Try {
@@ -8303,7 +8303,7 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     ret(call(name("_try"), vec![int(0)])),
                 ],
             ),
-            // Decode.decodeString dec s -> Ok(dec(json.loads(s))) / Error(_Exception(...)).
+            // Decode.decode_string dec s -> Ok(dec(json.loads(s))) / Error(_Exception(...)).
             "_pf_dec_decode_string" => def(
                 "_pf_dec_decode_string",
                 &["dec", "s"],
@@ -9079,7 +9079,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 &["k", "m"],
                 binop(PyBinOp::In, name("k"), name("m")),
             ),
-            // Map.findOr(k, default, m) -> m.get(k, default)
+            // Map.find_or(k, default, m) -> m.get(k, default)
             "_pf_map_find_or" => def1(
                 helper,
                 &["k", "default", "m"],
@@ -9113,7 +9113,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 &["m"],
                 call("list", vec![method(name("m"), "values", vec![])]),
             ),
-            // Map.toList(m) -> list(m.items())  (a list of (k, v) tuples)
+            // Map.to_list(m) -> list(m.items())  (a list of (k, v) tuples)
             "_pf_map_to_list" => def1(
                 helper,
                 &["m"],
@@ -9167,7 +9167,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     orelse: Box::new(none()),
                 },
             ),
-            // Option.toResult(err, o) -> Ok(o._0) if isinstance(o, Some) else Error(err)
+            // Option.to_result(err, o) -> Ok(o._0) if isinstance(o, Some) else Error(err)
             "_pf_option_to_result" => def(
                 helper,
                 &["err", "o"],
@@ -9180,7 +9180,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(call1("Error", name("err"))),
                 ],
             ),
-            // Option.withDefault(d, o) -> o._0 if isinstance(o, Some) else d
+            // Option.with_default(d, o) -> o._0 if isinstance(o, Some) else d
             "_pf_option_with_default" => def(
                 helper,
                 &["d", "o"],
@@ -9193,9 +9193,9 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(name("d")),
                 ],
             ),
-            // Option.isSome(o) -> isinstance(o, Some)
+            // Option.is_some(o) -> isinstance(o, Some)
             "_pf_option_is_some" => def1(helper, &["o"], is_some("o")),
-            // Option.isNone(o) -> not isinstance(o, Some)
+            // Option.is_none(o) -> not isinstance(o, Some)
             "_pf_option_is_none" => def1(helper, &["o"], PyExpr::Not(Box::new(is_some("o")))),
             // Result.map(f, r) -> Ok(f(r._0)) if isinstance(r, Ok) else r  (Error passes through)
             "_pf_result_map" => def(
@@ -9216,7 +9216,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(name("r")),
                 ],
             ),
-            // Result.mapError(f, r) -> Error(f(r._0)) if isinstance(r, Error) else r
+            // Result.map_error(f, r) -> Error(f(r._0)) if isinstance(r, Error) else r
             "_pf_result_map_error" => def(
                 helper,
                 &["f", "r"],
@@ -9251,7 +9251,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(name("r")),
                 ],
             ),
-            // Result.withDefault(d, r) -> r._0 if isinstance(r, Ok) else d
+            // Result.with_default(d, r) -> r._0 if isinstance(r, Ok) else d
             "_pf_result_with_default" => def(
                 helper,
                 &["d", "r"],
@@ -9264,11 +9264,11 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(name("d")),
                 ],
             ),
-            // Result.isOk(r) -> isinstance(r, Ok)
+            // Result.is_ok(r) -> isinstance(r, Ok)
             "_pf_result_is_ok" => def1(helper, &["r"], is_ok("r")),
-            // Result.isError(r) -> isinstance(r, Error)
+            // Result.is_error(r) -> isinstance(r, Error)
             "_pf_result_is_error" => def1(helper, &["r"], is_err("r")),
-            // Result.toOption(r) -> Some(r._0) if isinstance(r, Ok) else None_()
+            // Result.to_option(r) -> Some(r._0) if isinstance(r, Ok) else None_()
             "_pf_result_to_option" => def(
                 helper,
                 &["r"],
@@ -9397,13 +9397,13 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 &["sub", "s"],
                 binop(PyBinOp::In, name("sub"), name("s")),
             ),
-            // String.startsWith(pre, s) -> s.startswith(pre)
+            // String.starts_with(pre, s) -> s.startswith(pre)
             "_pf_str_starts_with" => def1(
                 helper,
                 &["pre", "s"],
                 method(name("s"), "startswith", vec![name("pre")]),
             ),
-            // String.endsWith(suf, s) -> s.endswith(suf)
+            // String.ends_with(suf, s) -> s.endswith(suf)
             "_pf_str_ends_with" => def1(
                 helper,
                 &["suf", "s"],
@@ -9425,7 +9425,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     upper: Box::new(name("end")),
                 },
             ),
-            // String.indexOf(sub, s): i = s.find(sub); Some(i) if i >= 0 else None_
+            // String.index_of(sub, s): i = s.find(sub); Some(i) if i >= 0 else None_
             // (`find` returns -1 when absent, so this is total.)
             "_pf_str_index_of" => def(
                 helper,
@@ -9446,7 +9446,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     }),
                 ],
             ),
-            // String.toInt(s) -> total parse: Some(int(s)) or None_ on ValueError
+            // String.to_int(s) -> total parse: Some(int(s)) or None_ on ValueError
             "_pf_str_to_int" => def(
                 helper,
                 &["s"],
@@ -9457,7 +9457,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     handler: vec![PyStmt::Return(none())],
                 }],
             ),
-            // String.toFloat(s) -> total parse: Some(float(s)) or None_ on ValueError
+            // String.to_float(s) -> total parse: Some(float(s)) or None_ on ValueError
             "_pf_str_to_float" => def(
                 helper,
                 &["s"],
@@ -9547,13 +9547,13 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 &["x"],
                 call("format", vec![name("x"), PyExpr::Str(",".to_string())]),
             ),
-            // Format.padLeft(w, fill, s) -> s.rjust(w, fill)
+            // Format.pad_left(w, fill, s) -> s.rjust(w, fill)
             "_pf_fmt_pad_left" => def1(
                 helper,
                 &["w", "fill", "s"],
                 method(name("s"), "rjust", vec![name("w"), name("fill")]),
             ),
-            // Format.padRight(w, fill, s) -> s.ljust(w, fill)
+            // Format.pad_right(w, fill, s) -> s.ljust(w, fill)
             "_pf_fmt_pad_right" => def1(
                 helper,
                 &["w", "fill", "s"],
@@ -9610,7 +9610,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     orelse: Box::new(none()),
                 },
             ),
-            // List.findIndex(f, xs): the first index whose element passes, if any
+            // List.find_index(f, xs): the first index whose element passes, if any
             "_pf_find_index" => def(
                 "_pf_find_index",
                 &["f", "xs"],
@@ -9639,7 +9639,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(none()),
                 ],
             ),
-            // List.findIndex ((==) x) xs: the C-level scan (`DESIGN.md` §5.2)
+            // List.find_index ((==) x) xs: the C-level scan (`DESIGN.md` §5.2)
             //   try: return Some(xs.index(x))
             //   except ValueError: return None_()
             "_pf_index_of" => def(
@@ -9695,7 +9695,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     orelse: Box::new(none()),
                 },
             ),
-            // List.maxBy(f, xs) -> Some(max(xs, key=f)) if xs else None_()
+            // List.max_by(f, xs) -> Some(max(xs, key=f)) if xs else None_()
             "_pf_max_by" => def1(
                 "_pf_max_by",
                 &["f", "xs"],
@@ -9712,7 +9712,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     orelse: Box::new(none()),
                 },
             ),
-            // List.minBy(f, xs) -> Some(min(xs, key=f)) if xs else None_()
+            // List.min_by(f, xs) -> Some(min(xs, key=f)) if xs else None_()
             "_pf_min_by" => def1(
                 "_pf_min_by",
                 &["f", "xs"],
@@ -9777,7 +9777,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     ],
                 },
             ),
-            // Seq.takeWhile(f, xs) -> itertools.takewhile(f, xs)
+            // Seq.take_while(f, xs) -> itertools.takewhile(f, xs)
             "_pf_seq_take_while" => def1(
                 "_pf_seq_take_while",
                 &["f", "xs"],
@@ -9786,7 +9786,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     args: vec![name("f"), name("xs")],
                 },
             ),
-            // Seq.dropWhile(f, xs) -> itertools.dropwhile(f, xs)
+            // Seq.drop_while(f, xs) -> itertools.dropwhile(f, xs)
             "_pf_seq_drop_while" => def1(
                 "_pf_seq_drop_while",
                 &["f", "xs"],
@@ -9843,7 +9843,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     ],
                 ),
             ),
-            // Seq.initInfinite(f) -> map(f, itertools.count())
+            // Seq.init_infinite(f) -> map(f, itertools.count())
             "_pf_seq_init_inf" => def1(
                 "_pf_seq_init_inf",
                 &["f"],
@@ -9954,7 +9954,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     ],
                 ),
             ),
-            // Seq.isEmpty(xs) -> not isinstance(next(map(Some, xs), None_()), Some)
+            // Seq.is_empty(xs) -> not isinstance(next(map(Some, xs), None_()), Some)
             // One element is pulled to find out, which is the honest cost of asking
             // an iterator whether it is empty.
             "_pf_seq_is_empty" => def1(
@@ -10006,7 +10006,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 ],
             ),
             // ---- Set: the traversal half (a Python `set`) ----
-            // Set.isEmpty(s) -> not s
+            // Set.is_empty(s) -> not s
             "_pf_set_is_empty" => {
                 def1("_pf_set_is_empty", &["s"], PyExpr::Not(Box::new(name("s"))))
             }
@@ -10062,13 +10062,13 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(PyExpr::Tuple(vec![name("yes"), name("no")])),
                 ],
             ),
-            // Set.isSubset(a, b) -> a.issubset(b)
+            // Set.is_subset(a, b) -> a.issubset(b)
             "_pf_set_is_subset" => def1(
                 "_pf_set_is_subset",
                 &["a", "b"],
                 method(name("a"), "issubset", vec![name("b")]),
             ),
-            // Set.isSuperset(a, b) -> a.issuperset(b)
+            // Set.is_superset(a, b) -> a.issuperset(b)
             "_pf_set_is_superset" => def1(
                 "_pf_set_is_superset",
                 &["a", "b"],
@@ -10097,7 +10097,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
             // ---- Map: the traversal half (a Python `dict`) ----
             // Every one takes the key *and* the value, since a map's element is the
             // pair, and every one walks `m.items()` in insertion order.
-            // Map.isEmpty(m) -> not m
+            // Map.is_empty(m) -> not m
             "_pf_map_is_empty" => {
                 def1("_pf_map_is_empty", &["m"], PyExpr::Not(Box::new(name("m"))))
             }
@@ -10337,7 +10337,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 ],
             ),
             // ---- String ----
-            // String.isEmpty(s) -> not s
+            // String.is_empty(s) -> not s
             "_pf_str_is_empty" => {
                 def1("_pf_str_is_empty", &["s"], PyExpr::Not(Box::new(name("s"))))
             }
@@ -10373,19 +10373,19 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     call("max", vec![name("n"), PyExpr::Int(0)]),
                 ),
             ),
-            // String.trimStart(s) -> s.lstrip()
+            // String.lstrip(s) -> s.lstrip()
             "_pf_str_trim_start" => def1(
                 "_pf_str_trim_start",
                 &["s"],
                 method(name("s"), "lstrip", vec![]),
             ),
-            // String.trimEnd(s) -> s.rstrip()
+            // String.rstrip(s) -> s.rstrip()
             "_pf_str_trim_end" => def1(
                 "_pf_str_trim_end",
                 &["s"],
                 method(name("s"), "rstrip", vec![]),
             ),
-            // String.splitLines(s) -> s.splitlines()
+            // String.split_lines(s) -> s.splitlines()
             "_pf_str_split_lines" => def1(
                 "_pf_str_split_lines",
                 &["s"],
@@ -10401,7 +10401,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     vec![call("reversed", vec![name("s")])],
                 ),
             ),
-            // String.ofList(xs) -> "".join(xs)
+            // String.of_list(xs) -> "".join(xs)
             "_pf_str_of_list" => def1(
                 "_pf_str_of_list",
                 &["xs"],
@@ -10427,7 +10427,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(none()),
                 ],
             ),
-            // Option.orElse(fallback, o) -> o if it has a payload, else fallback
+            // Option.or_else(fallback, o) -> o if it has a payload, else fallback
             "_pf_opt_or_else" => def1(
                 "_pf_opt_or_else",
                 &["fallback", "o"],
@@ -10464,7 +10464,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(PyExpr::NoneLit),
                 ],
             ),
-            // Option.toList(o) -> [o._0] if isinstance(o, Some) else []
+            // Option.to_list(o) -> [o._0] if isinstance(o, Some) else []
             "_pf_opt_to_list" => def1(
                 "_pf_opt_to_list",
                 &["o"],
@@ -10512,7 +10512,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     )),
                 ],
             ),
-            // Result.orElse(fallback, r) -> r if it is Ok, else fallback
+            // Result.or_else(fallback, r) -> r if it is Ok, else fallback
             "_pf_res_or_else" => def1(
                 "_pf_res_or_else",
                 &["fallback", "r"],
@@ -10538,7 +10538,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     PyStmt::Return(PyExpr::NoneLit),
                 ],
             ),
-            // Result.toList(r) -> [r._0] if isinstance(r, Ok) else []
+            // Result.to_list(r) -> [r._0] if isinstance(r, Ok) else []
             "_pf_res_to_list" => def1(
                 "_pf_res_to_list",
                 &["r"],
@@ -10549,7 +10549,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                 },
             ),
             // ---- from the FSharp.Core audit ----
-            // Seq.distinctBy(f, xs): lazy, remembering the keys it has yielded
+            // Seq.distinct_by(f, xs): lazy, remembering the keys it has yielded
             "_pf_seq_distinct_by" => def(
                 "_pf_seq_distinct_by",
                 &["f", "xs"],
@@ -10594,7 +10594,7 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     args: vec![name("x"), call("max", vec![name("n"), PyExpr::Int(0)])],
                 },
             ),
-            // Seq.sumBy(f, xs) -> sum(map(f, xs))
+            // Seq.sum_by(f, xs) -> sum(map(f, xs))
             "_pf_seq_sum_by" => def1(
                 "_pf_seq_sum_by",
                 &["f", "xs"],

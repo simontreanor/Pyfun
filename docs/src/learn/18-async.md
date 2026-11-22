@@ -6,15 +6,15 @@ way `seq` maps onto generators. An `async { }` block builds an `Async a` value. 
 step, and `return` hands back the final value.
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
-let fetchScore =
+let fetch_score =
   async {
     let! x = async { return 20 }
     return x + 1
   }
 
-print (runAsync fetchScore)
+print (run_async fetch_score)
 ```
 
 ```console
@@ -38,8 +38,8 @@ async def _pf_fn1():
         return 20
     x = await _pf_fn0()
     return x + 1
-fetchScore = _pf_Async(_pf_fn1)
-print(asyncio.run(_pf_run(fetchScore)))
+fetch_score = _pf_Async(_pf_fn1)
+print(asyncio.run(_pf_run(fetch_score)))
 ```
 
 ## Awaiting a value twice
@@ -47,7 +47,7 @@ print(asyncio.run(_pf_run(fetchScore)))
 Here is one place where Pyfun goes further than Python. Try awaiting the same value twice:
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let roll =
   async {
@@ -62,7 +62,7 @@ let twice =
     return a + b
   }
 
-print (runAsync twice)
+print (run_async twice)
 ```
 
 ```console
@@ -88,12 +88,12 @@ function to await it in. Python solves this with `asyncio.run(main())`, and Pyfu
 move through `extern` (lesson 12). The line
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 ```
 
 names Python's `asyncio.run` and gives it the Pyfun type `Async a -> a`: hand it an `Async a` and it
 runs it to completion and returns the `a`. `asyncio.run` wants a Python coroutine, so Pyfun hands it
-a fresh one made from the value, which is the `_pf_run(fetchScore)` you saw in the output. So `fetchScore |> runAsync` turns the
+a fresh one made from the value, which is the `_pf_run(fetch_score)` you saw in the output. So `fetch_score |> run_async` turns the
 `Async int` into a plain `int` you can `print`.
 
 ## Async is an inferred effect
@@ -128,7 +128,7 @@ the call itself for the await, so awaiting the result twice calls the Python fun
 it runs an `async { }` block twice.
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 extern sleep: float -> Async unit = asyncio.sleep
 
 let nap =
@@ -137,7 +137,7 @@ let nap =
     return "rested"
   }
 
-print (runAsync nap)
+print (run_async nap)
 ```
 
 ```console
@@ -161,11 +161,11 @@ error: `sleep` is declared `->{async}` but returns `unit`, which cannot be await
 `Async.parallel` awaits a whole list at once and keeps the results in order; `Async.timeout` gives an
 await a deadline and hands back an `Option`; `Async.catch` turns an exception raised *at the await*
 into a `Result` (a `try` around the call would only wrap the coroutine, because the call itself does
-not fail); `Async.race` takes the first to finish and cancels the rest; and `Async.toThread` runs a
+not fail); `Async.race` takes the first to finish and cancels the rest; and `Async.to_thread` runs a
 blocking function, `input` say, on a worker thread so the event loop stays free.
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let slow n =
   async {
@@ -182,11 +182,11 @@ let main =
     let! r = Async.catch (slow 4)
     match r:
       case Ok n: print f"finished with {n}"
-      case Error e: print f"failed: {e.errorKind}"
+      case Error e: print f"failed: {e.error_kind}"
     return ()
   }
 
-runAsync main
+run_async main
 ```
 
 ```console
@@ -208,7 +208,7 @@ scope waits for every task it started (or cancels them all if one fails). There 
 forget.
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let worker name =
   async {
@@ -223,7 +223,7 @@ let session =
     return "both joined"
   })
 
-print (runAsync session)
+print (run_async session)
 ```
 
 ```console
@@ -256,7 +256,7 @@ on the same two functions.
 Async earns its keep when real I/O overlaps, so waiting on one network request or file read lets
 another proceed. The examples in this lesson are compute-shaped on purpose, because the browser
 playground has no network access, and Pyodide runs `asyncio.run` in its worker, so a self-contained
-block like `fetchScore` runs there and prints `21`.
+block like `fetch_score` runs there and prints `21`.
 
 For real overlapping I/O, install the compiler with `pip install pyfun-lang` and read the
 `http_fetch` entry in the
@@ -269,10 +269,10 @@ effect system tracks it for you.
 
 Fill the hole so `combined` awaits two async blocks and returns their sum. The hole has type `int`
 (the value the second block returns), so any integer literal works. The runner bridge over
-`asyncio.run` is already in place, and `runAsync combined` runs it to a value.
+`asyncio.run` is already in place, and `run_async combined` runs it to a value.
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let combined =
   async {
@@ -281,7 +281,7 @@ let combined =
     return a + b
   }
 
-print (runAsync combined)
+print (run_async combined)
 ```
 
 Expected output:
@@ -290,13 +290,13 @@ Expected output:
 30
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHJ1bkFzeW5jOiBBc3luYyBhIC0-IGEgPSBhc3luY2lvLnJ1bgoKbGV0IGNvbWJpbmVkID0KICBhc3luYyB7CiAgICBsZXQhIGEgPSBhc3luYyB7IHJldHVybiAxMCB9CiAgICBsZXQhIGIgPSBhc3luYyB7IHJldHVybiA_IH0KICAgIHJldHVybiBhICsgYgogIH0KCnByaW50IChydW5Bc3luYyBjb21iaW5lZCkK)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHJ1bl9hc3luYzogQXN5bmMgYSAtPiBhID0gYXN5bmNpby5ydW4KCmxldCBjb21iaW5lZCA9CiAgYXN5bmMgewogICAgbGV0ISBhID0gYXN5bmMgeyByZXR1cm4gMTAgfQogICAgbGV0ISBiID0gYXN5bmMgeyByZXR1cm4gPyB9CiAgICByZXR1cm4gYSArIGIKICB9CgpwcmludCAocnVuX2FzeW5jIGNvbWJpbmVkKQo)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let combined =
   async {
@@ -305,9 +305,9 @@ let combined =
     return a + b
   }
 
-print (runAsync combined)
+print (run_async combined)
 ```
 
 `let!` awaits each inner block and binds its result, so `a` is `10` and `b` is `20`, and `return a +
-b` produces `30` once `runAsync` runs the block.
+b` produces `30` once `run_async` runs the block.
 </details>

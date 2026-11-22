@@ -16,7 +16,7 @@ timings for programs that computed different results.
 |---|---|---|
 | `expr_eval` | build/simplify/evaluate ADT expression trees | ADT allocation, deep + nested pattern matching |
 | `collatz` | total stopping times, recursive | function-call + integer-op throughput (baseline is iterative, as a Pythonista would write it) |
-| `map_build` | fold a 500k-insert string-keyed Map, then 500k lookups | the fold-pass dict lowering, `Map.find`/`Option.withDefault`, f-string keys |
+| `map_build` | fold a 500k-insert string-keyed Map, then 500k lookups | the fold-pass dict lowering, `Map.find`/`Option.with_default`, f-string keys |
 
 Deliberately **not** here: I/O-bound workloads. The network-rail example's
 runtime is gzip decompression and long-line scanning, costs every runtime pays

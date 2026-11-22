@@ -1,10 +1,10 @@
 //! Specialization of statically-known `Decode` decoders (`DESIGN.md` §5.3).
 //!
-//! `Decode.decodeString dec s` normally builds a runtime decoder *value* — a
+//! `Decode.decode_string dec s` normally builds a runtime decoder *value* — a
 //! tree of raising closures — and interprets it over `json.loads` output. When
 //! `dec` is a syntactically-known composition of the simple combinators
 //! (`str`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
-//! `succeed`/`fail`/`oneOf`, possibly through top-level `let` decoder names),
+//! `succeed`/`fail`/`one_of`, possibly through top-level `let` decoder names),
 //! this pass deforests the interpreter: it emits the equivalent **direct
 //! dict/list access with inline error handling** — one `try` whose body reads
 //! like a hand-written validating parser — producing a `Result` **byte-identical**
@@ -14,20 +14,20 @@
 //! Correctness mirrors the fold pass (`fold_loop.rs`): a pure syntactic
 //! analysis ([`Lowerer::classify_decoder`], no side effects) that rejects — and
 //! falls back to the interpreter byte-identically — on anything dynamic
-//! (`andThen`, a decoder passed as a value, a local/foreign decoder name, a
-//! non-literal `oneOf` list, a shadowed free variable of a named decoder, a
+//! (`and_then`, a decoder passed as a value, a local/foreign decoder name, a
+//! non-literal `one_of` list, a shadowed free variable of a named decoder, a
 //! cyclic reference). `PYFUN_NO_DECODE_OPT` is the kill switch for differential
 //! testing.
 //!
 //! Faithfulness notes, matching the interpreter exactly:
 //! - *Configuration expressions* (a `map` fan-in function, a `succeed` value, a
 //!   `fail` message, a `field` name) are evaluated when the interpreter
-//!   **builds** the decoder — outside `decodeString`'s try — so they are hoisted
+//!   **builds** the decoder — outside `decode_string`'s try — so they are hoisted
 //!   before the emitted `try`, in construction (pre-)order.
 //! - Every node decodes from a **bound temp**, so a `v[name]` subscript
 //!   evaluates exactly once (its `KeyError` is the missing-field error).
-//! - `oneOf` catches `Exception` per alternative and exhausts to
-//!   `ValueError("Decode.oneOf: no decoder matched")`, exactly like the
+//! - `one_of` catches `Exception` per alternative and exhausts to
+//!   `ValueError("Decode.one_of: no decoder matched")`, exactly like the
 //!   recursive `_try` helper.
 
 use std::collections::HashSet;
@@ -63,7 +63,7 @@ enum DecPlan {
 }
 
 impl Lowerer {
-    /// Try to specialize a fully-applied `Decode.decodeString dec s`
+    /// Try to specialize a fully-applied `Decode.decode_string dec s`
     /// (`args = [dec, s]`). Returns `Ok(None)` — fall back to the interpreter —
     /// on any failed precondition, with no side effects on the lowerer.
     pub(super) fn try_lower_decode_spec(
@@ -152,7 +152,7 @@ impl Lowerer {
                     args: sub_plans,
                 })
             }
-            ("Decode.oneOf", 1) => {
+            ("Decode.one_of", 1) => {
                 let ExprKind::List { elems } = &args[0].kind else {
                     return None;
                 };
@@ -162,7 +162,7 @@ impl Lowerer {
                 }
                 Some(DecPlan::OneOf(alts))
             }
-            // `Decode.andThen`, a partial application, a decoder-typed
+            // `Decode.and_then`, a partial application, a decoder-typed
             // parameter, anything else: dynamic — interpreter.
             _ => None,
         }
@@ -444,7 +444,7 @@ impl Lowerer {
                 // Innermost handler: every alternative failed.
                 let mut handler = vec![PyStmt::Raise(call(
                     "ValueError",
-                    vec![PyExpr::Str("Decode.oneOf: no decoder matched".to_string())],
+                    vec![PyExpr::Str("Decode.one_of: no decoder matched".to_string())],
                 ))];
                 // Consume configs in alternative order, then nest the tries
                 // back-to-front so alt 1 is outermost (tried first).
@@ -467,7 +467,7 @@ impl Lowerer {
                     }];
                 }
                 // The outermost layer is the first alternative's try (or, for an
-                // empty `oneOf`, the bare raise — exactly the interpreter).
+                // empty `one_of`, the bare raise — exactly the interpreter).
                 out.extend(handler);
                 PyExpr::Name(r)
             }

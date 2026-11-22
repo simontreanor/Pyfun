@@ -131,7 +131,7 @@ ordering hazard is a value dependency between slots, which the hoisting handles.
 (P1–P11) live in the design memo the pass was built from.
 
 **Tier B** extends the qualifying shapes, each behind the same differential gate:
-**block-local named folders** (`dedupLegs`'s inner `step` — a scope-coherent registry
+**block-local named folders** (`dedup_legs`'s inner `step` — a scope-coherent registry
 (`local_fn_defs`) records 2-ary block `let`s, evicts on rebinding, and is *shadow-guarded* at every
 binder introduction (function parameters, match-arm patterns), so a hit is always the innermost
 binding; a local folder's frees resolve in the call site's own frame, so the top-level-folder
@@ -154,9 +154,9 @@ still works). But a handful are pure, total, **one-liner** wrappers over a Pytho
 a member is **fully applied** there is no reason to route through the helper at all — the same
 fully-applied-collapse instinct as the currying rule. `try_inline_stdlib` (in `lower_application`,
 gated on the head being a module-qualified `Field` and the arg count matching the member's exact arity)
-emits the idiom directly: `String.contains n s`→`n in s`, `String.startsWith p s`→`s.startswith(p)`,
-`String.endsWith`→`s.endswith(…)`, `List`/`Set`/`Map.contains`→`x in xs` (a `PyExpr::Compare` with the
-`In` op, so precedence/parenthesization is free), and `List.isEmpty xs`→`not xs`. The argument order is
+emits the idiom directly: `String.contains n s`→`n in s`, `String.starts_with p s`→`s.startswith(p)`,
+`String.ends_with`→`s.endswith(…)`, `List`/`Set`/`Map.contains`→`x in xs` (a `PyExpr::Compare` with the
+`In` op, so precedence/parenthesization is free), and `List.is_empty xs`→`not xs`. The argument order is
 taken verbatim from each helper body — an inverted operand would be a silent miscompile — so the inline
 form is value-identical to the helper. Anything short of full arity (a partial application like
 `String.contains "x"`, or a bare value reference) is **not** matched and falls through to the helper
@@ -168,11 +168,11 @@ mostly the profiler's own per-call overhead on a ~1.87M-call trivial function, n
 fully-applied call is already `len(xs)` with no helper in between.)
 
 Two further call-site shapes ride on the same lever (found on a Scrabble move generator that asked
-`List.findIndex ((==) l) rack` two million times and `match Map.find rc checks:` four million
+`List.find_index ((==) l) rack` two million times and `match Map.find rc checks:` four million
 times per position).
 
 **Equality predicates** (`try_inline_eq_predicate`, right after `try_inline_stdlib` in
-`lower_application`): a fully-applied `List.findIndex`/`List.find`/`List.exists` whose first argument
+`lower_application`): a fully-applied `List.find_index`/`List.find`/`List.exists` whose first argument
 `eq_predicate_value` recognises as `(==) x` (an `App` of `OpFunc(Eq)` to one argument) or as a
 one-parameter lambda whose body is `x == y` / `y == x` with `y` not free in `x` (checked with
 `fold_loop::collect_free`) routes to `_pf_index_of(x, xs)` (`try: return Some(xs.index(x)) except
@@ -181,7 +181,7 @@ ValueError: return None_()`), `_pf_find_eq(x, xs)` (the same with `xs[xs.index(x
 `0.0`/`-0.0` can tell apart), or the `Compare … In` expression `x in xs`. The two helpers live in
 `list_prelude` under the collection-helper registry, flagged like `_pf_find_index` so the `Option`
 prelude is emitted. `x` lowers first and `xs` second, the argument order of the call they replace.
-The arity gate is exact, so `List.findIndex ((==) l)` as a value still becomes
+The arity gate is exact, so `List.find_index ((==) l)` as a value still becomes
 `functools.partial(_pf_find_index, lambda b: l == b)`. Semantics are those of `list.index`/`in`: an
 identity shortcut before `==`, the same trade `List.contains`→`x in xs` already made.
 
@@ -341,10 +341,10 @@ bind after lowering the value and before the next item, so `bind_ce_target` does
 
 ### Specializing statically-known `Decode` decoders — implements DESIGN §5.3
 
-`Decode.decodeString dec s` normally builds a runtime decoder *value* — a tree of raising closures —
+`Decode.decode_string dec s` normally builds a runtime decoder *value* — a tree of raising closures —
 and interprets it over `json.loads` output. When `dec` is a **syntactically-known composition** of the
 simple combinators (`str`/`int`/`float`/`bool`/`field`/`list`/`nullable`/`map`–`map4`/
-`succeed`/`fail`/`oneOf`, including through *top-level* `let` decoder names), the pass
+`succeed`/`fail`/`one_of`, including through *top-level* `let` decoder names), the pass
 (`src/lowering/decode_spec.rs`, hooked in `lower_application`, default-on with `PYFUN_NO_DECODE_OPT`
 as the kill switch) deforests the interpreter into **direct dict/list access with inline error
 handling**: one `try` whose body reads like a hand-written validating parser (`t = v["name"]`,
@@ -354,9 +354,9 @@ handling**: one `try` whose body reads like a hand-written validating parser (`t
 message (a missing field is `KeyError` with the key's quoted repr). Faithfulness mechanics:
 configuration expressions (fan-in functions, `field` names, `succeed` values) hoist *outside* the
 `try` in construction order, matching the interpreter's build-time evaluation; every node decodes from
-a bound temp so a subscript evaluates once; `oneOf` nests try/except per alternative, exhausting to the
-interpreter's exact message. Anything dynamic — `andThen`, a decoder passed as a value, a shadowed or
-cyclic named decoder, a non-literal `oneOf` list, an in-file `module` — rejects and falls back to the
+a bound temp so a subscript evaluates once; `one_of` nests try/except per alternative, exhausting to the
+interpreter's exact message. Anything dynamic — `and_then`, a decoder passed as a value, a shadowed or
+cyclic named decoder, a non-literal `one_of` list, an in-file `module` — rejects and falls back to the
 interpreter unchanged. Measured on a decode-dominated workload (400k-object JSON array into records,
 in-process best-of-5): **2.8x end-to-end** including the shared `json.loads`, ~4x on the decode portion
 itself.

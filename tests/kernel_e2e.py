@@ -135,10 +135,10 @@ def main():
             # OS. (A cell blocked in a C call like time.sleep does NOT interrupt
             # promptly on Windows — verified to be identical in the stock
             # python3 ipykernel, i.e. a platform limitation, not a Pyfun one.)
-            status, out, _ = run_cell(kc, "extern pure bigRange : int -> Seq int = range")
+            status, out, _ = run_cell(kc, "extern pure big_range : int -> Seq int = range")
             check("extern range accepted", status == "ok", out.strip())
 
-            msg_id = kc.execute("Seq.fold (fun acc x -> acc + x) 0 (bigRange 2000000000)")
+            msg_id = kc.execute("Seq.fold (fun acc x -> acc + x) 0 (big_range 2000000000)")
             # Give the cell a moment to actually be running, then interrupt.
             import time
 
@@ -181,9 +181,9 @@ def main():
             # --- async: `asyncio.run` works although ipykernel's loop is running ---
             status, out, err = run_cell(
                 kc,
-                "extern runAsync: Async a -> a = asyncio.run\n"
+                "extern run_async: Async a -> a = asyncio.run\n"
                 "let job = async {\n  let! x = async { return 20 }\n  return x + 1\n}\n"
-                "print (runAsync job)",
+                "print (run_async job)",
             )
             check("async cell runs", status == "ok" and "21" in out, (out + err).strip()[-120:])
             status, out, _ = run_cell(kc, "n + 1")

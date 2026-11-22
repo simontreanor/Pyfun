@@ -5,16 +5,16 @@ success branch of one becomes the place you write the next. In lesson 4 you saw 
 in a row already leans right, like a staircase:
 
 ```pyfun
-let addStrings a b =
-  match Option.toResult "bad a" (String.toInt a):
+let add_strings a b =
+  match Option.to_result "bad a" (String.to_int a):
     case Error e: Error e
     case Ok x:
-      match Option.toResult "bad b" (String.toInt b):
+      match Option.to_result "bad b" (String.to_int b):
         case Error e2: Error e2
         case Ok y: Ok (x + y)
 
-print (addStrings "3" "4")
-print (addStrings "3" "oops")
+print (add_strings "3" "4")
+print (add_strings "3" "oops")
 ```
 
 ```console
@@ -28,15 +28,15 @@ writes that repetition once. A `result { }` block lets you bind the success valu
 read top to bottom:
 
 ```pyfun
-let addStrings a b =
+let add_strings a b =
   result {
-    let! x = Option.toResult "bad a" (String.toInt a)
-    let! y = Option.toResult "bad b" (String.toInt b)
+    let! x = Option.to_result "bad a" (String.to_int a)
+    let! y = Option.to_result "bad b" (String.to_int b)
     return x + y
   }
 
-print (addStrings "3" "4")
-print (addStrings "3" "oops")
+print (add_strings "3" "4")
+print (add_strings "3" "oops")
 ```
 
 ```console
@@ -45,8 +45,8 @@ Error('bad b')
 ```
 
 `let!` unwraps an `Ok`, `return` wraps the final value back up, and the short-circuit on the first
-`Error` is automatic. This is the same idea as F#'s computation expressions. `String.toInt` gives
-back an `Option` (lesson 3), so `Option.toResult` bridges it to a `Result` with a message for the
+`Error` is automatic. This is the same idea as F#'s computation expressions. `String.to_int` gives
+back an `Option` (lesson 3), so `Option.to_result` bridges it to a `Result` with a message for the
 `None` case before `let!` binds it.
 
 ## When every step is an `Option`
@@ -56,15 +56,15 @@ have no error message to add, and the steps are already `Option`, `option { }` b
 and stops at the first `None`:
 
 ```pyfun
-let addStrings a b =
+let add_strings a b =
   option {
-    let! x = String.toInt a
-    let! y = String.toInt b
+    let! x = String.to_int a
+    let! y = String.to_int b
     return x + y
   }
 
-print (addStrings "3" "4")
-print (addStrings "3" "oops")
+print (add_strings "3" "4")
+print (add_strings "3" "oops")
 ```
 
 ```console
@@ -89,7 +89,7 @@ A block earns its keep at two or more `let!` steps. For a single one, `Option.ma
 `Option.bind` say the same thing on one line:
 
 ```pyfun
-let double s = String.toInt s |> Option.map (fun n -> n * 2)
+let double s = String.to_int s |> Option.map (fun n -> n * 2)
 
 print (double "21")
 ```
@@ -110,7 +110,7 @@ let counts =
     yield 3
   }
 
-counts |> Seq.toList |> print
+counts |> Seq.to_list |> print
 ```
 
 ```python
@@ -135,7 +135,7 @@ let squares =
     yield 100
   }
 
-squares |> Seq.toList |> print
+squares |> Seq.to_list |> print
 ```
 
 ```console
@@ -150,7 +150,7 @@ the loop.
 ## Exercise
 
 Fill the two holes so `multiply` parses both strings and returns their product as a `Result`. Each
-hole has type `Result int 'a`, so reach for the same `Option.toResult ... (String.toInt ...)` bridge
+hole has type `Result int 'a`, so reach for the same `Option.to_result ... (String.to_int ...)` bridge
 the worked example used. When both parse you get `Ok`, and a bad string short-circuits to `Error`.
 
 ```pyfun
@@ -180,8 +180,8 @@ Error('not a number')
 ```pyfun
 let multiply a b =
   result {
-    let! x = Option.toResult "not a number" (String.toInt a)
-    let! y = Option.toResult "not a number" (String.toInt b)
+    let! x = Option.to_result "not a number" (String.to_int a)
+    let! y = Option.to_result "not a number" (String.to_int b)
     return x * y
   }
 

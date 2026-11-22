@@ -7,25 +7,25 @@
 # and cleans up after itself.
 
 extern type Path
-extern toPath: str -> Path = pathlib.Path
-extern writeText: Path -> str -> int = pathlib.Path.write_text
-extern readText: Path -> str = pathlib.Path.read_text
+extern to_path: str -> Path = pathlib.Path
+extern write_text: Path -> str -> int = pathlib.Path.write_text
+extern read_text: Path -> str = pathlib.Path.read_text
 extern unlink: Path -> unit = pathlib.Path.unlink
 
-# `roundTrip` calls `io` externs, so it is inferred `io` too — a `let pure roundTrip`
+# `round_trip` calls `io` externs, so it is inferred `io` too — a `let pure round_trip`
 # would be a compile error. Purity is checked, not hoped for.
-let roundTrip name =
-  let p = toPath name
-  let _ = writeText p "hello from pyfun"
-  let back = readText p
+let round_trip name =
+  let p = to_path name
+  let _ = write_text p "hello from pyfun"
+  let back = read_text p
   let _ = unlink p
   back
 
 # Reading a missing file is total: `try` catches FileNotFoundError into `Error`.
-let readOrNote name =
-  match try (readText (toPath name)):
+let read_or_note name =
+  match try (read_text (to_path name)):
     case Ok s: s
-    case Error e: f"(could not read {name}: {e.errorKind})"
+    case Error e: f"(could not read {name}: {e.error_kind})"
 
-print (roundTrip "pyfun_interop_demo.txt")   # hello from pyfun
-print (readOrNote "no_such_file.txt")        # (could not read no_such_file.txt: FileNotFoundError)
+print (round_trip "pyfun_interop_demo.txt")   # hello from pyfun
+print (read_or_note "no_such_file.txt")        # (could not read no_such_file.txt: FileNotFoundError)

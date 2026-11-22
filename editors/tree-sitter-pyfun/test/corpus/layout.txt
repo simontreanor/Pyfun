@@ -95,7 +95,7 @@ print (x + y)
 lambda with indented block body
 ================================================================================
 
-let mkAdder n = fun m ->
+let mk_adder n = fun m ->
   let t = n + m
   t
 

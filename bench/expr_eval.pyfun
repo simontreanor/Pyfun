@@ -12,13 +12,13 @@ type Expr =
   | Mul Expr Expr
   | Neg Expr
 
-let nextSeed s = (s * 1103515245 + 12345) % 2147483648
+let next_seed s = (s * 1103515245 + 12345) % 2147483648
 
 let build depth seed =
   if depth == 0 then Num (seed % 100)
   else
-    let s1 = nextSeed seed
-    let s2 = nextSeed s1
+    let s1 = next_seed seed
+    let s2 = next_seed s1
     match seed % 4:
       case 0: Neg (build (depth - 1) s1)
       case 1: Mul (build (depth - 1) s1) (build (depth - 1) s2)
@@ -56,7 +56,7 @@ let simplify e =
         case (sa, sb): Mul sa sb
 
 let iter acc i =
-  let tree = build 12 (nextSeed (i * 7919))
+  let tree = build 12 (next_seed (i * 7919))
   let v1 = eval tree
   let v2 = eval (simplify tree)
   (acc * 31 + v1 * 17 + v2) % 1000000007

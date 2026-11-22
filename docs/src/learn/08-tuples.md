@@ -23,13 +23,13 @@ let line pair =
 
 let lines = List.zip names scores |> List.map line
 
-let byName = List.zip names scores |> Map.ofList
-let adaScore = Option.withDefault 0 (Map.find "ada" byName)
+let by_name = List.zip names scores |> Map.of_list
+let ada_score = Option.with_default 0 (Map.find "ada" by_name)
 
 print (swap (1, 2))
 print lines
-byName |> Map.toList |> print
-print adaScore
+by_name |> Map.to_list |> print
+print ada_score
 ```
 
 ```console
@@ -43,8 +43,8 @@ print adaScore
 `[("ada", 10), ("alan", 9)]`. Mapping `line` over that list destructures each pair in the `case`
 and binds `name` and `score`, the way Python's `for name, score in pairs` unpacks as it goes.
 
-Tuples also bridge lists and maps. `Map.ofList` builds a `Map` from a list of pairs, and
-`Map.toList` turns a map back into its pairs, so a zip followed by `Map.ofList` is a compact way to
+Tuples also bridge lists and maps. `Map.of_list` builds a `Map` from a list of pairs, and
+`Map.to_list` turns a map back into its pairs, so a zip followed by `Map.of_list` is a compact way to
 build a lookup table from two parallel lists.
 
 ## Binding both parts at once

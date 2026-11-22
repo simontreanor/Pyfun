@@ -31,8 +31,8 @@ split falls cleanly after step 4.
 The thread is the boundary versus the engine: Pyfun earns its keep where the outside world is untyped
 and can fail, and it stays out of the way of fast native code.
 
-1. Open the [Lesson 12 exercise](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyaW5nLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg).
-   Run `check` and read the `?titleDec` note: it has type `Decoder str` and suggests
+1. Open the [Lesson 12 exercise](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyLCBwYWdlczogaW50IH0KCmxldCBib29rX2RlY29kZXIgPQogIERlY29kZS5tYXAyIChmdW4gdGl0bGUgcGFnZXMgLT4gQm9vayB7IHRpdGxlID0gdGl0bGUsIHBhZ2VzID0gcGFnZXMgfSkKICAgIChEZWNvZGUuZmllbGQgInRpdGxlIiA_dGl0bGVfZGVjKQogICAgKERlY29kZS5maWVsZCAicGFnZXMiID9wYWdlc19kZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yX2tpbmR9KToge2UuZXJyb3JfbWVzc2FnZX0iCgpsZXQgd2VsbF9mb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nX2ZpZWxkID0gIiIieyJ0aXRsZSI6ICJEdW5lIn0iIiIKCndlbGxfZm9ybWVkIHw-IERlY29kZS5kZWNvZGVfc3RyaW5nIGJvb2tfZGVjb2RlciB8PiBkZXNjcmliZSB8PiBwcmludAptaXNzaW5nX2ZpZWxkIHw-IERlY29kZS5kZWNvZGVfc3RyaW5nIGJvb2tfZGVjb2RlciB8PiBkZXNjcmliZSB8PiBwcmludAo).
+   Run `check` and read the `?title_dec` note: it has type `Decoder str` and suggests
    `Decode.str`. Fill both holes (`Decode.str`, `Decode.int`) and Run. The well-formed object
    becomes a typed `Book`, and the object missing `pages` becomes `failed (KeyError): 'pages'`.
 2. Make the boundary-versus-engine point: the JSON is the untyped, failable edge, and decoding turns
@@ -41,7 +41,7 @@ and can fail, and it stays out of the way of fast native code.
 3. Open the [Lesson 13 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG11bHRpcGx5IGEgYiA9CiAgcmVzdWx0IHsKICAgIGxldCEgeCA9ID8KICAgIGxldCEgeSA9ID8KICAgIHJldHVybiB4ICogeQogIH0KCnByaW50IChtdWx0aXBseSAiNiIgIjciKQpwcmludCAobXVsdGlwbHkgIjYiICJub3BlIikK).
    Before filling it, show the staircase form from the top of lesson 13 (two nested `Result` matches)
    and point out that every `Error` branch does the same thing. Then fill the two holes with
-   `Option.toResult "not a number" (String.toInt a)` and its `b` twin and Run.
+   `Option.to_result "not a number" (String.to_int a)` and its `b` twin and Run.
 4. Make the point that `let!` unwraps an `Ok`, `return` wraps the final value, and the short-circuit
    on the first `Error` is automatic. The `result { }` block is the staircase written once. (If you
    are splitting into six sessions, this is the break point.)
@@ -49,11 +49,11 @@ and can fail, and it stays out of the way of fast native code.
    It adds a distance to a time. Run `check` and read the mismatch: `expected float<m>, found
    float<s>`. Change the `+` to `/` and Run to get `8.0`. Show the Python panel: the units are gone,
    the output is plain `distance / elapsed`. Units are checked, then erased.
-6. Open the [Lesson 15 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGNUb0YgYyA9IGMgKiA5IC8vIDUgKyAzMgpsZXQgZlRvQyBmID0gKGYgLSAzMikgKiA1IC8vIDkKCnByaW50IChjVG9GIDEwMCkKcHJpbnQgKGZUb0MgMjEyKQo).
-   Wrap the two functions in `module Temp =` and qualify the calls as `Temp.cToF` and `Temp.fToC`.
+6. Open the [Lesson 15 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGNfdG9fZiBjID0gYyAqIDkgLy8gNSArIDMyCmxldCBmX3RvX2MgZiA9IChmIC0gMzIpICogNSAvLyA5CgpwcmludCAoY190b19mIDEwMCkKcHJpbnQgKGZfdG9fYyAyMTIpCg).
+   Wrap the two functions in `module Temp =` and qualify the calls as `Temp.c_to_f` and `Temp.f_to_c`.
    Run. Note that this in-file module runs in the playground, while one-module-per-file projects need
    the installed compiler.
-7. Finish with the capstone. Open the [Lesson 16 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0cmluZywgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuRGVjb2RlciA9CiAgRGVjb2RlLm1hcDMgKGZ1biBuIGQgdCAtPiBSdW4geyBuYW1lID0gbiwgZGlzdGFuY2UgPSBkLCB0aW1lID0gdCB9KQogICAgKERlY29kZS5maWVsZCAibmFtZSIgRGVjb2RlLnN0cmluZykKICAgIChEZWNvZGUuZmllbGQgImRpc3RhbmNlIiA_KQogICAgKERlY29kZS5maWVsZCAidGltZSIgRGVjb2RlLmZsb2F0KQoKbGV0IGlucHV0ID0gIiIiWwogIHsibmFtZSI6ICJhZGEiLCAiZGlzdGFuY2UiOiAxMDAuMCwgInRpbWUiOiAyMC4wfSwKICB7Im5hbWUiOiAiYm8iLCAiZGlzdGFuY2UiOiAxNDAuMCwgInRpbWUiOiAzMC4wfQpdIiIiCgpsZXQgcmVwb3J0ID0KICBtYXRjaCBEZWNvZGUuZGVjb2RlU3RyaW5nIChEZWNvZGUubGlzdCBydW5EZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gcnVucyB8PiBMaXN0Lm1hcCAoZnVuIHIgLT4gci5uYW1lKSB8PiBTdHJpbmcuam9pbiAiLCAiCiAgICAgIGxldCBkaXN0ID0gcnVucyB8PiBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4KICAgICAgbGV0IHRpbWUgPSBydW5zIHw-IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4KICAgICAgbGV0IGF2ZyA9IGRpc3QgLyA_CiAgICAgIGYie25hbWVzfTogYXZlcmFnZSBzcGVlZCB7YXZnfSBtL3Mgb3ZlciB7TGlzdC5sZW4gcnVuc30gcnVucyIKICAgIGNhc2UgRXJyb3IgZTogZiJjb3VsZCBub3QgcmVhZCBpbnB1dCAoe2UuZXJyb3JLaW5kfSkiCgpwcmludCByZXBvcnQK).
+7. Finish with the capstone. Open the [Lesson 16 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bWVhc3VyZSBtCm1lYXN1cmUgcwoKdHlwZSBSdW4gPSB7IG5hbWU6IHN0ciwgZGlzdGFuY2U6IGZsb2F0LCB0aW1lOiBmbG9hdCB9CgpsZXQgcnVuX2RlY29kZXIgPQogIERlY29kZS5tYXAzIChmdW4gbiBkIHQgLT4gUnVuIHsgbmFtZSA9IG4sIGRpc3RhbmNlID0gZCwgdGltZSA9IHQgfSkKICAgIChEZWNvZGUuZmllbGQgIm5hbWUiIERlY29kZS5zdHIpCiAgICAoRGVjb2RlLmZpZWxkICJkaXN0YW5jZSIgPykKICAgIChEZWNvZGUuZmllbGQgInRpbWUiIERlY29kZS5mbG9hdCkKCmxldCBpbnB1dCA9ICIiIlsKICB7Im5hbWUiOiAiYWRhIiwgImRpc3RhbmNlIjogMTAwLjAsICJ0aW1lIjogMjAuMH0sCiAgeyJuYW1lIjogImJvIiwgImRpc3RhbmNlIjogMTQwLjAsICJ0aW1lIjogMzAuMH0KXSIiIgoKbGV0IHJlcG9ydCA9CiAgbWF0Y2ggRGVjb2RlLmRlY29kZV9zdHJpbmcgKERlY29kZS5saXN0IHJ1bl9kZWNvZGVyKSBpbnB1dDoKICAgIGNhc2UgT2sgcnVuczoKICAgICAgbGV0IG5hbWVzID0gcnVucyB8PiBMaXN0Lm1hcCAoZnVuIHIgLT4gci5uYW1lKSB8PiBTdHJpbmcuam9pbiAiLCAiCiAgICAgIGxldCBkaXN0ID0gcnVucyB8PiBMaXN0LmZvbGQgKGZ1biBhIHIgLT4gYSArIHIuZGlzdGFuY2UgKiA_KSAwLjA8bT4KICAgICAgbGV0IHRpbWUgPSBydW5zIHw-IExpc3QuZm9sZCAoZnVuIGEgciAtPiBhICsgci50aW1lICogMS4wPHM-KSAwLjA8cz4KICAgICAgbGV0IGF2ZyA9IGRpc3QgLyA_CiAgICAgIGYie25hbWVzfTogYXZlcmFnZSBzcGVlZCB7YXZnfSBtL3Mgb3ZlciB7TGlzdC5sZW4gcnVuc30gcnVucyIKICAgIGNhc2UgRXJyb3IgZTogZiJjb3VsZCBub3QgcmVhZCBpbnB1dCAoe2UuZXJyb3Jfa2luZH0pIgoKcHJpbnQgcmVwb3J0Cg).
    Run `check` and let the three hole notes name each type: `Decoder float`, `float<m>`, `float<'a>`.
    Fill them (`Decode.float`, `1.0<m>`, `time`) and Run to get the one-line report. Point at the join
    where JSON meets units: a decoded number is a plain `float`, and multiplying by `1.0<m>` lifts it
@@ -78,7 +78,7 @@ and can fail, and it stays out of the way of fast native code.
   boundary is effectful by default and can still raise. Wrap a call that can fail in `try`, or decode
   the data, to turn failure into a value.
 - "Decoding JSON is just `json.loads`." Correction: `json.loads` hands back an untyped shape.
-  `Decode.decodeString` produces your record or a structured error, so the rest of the program never
+  `Decode.decode_string` produces your record or a structured error, so the rest of the program never
   meets an untyped value.
 - "`result { }` is a special block that runs differently at runtime." Correction: it desugars to the
   same `Result` short-circuit you would write by hand with nested matches. `let!` and `return` are

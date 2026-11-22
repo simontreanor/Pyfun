@@ -477,7 +477,7 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("range", 2),
     ("zip", 2),
     ("get", 2),
-    ("isEmpty", 1),
+    ("is_empty", 1),
     ("contains", 2),
     ("concat", 2),
     ("sort", 1),
@@ -492,7 +492,7 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     // Slicing. Total and clamping, like `String.slice`.
     ("take", 2),
     ("drop", 2),
-    ("splitAt", 2),
+    ("split_at", 2),
     // Transform.
     ("map2", 3),
     ("indexed", 1),
@@ -500,19 +500,19 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     // Query.
     ("exists", 2),
     ("forall", 2),
-    ("findIndex", 2),
+    ("find_index", 2),
     // Order.
-    ("sortBy", 2),
-    ("sortDescending", 1),
+    ("sort_by", 2),
+    ("sort_descending", 1),
     ("distinct", 1),
-    ("distinctBy", 2),
-    ("groupBy", 2),
+    ("distinct_by", 2),
+    ("group_by", 2),
     // Aggregate.
     ("max", 1),
     ("min", 1),
-    ("maxBy", 2),
-    ("minBy", 2),
-    ("sumBy", 2),
+    ("max_by", 2),
+    ("min_by", 2),
+    ("sum_by", 2),
     ("average", 1),
     ("reduce", 2),
     // Structure.
@@ -522,18 +522,18 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
     ("init", 2),
     ("replicate", 2),
     // Positional update. Out of range leaves the list unchanged, so each is total.
-    ("updateAt", 3),
-    ("insertAt", 3),
-    ("removeAt", 2),
+    ("update_at", 3),
+    ("insert_at", 3),
+    ("remove_at", 2),
     // Windows.
     ("pairwise", 1),
     ("windowed", 2),
-    ("chunkBySize", 2),
+    ("chunk_by_size", 2),
     // From the FSharp.Core audit: `Seq` had these and `List` did not.
-    ("takeWhile", 2),
-    ("dropWhile", 2),
-    ("sortByDescending", 2),
-    ("countBy", 2),
+    ("take_while", 2),
+    ("drop_while", 2),
+    ("sort_by_descending", 2),
+    ("count_by", 2),
 ];
 
 /// The `Set` module (`DESIGN.md` §6): members of the built-in `Set a` (which lowers
@@ -546,15 +546,15 @@ pub const LIST_PRELUDE: &[(&str, usize)] = &[
 /// `Set.empty` is a nullary value (arity 0, lowers to `set()`).
 pub const SET_PRELUDE: &[(&str, usize)] = &[
     ("empty", 0),
-    ("isEmpty", 1),
+    ("is_empty", 1),
     ("map", 2),
     ("filter", 2),
     ("fold", 3),
     ("exists", 2),
     ("forall", 2),
     ("partition", 2),
-    ("isSubset", 2),
-    ("isSuperset", 2),
+    ("is_subset", 2),
+    ("is_superset", 2),
     ("max", 1),
     ("min", 1),
     ("add", 2),
@@ -564,22 +564,22 @@ pub const SET_PRELUDE: &[(&str, usize)] = &[
     ("union", 2),
     ("intersect", 2),
     ("difference", 2),
-    ("ofList", 1),
-    ("toList", 1),
+    ("of_list", 1),
+    ("to_list", 1),
     ("iter", 2),
 ];
 
 /// The `Map` module (`DESIGN.md` §6): members of the built-in `Map k v` (which
 /// lowers to a Python `dict`), accessed qualified (`Map.add`). Single source of
 /// truth shared with [`seed_map_prelude`] + lowering, all pure. Keys must be
-/// hashable at runtime. `Map.findOr key default m` is a total lookup with a
+/// hashable at runtime. `Map.find_or key default m` is a total lookup with a
 /// fallback (`dict.get`); `Map.find key m : Option v` is the optional form.
-/// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). `Map.ofList`/
-/// `Map.toList` convert to/from a `List (k, v)` of key/value tuples (now that
-/// tuples exist), mirroring `Set.ofList`/`toList`.
+/// `Map.empty` is a nullary value (arity 0, lowers to `dict()`). `Map.of_list`/
+/// `Map.to_list` convert to/from a `List (k, v)` of key/value tuples (now that
+/// tuples exist), mirroring `Set.of_list`/`to_list`.
 pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("empty", 0),
-    ("isEmpty", 1),
+    ("is_empty", 1),
     ("map", 2),
     ("filter", 2),
     ("fold", 3),
@@ -590,13 +590,13 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
     ("add", 3),
     ("remove", 2),
     ("contains", 2),
-    ("findOr", 3),
+    ("find_or", 3),
     ("find", 2),
     ("len", 1),
     ("keys", 1),
     ("values", 1),
-    ("ofList", 1),
-    ("toList", 1),
+    ("of_list", 1),
+    ("to_list", 1),
     ("iter", 2),
 ];
 
@@ -605,19 +605,19 @@ pub const MAP_PRELUDE: &[(&str, usize)] = &[
 /// `(member, arity)` pairs are the single source of truth shared with
 /// [`seed_string_prelude`] (schemes) and lowering (arities + emitted helpers). All
 /// pure and **monomorphic** (over `str`/`int`/`float`/`bool`) — no type vars.
-/// Pyfun has no `char` type, so a "character" is a length-1 string: `String.toList`
-/// yields single-char strings. `String.toInt : str -> Option int` is **total**
+/// Pyfun has no `char` type, so a "character" is a length-1 string: `String.to_list`
+/// yields single-char strings. `String.to_int : str -> Option int` is **total**
 /// (a `ValueError`-guarded parse), so it lowers to a `try`/`except` helper.
 pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("len", 1),
-    ("isEmpty", 1),
+    ("is_empty", 1),
     ("get", 2),
     ("repeat", 2),
-    ("trimStart", 1),
-    ("trimEnd", 1),
-    ("splitLines", 1),
+    ("lstrip", 1),
+    ("rstrip", 1),
+    ("split_lines", 1),
     ("rev", 1),
-    ("ofList", 1),
+    ("of_list", 1),
     ("concat", 2),
     ("join", 2),
     ("split", 2),
@@ -625,16 +625,16 @@ pub const STRING_PRELUDE: &[(&str, usize)] = &[
     ("lower", 1),
     ("strip", 1),
     ("contains", 2),
-    ("startsWith", 2),
-    ("endsWith", 2),
+    ("starts_with", 2),
+    ("ends_with", 2),
     ("replace", 3),
-    ("fromInt", 1),
-    ("fromFloat", 1),
-    ("toInt", 1),
-    ("toFloat", 1),
-    ("toList", 1),
+    ("from_int", 1),
+    ("from_float", 1),
+    ("to_int", 1),
+    ("to_float", 1),
+    ("to_list", 1),
     ("slice", 3),
-    ("indexOf", 2),
+    ("index_of", 2),
 ];
 
 /// The `Format` module (`DESIGN.md` §6): checked formatting functions, the typed
@@ -649,8 +649,8 @@ pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
     ("percent", 2),
     ("currency", 3),
     ("grouped", 1),
-    ("padLeft", 3),
-    ("padRight", 3),
+    ("pad_left", 3),
+    ("pad_right", 3),
 ];
 
 /// The `Async` module (`DESIGN.md` §8.1): the members F#'s `Async` has that `asyncio`
@@ -658,11 +658,11 @@ pub const FORMAT_PRELUDE: &[(&str, usize)] = &[
 /// is a coroutine object); the `async` effect is attributed where it is awaited
 /// (`let!`/`do!` in an `async { }` block). `race` cancels the losers; `catch` is
 /// the await-time `try` (a `try e` catches at call time and would wrap the
-/// coroutine); `toThread` runs a blocking thunk off the event loop.
+/// coroutine); `to_thread` runs a blocking thunk off the event loop.
 pub const ASYNC_PRELUDE: &[(&str, usize)] = &[
     ("sleep", 1),
     ("timeout", 2),
-    ("toThread", 1),
+    ("to_thread", 1),
     ("parallel", 1),
     ("race", 1),
     ("catch", 1),
@@ -678,7 +678,7 @@ pub const TASK_PRELUDE: &[(&str, usize)] = &[("scope", 1), ("start", 1)];
 /// The `Decode` module (`DESIGN.md` §6): Elm-style JSON decoder combinators over the
 /// opaque built-in `Decoder a`. A `Decoder a` is a pure, total recipe that turns
 /// untrusted JSON into your own typed data — "parse, don't validate" for the one
-/// library every Python programmer imports. `Decode.decodeString` runs a decoder over
+/// library every Python programmer imports. `Decode.decode_string` runs a decoder over
 /// a JSON string and yields `Result a Exception`, so malformed input is a value you
 /// must handle, never a crash. Single source of truth shared with [`seed_decode_prelude`]
 /// (schemes) and lowering (arities + emitted `_pf_dec_*` helpers). Every arrow is
@@ -700,9 +700,9 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
     ("map4", 5),
     ("succeed", 1),
     ("fail", 1),
-    ("andThen", 2),
-    ("oneOf", 1),
-    ("decodeString", 2),
+    ("and_then", 2),
+    ("one_of", 1),
+    ("decode_string", 2),
     ("auto", 0),
 ];
 
@@ -731,7 +731,7 @@ pub const MODULES: &[&str] = &[
 /// Complexity is stated wherever it is not obvious or not what a reader would
 /// assume, since the cost of a collection operation is exactly what a `List`
 /// backed by a Python list makes easy to get wrong (`contains` is a linear scan,
-/// `Set.contains` is not; `updateAt` copies). A test pins this table to
+/// `Set.contains` is not; `update_at` copies). A test pins this table to
 /// [`PRELUDE`] + [`MODULE_PRELUDES`] in both directions, so a new member cannot
 /// ship undocumented and a renamed one cannot leave a stale entry behind.
 pub const MEMBER_DOCS: &[(&str, &str)] = &[
@@ -744,7 +744,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Await a value with a deadline in seconds: `Some` the result, or `None` if it ran out. `asyncio.wait_for`.",
     ),
     (
-        "Async.toThread",
+        "Async.to_thread",
         "Run a blocking thunk on a worker thread and await its result, keeping the event loop free. `asyncio.to_thread`.",
     ),
     (
@@ -814,24 +814,24 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ("fst", "The first element of a pair."),
     ("snd", "The second element of a pair."),
     (
-        "List.takeWhile",
+        "List.take_while",
         "Take elements while a test passes; stops at the first failure. O(n).",
     ),
     (
-        "List.dropWhile",
+        "List.drop_while",
         "Skip elements while a test passes; keeps the rest from the first failure. O(n).",
     ),
     (
-        "List.sortByDescending",
+        "List.sort_by_descending",
         "Sort by a key, largest first. O(n log n). The key needs `comparison`, the element does not.",
     ),
     (
-        "List.countBy",
+        "List.count_by",
         "How many elements share each key, in first-seen key order. O(n).",
     ),
     ("Seq.empty", "The sequence with no elements."),
     (
-        "Seq.distinctBy",
+        "Seq.distinct_by",
         "Drop later elements with a seen key, lazily. Remembers the keys it has seen.",
     ),
     ("Seq.replicate", "n copies of one value, lazily."),
@@ -844,7 +844,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The final element, or `None` when empty. Consumes the whole sequence.",
     ),
     (
-        "Seq.sumBy",
+        "Seq.sum_by",
         "Add a number computed per element. Consumes the whole sequence.",
     ),
     (
@@ -915,7 +915,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "List.get",
         "The element at an index, or `None` when out of range. O(1), and total: there is no bare `xs[i]`.",
     ),
-    ("List.isEmpty", "Whether the list has no elements. O(1)."),
+    ("List.is_empty", "Whether the list has no elements. O(1)."),
     (
         "List.contains",
         "Whether the list holds this element. O(n) linear scan — `Set.contains` is O(1).",
@@ -960,7 +960,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "List.drop",
         "Everything after the first n elements. O(n); a count past the end drops everything.",
     ),
-    ("List.splitAt", "The pair of `take n` and `drop n`. O(n)."),
+    ("List.split_at", "The pair of `take n` and `drop n`. O(n)."),
     (
         "List.map2",
         "Combine two lists element by element, stopping at the shorter (F# raises instead). O(n).",
@@ -979,15 +979,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Whether every element passes a test. O(n), short-circuiting.",
     ),
     (
-        "List.findIndex",
+        "List.find_index",
         "The index of the first element passing a test, or `None`. O(n).",
     ),
     (
-        "List.sortBy",
+        "List.sort_by",
         "Sort by a key computed per element. O(n log n). The key needs `comparison`, the element does not.",
     ),
     (
-        "List.sortDescending",
+        "List.sort_descending",
         "A fresh list in descending order. O(n log n). Needs `comparison`.",
     ),
     (
@@ -995,11 +995,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Drop later duplicates, keeping first-seen order. O(n), and elements must be hashable.",
     ),
     (
-        "List.distinctBy",
+        "List.distinct_by",
         "Keep the first element for each key, in first-seen order. O(n).",
     ),
     (
-        "List.groupBy",
+        "List.group_by",
         "Group elements by a key into (key, members) pairs, in first-seen key order. O(n).",
     ),
     (
@@ -1011,15 +1011,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The smallest element, or `None` when empty. O(n). Needs `comparison`.",
     ),
     (
-        "List.maxBy",
+        "List.max_by",
         "The element with the largest key, or `None` when empty. O(n).",
     ),
     (
-        "List.minBy",
+        "List.min_by",
         "The element with the smallest key, or `None` when empty. O(n).",
     ),
     (
-        "List.sumBy",
+        "List.sum_by",
         "Add a number computed per element. O(n); an empty list sums to zero, so no `Option`.",
     ),
     (
@@ -1048,15 +1048,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     ("List.replicate", "A list of n copies of one value. O(n)."),
     (
-        "List.updateAt",
+        "List.update_at",
         "A fresh list with one index replaced. O(n) — it copies; an index outside the list changes nothing.",
     ),
     (
-        "List.insertAt",
+        "List.insert_at",
         "A fresh list with a value inserted at an index. O(n); the index clamps to the ends.",
     ),
     (
-        "List.removeAt",
+        "List.remove_at",
         "A fresh list without the element at an index. O(n); an index outside the list changes nothing.",
     ),
     (
@@ -1068,10 +1068,10 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Every sliding window of the given size, full ones only. O(n*size).",
     ),
     (
-        "List.chunkBySize",
+        "List.chunk_by_size",
         "Consecutive chunks of the given size, the last one short if it does not divide evenly. O(n).",
     ),
-    ("Set.isEmpty", "Whether the set has no elements. O(1)."),
+    ("Set.is_empty", "Whether the set has no elements. O(1)."),
     (
         "Set.map",
         "Apply a function to every element. O(n); the result can be smaller, since two elements may map onto one.",
@@ -1094,11 +1094,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Split into the elements passing and failing a test. O(n), testing each element once.",
     ),
     (
-        "Set.isSubset",
+        "Set.is_subset",
         "Whether every element of the first set is in the second. O(n).",
     ),
     (
-        "Set.isSuperset",
+        "Set.is_superset",
         "Whether the first set holds every element of the second. O(m).",
     ),
     (
@@ -1109,7 +1109,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Set.min",
         "The smallest element, or `None` when empty. O(n). Needs `comparison`.",
     ),
-    ("Map.isEmpty", "Whether the map has no entries. O(1)."),
+    ("Map.is_empty", "Whether the map has no entries. O(1)."),
     (
         "Map.map",
         "Apply a function to every value, keeping the keys. The function takes the key and the value. O(n).",
@@ -1159,11 +1159,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The elements of the first set not in the second. O(n).",
     ),
     (
-        "Set.ofList",
+        "Set.of_list",
         "A set of a list's elements, dropping duplicates. O(n).",
     ),
     (
-        "Set.toList",
+        "Set.to_list",
         "The elements as a list, in no guaranteed order. O(n).",
     ),
     ("Map.empty", "The map with no entries."),
@@ -1177,7 +1177,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     ("Map.contains", "Whether the map holds this key. O(1)."),
     (
-        "Map.findOr",
+        "Map.find_or",
         "The value for a key, or the given default. O(1).",
     ),
     ("Map.find", "The value for a key, or `None`. O(1)."),
@@ -1188,11 +1188,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The values as a list, in insertion order. O(n).",
     ),
     (
-        "Map.ofList",
+        "Map.of_list",
         "A map from (key, value) pairs; a later pair wins. O(n).",
     ),
     (
-        "Map.toList",
+        "Map.to_list",
         "The entries as (key, value) pairs, in insertion order. O(n).",
     ),
     (
@@ -1200,15 +1200,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Combine two options with a function; `Some` only when both are.",
     ),
     (
-        "Option.orElse",
-        "The second option if it has a payload, else the first. The fallback comes first, so it reads as `primary |> Option.orElse fallback`.",
+        "Option.or_else",
+        "The second option if it has a payload, else the first. The fallback comes first, so it reads as `primary |> Option.or_else fallback`.",
     ),
     ("Option.flatten", "Collapse a nested option into one."),
     (
         "Option.iter",
         "Run a function for its effect on the payload, if there is one.",
     ),
-    ("Option.toList", "A one-element list, or the empty list."),
+    ("Option.to_list", "A one-element list, or the empty list."),
     (
         "Option.exists",
         "Whether there is a payload and it passes a test. `None` fails.",
@@ -1218,15 +1218,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Combine two results with a function; `Ok` only when both are, otherwise the first `Error`.",
     ),
     (
-        "Result.orElse",
-        "The second result if it is `Ok`, else the first. The fallback comes first, so it reads as `primary |> Result.orElse fallback`.",
+        "Result.or_else",
+        "The second result if it is `Ok`, else the first. The fallback comes first, so it reads as `primary |> Result.or_else fallback`.",
     ),
     (
         "Result.iter",
         "Run a function for its effect on the `Ok` value; an `Error` does nothing.",
     ),
     (
-        "Result.toList",
+        "Result.to_list",
         "A one-element list from an `Ok`, or the empty list from an `Error`.",
     ),
     (
@@ -1241,11 +1241,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Option.filter",
         "Keep the payload only if it passes a test.",
     ),
-    ("Option.withDefault", "The payload, or the given fallback."),
-    ("Option.isSome", "Whether there is a payload."),
-    ("Option.isNone", "Whether there is no payload."),
+    ("Option.with_default", "The payload, or the given fallback."),
+    ("Option.is_some", "Whether there is a payload."),
+    ("Option.is_none", "Whether there is no payload."),
     (
-        "Option.toResult",
+        "Option.to_result",
         "`Some x` becomes `Ok x`; `None` becomes `Error` with the given value.",
     ),
     (
@@ -1253,7 +1253,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Apply a function to the `Ok` value, leaving an `Error` untouched.",
     ),
     (
-        "Result.mapError",
+        "Result.map_error",
         "Apply a function to the `Error` value, leaving an `Ok` untouched.",
     ),
     (
@@ -1261,22 +1261,22 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Chain a function that itself answers with `Result`, short-circuiting on `Error`.",
     ),
     (
-        "Result.withDefault",
+        "Result.with_default",
         "The `Ok` value, or the given fallback.",
     ),
-    ("Result.isOk", "Whether this is an `Ok`."),
-    ("Result.isError", "Whether this is an `Error`."),
+    ("Result.is_ok", "Whether this is an `Ok`."),
+    ("Result.is_error", "Whether this is an `Error`."),
     (
-        "Result.toOption",
+        "Result.to_option",
         "`Ok x` becomes `Some x`; any `Error` becomes `None`.",
     ),
     ("Seq.drop", "Skip the first n elements, lazily."),
     (
-        "Seq.takeWhile",
+        "Seq.take_while",
         "Take elements while a test passes, lazily; stops at the first failure.",
     ),
     (
-        "Seq.dropWhile",
+        "Seq.drop_while",
         "Skip elements while a test passes, lazily; keeps the rest from the first failure.",
     ),
     (
@@ -1306,7 +1306,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Build a sequence of n elements from their indices, lazily.",
     ),
     (
-        "Seq.initInfinite",
+        "Seq.init_infinite",
         "An endless sequence built from the indices 0, 1, 2, …, lazily. Pair it with `Seq.take`.",
     ),
     (
@@ -1318,7 +1318,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The first element, or `None` when empty. Consumes it — a Python iterator is single-pass.",
     ),
     (
-        "Seq.isEmpty",
+        "Seq.is_empty",
         "Whether the sequence has no elements. Consumes one element to find out.",
     ),
     (
@@ -1360,11 +1360,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Combine every element into an accumulator. Consumes the whole sequence.",
     ),
     (
-        "Seq.toList",
+        "Seq.to_list",
         "Force the sequence into a list. Consumes the whole sequence, and does not terminate on an endless one.",
     ),
     (
-        "Seq.ofList",
+        "Seq.of_list",
         "View a list as a sequence. O(1) — no copy, and the result is single-pass.",
     ),
     (
@@ -1373,7 +1373,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     ("String.len", "How many characters. O(1)."),
     (
-        "String.isEmpty",
+        "String.is_empty",
         "Whether the string has no characters. O(1).",
     ),
     (
@@ -1385,21 +1385,21 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The string repeated n times; a non-positive count gives the empty string. O(n*k).",
     ),
     (
-        "String.trimStart",
+        "String.lstrip",
         "Drop leading whitespace. O(n). `String.strip` does both ends.",
     ),
     (
-        "String.trimEnd",
+        "String.rstrip",
         "Drop trailing whitespace. O(n). `String.strip` does both ends.",
     ),
     (
-        "String.splitLines",
+        "String.split_lines",
         "Split on any line ending. O(n). A trailing newline does not add an empty last line.",
     ),
     ("String.rev", "The characters in the opposite order. O(n)."),
     (
-        "String.ofList",
-        "Join a list of strings with nothing between them. O(total). The inverse of `String.toList`.",
+        "String.of_list",
+        "Join a list of strings with nothing between them. O(total). The inverse of `String.to_list`.",
     ),
     ("String.concat", "Join two strings. O(n+m)."),
     (
@@ -1421,29 +1421,29 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Whether the string holds this substring. O(n*m) worst case — it is a search, not a lookup.",
     ),
     (
-        "String.startsWith",
+        "String.starts_with",
         "Whether the string begins with this prefix. O(m), the prefix length.",
     ),
     (
-        "String.endsWith",
+        "String.ends_with",
         "Whether the string ends with this suffix. O(m), the suffix length.",
     ),
     (
         "String.replace",
         "Every occurrence of one substring replaced by another. O(n).",
     ),
-    ("String.fromInt", "The decimal spelling of an integer."),
-    ("String.fromFloat", "The decimal spelling of a float."),
+    ("String.from_int", "The decimal spelling of an integer."),
+    ("String.from_float", "The decimal spelling of a float."),
     (
-        "String.toInt",
+        "String.to_int",
         "Parse an integer, or `None` when it does not parse. Total. O(n).",
     ),
     (
-        "String.toFloat",
+        "String.to_float",
         "Parse a float, or `None` when it does not parse. Total. O(n).",
     ),
     (
-        "String.toList",
+        "String.to_list",
         "The characters as single-character strings — there is no `char` type. O(n).",
     ),
     (
@@ -1451,7 +1451,7 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "The characters between two positions, end-exclusive. O(k) in the slice length. Total: out-of-range bounds clamp.",
     ),
     (
-        "String.indexOf",
+        "String.index_of",
         "Where a substring first occurs, or `None`. O(n*m) worst case — it is a search.",
     ),
     (
@@ -1472,11 +1472,11 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     ),
     ("Format.grouped", "An integer with thousands separators."),
     (
-        "Format.padLeft",
+        "Format.pad_left",
         "Right-align in a field of this width, padded with this fill string.",
     ),
     (
-        "Format.padRight",
+        "Format.pad_right",
         "Left-align in a field of this width, padded with this fill string.",
     ),
     ("Decode.str", "Decode a JSON string."),
@@ -1505,15 +1505,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "A decoder that always fails with this message.",
     ),
     (
-        "Decode.andThen",
+        "Decode.and_then",
         "Pick the next decoder from what has been decoded so far.",
     ),
     (
-        "Decode.oneOf",
+        "Decode.one_of",
         "Try each decoder in turn, taking the first that succeeds.",
     ),
     (
-        "Decode.decodeString",
+        "Decode.decode_string",
         "Run a decoder over JSON text, giving `Result`.",
     ),
 ];
@@ -1572,38 +1572,38 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
 /// constructors themselves are global; these are the qualified combinators.
 pub const OPTION_PRELUDE: &[(&str, usize)] = &[
     ("map2", 3),
-    ("orElse", 2),
+    ("or_else", 2),
     ("flatten", 1),
     ("iter", 2),
-    ("toList", 1),
+    ("to_list", 1),
     ("exists", 2),
     ("map", 2),
     ("bind", 2),
     ("filter", 2),
-    ("withDefault", 2),
-    ("isSome", 1),
-    ("isNone", 1),
-    ("toResult", 2),
+    ("with_default", 2),
+    ("is_some", 1),
+    ("is_none", 1),
+    ("to_result", 2),
     ("forall", 2),
     ("contains", 2),
 ];
 
 /// The `Result` module (`DESIGN.md` §6): combinators over the built-in `Result a e`
 /// type (constructors `Ok`/`Error`, used by the `result {}` CE). `Result.map`/
-/// `Result.mapError`/`Result.bind` are effect-polymorphic; `Result.toOption` bridges
+/// `Result.map_error`/`Result.bind` are effect-polymorphic; `Result.to_option` bridges
 /// to `Option` (`Ok v → Some v`, `Error _ → None`).
 pub const RESULT_PRELUDE: &[(&str, usize)] = &[
     ("map2", 3),
-    ("orElse", 2),
+    ("or_else", 2),
     ("iter", 2),
-    ("toList", 1),
+    ("to_list", 1),
     ("map", 2),
-    ("mapError", 2),
+    ("map_error", 2),
     ("bind", 2),
-    ("withDefault", 2),
-    ("isOk", 1),
-    ("isError", 1),
-    ("toOption", 1),
+    ("with_default", 2),
+    ("is_ok", 1),
+    ("is_error", 1),
+    ("to_option", 1),
     ("exists", 2),
     ("forall", 2),
     ("contains", 2),
@@ -1612,13 +1612,13 @@ pub const RESULT_PRELUDE: &[(&str, usize)] = &[
 /// The `Seq` module (`DESIGN.md` §6): the **lazy** counterpart to `List`, over the
 /// built-in `Seq a` produced by the `seq {}` CE (a Python iterator/generator).
 /// `Seq.map`/`filter`/`take`/`range` are lazy (Python's lazy `map`/`filter`/
-/// `islice`/`range`); `Seq.fold`/`toList` force the sequence. `Seq.map`/`filter`/
+/// `islice`/`range`); `Seq.fold`/`to_list` force the sequence. `Seq.map`/`filter`/
 /// `fold` are effect-polymorphic. NB Python iterators are **single-pass**.
 pub const SEQ_PRELUDE: &[(&str, usize)] = &[
     // Lazy: each answers a new sequence without pulling from the old one yet.
     ("drop", 2),
-    ("takeWhile", 2),
-    ("dropWhile", 2),
+    ("take_while", 2),
+    ("drop_while", 2),
     ("concat", 2),
     ("flatten", 1),
     ("collect", 2),
@@ -1627,12 +1627,12 @@ pub const SEQ_PRELUDE: &[(&str, usize)] = &[
     ("distinct", 1),
     ("pairwise", 1),
     ("init", 2),
-    ("initInfinite", 1),
+    ("init_infinite", 1),
     ("unfold", 2),
     // Consuming: these pull from the sequence, and a Python iterator is
     // single-pass (`DESIGN.md` §6), so what they consume is gone.
     ("head", 1),
-    ("isEmpty", 1),
+    ("is_empty", 1),
     ("len", 1),
     ("exists", 2),
     ("forall", 2),
@@ -1644,16 +1644,16 @@ pub const SEQ_PRELUDE: &[(&str, usize)] = &[
     ("filter", 2),
     ("take", 2),
     ("fold", 3),
-    ("toList", 1),
-    ("ofList", 1),
+    ("to_list", 1),
+    ("of_list", 1),
     ("range", 2),
     // From the FSharp.Core audit: `List` had these and `Seq` did not.
     ("empty", 0),
-    ("distinctBy", 2),
+    ("distinct_by", 2),
     ("replicate", 2),
     ("get", 2),
     ("last", 1),
-    ("sumBy", 2),
+    ("sum_by", 2),
     ("max", 1),
     ("min", 1),
     ("reduce", 2),
@@ -1687,9 +1687,9 @@ pub fn qualified_name(expr: &Expr) -> Option<String> {
 fn python_builtin_spelling(name: &str) -> Option<&'static str> {
     Some(match name {
         "len" => "`List.len` for a list, `String.len` for a string",
-        "str" => "`String.fromInt` or `String.fromFloat` (or an f-string)",
-        "int" => "`String.toInt`, which returns an `Option`",
-        "float" => "`String.toFloat`, which returns an `Option`",
+        "str" => "`String.from_int` or `String.from_float` (or an f-string)",
+        "int" => "`String.to_int`, which returns an `Option`",
+        "float" => "`String.to_float`, which returns an `Option`",
         "sum" => "`List.sum`",
         "sorted" => "`List.sort`",
         "reversed" => "`List.rev`",
@@ -1727,23 +1727,48 @@ fn levenshtein(a: &str, b: &str) -> usize {
 
 /// Standard-library members renamed in 0.11, so the old spelling is answered with
 /// the new one however far apart the two are (`tryFind` and `find` are too far
-/// for the fuzzy match below). Every lookup returns an `Option`, so the `try`
-/// prefix two of them carried said nothing the type did not (`DESIGN.md` §6).
-fn renamed_member(module: &str, name: &str) -> Option<&'static str> {
-    match (module, name) {
+/// for the fuzzy match below). Three families: every lookup returns an `Option`,
+/// so the `try` prefix two of them carried said nothing the type did not; a
+/// name follows Python's word where it has one (`lstrip`, `str`); and every
+/// multi-word name is snake_case, so a camelCase spelling whose snake_case form
+/// is a member is answered with that form (`DESIGN.md` §6).
+fn renamed_member(module: &str, name: &str, env: &Env) -> Option<String> {
+    let fixed = match (module, name) {
         ("Map", "tryFind") => Some("find"),
-        ("String", "tryIndexOf") => Some("indexOf"),
+        ("String", "tryIndexOf" | "indexOf") => Some("index_of"),
+        ("String", "trimStart") => Some("lstrip"),
+        ("String", "trimEnd") => Some("rstrip"),
         ("Decode", "string") => Some("str"),
         _ => None,
+    };
+    if let Some(new) = fixed {
+        return Some(new.to_string());
     }
+    let snake = to_snake_case(name);
+    (snake != name && env.contains_key(&format!("{module}.{snake}"))).then_some(snake)
+}
+
+/// `sortBy` → `sort_by`: an underscore at every lowercase-to-uppercase word
+/// boundary, everything lowercased. The one casing rule value names follow.
+pub fn to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 2);
+    let mut prev_lower = false;
+    for c in name.chars() {
+        if c.is_ascii_uppercase() && prev_lower {
+            out.push('_');
+        }
+        prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+        out.push(c.to_ascii_lowercase());
+    }
+    out
 }
 
 /// The member of `module` closest to `name` by edit distance, when one is near
-/// enough to be a plausible typo or casing slip (`String.startswith` → `startsWith`).
+/// enough to be a plausible typo or casing slip (`String.startswith` → `starts_with`).
 /// Scans the env's qualified keys, so it works for built-in *and* user modules alike.
 fn closest_member(module: &str, name: &str, env: &Env) -> Option<String> {
-    if let Some(new) = renamed_member(module, name) {
-        return Some(new.to_string());
+    if let Some(new) = renamed_member(module, name, env) {
+        return Some(new);
     }
     let prefix = format!("{module}.");
     let members = || env.keys().filter_map(|k| k.strip_prefix(&prefix));
@@ -3432,7 +3457,7 @@ fn build_decls(
 }
 
 /// Seed the `Async` module ([`ASYNC_PRELUDE`]). Every arrow is pure except
-/// `toThread`, which performs the thunk's effect when the value is built.
+/// `to_thread`, which performs the thunk's effect when the value is built.
 fn seed_async_prelude(env: &mut Env) {
     let asy = |t: Ty| Ty::Con("Async".to_string(), vec![t]);
     let list = |t: Ty| Ty::Con("List".to_string(), vec![t]);
@@ -3463,9 +3488,9 @@ fn seed_async_prelude(env: &mut Env) {
         "timeout",
         scheme(vec![0], vec![], pf(float(), pf(asy(a()), asy(opt(a()))))),
     );
-    // Async.toThread : (unit ->{e} a) ->{e} Async a
+    // Async.to_thread : (unit ->{e} a) ->{e} Async a
     put(
-        "toThread",
+        "to_thread",
         scheme(vec![0], vec![e], arrow_e(arrow_e(Ty::Unit, a()), asy(a()))),
     );
     // Async.parallel : List (Async a) -> Async (List a)
@@ -4498,9 +4523,9 @@ fn seed_list_prelude(env: &mut Env) {
             pure_fn(int(), pure_fn(list(Ty::Var(0)), option(Ty::Var(0)))),
         ),
     );
-    // List.isEmpty : List a -> bool   (pure, O(1))
+    // List.is_empty : List a -> bool   (pure, O(1))
     env.insert(
-        "List.isEmpty".to_string(),
+        "List.is_empty".to_string(),
         mono(vec![0], pure_fn(list(Ty::Var(0)), Ty::Bool)),
     );
     // List.contains : a -> List a -> bool   (pure, O(n) linear scan; `Set` is O(1))
@@ -4676,9 +4701,9 @@ fn seed_list_prelude(env: &mut Env) {
         "List.drop".to_string(),
         mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(a())))),
     );
-    // List.splitAt : int -> List a -> (List a, List a)
+    // List.split_at : int -> List a -> (List a, List a)
     env.insert(
-        "List.splitAt".to_string(),
+        "List.split_at".to_string(),
         mono(
             vec![0],
             pure_fn(
@@ -4736,9 +4761,9 @@ fn seed_list_prelude(env: &mut Env) {
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), Ty::Bool)),
         ),
     );
-    // List.findIndex : (a ->{e} bool) -> List a ->{e} Option int
+    // List.find_index : (a ->{e} bool) -> List a ->{e} Option int
     env.insert(
-        "List.findIndex".to_string(),
+        "List.find_index".to_string(),
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), option(int()))),
@@ -4746,18 +4771,18 @@ fn seed_list_prelude(env: &mut Env) {
     );
 
     // ---- order (the key is what needs `comparison`, not the element) ----
-    // List.sortBy : comparison b => (a ->{e} b) -> List a ->{e} List a
+    // List.sort_by : comparison b => (a ->{e} b) -> List a ->{e} List a
     env.insert(
-        "List.sortBy".to_string(),
+        "List.sort_by".to_string(),
         ord_eff_scheme(
             vec![0, 1],
             vec![1],
             pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
         ),
     );
-    // List.sortDescending : comparison a => List a -> List a
+    // List.sort_descending : comparison a => List a -> List a
     env.insert(
-        "List.sortDescending".to_string(),
+        "List.sort_descending".to_string(),
         ord_scheme(vec![0], vec![0], pure_fn(list(a()), list(a()))),
     );
     // List.distinct : List a -> List a   (first occurrence wins, order kept)
@@ -4765,18 +4790,18 @@ fn seed_list_prelude(env: &mut Env) {
         "List.distinct".to_string(),
         mono(vec![0], pure_fn(list(a()), list(a()))),
     );
-    // List.distinctBy : (a ->{e} b) -> List a ->{e} List a
+    // List.distinct_by : (a ->{e} b) -> List a ->{e} List a
     env.insert(
-        "List.distinctBy".to_string(),
+        "List.distinct_by".to_string(),
         eff_scheme(
             vec![0, 1],
             pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
         ),
     );
-    // List.groupBy : (a ->{e} b) -> List a ->{e} List (b, List a)   (groups in
+    // List.group_by : (a ->{e} b) -> List a ->{e} List (b, List a)   (groups in
     // first-seen key order)
     env.insert(
-        "List.groupBy".to_string(),
+        "List.group_by".to_string(),
         eff_scheme(
             vec![0, 1],
             pure_fn(
@@ -4797,28 +4822,28 @@ fn seed_list_prelude(env: &mut Env) {
         "List.min".to_string(),
         ord_scheme(vec![0], vec![0], pure_fn(list(a()), option(a()))),
     );
-    // List.maxBy : comparison b => (a ->{e} b) -> List a ->{e} Option a
+    // List.max_by : comparison b => (a ->{e} b) -> List a ->{e} Option a
     env.insert(
-        "List.maxBy".to_string(),
+        "List.max_by".to_string(),
         ord_eff_scheme(
             vec![0, 1],
             vec![1],
             pure_fn(arrow_e(a(), b()), arrow_e(list(a()), option(a()))),
         ),
     );
-    // List.minBy : comparison b => (a ->{e} b) -> List a ->{e} Option a
+    // List.min_by : comparison b => (a ->{e} b) -> List a ->{e} Option a
     env.insert(
-        "List.minBy".to_string(),
+        "List.min_by".to_string(),
         ord_eff_scheme(
             vec![0, 1],
             vec![1],
             pure_fn(arrow_e(a(), b()), arrow_e(list(a()), option(a()))),
         ),
     );
-    // List.sumBy : num b => (a ->{e} b) -> List a ->{e} b   (empty sums to zero,
+    // List.sum_by : num b => (a ->{e} b) -> List a ->{e} b   (empty sums to zero,
     // like `List.sum`, so no `Option`)
     env.insert(
-        "List.sumBy".to_string(),
+        "List.sum_by".to_string(),
         num_eff_scheme(
             vec![0, 1],
             vec![1],
@@ -4887,25 +4912,25 @@ fn seed_list_prelude(env: &mut Env) {
     );
 
     // ---- positional update (out of range leaves the list unchanged) ----
-    // List.updateAt : int -> a -> List a -> List a
+    // List.update_at : int -> a -> List a -> List a
     env.insert(
-        "List.updateAt".to_string(),
+        "List.update_at".to_string(),
         mono(
             vec![0],
             pure_fn(int(), pure_fn(a(), pure_fn(list(a()), list(a())))),
         ),
     );
-    // List.insertAt : int -> a -> List a -> List a   (index clamped to the ends)
+    // List.insert_at : int -> a -> List a -> List a   (index clamped to the ends)
     env.insert(
-        "List.insertAt".to_string(),
+        "List.insert_at".to_string(),
         mono(
             vec![0],
             pure_fn(int(), pure_fn(a(), pure_fn(list(a()), list(a())))),
         ),
     );
-    // List.removeAt : int -> List a -> List a
+    // List.remove_at : int -> List a -> List a
     env.insert(
-        "List.removeAt".to_string(),
+        "List.remove_at".to_string(),
         mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(a())))),
     );
 
@@ -4921,44 +4946,44 @@ fn seed_list_prelude(env: &mut Env) {
         "List.windowed".to_string(),
         mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(list(a()))))),
     );
-    // List.chunkBySize : int -> List a -> List (List a)   (consecutive chunks; the
+    // List.chunk_by_size : int -> List a -> List (List a)   (consecutive chunks; the
     // last one is short if the length does not divide evenly)
     env.insert(
-        "List.chunkBySize".to_string(),
+        "List.chunk_by_size".to_string(),
         mono(vec![0], pure_fn(int(), pure_fn(list(a()), list(list(a()))))),
     );
 
     // ---- from the FSharp.Core audit: `Seq` had these and `List` did not ----
-    // List.takeWhile : (a ->{e} bool) -> List a ->{e} List a
+    // List.take_while : (a ->{e} bool) -> List a ->{e} List a
     env.insert(
-        "List.takeWhile".to_string(),
+        "List.take_while".to_string(),
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), list(a()))),
         ),
     );
-    // List.dropWhile : (a ->{e} bool) -> List a ->{e} List a
+    // List.drop_while : (a ->{e} bool) -> List a ->{e} List a
     env.insert(
-        "List.dropWhile".to_string(),
+        "List.drop_while".to_string(),
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(list(a()), list(a()))),
         ),
     );
-    // List.sortByDescending : comparison b => (a ->{e} b) -> List a ->{e} List a
-    // (`sortBy` and `sortDescending` existed; this is the pair of them.)
+    // List.sort_by_descending : comparison b => (a ->{e} b) -> List a ->{e} List a
+    // (`sort_by` and `sort_descending` existed; this is the pair of them.)
     env.insert(
-        "List.sortByDescending".to_string(),
+        "List.sort_by_descending".to_string(),
         ord_eff_scheme(
             vec![0, 1],
             vec![1],
             pure_fn(arrow_e(a(), b()), arrow_e(list(a()), list(a()))),
         ),
     );
-    // List.countBy : (a ->{e} b) -> List a ->{e} List (b, int)   (how many share
-    // each key, in first-seen key order — `groupBy` with the members counted)
+    // List.count_by : (a ->{e} b) -> List a ->{e} List (b, int)   (how many share
+    // each key, in first-seen key order — `group_by` with the members counted)
     env.insert(
-        "List.countBy".to_string(),
+        "List.count_by".to_string(),
         eff_scheme(
             vec![0, 1],
             pure_fn(
@@ -4998,8 +5023,8 @@ fn seed_set_prelude(env: &mut Env) {
     put("union", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
     put("intersect", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
     put("difference", pure_fn(set(a()), pure_fn(set(a()), set(a()))));
-    put("ofList", pure_fn(list(a()), set(a())));
-    put("toList", pure_fn(set(a()), list(a())));
+    put("of_list", pure_fn(list(a()), set(a())));
+    put("to_list", pure_fn(set(a()), list(a())));
 
     // The higher-order members are effect-polymorphic like `List.map`: one bound
     // effect variable (id 0) links the function's arrow to the traversal's.
@@ -5016,9 +5041,9 @@ fn seed_set_prelude(env: &mut Env) {
     };
     let b = || Ty::Var(1);
     let opt = |t: Ty| Ty::Con("Option".to_string(), vec![t]);
-    // Set.isEmpty : Set a -> bool
+    // Set.is_empty : Set a -> bool
     env.insert(
-        "Set.isEmpty".to_string(),
+        "Set.is_empty".to_string(),
         scheme(pure_fn(set(a()), Ty::Bool)),
     );
     // Set.map : (a ->{e} b) -> Set a ->{e} Set b   (the result may be smaller: two
@@ -5076,13 +5101,13 @@ fn seed_set_prelude(env: &mut Env) {
             ),
         ),
     );
-    // Set.isSubset / Set.isSuperset : Set a -> Set a -> bool
+    // Set.is_subset / Set.is_superset : Set a -> Set a -> bool
     env.insert(
-        "Set.isSubset".to_string(),
+        "Set.is_subset".to_string(),
         scheme(pure_fn(set(a()), pure_fn(set(a()), Ty::Bool))),
     );
     env.insert(
-        "Set.isSuperset".to_string(),
+        "Set.is_superset".to_string(),
         scheme(pure_fn(set(a()), pure_fn(set(a()), Ty::Bool))),
     );
     // Set.max / Set.min : comparison a => Set a -> Option a
@@ -5116,7 +5141,7 @@ fn seed_set_prelude(env: &mut Env) {
 /// Seed the `String` module ([`STRING_PRELUDE`]) — pure, **monomorphic** text
 /// operations over the built-in `str`, under qualified keys (`String.split`).
 /// No type variables (all concrete over `str`/`int`/`float`), so the schemes are
-/// closed. `String.toInt` returns `Option int` (a total parse).
+/// closed. `String.to_int` returns `Option int` (a total parse).
 fn seed_string_prelude(env: &mut Env) {
     let str_ = || Ty::Str;
     let int = || Ty::Int(Unit::dimensionless());
@@ -5146,47 +5171,47 @@ fn seed_string_prelude(env: &mut Env) {
     put("lower", pure_fn(str_(), str_()));
     put("strip", pure_fn(str_(), str_()));
     put("contains", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
-    put("startsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
-    put("endsWith", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
+    put("starts_with", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
+    put("ends_with", pure_fn(str_(), pure_fn(str_(), Ty::Bool)));
     // String.replace old new s
     put(
         "replace",
         pure_fn(str_(), pure_fn(str_(), pure_fn(str_(), str_()))),
     );
-    put("fromInt", pure_fn(int(), str_()));
-    put("fromFloat", pure_fn(float(), str_()));
-    put("toInt", pure_fn(str_(), opt(int())));
-    // String.toFloat : string -> Option float  (a total parse, mirrors toInt).
-    put("toFloat", pure_fn(str_(), opt(float())));
+    put("from_int", pure_fn(int(), str_()));
+    put("from_float", pure_fn(float(), str_()));
+    put("to_int", pure_fn(str_(), opt(int())));
+    // String.to_float : string -> Option float  (a total parse, mirrors to_int).
+    put("to_float", pure_fn(str_(), opt(float())));
     // Each element of the result is a single-character string (no `char` type).
-    put("toList", pure_fn(str_(), list(str_())));
+    put("to_list", pure_fn(str_(), list(str_())));
     // String.slice start end s -> s[start:end]  (Python slice semantics: total,
     // end-exclusive, clamps out-of-range).
     put(
         "slice",
         pure_fn(int(), pure_fn(int(), pure_fn(str_(), str_()))),
     );
-    // String.indexOf sub s -> Some i (first occurrence) or None if absent.
-    put("indexOf", pure_fn(str_(), pure_fn(str_(), opt(int()))));
+    // String.index_of sub s -> Some i (first occurrence) or None if absent.
+    put("index_of", pure_fn(str_(), pure_fn(str_(), opt(int()))));
 
-    // String.isEmpty : string -> bool   (the same name every other container uses)
-    put("isEmpty", pure_fn(str_(), Ty::Bool));
+    // String.is_empty : string -> bool   (the same name every other container uses)
+    put("is_empty", pure_fn(str_(), Ty::Bool));
     // String.get : int -> string -> Option string   (one character, bounds-checked
     // and total, exactly like `List.get`; there is no `char` type, so it is a
     // one-character string)
     put("get", pure_fn(int(), pure_fn(str_(), opt(str_()))));
     // String.repeat : int -> string -> string   (a non-positive count gives "")
     put("repeat", pure_fn(int(), pure_fn(str_(), str_())));
-    // String.trimStart / trimEnd : string -> string   (`strip` does both ends)
-    put("trimStart", pure_fn(str_(), str_()));
-    put("trimEnd", pure_fn(str_(), str_()));
-    // String.splitLines : string -> List string   (splits on any line ending, and
+    // String.lstrip / rstrip : string -> string   (`strip` does both ends)
+    put("lstrip", pure_fn(str_(), str_()));
+    put("rstrip", pure_fn(str_(), str_()));
+    // String.split_lines : string -> List string   (splits on any line ending, and
     // a trailing newline does not add an empty last line)
-    put("splitLines", pure_fn(str_(), list(str_())));
+    put("split_lines", pure_fn(str_(), list(str_())));
     // String.rev : string -> string
     put("rev", pure_fn(str_(), str_()));
-    // String.ofList : List string -> string   (the inverse of `toList`)
-    put("ofList", pure_fn(list(str_()), str_()));
+    // String.of_list : List string -> string   (the inverse of `to_list`)
+    put("of_list", pure_fn(list(str_()), str_()));
 }
 
 /// Seed the `Format` module ([`FORMAT_PRELUDE`]) — checked formatting functions, the
@@ -5238,17 +5263,17 @@ fn seed_format_prelude(env: &mut Env) {
         "Format.grouped".to_string(),
         uscheme(pure_fn(int_u(), str_())),
     );
-    // Format.padLeft w fill s -> pad on the left to width w (right-justify); `fill`
+    // Format.pad_left w fill s -> pad on the left to width w (right-justify); `fill`
     // is a length-1 string (Pyfun has no `char`).
     let pad = || pure_fn(int(), pure_fn(str_(), pure_fn(str_(), str_())));
-    env.insert("Format.padLeft".to_string(), cscheme(pad()));
-    // Format.padRight w fill s -> pad on the right to width w (left-justify).
-    env.insert("Format.padRight".to_string(), cscheme(pad()));
+    env.insert("Format.pad_left".to_string(), cscheme(pad()));
+    // Format.pad_right w fill s -> pad on the right to width w (left-justify).
+    env.insert("Format.pad_right".to_string(), cscheme(pad()));
 }
 
 /// Seed the `Decode` module ([`DECODE_PRELUDE`]) — Elm-style JSON decoder combinators
 /// over the opaque `Decoder a`. Every arrow is **pure**: decoders are a pure, total
-/// sublanguage, so composing and running them (`decodeString : Decoder a -> str ->
+/// sublanguage, so composing and running them (`decode_string : Decoder a -> str ->
 /// Result a Exception`) never introduces an effect, even though the runner parses JSON
 /// at the boundary. The function argument to `map`/`map2`/… is likewise a pure arrow,
 /// which is what keeps the whole pipeline pure and sound.
@@ -5339,19 +5364,19 @@ fn seed_decode_prelude(env: &mut Env) {
     put("succeed", scheme(vec![0], pf(v(0), dec(v(0)))));
     // Decode.fail msg : a decoder that always fails with `msg`.
     put("fail", scheme(vec![0], pf(str_(), dec(v(0)))));
-    // Decode.andThen f dec : chain a decoder that depends on the decoded value.
+    // Decode.and_then f dec : chain a decoder that depends on the decoded value.
     put(
-        "andThen",
+        "and_then",
         scheme(
             vec![0, 1],
             pf(pf(v(0), dec(v(1))), pf(dec(v(0)), dec(v(1)))),
         ),
     );
-    // Decode.oneOf decs : the first decoder in the list that succeeds.
-    put("oneOf", scheme(vec![0], pf(list(dec(v(0))), dec(v(0)))));
-    // Decode.decodeString dec s : run a decoder over a JSON string, totally.
+    // Decode.one_of decs : the first decoder in the list that succeeds.
+    put("one_of", scheme(vec![0], pf(list(dec(v(0))), dec(v(0)))));
+    // Decode.decode_string dec s : run a decoder over a JSON string, totally.
     put(
-        "decodeString",
+        "decode_string",
         scheme(
             vec![0],
             pf(dec(v(0)), pf(str_(), result(v(0), exception()))),
@@ -5387,15 +5412,15 @@ fn seed_map_prelude(env: &mut Env) {
     put("add", pure_fn(k(), pure_fn(v(), pure_fn(mv(), mv()))));
     put("remove", pure_fn(k(), pure_fn(mv(), mv())));
     put("contains", pure_fn(k(), pure_fn(mv(), Ty::Bool)));
-    put("findOr", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
+    put("find_or", pure_fn(k(), pure_fn(v(), pure_fn(mv(), v()))));
     put("find", pure_fn(k(), pure_fn(mv(), opt(v()))));
     put("len", pure_fn(mv(), int()));
     put("keys", pure_fn(mv(), list(k())));
     put("values", pure_fn(mv(), list(v())));
-    // Map.ofList : List (k, v) -> Map k v ; Map.toList : Map k v -> List (k, v)
+    // Map.of_list : List (k, v) -> Map k v ; Map.to_list : Map k v -> List (k, v)
     let pair = || list(Ty::Tuple(vec![k(), v()]));
-    put("ofList", pure_fn(pair(), mv()));
-    put("toList", pure_fn(mv(), pair()));
+    put("of_list", pure_fn(pair(), mv()));
+    put("to_list", pure_fn(mv(), pair()));
 
     // The higher-order members take the key *and* the value, since a map's
     // element is the pair. Effect-polymorphic like `List.map`.
@@ -5412,8 +5437,8 @@ fn seed_map_prelude(env: &mut Env) {
     };
     let w = || Ty::Var(2);
     let acc = || Ty::Var(3);
-    // Map.isEmpty : Map k v -> bool
-    env.insert("Map.isEmpty".to_string(), scheme(pure_fn(mv(), Ty::Bool)));
+    // Map.is_empty : Map k v -> bool
+    env.insert("Map.is_empty".to_string(), scheme(pure_fn(mv(), Ty::Bool)));
     // Map.map : (k ->{e} v ->{e} w) -> Map k v ->{e} Map k w   (keys are kept)
     env.insert(
         "Map.map".to_string(),
@@ -5557,16 +5582,16 @@ fn seed_option_prelude(env: &mut Env) {
         },
     );
     put(
-        "withDefault",
+        "with_default",
         scheme(vec![0], pure_fn(a(), pure_fn(opt(a()), a()))),
     );
-    put("isSome", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
-    put("isNone", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
-    // Option.toResult : e -> Option a -> Result a e   (Some x -> Ok x, None ->
-    // Error e; the inverse of Result.toOption). `b` (var 1) is the error type.
+    put("is_some", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
+    put("is_none", scheme(vec![0], pure_fn(opt(a()), Ty::Bool)));
+    // Option.to_result : e -> Option a -> Result a e   (Some x -> Ok x, None ->
+    // Error e; the inverse of Result.to_option). `b` (var 1) is the error type.
     let res = |a: Ty, e: Ty| Ty::Con("Result".to_string(), vec![a, e]);
     put(
-        "toResult",
+        "to_result",
         scheme(vec![0, 1], pure_fn(b(), pure_fn(opt(a()), res(a(), b())))),
     );
 
@@ -5593,11 +5618,11 @@ fn seed_option_prelude(env: &mut Env) {
             ),
         ),
     );
-    // Option.orElse : Option a -> Option a -> Option a
-    // The **fallback comes first**, like `withDefault`, so it reads as
-    // `primary |> Option.orElse fallback`.
+    // Option.or_else : Option a -> Option a -> Option a
+    // The **fallback comes first**, like `with_default`, so it reads as
+    // `primary |> Option.or_else fallback`.
     put(
-        "orElse",
+        "or_else",
         scheme(vec![0], pure_fn(opt(a()), pure_fn(opt(a()), opt(a())))),
     );
     // Option.flatten : Option (Option a) -> Option a
@@ -5610,8 +5635,8 @@ fn seed_option_prelude(env: &mut Env) {
             pure_fn(arrow_e(a(), Ty::Unit), arrow_e(opt(a()), Ty::Unit)),
         ),
     );
-    // Option.toList : Option a -> List a   (one element, or none)
-    put("toList", scheme(vec![0], pure_fn(opt(a()), list(a()))));
+    // Option.to_list : Option a -> List a   (one element, or none)
+    put("to_list", scheme(vec![0], pure_fn(opt(a()), list(a()))));
     // Option.exists : (a ->{e} bool) -> Option a ->{e} bool   (`None` fails it)
     put(
         "exists",
@@ -5637,7 +5662,7 @@ fn seed_option_prelude(env: &mut Env) {
 }
 
 /// Seed the `Result` module ([`RESULT_PRELUDE`]) — combinators over the built-in
-/// `Result a e` (ok var 0, error var 1, mapped var 2). `Result.map`/`mapError`/
+/// `Result a e` (ok var 0, error var 1, mapped var 2). `Result.map`/`map_error`/
 /// `bind` are effect-polymorphic (one bound effect variable, id 0), like
 /// `List.map`/`Option.map`.
 fn seed_result_prelude(env: &mut Env) {
@@ -5678,9 +5703,9 @@ fn seed_result_prelude(env: &mut Env) {
             pure_fn(arrow_e(a(), m()), arrow_e(res(a(), e()), res(m(), e()))),
         ),
     );
-    // Result.mapError : (e ->{x} m) -> Result a e -> Result a m
+    // Result.map_error : (e ->{x} m) -> Result a e -> Result a m
     put(
-        "mapError",
+        "map_error",
         eff_scheme(
             vec![0, 1, 2],
             pure_fn(arrow_e(e(), m()), arrow_e(res(a(), e()), res(a(), m()))),
@@ -5697,19 +5722,22 @@ fn seed_result_prelude(env: &mut Env) {
             ),
         ),
     );
-    // Result.withDefault : a -> Result a e -> a
+    // Result.with_default : a -> Result a e -> a
     put(
-        "withDefault",
+        "with_default",
         scheme(vec![0, 1], pure_fn(a(), pure_fn(res(a(), e()), a()))),
     );
-    put("isOk", scheme(vec![0, 1], pure_fn(res(a(), e()), Ty::Bool)));
     put(
-        "isError",
+        "is_ok",
         scheme(vec![0, 1], pure_fn(res(a(), e()), Ty::Bool)),
     );
-    // Result.toOption : Result a e -> Option a
     put(
-        "toOption",
+        "is_error",
+        scheme(vec![0, 1], pure_fn(res(a(), e()), Ty::Bool)),
+    );
+    // Result.to_option : Result a e -> Option a
+    put(
+        "to_option",
         scheme(vec![0, 1], pure_fn(res(a(), e()), opt(a()))),
     );
 
@@ -5727,10 +5755,10 @@ fn seed_result_prelude(env: &mut Env) {
             ),
         ),
     );
-    // Result.orElse : Result a e -> Result a e -> Result a e   (fallback first,
-    // like `withDefault`)
+    // Result.or_else : Result a e -> Result a e -> Result a e   (fallback first,
+    // like `with_default`)
     put(
-        "orElse",
+        "or_else",
         scheme(
             vec![0, 1],
             pure_fn(res(a(), e()), pure_fn(res(a(), e()), res(a(), e()))),
@@ -5744,9 +5772,9 @@ fn seed_result_prelude(env: &mut Env) {
             pure_fn(arrow_e(a(), Ty::Unit), arrow_e(res(a(), e()), Ty::Unit)),
         ),
     );
-    // Result.toList : Result a e -> List a   (the `Ok` value, or none)
+    // Result.to_list : Result a e -> List a   (the `Ok` value, or none)
     put(
-        "toList",
+        "to_list",
         scheme(vec![0, 1], pure_fn(res(a(), e()), list(a()))),
     );
     // Result.exists / forall : (a ->{x} bool) -> Result a e ->{x} bool
@@ -5837,10 +5865,10 @@ fn seed_seq_prelude(env: &mut Env) {
             ),
         ),
     );
-    // Seq.toList : Seq a -> List a   (forces)
-    put("toList", mono(vec![0], pure_fn(seq(a()), list(a()))));
-    // Seq.ofList : List a -> Seq a
-    put("ofList", mono(vec![0], pure_fn(list(a()), seq(a()))));
+    // Seq.to_list : Seq a -> List a   (forces)
+    put("to_list", mono(vec![0], pure_fn(seq(a()), list(a()))));
+    // Seq.of_list : List a -> Seq a
+    put("of_list", mono(vec![0], pure_fn(list(a()), seq(a()))));
     // Seq.range : int -> int -> Seq int
     put(
         "range",
@@ -5854,17 +5882,17 @@ fn seed_seq_prelude(env: &mut Env) {
         "drop",
         mono(vec![0], pure_fn(int(), pure_fn(seq(a()), seq(a())))),
     );
-    // Seq.takeWhile : (a ->{e} bool) -> Seq a ->{e} Seq a
+    // Seq.take_while : (a ->{e} bool) -> Seq a ->{e} Seq a
     put(
-        "takeWhile",
+        "take_while",
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), seq(a()))),
         ),
     );
-    // Seq.dropWhile : (a ->{e} bool) -> Seq a ->{e} Seq a
+    // Seq.drop_while : (a ->{e} bool) -> Seq a ->{e} Seq a
     put(
-        "dropWhile",
+        "drop_while",
         eff_scheme(
             vec![0],
             pure_fn(arrow_e(a(), Ty::Bool), arrow_e(seq(a()), seq(a()))),
@@ -5913,10 +5941,10 @@ fn seed_seq_prelude(env: &mut Env) {
             pure_fn(int(), arrow_e(arrow_e(int(), a()), seq(a()))),
         ),
     );
-    // Seq.initInfinite : (int ->{e} a) ->{e} Seq a   (endless — the reason `Seq`
+    // Seq.init_infinite : (int ->{e} a) ->{e} Seq a   (endless — the reason `Seq`
     // exists; pair it with `take`)
     put(
-        "initInfinite",
+        "init_infinite",
         eff_scheme(vec![0], pure_fn(arrow_e(int(), a()), seq(a()))),
     );
     // Seq.unfold : (b ->{e} Option (a, b)) -> b ->{e} Seq a   (generate from a
@@ -5935,8 +5963,8 @@ fn seed_seq_prelude(env: &mut Env) {
     // ---- consuming: a Python iterator is single-pass, so what these pull is gone ----
     // Seq.head : Seq a -> Option a
     put("head", mono(vec![0], pure_fn(seq(a()), option(a()))));
-    // Seq.isEmpty : Seq a -> bool
-    put("isEmpty", mono(vec![0], pure_fn(seq(a()), Ty::Bool)));
+    // Seq.is_empty : Seq a -> bool
+    put("is_empty", mono(vec![0], pure_fn(seq(a()), Ty::Bool)));
     // Seq.len : Seq a -> int
     put("len", mono(vec![0], pure_fn(seq(a()), int())));
     // Seq.exists : (a ->{e} bool) -> Seq a ->{e} bool
@@ -6000,9 +6028,9 @@ fn seed_seq_prelude(env: &mut Env) {
     };
     // Seq.empty : Seq a
     put("empty", mono(vec![0], seq(a())));
-    // Seq.distinctBy : (a ->{e} b) -> Seq a ->{e} Seq a   (lazy, remembering keys)
+    // Seq.distinct_by : (a ->{e} b) -> Seq a ->{e} Seq a   (lazy, remembering keys)
     put(
-        "distinctBy",
+        "distinct_by",
         eff_scheme(
             vec![0, 1],
             pure_fn(arrow_e(a(), b()), arrow_e(seq(a()), seq(a()))),
@@ -6020,9 +6048,9 @@ fn seed_seq_prelude(env: &mut Env) {
     );
     // Seq.last : Seq a -> Option a
     put("last", mono(vec![0], pure_fn(seq(a()), option(a()))));
-    // Seq.sumBy : num b => (a ->{e} b) -> Seq a ->{e} b
+    // Seq.sum_by : num b => (a ->{e} b) -> Seq a ->{e} b
     put(
-        "sumBy",
+        "sum_by",
         num_eff_scheme(
             vec![0, 1],
             vec![1],
@@ -6165,7 +6193,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
     );
 
     // `Exception` — the reserved record carrying a caught Python exception's
-    // `errorKind` (the class name, `type(e).__name__`) and `errorMessage` (`str(e)`).
+    // `error_kind` (the class name, `type(e).__name__`) and `error_message` (`str(e)`).
     // Produced only by `try e : Result a Exception` (`ExprKind::Try`). Reserved (a
     // user `type Exception` is rejected via the `type_arity` clash), and it reuses
     // the ordinary record machinery, so its fields join the global field registry.
@@ -6175,19 +6203,19 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
         RecordInfo {
             params_count: 0,
             fields: vec![
-                ("errorKind".to_string(), Ty::Str),
-                ("errorMessage".to_string(), Ty::Str),
+                ("error_kind".to_string(), Ty::Str),
+                ("error_message".to_string(), Ty::Str),
             ],
         },
     );
     decls
         .field_owner
-        .entry("errorKind".to_string())
+        .entry("error_kind".to_string())
         .or_default()
         .push("Exception".to_string());
     decls
         .field_owner
-        .entry("errorMessage".to_string())
+        .entry("error_message".to_string())
         .or_default()
         .push("Exception".to_string());
     decls.local_records.insert("Exception".to_string());
@@ -6327,7 +6355,7 @@ const MAX_REFINE_DEPTH: usize = 2;
 
 /// How well a candidate's name matches the hole's own name, lower first: the
 /// member name equals the hole's name (`?upper` and `String.upper`), one contains
-/// the other (`?upperCase`, `?len` and `String.length`), or no relation. A bare
+/// the other (`?upper_case`, `?len` and `String.length`), or no relation. A bare
 /// `?` has no name to match, so every candidate ties.
 fn name_affinity(hole: Option<&str>, candidate: &str) -> u8 {
     let Some(hole) = hole else { return 2 };
@@ -8151,7 +8179,7 @@ impl Infer {
                 ("Seq", 1) => {
                     return Err(
                         "cannot derive a decoder for a lazy `Seq`: decode a `List` and convert \
-                         with `Seq.ofList`"
+                         with `Seq.of_list`"
                             .to_string(),
                     );
                 }
@@ -10344,8 +10372,8 @@ mod member_doc_tests {
         "Set.empty",
         "Map.empty",
         "Seq.empty",
-        "String.fromInt",
-        "String.fromFloat",
+        "String.from_int",
+        "String.from_float",
     ];
 
     #[test]

@@ -20,10 +20,10 @@ let widen = Geometry.area 10
 let strip = widen 2                  # 20
 
 # An Option built in Store and consumed here — one `Some` type via the shared
-# runtime, so `Option.withDefault` matches it correctly across the boundary.
+# runtime, so `Option.with_default` matches it correctly across the boundary.
 # `|>` pipes the value into the (curried, partially-applied) transform.
-let hit = Store.lookup 1 |> Option.withDefault 0
-let miss = Store.lookup 9 |> Option.withDefault 0
+let hit = Store.lookup 1 |> Option.with_default 0
+let miss = Store.lookup 9 |> Option.with_default 0
 
 print floor                          # 20
 print nine                           # 9

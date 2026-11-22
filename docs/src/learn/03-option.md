@@ -12,7 +12,7 @@ list the shapes the value can have and give each one a result.
 
 ```pyfun
 let describe s =
-  match String.toInt s:
+  match String.to_int s:
     case Some n: f"got the number {n}"
     case None: "not a number"
 
@@ -20,8 +20,8 @@ print (describe "41")
 print (describe "hello")
 
 let ns = [10, 20, 30]
-let third = Option.withDefault 0 (List.get 2 ns)
-let missing = Option.withDefault 0 (List.get 9 ns)
+let third = Option.with_default 0 (List.get 2 ns)
+let missing = Option.with_default 0 (List.get 9 ns)
 print third
 print missing
 ```
@@ -35,12 +35,12 @@ not a number
 0
 ```
 
-`String.toInt` is a total parse. In Python `int("hello")` raises, so calling code wraps it
-in `try`/`except`. Pyfun's `String.toInt` returns `Some 41` for `"41"` and `None` for
+`String.to_int` is a total parse. In Python `int("hello")` raises, so calling code wraps it
+in `try`/`except`. Pyfun's `String.to_int` returns `Some 41` for `"41"` and `None` for
 `"hello"`, and the `match` handles each. `List.get` behaves the same way: instead of an
 index that might raise `IndexError`, it returns `Some` when the position exists and `None`
 when it does not. When you only want a fallback and not a full `match`,
-`Option.withDefault` supplies one: `Option.withDefault 0 (List.get 9 ns)` is `0` because
+`Option.with_default` supplies one: `Option.with_default 0 (List.get 9 ns)` is `0` because
 position 9 is past the end.
 
 ## Exercise
@@ -52,7 +52,7 @@ The function below labels a parsed number, but it only handles the `Some` case. 
 error: non-exhaustive match: `None` is not matched
  --> 2:3
   |
-2 |   match String.toInt s:
+2 |   match String.to_int s:
   |   ^^^^^^^^^^^^^^^^^^^^^
 ```
 
@@ -60,7 +60,7 @@ Add the `None` case so the match is total and the program runs.
 
 ```pyfun
 let label s =
-  match String.toInt s:
+  match String.to_int s:
     case Some n: f"number: {n}"
 
 print (label "7")
@@ -74,14 +74,14 @@ number: 7
 no number
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHMgPQogIG1hdGNoIFN0cmluZy50b0ludCBzOgogICAgY2FzZSBTb21lIG46IGYibnVtYmVyOiB7bn0iCgpwcmludCAobGFiZWwgIjciKQpwcmludCAobGFiZWwgIm5vcGUiKQo)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHMgPQogIG1hdGNoIFN0cmluZy50b19pbnQgczoKICAgIGNhc2UgU29tZSBuOiBmIm51bWJlcjoge259IgoKcHJpbnQgKGxhYmVsICI3IikKcHJpbnQgKGxhYmVsICJub3BlIikK)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
 let label s =
-  match String.toInt s:
+  match String.to_int s:
     case Some n: f"number: {n}"
     case None: "no number"
 

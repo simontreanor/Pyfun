@@ -4,9 +4,9 @@
 ## A doc comment at column 0.
 extern type Datetime
 extern import datetime as dt
-extern pure mkDate : int -> int -> int -> Datetime = dt.datetime
+extern pure mk_date : int -> int -> int -> Datetime = dt.datetime
 extern slurp : str ->{io} str = builtins.open
-extern pure applyIt : (a ->{e} b) -> a ->{e} b = apply
+extern pure apply_it : (a ->{e} b) -> a ->{e} b = apply
 
 # --- literals ---
 let hexy = 0xDEAD_BEEF
@@ -29,13 +29,13 @@ let esc = "tab\there \u{1F600}\n"
 let braces = f"{{literal}} {1 + 2}"
 
 # --- operators, sections, composition ---
-let inRange x = 0 <= x < 10
+let in_range x = 0 <= x < 10
 let prod ns = List.fold (*) 1 ns
 let backpipe = String.len <| "abc"
 let composed = (fun n -> n + 1) >> (fun n -> n * 2)
 let nn = not (1 == 2)
 let poly x = -x ** 2
-let safeDiv = try (1 // 0)
+let safe_div = try (1 // 0)
 
 let ok =
   1 < 2
@@ -52,7 +52,7 @@ let counter =
   n <- n + 1
   n
 
-let mkAdder n = fun m ->
+let mk_adder n = fun m ->
   let t = n + m
   t
 
@@ -114,14 +114,14 @@ module Maybe =
   let return_ x = Some x
   let bind m f = match m: case Some v: f v case None: None
 
-let maybeSum a b =
+let maybe_sum a b =
   Maybe { let! x = a
           let! y = b
           return x + y }
 
-let firstEvens =
+let first_evens =
   seq { yield 0
-        yield! (Seq.ofList [2, 4]) }
+        yield! (Seq.of_list [2, 4]) }
 
 let chained =
   result { let! v = Ok 1

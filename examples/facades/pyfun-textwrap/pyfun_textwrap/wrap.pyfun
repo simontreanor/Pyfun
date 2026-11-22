@@ -7,16 +7,16 @@
 
 extern import textwrap
 
-extern pure fillText: str -> int -> str = textwrap.fill(width = ...)
-extern pure shortenText: str -> int -> str = textwrap.shorten(width = ...)
-extern pure indentText: str -> str -> str = textwrap.indent
+extern pure fill_text: str -> int -> str = textwrap.fill(width = ...)
+extern pure shorten_text: str -> int -> str = textwrap.shorten(width = ...)
+extern pure indent_text: str -> str -> str = textwrap.indent
 
 # `text |> Wrap.fill 24`: the text re-flowed to lines of at most 24 characters.
-let fill width text = fillText text width
+let fill width text = fill_text text width
 
 # `text |> Wrap.shorten 30`: the text collapsed and cut to fit 30 characters,
 # ending in " [...]" when something was cut.
-let shorten width text = shortenText text width
+let shorten width text = shorten_text text width
 
 # `text |> Wrap.indent "> "`: every non-blank line prefixed.
-let indent prefix text = indentText text prefix
+let indent prefix text = indent_text text prefix

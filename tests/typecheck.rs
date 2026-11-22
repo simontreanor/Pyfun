@@ -27,7 +27,7 @@ fn decode_module_types_a_record_decoder() {
         pyfun::check(
             "type P = { name: str, age: int, tags: List str }\n\
              let d =\n  Decode.map3 (fun name age tags -> P { name = name, age = age, tags = tags })\n    (Decode.field \"name\" Decode.str)\n    (Decode.field \"age\" Decode.int)\n    (Decode.field \"tags\" (Decode.list Decode.str))\n\
-             let r = Decode.decodeString d \"{}\""
+             let r = Decode.decode_string d \"{}\""
         )
         .is_ok()
     );
@@ -119,11 +119,11 @@ fn recursion_does_not_break_let_generalization() {
 #[test]
 fn accepts_mutual_recursion() {
     // Mutually-recursive functions form a cycle and type-check together, in either
-    // order — `isEven` sees the later `isOdd` and vice versa.
+    // order — `is_even` sees the later `is_odd` and vice versa.
     assert!(
         pyfun::check(
-            "let isEven n = if n == 0 then True else isOdd (n - 1)\n\
-             let isOdd n = if n == 0 then False else isEven (n - 1)"
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let is_odd n = if n == 0 then False else is_even (n - 1)"
         )
         .is_ok()
     );
@@ -245,8 +245,8 @@ fn accepts_discard_binding() {
 #[test]
 fn accepts_string_slice_and_index_of() {
     assert!(pyfun::check("let r = String.slice 0 3 \"hello\"").is_ok());
-    assert!(pyfun::check("let r = String.indexOf \"l\" \"hello\"").is_ok()); // : Option int
-    assert!(pyfun::check("let r = Option.withDefault 0 (String.indexOf \"l\" \"hi\")").is_ok());
+    assert!(pyfun::check("let r = String.index_of \"l\" \"hello\"").is_ok()); // : Option int
+    assert!(pyfun::check("let r = Option.with_default 0 (String.index_of \"l\" \"hi\")").is_ok());
     // slice bounds are ints, not strings.
     assert_error_contains("let r = String.slice \"a\" 3 \"hello\"", "int");
 }
@@ -276,7 +276,7 @@ fn accepts_option_bind_filter_to_result() {
         "Option.bind"
     );
     assert!(pyfun::check("let r = Option.filter (fun x -> x > 0) (Some 3)").is_ok());
-    assert!(pyfun::check("let r = Option.toResult \"none\" (Some 42)").is_ok());
+    assert!(pyfun::check("let r = Option.to_result \"none\" (Some 42)").is_ok());
     // bind chains: Option a -> Option b -> Option c.
     assert!(
         pyfun::check(
@@ -300,8 +300,8 @@ fn accepts_numeric_conversions() {
     assert!(pyfun::check("measure m\nlet r = round 2.5<m>\nlet ok = r + 1<m>").is_ok());
     // The result is an int, so it mixes with int arithmetic.
     assert!(pyfun::check("let r = floor 3.7 + 1").is_ok());
-    // String.toFloat : string -> Option float.
-    assert!(pyfun::check("let r = Option.withDefault 0.0 (String.toFloat \"3.14\")").is_ok());
+    // String.to_float : str -> Option float.
+    assert!(pyfun::check("let r = Option.with_default 0.0 (String.to_float \"3.14\")").is_ok());
 }
 
 #[test]
@@ -424,14 +424,14 @@ fn accepts_scientific_notation() {
 #[test]
 fn accepts_list_completeness_ops() {
     assert!(pyfun::check("let r = List.get 0 [1, 2, 3]").is_ok()); // : Option int
-    assert!(pyfun::check("let r = List.isEmpty [1]").is_ok());
+    assert!(pyfun::check("let r = List.is_empty [1]").is_ok());
     assert!(pyfun::check("let r = List.contains 2 [1, 2]").is_ok());
     assert!(pyfun::check("let r = List.concat [1] [2, 3]").is_ok());
     assert!(pyfun::check("let r = List.sort [3, 1, 2]").is_ok());
     assert!(pyfun::check("let r = List.sort [\"b\", \"a\"]").is_ok()); // strings orderable
     assert!(pyfun::check("let r = List.find (fun x -> x > 1) [1, 2, 3]").is_ok());
     // `get`/`find` yield `Option`, consumed by the Option module.
-    assert!(pyfun::check("let r = Option.withDefault 0 (List.get 0 [1, 2])").is_ok());
+    assert!(pyfun::check("let r = Option.with_default 0 (List.get 0 [1, 2])").is_ok());
 }
 
 #[test]
@@ -456,7 +456,7 @@ fn accepts_list_choose_and_collect() {
     // choose can change the element type: int in, string out.
     assert!(
         pyfun::check(
-            "let r = List.choose (fun x -> Some (String.fromInt x)) [1, 2]\n\
+            "let r = List.choose (fun x -> Some (String.from_int x)) [1, 2]\n\
              let n = List.map String.len r"
         )
         .is_ok()
@@ -491,7 +491,7 @@ fn choose_and_collect_are_effect_polymorphic() {
 #[test]
 fn accepts_modulo() {
     assert!(pyfun::check("let r = 10 % 3").is_ok());
-    assert!(pyfun::check("let isEven n = n % 2 == 0").is_ok());
+    assert!(pyfun::check("let is_even n = n % 2 == 0").is_ok());
     assert!(pyfun::check("let r = 5.5 % 2.0").is_ok()); // float modulo
     // Unit-preserving like `+`/`-`: `10<m> % 3<m> : int<m>`.
     assert!(pyfun::check("measure m\nlet r = 10<m> % 3<m>\nlet ok = r + 1<m>").is_ok());
@@ -604,8 +604,8 @@ fn accepts_parameterized_opaque_type() {
     // `Tag a` wraps `List a`; wrapping and unwrapping instantiate the parameter.
     let src = "opaque type Tag a = List a\n\
                let t = Tag [1, 2]\n\
-               let unwrapTag tg =\n  match tg:\n    case Tag xs: xs\n\
-               let xs = unwrapTag t";
+               let unwrap_tag tg =\n  match tg:\n    case Tag xs: xs\n\
+               let xs = unwrap_tag t";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -613,8 +613,8 @@ fn accepts_parameterized_opaque_type() {
 fn accepts_opaque_type_in_an_extern_signature() {
     // A newtype names a position in an extern's declared type like any nominal type.
     let src = "opaque type UserId = str\n\
-               extern pure upperId: UserId -> str = str.upper\n\
-               let r = upperId (UserId \"abc\")";
+               extern pure upper_id: UserId -> str = str.upper\n\
+               let r = upper_id (UserId \"abc\")";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -629,8 +629,8 @@ fn newtype_constructor_is_first_class() {
     // `List.map UserId` has type `List string -> List UserId`, and the result is
     // consumed by a function matching newtype patterns.
     let src = "opaque type UserId = str\n\
-               let firstLen ids =\n  match ids:\n    case [UserId s, *_]: String.len s\n    case []: 0\n\
-               let n = firstLen (List.map UserId [\"ab\", \"c\"])";
+               let first_len ids =\n  match ids:\n    case [UserId s, *_]: String.len s\n    case []: 0\n\
+               let n = first_len (List.map UserId [\"ab\", \"c\"])";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -1042,7 +1042,7 @@ fn for_items_type_in_every_builder() {
     // its body, in `seq`, `async`, `result`/`option` and a user builder.
     let src = "let squares = seq {\n  for x in [1, 2, 3]:\n    let y = x * x\n    yield y\n  yield 100\n}\n\
                let pairs = seq { for (a, b) in [(1, 2)]: yield a + b }\n\
-               let lazy = seq { for x in Seq.ofList [1]: yield x }\n\
+               let lazy = seq { for x in Seq.of_list [1]: yield x }\n\
                let check x = if x > 0 then Ok x else Error \"neg\"\n\
                let all xs = result {\n  for x in xs:\n    let! _ = check x\n  return True\n}\n\
                let main = async {\n  for n in [1, 2]:\n    do! Async.sleep 0.001\n  return ()\n}\n\
@@ -1089,7 +1089,7 @@ const MAYBE_BUILDER: &str = "module Maybe =\n\
     \x20 \x20 \x20 case Some x: f x\n\
     \x20 \x20 \x20 case None: None\n\
     \x20 let return_ x = Some x\n\
-    \x20 let returnFrom m = m\n";
+    \x20 let return_from m = m\n";
 
 #[test]
 fn accepts_user_monad_ce() {
@@ -1685,7 +1685,7 @@ fn a_shared_field_resolves_when_the_base_type_is_known() {
              let cl = c.letter\n\
              let nested = b.top.letter\n\
              let moved = { p with letter = \"z\" }\n\
-             let viaMatch =\n\
+             let via_match =\n\
              \x20 match c:\n\
              \x20 \x20 case Cell { letter }: letter"
         )
@@ -1731,8 +1731,8 @@ fn rejects_field_declared_twice_in_one_record() {
 fn set_traversals_keep_the_set_type() {
     assert!(
         pyfun::check(
-            "let s = Set.ofList [1, 2, 3]\n\
-             let e = Set.isEmpty s\n\
+            "let s = Set.of_list [1, 2, 3]\n\
+             let e = Set.is_empty s\n\
              let m = Set.map (fun x -> x * 2) s\n\
              let f = Set.filter (fun x -> x > 1) s\n\
              let t = Set.fold (fun acc x -> acc + x) 0 s\n\
@@ -1746,14 +1746,14 @@ fn set_traversals_keep_the_set_type() {
 fn set_map_may_change_the_element_type() {
     // Two elements can map onto one, so this is a `Set b`, not a relabelling.
     assert!(
-        pyfun::check("let s = Set.map (fun x -> String.fromInt x) (Set.ofList [1, 2])").is_ok()
+        pyfun::check("let s = Set.map (fun x -> String.from_int x) (Set.of_list [1, 2])").is_ok()
     );
 }
 
 #[test]
 fn set_max_and_min_answer_with_option() {
     assert_error_contains(
-        "let m = Set.max (Set.ofList [1])\nlet bad = m + 1",
+        "let m = Set.max (Set.of_list [1])\nlet bad = m + 1",
         "Option",
     );
 }
@@ -1762,12 +1762,12 @@ fn set_max_and_min_answer_with_option() {
 fn set_subset_checks_take_two_sets() {
     assert!(
         pyfun::check(
-            "let a = Set.isSubset (Set.ofList [1]) (Set.ofList [1, 2])\n\
-             let b = Set.isSuperset (Set.ofList [1, 2]) (Set.ofList [1])"
+            "let a = Set.is_subset (Set.of_list [1]) (Set.of_list [1, 2])\n\
+             let b = Set.is_superset (Set.of_list [1, 2]) (Set.of_list [1])"
         )
         .is_ok()
     );
-    assert_error_contains("let bad = Set.isSubset (Set.ofList [1]) [1, 2]", "Set");
+    assert_error_contains("let bad = Set.is_subset (Set.of_list [1]) [1, 2]", "Set");
 }
 
 #[test]
@@ -1775,8 +1775,8 @@ fn map_traversals_take_the_key_and_the_value() {
     // A map's element is the pair, so every higher-order member sees both.
     assert!(
         pyfun::check(
-            "let m = Map.ofList [(1, \"a\")]\n\
-             let e = Map.isEmpty m\n\
+            "let m = Map.of_list [(1, \"a\")]\n\
+             let e = Map.is_empty m\n\
              let mapped = Map.map (fun k v -> String.concat v \"!\") m\n\
              let kept = Map.filter (fun k v -> k > 0) m\n\
              let total = Map.fold (fun acc k v -> acc + k) 0 m\n\
@@ -1793,9 +1793,9 @@ fn map_map_keeps_the_keys_and_may_change_the_values() {
     // `Map k v -> Map k w`: the key type is fixed, the value type is not.
     assert!(
         pyfun::check(
-            "let m = Map.ofList [(1, \"a\")]\n\
+            "let m = Map.of_list [(1, \"a\")]\n\
              let lengths = Map.map (fun k v -> String.len v) m\n\
-             let n = Map.findOr 1 0 lengths"
+             let n = Map.find_or 1 0 lengths"
         )
         .is_ok()
     );
@@ -1804,11 +1804,11 @@ fn map_map_keeps_the_keys_and_may_change_the_values() {
 #[test]
 fn map_union_needs_two_maps_of_one_type() {
     assert!(
-        pyfun::check("let u = Map.union (Map.ofList [(1, \"a\")]) (Map.ofList [(2, \"b\")])")
+        pyfun::check("let u = Map.union (Map.of_list [(1, \"a\")]) (Map.of_list [(2, \"b\")])")
             .is_ok()
     );
     assert_error_contains(
-        "let bad = Map.union (Map.ofList [(1, \"a\")]) (Map.ofList [(2, 3)])",
+        "let bad = Map.union (Map.of_list [(1, \"a\")]) (Map.of_list [(2, 3)])",
         "int",
     );
 }
@@ -1816,11 +1816,11 @@ fn map_union_needs_two_maps_of_one_type() {
 #[test]
 fn map_and_set_traversals_carry_their_effect() {
     assert_error_contains(
-        "let pure go = Set.map (fun x -> print x) (Set.ofList [1])",
+        "let pure go = Set.map (fun x -> print x) (Set.of_list [1])",
         "io",
     );
     assert_error_contains(
-        "let pure go = Map.map (fun k v -> print v) (Map.ofList [(1, 2)])",
+        "let pure go = Map.map (fun k v -> print v) (Map.of_list [(1, 2)])",
         "io",
     );
 }
@@ -1831,11 +1831,11 @@ fn map_and_set_traversals_carry_their_effect() {
 fn string_members_stay_monomorphic_over_string() {
     assert!(
         pyfun::check(
-            "let e = String.isEmpty \"\"\n\
+            "let e = String.is_empty \"\"\n\
              let r = String.repeat 2 \"ab\"\n\
-             let a = String.trimStart \" x\"\n\
-             let b = String.trimEnd \"x \"\n\
-             let l = String.splitLines \"a\"\n\
+             let a = String.lstrip \" x\"\n\
+             let b = String.rstrip \"x \"\n\
+             let l = String.split_lines \"a\"\n\
              let v = String.rev \"abc\""
         )
         .is_ok()
@@ -1847,7 +1847,7 @@ fn string_members_stay_monomorphic_over_string() {
 fn string_get_answers_with_option_like_list_get() {
     // One character is a one-character string — there is no `char` type.
     assert!(
-        pyfun::check("let c = String.get 0 \"abc\"\nlet s = Option.withDefault \"\" c").is_ok()
+        pyfun::check("let c = String.get 0 \"abc\"\nlet s = Option.with_default \"\" c").is_ok()
     );
     assert_error_contains(
         "let c = String.get 0 \"abc\"\nlet bad = String.len c",
@@ -1857,8 +1857,8 @@ fn string_get_answers_with_option_like_list_get() {
 
 #[test]
 fn string_of_list_inverts_to_list() {
-    assert!(pyfun::check("let s = String.ofList (String.toList \"abc\")").is_ok());
-    assert_error_contains("let bad = String.ofList [1, 2]", "str");
+    assert!(pyfun::check("let s = String.of_list (String.to_list \"abc\")").is_ok());
+    assert_error_contains("let bad = String.of_list [1, 2]", "str");
 }
 
 // ---------- deferred field resolution ----------
@@ -1932,7 +1932,7 @@ fn a_pinned_container_resolves_its_payload() {
         pyfun::check(
             "type Placed = { row: int, letter: str }\n\
              type Cell = { row: int, letter: str, blank: bool }\n\
-             let board = Map.ofList [(1, Placed { row = 1, letter = \"A\" })]\n\
+             let board = Map.of_list [(1, Placed { row = 1, letter = \"A\" })]\n\
              let at k =\n\
              \x20 match Map.find k board:\n\
              \x20   case Some p: p.letter\n\
@@ -1970,11 +1970,11 @@ fn every_multi_argument_callback_member_takes_an_effect() {
     let cases = [
         "let r = List.map2 (fun a b -> log (a + b)) [1] [2]",
         "let r = List.reduce (fun a b -> log (a + b)) [1, 2]",
-        "let r = Seq.fold (fun acc x -> log (acc + x)) 0 (Seq.ofList [1])",
-        "let r = Set.fold (fun acc x -> log (acc + x)) 0 (Set.ofList [1])",
-        "let r = Map.map (fun k v -> log v) (Map.ofList [(1, 2)])",
-        "let r = Map.fold (fun acc k v -> log (acc + v)) 0 (Map.ofList [(1, 2)])",
-        "let r = Map.iter (fun k v -> ignore (log v)) (Map.ofList [(1, 2)])",
+        "let r = Seq.fold (fun acc x -> log (acc + x)) 0 (Seq.of_list [1])",
+        "let r = Set.fold (fun acc x -> log (acc + x)) 0 (Set.of_list [1])",
+        "let r = Map.map (fun k v -> log v) (Map.of_list [(1, 2)])",
+        "let r = Map.fold (fun acc k v -> log (acc + v)) 0 (Map.of_list [(1, 2)])",
+        "let r = Map.iter (fun k v -> ignore (log v)) (Map.of_list [(1, 2)])",
         "let r = Option.map2 (fun a b -> log (a + b)) (Some 1) (Some 2)",
         "let r = Result.map2 (fun a b -> log (a + b)) (Ok 1) (Ok 2)",
     ];
@@ -1992,10 +1992,10 @@ fn list_gains_the_members_seq_already_had() {
     assert!(
         pyfun::check(
             "let xs = [1, 2, 3]\n\
-             let a = List.takeWhile (fun x -> x < 3) xs\n\
-             let b = List.dropWhile (fun x -> x < 3) xs\n\
-             let c = List.sortByDescending (fun x -> x) xs\n\
-             let d = List.countBy (fun x -> x % 2) xs"
+             let a = List.take_while (fun x -> x < 3) xs\n\
+             let b = List.drop_while (fun x -> x < 3) xs\n\
+             let c = List.sort_by_descending (fun x -> x) xs\n\
+             let d = List.count_by (fun x -> x % 2) xs"
         )
         .is_ok()
     );
@@ -2005,13 +2005,13 @@ fn list_gains_the_members_seq_already_had() {
 fn seq_gains_the_members_list_already_had() {
     assert!(
         pyfun::check(
-            "let s = Seq.ofList [1, 2, 3]\n\
-             let e = Seq.toList Seq.empty\n\
-             let d = Seq.toList (Seq.distinctBy (fun x -> x % 2) s)\n\
-             let r = Seq.toList (Seq.replicate 2 \"a\")\n\
+            "let s = Seq.of_list [1, 2, 3]\n\
+             let e = Seq.to_list Seq.empty\n\
+             let d = Seq.to_list (Seq.distinct_by (fun x -> x % 2) s)\n\
+             let r = Seq.to_list (Seq.replicate 2 \"a\")\n\
              let g = Seq.get 1 s\n\
              let l = Seq.last s\n\
-             let t = Seq.sumBy (fun x -> x * 2) s\n\
+             let t = Seq.sum_by (fun x -> x * 2) s\n\
              let m = Seq.max s\n\
              let n = Seq.min s\n\
              let f = Seq.reduce (fun a b -> a + b) s"
@@ -2025,8 +2025,8 @@ fn every_module_can_iterate_for_effect() {
     // `iter` existed on List, Seq, Option and Result but not on Set or Map.
     assert!(
         pyfun::check(
-            "let a = Set.iter (fun x -> print x) (Set.ofList [1])\n\
-             let b = Map.iter (fun k v -> print v) (Map.ofList [(1, 2)])"
+            "let a = Set.iter (fun x -> print x) (Set.of_list [1])\n\
+             let b = Map.iter (fun k v -> print v) (Map.of_list [(1, 2)])"
         )
         .is_ok()
     );
@@ -2069,16 +2069,16 @@ fn option_map2_combines_two_options() {
 
 #[test]
 fn option_or_else_takes_the_fallback_first() {
-    // Argument order matches `withDefault`, so it reads as
-    // `primary |> Option.orElse fallback`.
-    assert!(pyfun::check("let s = Some 1 |> Option.orElse (Some 2)").is_ok());
-    assert_error_contains("let bad = Option.orElse (Some 1) (Some \"x\")", "str");
+    // Argument order matches `with_default`, so it reads as
+    // `primary |> Option.or_else fallback`.
+    assert!(pyfun::check("let s = Some 1 |> Option.or_else (Some 2)").is_ok());
+    assert_error_contains("let bad = Option.or_else (Some 1) (Some \"x\")", "str");
 }
 
 #[test]
 fn option_flatten_collapses_one_level() {
     assert!(
-        pyfun::check("let s = Option.flatten (Some (Some 1))\nlet n = Option.withDefault 0 s")
+        pyfun::check("let s = Option.flatten (Some (Some 1))\nlet n = Option.with_default 0 s")
             .is_ok()
     );
     // Only one level: a plain `Option a` has nothing to collapse.
@@ -2089,7 +2089,7 @@ fn option_flatten_collapses_one_level() {
 fn option_bridges_to_list_and_bool() {
     assert!(
         pyfun::check(
-            "let xs = Option.toList (Some 1)\n\
+            "let xs = Option.to_list (Some 1)\n\
              let n = List.len xs\n\
              let b = Option.exists (fun x -> x > 0) (Some 1)"
         )
@@ -2113,8 +2113,8 @@ fn result_map2_keeps_one_error_type() {
 fn result_bridges_to_list_and_or_else() {
     assert!(
         pyfun::check(
-            "let xs = Result.toList (Ok 1)\n\
-             let r = Ok 1 |> Result.orElse (Ok 2)"
+            "let xs = Result.to_list (Ok 1)\n\
+             let r = Ok 1 |> Result.or_else (Ok 2)"
         )
         .is_ok()
     );
@@ -2137,12 +2137,12 @@ fn seq_lazy_members_answer_a_seq() {
     // Each stays in `Seq`, so a chain of them is still lazy.
     assert!(
         pyfun::check(
-            "let s = Seq.ofList [1, 2, 3]\n\
-             let a = Seq.toList (Seq.drop 1 s)\n\
-             let b = Seq.toList (Seq.takeWhile (fun x -> x < 3) s)\n\
-             let c = Seq.toList (Seq.dropWhile (fun x -> x < 3) s)\n\
-             let d = Seq.toList (Seq.distinct s)\n\
-             let e = Seq.toList (Seq.pairwise s)"
+            "let s = Seq.of_list [1, 2, 3]\n\
+             let a = Seq.to_list (Seq.drop 1 s)\n\
+             let b = Seq.to_list (Seq.take_while (fun x -> x < 3) s)\n\
+             let c = Seq.to_list (Seq.drop_while (fun x -> x < 3) s)\n\
+             let d = Seq.to_list (Seq.distinct s)\n\
+             let e = Seq.to_list (Seq.pairwise s)"
         )
         .is_ok()
     );
@@ -2153,15 +2153,15 @@ fn seq_and_list_members_do_not_mix() {
     // `Seq` and `List` are distinct types, so a member of one rejects the other
     // — the choice of laziness stays explicit.
     assert_error_contains("let bad = Seq.drop 1 [1, 2]", "Seq");
-    assert_error_contains("let bad = List.drop 1 (Seq.ofList [1, 2])", "List");
+    assert_error_contains("let bad = List.drop 1 (Seq.of_list [1, 2])", "List");
 }
 
 #[test]
 fn seq_zip_and_indexed_pair_up() {
     assert!(
         pyfun::check(
-            "let z = Seq.toList (Seq.zip (Seq.ofList [1]) (Seq.ofList [\"a\"]))\n\
-             let i = Seq.toList (Seq.indexed (Seq.ofList [\"a\"]))"
+            "let z = Seq.to_list (Seq.zip (Seq.of_list [1]) (Seq.of_list [\"a\"]))\n\
+             let i = Seq.to_list (Seq.indexed (Seq.of_list [\"a\"]))"
         )
         .is_ok()
     );
@@ -2172,9 +2172,9 @@ fn seq_concat_appends_and_flatten_flattens() {
     // Same divergence from F# as `List.concat`: this one appends.
     assert!(
         pyfun::check(
-            "let a = Seq.toList (Seq.concat (Seq.ofList [1]) (Seq.ofList [2]))\n\
-             let b = Seq.toList (Seq.flatten (Seq.ofList [Seq.ofList [1]]))\n\
-             let c = Seq.toList (Seq.collect (fun x -> Seq.ofList [x]) (Seq.ofList [1]))"
+            "let a = Seq.to_list (Seq.concat (Seq.of_list [1]) (Seq.of_list [2]))\n\
+             let b = Seq.to_list (Seq.flatten (Seq.of_list [Seq.of_list [1]]))\n\
+             let c = Seq.to_list (Seq.collect (fun x -> Seq.of_list [x]) (Seq.of_list [1]))"
         )
         .is_ok()
     );
@@ -2182,18 +2182,19 @@ fn seq_concat_appends_and_flatten_flattens() {
 
 #[test]
 fn seq_can_be_endless() {
-    // `initInfinite` and `unfold` have no list behind them, which is the whole
+    // `init_infinite` and `unfold` have no list behind them, which is the whole
     // reason `Seq` exists.
     assert!(
-        pyfun::check("let s = Seq.toList (Seq.take 3 (Seq.initInfinite (fun i -> i * 2)))").is_ok()
+        pyfun::check("let s = Seq.to_list (Seq.take 3 (Seq.init_infinite (fun i -> i * 2)))")
+            .is_ok()
     );
     assert!(
-        pyfun::check("let s = Seq.toList (Seq.take 3 (Seq.unfold (fun n -> Some (n, n + 1)) 0))")
+        pyfun::check("let s = Seq.to_list (Seq.take 3 (Seq.unfold (fun n -> Some (n, n + 1)) 0))")
             .is_ok()
     );
     // `unfold`'s function reports the end with `None`, so it must answer Option.
     assert_error_contains(
-        "let s = Seq.toList (Seq.unfold (fun n -> (n, n + 1)) 0)",
+        "let s = Seq.to_list (Seq.unfold (fun n -> (n, n + 1)) 0)",
         "Option",
     );
 }
@@ -2202,9 +2203,9 @@ fn seq_can_be_endless() {
 fn seq_consuming_members_answer_plain_values() {
     assert!(
         pyfun::check(
-            "let s = Seq.ofList [1, 2, 3]\n\
+            "let s = Seq.of_list [1, 2, 3]\n\
              let n = Seq.len s\n\
-             let e = Seq.isEmpty s\n\
+             let e = Seq.is_empty s\n\
              let x = Seq.exists (fun v -> v > 1) s\n\
              let a = Seq.forall (fun v -> v > 0) s\n\
              let c = Seq.contains 2 s\n\
@@ -2214,16 +2215,16 @@ fn seq_consuming_members_answer_plain_values() {
     );
     // `head`/`find` are the Option-answering pair, like List's.
     assert_error_contains(
-        "let h = Seq.head (Seq.ofList [1])\nlet bad = h + 1",
+        "let h = Seq.head (Seq.of_list [1])\nlet bad = h + 1",
         "Option",
     );
 }
 
 #[test]
 fn seq_iter_carries_the_effect_of_its_function() {
-    assert!(pyfun::check("let go = Seq.iter (fun x -> print x) (Seq.ofList [1])").is_ok());
+    assert!(pyfun::check("let go = Seq.iter (fun x -> print x) (Seq.of_list [1])").is_ok());
     assert_error_contains(
-        "let pure go = Seq.iter (fun x -> print x) (Seq.ofList [1])",
+        "let pure go = Seq.iter (fun x -> print x) (Seq.of_list [1])",
         "io",
     );
 }
@@ -2234,8 +2235,8 @@ fn seq_iter_carries_the_effect_of_its_function() {
 fn list_accessors_answer_with_option() {
     // `head`/`last`/`tail` keep their plain names and report the empty case the
     // way `get`/`find` already do, rather than raising as F# does.
-    assert!(pyfun::check("let h = List.head [1, 2]\nlet n = Option.withDefault 0 h").is_ok());
-    assert!(pyfun::check("let t = List.tail [1, 2]\nlet n = Option.withDefault [] t").is_ok());
+    assert!(pyfun::check("let h = List.head [1, 2]\nlet n = Option.with_default 0 h").is_ok());
+    assert!(pyfun::check("let t = List.tail [1, 2]\nlet n = Option.with_default [] t").is_ok());
     assert_error_contains("let h = List.head [1, 2]\nlet bad = h + 1", "Option");
 }
 
@@ -2243,7 +2244,7 @@ fn list_accessors_answer_with_option() {
 fn list_slicing_is_total() {
     assert!(
         pyfun::check(
-            "let a = List.take 2 [1, 2, 3]\n             let b = List.drop 2 [1, 2, 3]\n             let c = List.splitAt 2 [1, 2, 3]"
+            "let a = List.take 2 [1, 2, 3]\n             let b = List.drop 2 [1, 2, 3]\n             let c = List.split_at 2 [1, 2, 3]"
         )
         .is_ok()
     );
@@ -2261,11 +2262,11 @@ fn list_map2_pairs_two_lists() {
 
 #[test]
 fn list_ordering_members_need_comparison() {
-    assert!(pyfun::check("let m = List.max [3, 1]\nlet s = List.sortDescending [3, 1]").is_ok());
-    // `sortBy`/`maxBy` constrain the *key*, not the element.
+    assert!(pyfun::check("let m = List.max [3, 1]\nlet s = List.sort_descending [3, 1]").is_ok());
+    // `sort_by`/`max_by` constrain the *key*, not the element.
     assert!(
         pyfun::check(
-            "type P = { name: str, age: int }\n             let ps = [P { name = \"a\", age = 2 }]\n             let byAge = List.sortBy (fun p -> p.age) ps\n             let oldest = List.maxBy (fun p -> p.age) ps"
+            "type P = { name: str, age: int }\n             let ps = [P { name = \"a\", age = 2 }]\n             let by_age = List.sort_by (fun p -> p.age) ps\n             let oldest = List.max_by (fun p -> p.age) ps"
         )
         .is_ok()
     );
@@ -2273,8 +2274,8 @@ fn list_ordering_members_need_comparison() {
 
 #[test]
 fn list_aggregates_that_can_be_empty_answer_with_option() {
-    // `sumBy` has a zero, so it needs no Option; `average`/`reduce`/`max` do not.
-    assert!(pyfun::check("let n = List.sumBy (fun x -> x * 2) [1, 2]\nlet m = n + 1").is_ok());
+    // `sum_by` has a zero, so it needs no Option; `average`/`reduce`/`max` do not.
+    assert!(pyfun::check("let n = List.sum_by (fun x -> x * 2) [1, 2]\nlet m = n + 1").is_ok());
     assert_error_contains("let a = List.average [1.0]\nlet bad = a + 1.0", "Option");
     assert_error_contains(
         "let r = List.reduce (fun a b -> a + b) [1]\nlet bad = r + 1",
@@ -2294,7 +2295,7 @@ fn list_average_takes_floats() {
 fn list_structure_members_keep_their_element_types() {
     assert!(
         pyfun::check(
-            "let p = List.partition (fun x -> x > 1) [1, 2]\n             let u = List.unzip (List.zip [1] [\"a\"])\n             let f = List.flatten [[1], [2]]\n             let i = List.init 3 (fun n -> n * n)\n             let r = List.replicate 2 \"x\"\n             let g = List.groupBy (fun x -> x % 2) [1, 2]"
+            "let p = List.partition (fun x -> x > 1) [1, 2]\n             let u = List.unzip (List.zip [1] [\"a\"])\n             let f = List.flatten [[1], [2]]\n             let i = List.init 3 (fun n -> n * n)\n             let r = List.replicate 2 \"x\"\n             let g = List.group_by (fun x -> x % 2) [1, 2]"
         )
         .is_ok()
     );
@@ -2304,7 +2305,7 @@ fn list_structure_members_keep_their_element_types() {
 fn list_positional_updates_and_windows_type() {
     assert!(
         pyfun::check(
-            "let u = List.updateAt 0 9 [1, 2]\n             let i = List.insertAt 0 9 [1, 2]\n             let r = List.removeAt 0 [1, 2]\n             let p = List.pairwise [1, 2, 3]\n             let w = List.windowed 2 [1, 2, 3]\n             let c = List.chunkBySize 2 [1, 2, 3]"
+            "let u = List.update_at 0 9 [1, 2]\n             let i = List.insert_at 0 9 [1, 2]\n             let r = List.remove_at 0 [1, 2]\n             let p = List.pairwise [1, 2, 3]\n             let w = List.windowed 2 [1, 2, 3]\n             let c = List.chunk_by_size 2 [1, 2, 3]"
         )
         .is_ok()
     );
@@ -2656,20 +2657,20 @@ fn the_async_module_members_type_as_declared() {
                  let! xs = Async.parallel [slow 1, slow 2]\n  \
                  let! first = Async.race [slow 3, slow 4]\n  \
                  let! t = Async.timeout 0.5 (slow 5)\n  \
-                 let! v = Async.toThread (fun _ -> 41)\n  \
+                 let! v = Async.to_thread (fun _ -> 41)\n  \
                  let! r = Async.catch (slow 6)\n  \
                  let total = match t:\n    case Some n: n\n    case None: 0\n  \
-                 let got = match r:\n    case Ok n: n\n    case Error e: String.len e.errorKind\n  \
+                 let got = match r:\n    case Ok n: n\n    case Error e: String.len e.error_kind\n  \
                  return List.sum xs + first + total + v + got\n\
                }";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
-    // `toThread` carries the thunk's effect: a printing thunk makes the block
+    // `to_thread` carries the thunk's effect: a printing thunk makes the block
     // builder impure even before the await, so `let pure` over it is rejected.
     assert_error_contains(
-        "let pure go x = Async.toThread (fun _ -> print x)",
+        "let pure go x = Async.to_thread (fun _ -> print x)",
         "declared `pure` but performs",
     );
-    assert!(pyfun::check("let pure go x = Async.toThread (fun _ -> x + 1)").is_ok());
+    assert!(pyfun::check("let pure go x = Async.to_thread (fun _ -> x + 1)").is_ok());
 }
 
 #[test]
@@ -2691,9 +2692,9 @@ fn task_scope_discharges_the_spawn_that_start_performs() {
     );
     // ...including one tucked inside an async block that is run at top level.
     assert_error_contains(
-        "extern runAsync: Async a -> a = asyncio.run\n\
+        "extern run_async: Async a -> a = asyncio.run\n\
          let sneaky n = async { Task.start (Async.sleep 1.0) }\n\
-         let r = runAsync (sneaky 0)",
+         let r = run_async (sneaky 0)",
         "outside any `Task.scope`",
     );
     // A function that starts tasks is fine to define; its arrow carries `spawn`.
@@ -2733,26 +2734,26 @@ fn decode_auto_is_pinned_by_a_later_use_and_open_otherwise() {
     // #110: the site's variable stays weak at generalization, so the `match`
     // below the top-level `let` fixes it.
     let src = "type P = { x: int }\n\
-               let back = Decode.decodeString Decode.auto \"{}\"\n\
+               let back = Decode.decode_string Decode.auto \"{}\"\n\
                match back:\n  case Ok p: print p.x\n  case Error _: print 0";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
     // Inside a function the arms pin it before the function generalizes.
     let src = "type Msg = Hello str | Resign\n\
-               let parse s =\n  match Decode.decodeString Decode.auto s:\n    \
+               let parse s =\n  match Decode.decode_string Decode.auto s:\n    \
                  case Ok (Hello who): who\n    case Ok Resign: \"resign\"\n    case Error _: \"bad\"";
     assert!(pyfun::check(src).is_ok(), "{:?}", errors(src));
     // Nothing pins it: an error at the site, naming how to.
     assert_error_contains(
-        "let loose = Decode.decodeString Decode.auto \"1\"",
+        "let loose = Decode.decode_string Decode.auto \"1\"",
         "cannot tell what `Decode.auto` decodes into here",
     );
     // Types with no JSON form say so.
     assert_error_contains(
-        "let f = Decode.decodeString Decode.auto \"1\"\nlet g = match f:\n  case Ok h: h 1\n  case Error _: 0",
+        "let f = Decode.decode_string Decode.auto \"1\"\nlet g = match f:\n  case Ok h: h 1\n  case Error _: 0",
         "a function has no JSON form",
     );
     assert_error_contains(
-        "extern type Conn\nextern use: Conn -> int = m.use\nlet r = Decode.decodeString Decode.auto \"1\"\nlet n = match r:\n  case Ok c: use c\n  case Error _: 0",
+        "extern type Conn\nextern use: Conn -> int = m.use\nlet r = Decode.decode_string Decode.auto \"1\"\nlet n = match r:\n  case Ok c: use c\n  case Error _: 0",
         "it is an extern type",
     );
 }
@@ -2873,8 +2874,8 @@ fn format_module_signatures_check() {
                let c = Format.percent 1 0.256\n\
                let d = Format.currency \"$\" 2 1234.5\n\
                let e = Format.grouped 1234567\n\
-               let f = Format.padLeft 6 \"0\" \"42\"\n\
-               let g = Format.padRight 6 \".\" \"42\"";
+               let f = Format.pad_left 6 \"0\" \"42\"\n\
+               let g = Format.pad_right 6 \".\" \"42\"";
     assert!(
         pyfun::check(src).is_ok(),
         "{:?}",
@@ -2961,9 +2962,9 @@ fn a_closed_callback_arrow_points_at_the_effect_variable() {
     // argument rather than the whole call, and shows the `->{e}` fix.
     let src = "extern type Writer\n\
                extern type Server\n\
-               extern closeConn: Writer -> unit = .close()\n\
+               extern close_conn: Writer -> unit = .close()\n\
                extern serve: (Writer -> Async unit) -> int -> Async Server = asyncio.start_server\n\
-               let handle w = async { closeConn w }\n\
+               let handle w = async { close_conn w }\n\
                let listen = serve handle 7777";
     let errs = pyfun::check(src).unwrap_err();
     assert_eq!(
@@ -3072,7 +3073,7 @@ fn rejects_an_effect_var_in_a_record_field() {
     // The privilege is extern-scoped: a `->{e}` in a record field (like an ADT
     // variant field) has no extern scheme to generalize into, so it errors.
     assert_error_contains(
-        "type Callbacks = { onData: str ->{e} unit }",
+        "type Callbacks = { on_data: str ->{e} unit }",
         "unknown effect label `e`",
     );
 }
@@ -3147,14 +3148,14 @@ fn a_tuple_parameter_types_its_elements() {
     // same binding the equivalent `match` would produce.
     assert!(
         pyfun::check(
-            "let tileScore (t, sq) = t * sq
-let s = tileScore (3, 4)"
+            "let tile_score (t, sq) = t * sq
+let s = tile_score (3, 4)"
         )
         .is_ok()
     );
     assert_error_contains(
-        "let tileScore (t, sq) = t * sq
-let bad = tileScore (3, \"x\")",
+        "let tile_score (t, sq) = t * sq
+let bad = tile_score (3, \"x\")",
         "str",
     );
 }
@@ -3287,7 +3288,7 @@ fn map_of_an_impure_function_is_impure() {
     // Effect polymorphism: mapping `print` makes the whole call `io`, so a `pure`
     // binding must be rejected.
     assert_error_contains(
-        "let pure shoutAll xs = List.map (fun x -> print x) xs",
+        "let pure shout_all xs = List.map (fun x -> print x) xs",
         "declared `pure` but performs `io`",
     );
 }
@@ -3297,7 +3298,7 @@ fn input_is_a_prelude_builtin_with_the_io_effect() {
     // input : string ->{io} string — Python's input(prompt), name-for-name.
     assert!(pyfun::check("let ask u = input \"? \"").is_ok());
     // Composes with the total parse into Option int.
-    assert!(pyfun::check("let n = String.toInt (input \"n? \")").is_ok());
+    assert!(pyfun::check("let n = String.to_int (input \"n? \")").is_ok());
     // The io effect flows out: a `pure` binding using input is rejected.
     assert_error_contains(
         "let pure ask u = input \"? \"",
@@ -3316,7 +3317,7 @@ fn rejects_redefining_builtin_list() {
 
 #[test]
 fn accepts_set_functions() {
-    let src = "let s = Set.ofList [1, 2, 3]\n\
+    let src = "let s = Set.of_list [1, 2, 3]\n\
                let s2 = Set.add 4 s\n\
                let s3 = Set.remove 1 s2\n\
                let has = Set.contains 2 s3\n\
@@ -3324,14 +3325,14 @@ fn accepts_set_functions() {
                let u = Set.union s s2\n\
                let i = Set.intersect s s2\n\
                let d = Set.difference s s2\n\
-               let xs = Set.toList (Set.union s Set.empty)";
+               let xs = Set.to_list (Set.union s Set.empty)";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn accepts_map_functions() {
     let src = "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\
-               let v = Map.findOr \"a\" 0 m\n\
+               let v = Map.find_or \"a\" 0 m\n\
                let o = Map.find \"a\" m\n\
                let m2 = Map.remove \"b\" m\n\
                let has = Map.contains \"a\" m2\n\
@@ -3345,22 +3346,22 @@ fn accepts_map_functions() {
 fn try_yields_a_result_over_exception() {
     // `try e : Result <e> Exception`; the Ok payload is the body's type, the Error
     // payload is the reserved `Exception` record (accessed by field).
-    let src = "extern parseInt : str -> int = int\n\
+    let src = "extern parse_int : str -> int = int\n\
                let describe s =\n\
-               \x20 match try (parseInt s):\n\
+               \x20 match try (parse_int s):\n\
                \x20 \x20 case Ok n: n\n\
-               \x20 \x20 case Error e: String.len e.errorKind";
+               \x20 \x20 case Error e: String.len e.error_kind";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn try_body_type_flows_into_ok() {
     // The Ok arm binds the body's type — here `string`, so String ops apply.
-    let src = "extern readFile : str -> str = open\n\
-               let firstChar path =\n\
-               \x20 match try (readFile path):\n\
+    let src = "extern read_file : str -> str = open\n\
+               let first_char path =\n\
+               \x20 match try (read_file path):\n\
                \x20 \x20 case Ok contents: String.upper contents\n\
-               \x20 \x20 case Error e: e.errorMessage";
+               \x20 \x20 case Error e: e.error_message";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3471,24 +3472,24 @@ fn accepts_string_functions() {
                let parts = String.split \",\" g\n\
                let joined = String.join \" | \" parts\n\
                let has = String.contains \"World\" g\n\
-               let sw = String.startsWith \"He\" g\n\
-               let ew = String.endsWith \"ld\" g\n\
+               let sw = String.starts_with \"He\" g\n\
+               let ew = String.ends_with \"ld\" g\n\
                let r = String.replace \"l\" \"L\" g\n\
-               let s1 = String.fromInt 7\n\
-               let s2 = String.fromFloat 3.5\n\
-               let chars = String.toList g";
+               let s1 = String.from_int 7\n\
+               let s2 = String.from_float 3.5\n\
+               let chars = String.to_list g";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn string_to_int_returns_an_option() {
-    // `String.toInt : string -> Option int` — the result must match/destructure as an
+    // `String.to_int : string -> Option int` — the result must match/destructure as an
     // Option, and its payload is an int (usable in arithmetic).
     let src = "let bump o =\n\
                \x20 match o:\n\
                \x20 \x20 case Some n: n + 1\n\
                \x20 \x20 case None: 0\n\
-               let r = bump (String.toInt \"41\")";
+               let r = bump (String.to_int \"41\")";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3504,7 +3505,7 @@ fn unknown_member_suggests_the_closest_name() {
     // a "did you mean" pointing at the one canonical spelling.
     assert_error_contains(
         "let r = String.startswith \"a\" \"b\"",
-        "did you mean `String.startsWith`?",
+        "did you mean `String.starts_with`?",
     );
     assert_error_contains("let r = String.UPPER \"x\"", "did you mean `String.upper`?");
     assert_error_contains("let n = String.length \"x\"", "did you mean `String.len`?");
@@ -3535,56 +3536,56 @@ fn did_you_mean_works_for_user_modules_too() {
 fn list_zip_pairs_elements_into_tuples() {
     // `List.zip : List a -> List b -> List (a, b)`. Destructuring a zipped pair
     // recovers both element types.
-    let src = "let firstOf p =\n\
+    let src = "let first_of p =\n\
                \x20 match p:\n\
                \x20 \x20 case (n, s): n\n\
                let ps = List.zip [1, 2] [\"a\", \"b\"]\n\
-               let firsts = List.map firstOf ps\n\
+               let firsts = List.map first_of ps\n\
                let total = List.sum firsts";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn map_of_list_and_to_list_round_trip_through_pairs() {
-    // `Map.ofList : List (k, v) -> Map k v` and `Map.toList` its inverse.
-    let src = "let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])\n\
-               let v = Option.withDefault 0 (Map.find \"a\" m)\n\
-               let pairs = Map.toList m";
+    // `Map.of_list : List (k, v) -> Map k v` and `Map.to_list` its inverse.
+    let src = "let m = Map.of_list (List.zip [\"a\", \"b\"] [1, 2])\n\
+               let v = Option.with_default 0 (Map.find \"a\" m)\n\
+               let pairs = Map.to_list m";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn rejects_map_of_list_from_a_non_pair_list() {
-    // `Map.ofList` needs a list of pairs, not a list of ints.
-    assert_error_contains("let bad = Map.ofList [1, 2, 3]", "found int");
+    // `Map.of_list` needs a list of pairs, not a list of ints.
+    assert_error_contains("let bad = Map.of_list [1, 2, 3]", "found int");
 }
 
 #[test]
 fn set_element_type_is_enforced() {
     // `Set.add : a -> Set a -> Set a`, so adding a string to a `Set int` fails.
     assert_error_contains(
-        "let bad = Set.add \"x\" (Set.ofList [1, 2])",
+        "let bad = Set.add \"x\" (Set.of_list [1, 2])",
         "expected str, found int",
     );
 }
 
 #[test]
 fn map_find_or_default_must_match_the_value_type() {
-    // `Map.findOr : k -> v -> Map k v -> v`; an int default against a string-valued
+    // `Map.find_or : k -> v -> Map k v -> v`; an int default against a string-valued
     // map is a type error.
     assert_error_contains(
-        "let m = Map.add \"a\" \"x\" Map.empty\nlet bad = Map.findOr \"a\" 0 m",
+        "let m = Map.add \"a\" \"x\" Map.empty\nlet bad = Map.find_or \"a\" 0 m",
         "str",
     );
 }
 
 #[test]
 fn map_find_returns_an_option() {
-    // `Map.find : k -> Map k v -> Option v`, so `Option.withDefault` accepts it.
+    // `Map.find : k -> Map k v -> Option v`, so `Option.with_default` accepts it.
     assert!(
         pyfun::check(
             "let m = Map.add \"a\" 1 Map.empty\n\
-             let v = Option.withDefault 0 (Map.find \"a\" m)"
+             let v = Option.with_default 0 (Map.find \"a\" m)"
         )
         .is_ok()
     );
@@ -3623,12 +3624,12 @@ fn rejects_redefining_builtin_option() {
 fn accepts_result_module() {
     let src = "let r = Ok 1\n\
                let a = Result.map (fun x -> x + 1) r\n\
-               let b = Result.mapError (fun e -> e) r\n\
+               let b = Result.map_error (fun e -> e) r\n\
                let c = Result.bind (fun x -> Ok (x + 1)) r\n\
-               let d = Result.withDefault 0 r\n\
-               let e = Result.isOk r\n\
-               let f = Result.isError r\n\
-               let g = Result.toOption r";
+               let d = Result.with_default 0 r\n\
+               let e = Result.is_ok r\n\
+               let f = Result.is_error r\n\
+               let g = Result.to_option r";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3639,32 +3640,32 @@ fn result_map_changes_the_ok_type() {
     assert_error_contains(
         "extern show: a -> str = str\n\
          let r = Ok 1\n\
-         let bad = Result.withDefault 0 (Result.map show r)",
+         let bad = Result.with_default 0 (Result.map show r)",
         "str",
     );
 }
 
 #[test]
 fn result_to_option_bridges_to_option() {
-    // `Result.toOption : Result a e -> Option a`, consumed by the `Option` module.
-    assert!(pyfun::check("let v = Option.withDefault 0 (Result.toOption (Ok 1))").is_ok());
+    // `Result.to_option : Result a e -> Option a`, consumed by the `Option` module.
+    assert!(pyfun::check("let v = Option.with_default 0 (Result.to_option (Ok 1))").is_ok());
 }
 
 #[test]
 fn accepts_seq_module() {
-    let src = "let s = Seq.ofList [1, 2, 3]\n\
+    let src = "let s = Seq.of_list [1, 2, 3]\n\
                let a = Seq.map (fun x -> x + 1) s\n\
                let b = Seq.filter (fun x -> x < 2) s\n\
                let c = Seq.take 2 s\n\
                let d = Seq.fold (fun acc x -> acc + x) 0 s\n\
-               let e = Seq.toList (Seq.range 0 5)";
+               let e = Seq.to_list (Seq.range 0 5)";
     assert!(pyfun::check(src).is_ok());
 }
 
 #[test]
 fn seq_take_returns_a_seq_not_a_list() {
     // `Seq.take : int -> Seq a -> Seq a`; the result is still lazy, so `List.len`
-    // (which needs a `List`) is a type error until `Seq.toList` forces it.
+    // (which needs a `List`) is a type error until `Seq.to_list` forces it.
     assert_error_contains("let bad = List.len (Seq.take 2 (Seq.range 0 9))", "List");
 }
 
@@ -3775,7 +3776,7 @@ fn extern_boundary_is_effectful_by_default() {
     // A plain `extern` is impure at full application, so a `pure` binding that
     // calls it must be rejected.
     assert_error_contains(
-        "extern readLine: str -> str\nlet pure ask q = readLine q",
+        "extern read_line: str -> str\nlet pure ask q = read_line q",
         "declared `pure` but performs `io`",
     );
 }
@@ -3791,7 +3792,7 @@ fn pure_extern_can_be_used_in_a_pure_binding() {
 fn partial_application_of_an_extern_is_pure() {
     // The Python call only happens on full application, so a partial application
     // performs no effect — usable inside a `pure` binding.
-    let src = "extern pow: float -> float -> float = math.pow\nlet pure twoTo = pow 2.0";
+    let src = "extern pow: float -> float -> float = math.pow\nlet pure two_to = pow 2.0";
     assert!(pyfun::check(src).is_ok());
 }
 
@@ -3868,7 +3869,7 @@ fn flip_is_effect_polymorphic() {
     // flip calls its function argument, so flipping an impure one is `io` — a
     // `pure` binding that fully applies it is rejected...
     assert_error_contains(
-        "let logAdd a b =\n  print a\n  a + b\nlet pure bad = flip logAdd 1 2",
+        "let log_add a b =\n  print a\n  a + b\nlet pure bad = flip log_add 1 2",
         "performs `io`",
     );
     // ...while flipping a pure function stays pure.
@@ -4032,7 +4033,7 @@ fn refinements_of(source: &str) -> Vec<String> {
 #[test]
 fn refinement_fits_suggest_functions_whose_result_matches() {
     // A `string` hole: functions returning `string`, applied to a hole
-    // (`String.lower ?`, `String.fromInt ?`, …).
+    // (`String.lower ?`, `String.from_int ?`, …).
     let refs = refinements_of("let use = String.concat ?g \"!\"");
     assert!(!refs.is_empty(), "expected refinement fits");
     assert!(
@@ -4058,7 +4059,7 @@ fn refinement_fits_suggest_functions_whose_result_matches() {
 #[test]
 fn a_python_builtin_name_points_at_its_pyfun_module() {
     assert_error_contains("let n = len [1, 2, 3]", "`List.len` for a list");
-    assert_error_contains("let s = str 5", "`String.fromInt`");
+    assert_error_contains("let s = str 5", "`String.from_int`");
     assert_error_contains("let t = sum [1, 2]", "Pyfun spells this `List.sum`");
     // Any other unbound name keeps the plain message.
     assert_eq!(
@@ -4338,7 +4339,7 @@ fn structural_patterns_mix_with_active_patterns() {
     // (`DESIGN.md` §7.2.1); exhaustiveness stays conservative for the mix.
     assert!(
         pyfun::check(
-            "let (|Empty|_|) xs = List.isEmpty xs\n\
+            "let (|Empty|_|) xs = List.is_empty xs\n\
              let f xs =\n  match xs:\n    case Empty: 0\n    case [x]: x\n    case _: 1"
         )
         .is_ok()
@@ -4582,7 +4583,7 @@ fn option_block_chains_several_binds() {
     // The shape the builder exists for: fallible stdlib accessors in a row.
     assert!(
         pyfun::check(
-            "let f xs s = option {\n  let! a = List.get 0 xs\n  let! b = List.get 1 xs\n  let! n = String.toInt s\n  return (a + b + n)\n}"
+            "let f xs s = option {\n  let! a = List.get 0 xs\n  let! b = List.get 1 xs\n  let! n = String.to_int s\n  return (a + b + n)\n}"
         )
         .is_ok()
     );
@@ -4710,9 +4711,9 @@ fn lookups_carry_no_try_prefix_and_the_old_names_point_at_the_new() {
     // Every lookup is total and returns an `Option`, so none is marked `try`.
     assert!(
         pyfun::check(
-            "let m = Map.ofList [(\"a\", 1)]\n\
-             let hit = Option.withDefault 0 (Map.find \"a\" m)\n\
-             let at = Option.withDefault 0 (String.indexOf \"b\" \"abc\")"
+            "let m = Map.of_list [(\"a\", 1)]\n\
+             let hit = Option.with_default 0 (Map.find \"a\" m)\n\
+             let at = Option.with_default 0 (String.index_of \"b\" \"abc\")"
         )
         .is_ok()
     );
@@ -4723,6 +4724,73 @@ fn lookups_carry_no_try_prefix_and_the_old_names_point_at_the_new() {
     );
     assert_error_contains(
         "let r = String.tryIndexOf \"a\" \"abc\"",
-        "`tryIndexOf` is not a member of `String` (did you mean `String.indexOf`?)",
+        "`tryIndexOf` is not a member of `String` (did you mean `String.index_of`?)",
+    );
+}
+
+#[test]
+fn standard_library_names_are_snake_case_and_old_spellings_point_at_them() {
+    // One rule: an underscore at every word boundary.
+    assert!(
+        pyfun::check(
+            "let xs = List.sort_by (fun x -> 0 - x) [3, 1, 2]\n\
+             let m = Map.of_list [(\"a\", 1)]\n\
+             let n = Option.with_default 0 (Map.find \"a\" m)\n\
+             let ok = String.starts_with \"a\" \"abc\" and not (List.is_empty xs)\n\
+             let t = String.lstrip \"  a\" |> String.rstrip\n\
+             let r = Result.map_error String.len (Ok 1)"
+        )
+        .is_ok()
+    );
+    // The camelCase spelling of releases before 0.11 is answered with the
+    // snake_case member, whatever the edit distance.
+    for (source, hint) in [
+        ("let r = List.sortBy", "did you mean `List.sort_by`?"),
+        (
+            "let r = List.sortByDescending",
+            "did you mean `List.sort_by_descending`?",
+        ),
+        ("let r = Map.ofList", "did you mean `Map.of_list`?"),
+        (
+            "let r = Option.withDefault",
+            "did you mean `Option.with_default`?",
+        ),
+        (
+            "let r = Decode.decodeString",
+            "did you mean `Decode.decode_string`?",
+        ),
+        (
+            "let r = Seq.initInfinite",
+            "did you mean `Seq.init_infinite`?",
+        ),
+        // Two that took Python's word instead of a mechanical respelling.
+        ("let r = String.trimStart", "did you mean `String.lstrip`?"),
+        ("let r = String.trimEnd", "did you mean `String.rstrip`?"),
+        // Python's run-together spellings are a short edit away, so they land
+        // on the same members.
+        (
+            "let r = String.startswith",
+            "did you mean `String.starts_with`?",
+        ),
+        ("let r = Set.issubset", "did you mean `Set.is_subset`?"),
+        (
+            "let r = String.splitlines",
+            "did you mean `String.split_lines`?",
+        ),
+    ] {
+        assert_error_contains(source, hint);
+    }
+    // A user module's members are suggested the same way.
+    assert_error_contains(
+        "module Geo =\n  let area_of r = r * r\nlet a = Geo.areaOf 2",
+        "did you mean `Geo.area_of`?",
+    );
+    // The built-in `Exception` record follows the rule too.
+    assert!(
+        pyfun::check(
+            "let describe r =\n  match r:\n    case Ok v: v\n    case Error e: String.concat e.error_kind e.error_message\n\
+             let s = describe (try (String.upper \"a\"))"
+        )
+        .is_ok()
     );
 }

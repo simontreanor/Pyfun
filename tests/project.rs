@@ -159,7 +159,7 @@ fn option_classes_come_from_the_shared_runtime() {
         &[
             (
                 "Main",
-                "import Store\nlet found = Option.isSome (Store.lookup 1)",
+                "import Store\nlet found = Option.is_some (Store.lookup 1)",
             ),
             ("Store", "let lookup k = Some k"),
         ],
@@ -238,13 +238,13 @@ fn e2e_a_task_started_in_one_module_joins_a_scope_opened_in_another() {
             (
                 "Main",
                 "import Jobs\n\
-                 extern runAsync: Async a -> a = asyncio.run\n\
+                 extern run_async: Async a -> a = asyncio.run\n\
                  let session = Task.scope (async {\n  \
                    Jobs.launch \"x\"\n  \
                    Jobs.launch \"y\"\n  \
                    return 7\n\
                  })\n\
-                 print (runAsync session)",
+                 print (run_async session)",
             ),
             (
                 "Jobs",
@@ -282,18 +282,18 @@ fn e2e_an_imported_async_extern_is_cold_and_its_argument_starts() {
                    do! tick\n  \
                    return 2\n\
                  }\n\
-                 print (Clock.runAsync twice)",
+                 print (Clock.run_async twice)",
             ),
             (
                 "Clock",
-                "extern runAsync: Async a -> a = asyncio.run\n\
+                "extern run_async: Async a -> a = asyncio.run\n\
                  extern pause: float -> Async unit = asyncio.sleep",
             ),
         ],
     );
     let clock = file(&files, "clock.py");
     assert!(
-        clock.contains("runAsync = lambda _pf_p0: asyncio.run(_pf_run(_pf_p0))"),
+        clock.contains("run_async = lambda _pf_p0: asyncio.run(_pf_run(_pf_p0))"),
         "{clock}"
     );
     assert!(
@@ -371,7 +371,7 @@ fn the_browser_cookbook_example_type_checks_and_lowers() {
         .expect("counter.py");
     assert!(main.contains("global count"), "{main}");
     assert!(
-        main.contains("dom.on(dom.byId(\"plus\"), \"click\", dom.proxy(bump))"),
+        main.contains("dom.on(dom.by_id(\"plus\"), \"click\", dom.proxy(bump))"),
         "{main}"
     );
     let dom = compiled
@@ -393,14 +393,14 @@ fn e2e_derived_codecs_cross_a_module_import() {
             (
                 "Main",
                 "import Rules\nlet wire = Encode.auto Rules.sample\nprint wire\n\
-                 let back = Decode.decodeString Decode.auto wire\n\
-                 match back:\n  case Ok v: print (v == Rules.sample)\n  case Error e: print e.errorMessage",
+                 let back = Decode.decode_string Decode.auto wire\n\
+                 match back:\n  case Ok v: print (v == Rules.sample)\n  case Error e: print e.error_message",
             ),
             (
                 "Rules",
                 "type Placed = { letter: str, score: int }\ntype Player = Ann | Bob\n\
                  type View = { board: Map (int, int) Placed, turn: Option Player }\n\
-                 let sample = View { board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })], turn = Some Bob }",
+                 let sample = View { board = Map.of_list [((1, 2), Placed { letter = \"Q\", score = 10 })], turn = Some Bob }",
             ),
         ],
     );
@@ -503,7 +503,7 @@ fn e2e_cross_module_nullary_singletons_and_option_ladder() {
                  print (last [Color.Green, Color.Red])\n\
                  print (last [])\n\
                  print (Color.Red == Color.Red)\n\
-                 print (Set.len (Set.ofList [Color.Red, Color.Red, Color.Blue]))",
+                 print (Set.len (Set.of_list [Color.Red, Color.Red, Color.Blue]))",
             ),
         ],
     );
@@ -691,14 +691,14 @@ fn e2e_a_local_type_declaration_can_name_an_imported_type() {
                 "Shapes",
                 "type Placed = { row: int, col: int }\n\
                  let mk r = Placed { row = r, col = r }\n\
-                 let rowOf p = p.row",
+                 let row_of p = p.row",
             ),
             (
                 "Main",
                 "import Shapes\n\
                  type Holder = { item: Shapes.Placed, tag: str }\n\
                  type Slot = Empty | Filled Placed\n\
-                 let describe s =\n  match s:\n    case Empty: 0\n    case Filled p: Shapes.rowOf p\n\
+                 let describe s =\n  match s:\n    case Empty: 0\n    case Filled p: Shapes.row_of p\n\
                  let h = Holder { item = Shapes.mk 3, tag = \"a\" }\n\
                  print h.tag\n\
                  print (describe (Filled h.item))\n\
@@ -1130,11 +1130,11 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
 
 /// The three-module shape of issue #75: `Inner` declares a record, `Middle`
 /// wraps it, and the consumer imports only `Middle`.
-const INNER: &str = "type Config = { cSize: int }\nlet make n = Config { cSize = n }";
+const INNER: &str = "type Config = { c_size: int }\nlet make n = Config { c_size = n }";
 const MIDDLE: &str = "import Inner\n\
-     type Wrap = { wConf: Inner.Config }\n\
-     let mk n = Wrap { wConf = Inner.make n }\n\
-     let size w = w.wConf.cSize";
+     type Wrap = { w_conf: Inner.Config }\n\
+     let mk n = Wrap { w_conf = Inner.make n }\n\
+     let size w = w.w_conf.c_size";
 
 #[test]
 fn e2e_an_extern_type_can_be_named_across_the_module_boundary() {
@@ -1147,8 +1147,8 @@ fn e2e_an_extern_type_can_be_named_across_the_module_boundary() {
             (
                 "Gen",
                 "extern type Rng\n\
-                 extern newRng : int -> Rng = random.Random\n\
-                 let make seed = newRng seed",
+                 extern new_rng : int -> Rng = random.Random\n\
+                 let make seed = new_rng seed",
             ),
             (
                 "Main",
@@ -1174,7 +1174,7 @@ fn an_unknown_type_qualified_to_an_opaque_exporting_module_reports_once() {
         &[
             (
                 "Gen",
-                "extern type Rng\nextern newRng : int -> Rng = random.Random",
+                "extern type Rng\nextern new_rng : int -> Rng = random.Random",
             ),
             ("Main", "import Gen\ntype Holder = { h: Gen.Nope }"),
         ],
@@ -1202,8 +1202,8 @@ fn an_opaque_type_carried_transitively_can_be_named_bare() {
             (
                 "Gen",
                 "extern type Rng\n\
-                 extern newRng : int -> Rng = random.Random\n\
-                 let make seed = newRng seed",
+                 extern new_rng : int -> Rng = random.Random\n\
+                 let make seed = new_rng seed",
             ),
             ("Middle", "import Gen\nlet fresh n = Gen.make n"),
             (
@@ -1228,7 +1228,7 @@ fn a_local_type_clashing_with_an_imported_opaque_type_is_reported() {
         &[
             (
                 "Gen",
-                "extern type Rng\nextern newRng : int -> Rng = random.Random",
+                "extern type Rng\nextern new_rng : int -> Rng = random.Random",
             ),
             ("Main", "import Gen\ntype Rng = A | B\nlet x = A"),
         ],
@@ -1247,7 +1247,7 @@ fn a_local_type_clashing_with_an_imported_opaque_type_is_reported() {
 #[test]
 fn e2e_a_transitive_record_field_is_accessible() {
     // issue #75: `Wrap`'s field is typed `Inner.Config`, so `Config` crosses
-    // with Middle's interface and the consumer can read `x.wConf.cSize` without
+    // with Middle's interface and the consumer can read `x.w_conf.c_size` without
     // importing `Inner` directly.
     let files = compile(
         "Main",
@@ -1256,7 +1256,7 @@ fn e2e_a_transitive_record_field_is_accessible() {
             ("Middle", MIDDLE),
             (
                 "Main",
-                "import Middle\nlet x = Middle.mk 5\nprint x.wConf.cSize",
+                "import Middle\nlet x = Middle.mk 5\nprint x.w_conf.c_size",
             ),
         ],
     );
@@ -1280,10 +1280,10 @@ fn e2e_a_record_update_through_a_transitive_boundary_routes_to_the_declaring_cla
                 "Main",
                 "import Middle\n\
                  let x = Middle.mk 5\n\
-                 let y = { x with wConf.cSize = 9 }\n\
-                 let z = { x.wConf with cSize = 7 }\n\
-                 print y.wConf.cSize\n\
-                 print z.cSize",
+                 let y = { x with w_conf.c_size = 9 }\n\
+                 let z = { x.w_conf with c_size = 7 }\n\
+                 print y.w_conf.c_size\n\
+                 print z.c_size",
             ),
         ],
     );
@@ -1305,13 +1305,13 @@ fn e2e_a_transitive_record_crosses_any_depth() {
         &[
             (
                 "Deep",
-                "type Core = { cv: int }\nlet mkCore n = Core { cv = n }",
+                "type Core = { cv: int }\nlet mk_core n = Core { cv = n }",
             ),
             (
                 "Mid",
                 "import Deep\n\
                  type Two = { w1: Deep.Core }\n\
-                 let mk2 n = Two { w1 = Deep.mkCore n }",
+                 let mk2 n = Two { w1 = Deep.mk_core n }",
             ),
             (
                 "Top",
@@ -1339,10 +1339,10 @@ fn mutually_referencing_records_cross_transitively() {
                 "Inner",
                 "type A = { av: int, ab: Option B }\n\
                  type B = { bv: int, ba: Option A }\n\
-                 let mkA n = A { av = n, ab = None }\n\
-                 let mkB n = B { bv = n, ba = Some (mkA n) }",
+                 let mk_a n = A { av = n, ab = None }\n\
+                 let mk_b n = B { bv = n, ba = Some (mk_a n) }",
             ),
-            ("Middle", "import Inner\nlet make n = Inner.mkB n"),
+            ("Middle", "import Inner\nlet make n = Inner.mk_b n"),
             (
                 "Main",
                 "import Middle\n\
@@ -1358,7 +1358,7 @@ fn mutually_referencing_records_cross_transitively() {
 
 #[test]
 fn a_direct_record_wins_a_field_name_over_a_carried_one() {
-    // A local record and a transitively carried one both declare `cSize`. Carried
+    // A local record and a transitively carried one both declare `c_size`. Carried
     // records are a fallback tier for by-name field lookup (mirroring the
     // bare-name rule: local and direct declarations win, the consumer never
     // wrote the carried name), so the access resolves to `Local` and stays
@@ -1372,9 +1372,9 @@ fn a_direct_record_wins_a_field_name_over_a_carried_one() {
             (
                 "Main",
                 "import Middle\n\
-                 type Local = { cSize: bool, other: int }\n\
-                 let get w = w.cSize\n\
-                 let v = get (Local { cSize = True, other = 1 })",
+                 type Local = { c_size: bool, other: int }\n\
+                 let get w = w.c_size\n\
+                 let v = get (Local { c_size = True, other = 1 })",
             ),
         ],
     );
@@ -1397,8 +1397,8 @@ fn e2e_a_carried_record_cannot_break_a_working_field_access() {
             (
                 "Middle",
                 "import Inner\n\
-                 type Wrap = { wConf: Inner.Config }\n\
-                 let mk n = Wrap { wConf = Inner.make n }",
+                 type Wrap = { w_conf: Inner.Config }\n\
+                 let mk n = Wrap { w_conf = Inner.make n }",
             ),
             (
                 "Main",
@@ -1427,16 +1427,16 @@ fn two_carried_records_sharing_a_field_are_still_ambiguous() {
                 "Twin",
                 "type A = { size: int }\n\
                  type B = { size: bool }\n\
-                 let mkA n = A { size = n }\n\
-                 let mkB b = B { size = b }",
+                 let mk_a n = A { size = n }\n\
+                 let mk_b b = B { size = b }",
             ),
             (
                 "Carry",
                 "import Twin\n\
                  type WrapA = { wa: Twin.A }\n\
                  type WrapB = { wb: Twin.B }\n\
-                 let mka n = WrapA { wa = Twin.mkA n }\n\
-                 let mkb b = WrapB { wb = Twin.mkB b }",
+                 let mka n = WrapA { wa = Twin.mk_a n }\n\
+                 let mkb b = WrapB { wb = Twin.mk_b b }",
             ),
             ("Main", "import Carry\nlet get w = w.size"),
         ],
@@ -1467,7 +1467,7 @@ fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
                 "import Middle\n\
                  type Config = { other: int }\n\
                  let x = Middle.mk 5\n\
-                 let bad = x.wConf.cSize",
+                 let bad = x.w_conf.c_size",
             ),
         ],
     );
@@ -1475,7 +1475,7 @@ fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
     assert_eq!(errors.len(), 1);
     let message = &errors[0].errors[0].message;
     assert!(
-        message.contains("has no field `cSize`")
+        message.contains("has no field `c_size`")
             && message.contains("module `Inner`")
             && message.contains("hidden"),
         "got: {message}"
@@ -1490,7 +1490,7 @@ fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
                 "Main",
                 "import Middle\n\
                  type Config = { other: int }\n\
-                 let get w = w.cSize",
+                 let get w = w.c_size",
             ),
         ],
     );
@@ -1498,7 +1498,7 @@ fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
     assert_eq!(errors.len(), 1);
     let message = &errors[0].errors[0].message;
     assert!(
-        message.contains("unknown record field `cSize`") && message.contains("module `Inner`"),
+        message.contains("unknown record field `c_size`") && message.contains("module `Inner`"),
         "got: {message}"
     );
 }
@@ -1515,20 +1515,20 @@ fn a_diamond_of_carried_records_does_not_clash() {
                 "Left",
                 "import Inner\n\
                  type LWrap = { lc: Inner.Config }\n\
-                 let mkL n = LWrap { lc = Inner.make n }",
+                 let mk_l n = LWrap { lc = Inner.make n }",
             ),
             (
                 "Right",
                 "import Inner\n\
                  type RWrap = { rc: Inner.Config }\n\
-                 let mkR n = RWrap { rc = Inner.make n }",
+                 let mk_r n = RWrap { rc = Inner.make n }",
             ),
             (
                 "Main",
                 "import Left\n\
                  import Right\n\
-                 let a = (Left.mkL 1).lc.cSize\n\
-                 let b = (Right.mkR 2).rc.cSize",
+                 let a = (Left.mk_l 1).lc.c_size\n\
+                 let b = (Right.mk_r 2).rc.c_size",
             ),
         ],
     );
@@ -1550,8 +1550,8 @@ fn importing_the_declaring_module_alongside_the_carrier_is_fine() {
                 "import Inner\n\
                  import Middle\n\
                  let x = Middle.mk 5\n\
-                 let a = x.wConf.cSize\n\
-                 let mine = Inner.Config { cSize = 1 }",
+                 let a = x.w_conf.c_size\n\
+                 let mine = Inner.Config { c_size = 1 }",
             ),
         ],
     );
@@ -1570,7 +1570,7 @@ fn a_carried_record_cannot_be_constructed_without_a_direct_import() {
             ("Middle", MIDDLE),
             (
                 "Main",
-                "import Middle\nlet bad = Inner.Config { cSize = 1 }",
+                "import Middle\nlet bad = Inner.Config { c_size = 1 }",
             ),
         ],
     );
@@ -1595,7 +1595,7 @@ fn a_bare_carried_record_construction_names_the_declaring_module() {
         &[
             ("Inner", INNER),
             ("Middle", MIDDLE),
-            ("Main", "import Middle\nlet bad = Config { cSize = 1 }"),
+            ("Main", "import Middle\nlet bad = Config { c_size = 1 }"),
         ],
     );
     let errors = project::check(&project);
@@ -1619,7 +1619,7 @@ fn a_bare_carried_record_pattern_names_the_declaring_module() {
             (
                 "Main",
                 "import Middle\n\
-                 let f w =\n  match w:\n    case Config { cSize = n }: n",
+                 let f w =\n  match w:\n    case Config { c_size = n }: n",
             ),
         ],
     );
@@ -1678,18 +1678,18 @@ fn local_binders_colliding_with_a_module_alias_also_get_the_mangled_import() {
             (
                 "Main",
                 "import Ids\n\
-                 let viaParam ids = List.map (fun n -> Ids.greet n) ids\n\
+                 let via_param ids = List.map (fun n -> Ids.greet n) ids\n\
                  let hoisted u =\n    let g = Ids.greet u\n    let ids = [1, 2]\n    List.len ids + String.len g\n\
-                 let viaLambda xs = List.map (fun ids -> Ids.greet ids) xs\n\
-                 let fromMatch xs =\n  match xs:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
-                 let fromCe =\n  result {\n    let! ids = Ok [1]\n    return Ids.greet \"g\"\n  }\n\
-                 let topLevel =\n  match [\"f\"]:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
-                 print (List.len (viaParam [\"a\", \"b\"]))\n\
+                 let via_lambda xs = List.map (fun ids -> Ids.greet ids) xs\n\
+                 let from_match xs =\n  match xs:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
+                 let from_ce =\n  result {\n    let! ids = Ok [1]\n    return Ids.greet \"g\"\n  }\n\
+                 let top_level =\n  match [\"f\"]:\n    case [ids]: Ids.greet ids\n    case _: \"none\"\n\
+                 print (List.len (via_param [\"a\", \"b\"]))\n\
                  print (hoisted \"c\")\n\
-                 print (List.len (viaLambda [\"d\"]))\n\
-                 print (fromMatch [\"e\"])\n\
-                 print (Result.withDefault \"err\" fromCe)\n\
-                 print topLevel",
+                 print (List.len (via_lambda [\"d\"]))\n\
+                 print (from_match [\"e\"])\n\
+                 print (Result.with_default \"err\" from_ce)\n\
+                 print top_level",
             ),
         ],
     );
@@ -1771,13 +1771,13 @@ fn editor_analysis_still_flags_a_genuine_cross_module_error() {
 fn e2e_an_option_crosses_the_module_boundary() {
     // The decisive runtime test: an Option built in Store and inspected in Main
     // must match against the *same* Some class — only possible via the shared
-    // runtime. A per-file class would make `Option.isSome` see a foreign type.
+    // runtime. A per-file class would make `Option.is_some` see a foreign type.
     let files = compile(
         "Main",
         &[
             (
                 "Main",
-                "import Store\nlet hit = Option.withDefault 0 (Store.lookup 7)\nprint hit",
+                "import Store\nlet hit = Option.with_default 0 (Store.lookup 7)\nprint hit",
             ),
             ("Store", "let lookup k = Some k"),
         ],
@@ -1853,12 +1853,12 @@ fn a_module_that_only_matches_an_imported_option_imports_it() {
                 "Main",
                 "import Helper
 let probe xs =
-  match Helper.firstOf xs:
+  match Helper.first_of xs:
     case None: \"none\"
     case Some k: k
 print (probe [\"A\", \"B\"])",
             ),
-            ("Helper", "let firstOf xs = List.get 0 xs"),
+            ("Helper", "let first_of xs = List.get 0 xs"),
         ],
     );
     assert!(

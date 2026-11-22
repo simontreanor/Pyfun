@@ -15,12 +15,12 @@ import Dom
 let mut count = 0
 
 let render _ =
-  Dom.setText (Dom.byId "count") f"{count}"
+  Dom.set_text (Dom.by_id "count") f"{count}"
 
 let bump _ =
   count <- count + 1
   render ()
 
-Dom.on (Dom.byId "plus") "click" (Dom.proxy bump)
+Dom.on (Dom.by_id "plus") "click" (Dom.proxy bump)
 render ()
 print "counter ready"

@@ -1,7 +1,7 @@
 # Every shape that rebinds a captured name through `nonlocal` in the emitted
 # Python, each built natively by tests/native_parity.py (python/mypy#22221).
 extern import asyncio
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 let finished count = async { return count }
 
@@ -34,9 +34,9 @@ let bump start =
     n <- n + 1
     return n
   }
-  runAsync step
+  run_async step
 
-print (runAsync (countdown 4 0))
-print (numbered ["a", "b"] |> Seq.toList)
+print (run_async (countdown 4 0))
+print (numbered ["a", "b"] |> Seq.to_list)
 print (tally [1, 2, 3])
 print (bump 41)

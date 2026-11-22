@@ -8,20 +8,20 @@
 
 # A JSON array of one type decodes to a `List`; a flat object to a `Map`. `= json.loads`
 # auto-imports `json`; the boundary is effectful, so both are `io`.
-extern parseFloats: str -> List float = json.loads
-extern parseScores: str -> Map str float = json.loads
+extern parse_floats: str -> List float = json.loads
+extern parse_scores: str -> Map str float = json.loads
 
 # `try` catches a malformed string into `Error`; the `match` forces you to handle it.
-let sumJson s =
-  match try (parseFloats s):
+let sum_json s =
+  match try (parse_floats s):
     case Ok xs: List.fold (+) 0.0 xs
     case Error e: 0.0
 
 # Object lookup stays total, too: `Map.find` returns `Option`, so a missing key
 # is `None`, not a `KeyError`.
-let scores = parseScores """{"ada": 9.5, "alan": 8.0}"""
+let scores = parse_scores """{"ada": 9.5, "alan": 8.0}"""
 
-print (sumJson "[1.0, 2.0, 3.5]")                             # 6.5
-print (sumJson "[1.0, oops]")                                 # 0.0  (JSONDecodeError caught)
-print (Option.withDefault 0.0 (Map.find "ada" scores))    # 9.5
-print (Option.withDefault 0.0 (Map.find "grace" scores))  # 0.0
+print (sum_json "[1.0, 2.0, 3.5]")                             # 6.5
+print (sum_json "[1.0, oops]")                                 # 0.0  (JSONDecodeError caught)
+print (Option.with_default 0.0 (Map.find "ada" scores))    # 9.5
+print (Option.with_default 0.0 (Map.find "grace" scores))  # 0.0

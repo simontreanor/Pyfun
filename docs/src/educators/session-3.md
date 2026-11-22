@@ -22,7 +22,7 @@ The thread is choosing the right shape for data: a record for one thing with nam
 collection for many things, a tuple for a short positional pairing. Keep the Python panel visible so
 students see records become frozen dataclasses.
 
-1. Open the [Lesson 6 exercise](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBBY2NvdW50ID0geyBuYW1lOiBzdHJpbmcsIGJhbGFuY2U6IGludCB9CgpsZXQgb3BlbmVkID0gQWNjb3VudCB7IG5hbWUgPSAiQWRhIiwgYmFsYW5jZSA9IDAgfQpsZXQgZnVuZGVkID0geyBvcGVuZWQgd2l0aCBiYWxhbmNlID0gPyB9CgpwcmludCBmdW5kZWQubmFtZQpwcmludCBmdW5kZWQuYmFsYW5jZQpwcmludCBvcGVuZWQuYmFsYW5jZQo).
+1. Open the [Lesson 6 exercise](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBBY2NvdW50ID0geyBuYW1lOiBzdHIsIGJhbGFuY2U6IGludCB9CgpsZXQgb3BlbmVkID0gQWNjb3VudCB7IG5hbWUgPSAiQWRhIiwgYmFsYW5jZSA9IDAgfQpsZXQgZnVuZGVkID0geyBvcGVuZWQgd2l0aCBiYWxhbmNlID0gPyB9CgpwcmludCBmdW5kZWQubmFtZQpwcmludCBmdW5kZWQuYmFsYW5jZQpwcmludCBvcGVuZWQuYmFsYW5jZQo).
    Run `check` and read the hole note: the hole has type `int`. Fill it with `100` and Run. Draw
    attention to the last line: `opened.balance` still prints `0`.
 2. Explain the copy-and-update line `{ opened with balance = 100 }`. It builds a fresh `Account` and
@@ -32,11 +32,11 @@ students see records become frozen dataclasses.
    to a new `Account(...)` call. The immutability is literal in the output.
 4. Break it live: change `Account { name = "Ada", balance = 0 }` to drop the `balance` field. The
    compiler reports the missing field. Restore it. This shows records require all their fields.
-5. Move to collections. Open the [Lesson 7 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5zID0gWzQsIDgsIDE1LCAxNiwgMjNdCgpsZXQgdG90YWwgPSBMaXN0LmZvbGQgPyAwIG5zCmxldCBhdFRlbiA9IE9wdGlvbi53aXRoRGVmYXVsdCA_IChMaXN0LmdldCAxMCBucykKCnByaW50IHRvdGFsCnByaW50IGF0VGVuCg).
+5. Move to collections. Open the [Lesson 7 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5zID0gWzQsIDgsIDE1LCAxNiwgMjNdCgpsZXQgdG90YWwgPSBMaXN0LmZvbGQgPyAwIG5zCmxldCBhdF90ZW4gPSBPcHRpb24ud2l0aF9kZWZhdWx0ID8gKExpc3QuZ2V0IDEwIG5zKQoKcHJpbnQgdG90YWwKcHJpbnQgYXRfdGVuCg).
    Run `check` and show the two hole notes. The first hole wants `int -> int -> int`. Fill it with
    the operator section `(+)`, fill the second with `0`, and Run.
 6. Make the totality point: there is no `ns[10]` bracket indexing in Pyfun. `List.get 10 ns` returns
-   an `Option`, and `Option.withDefault` supplies the fallback, so an out-of-range lookup cannot
+   an `Option`, and `Option.with_default` supplies the fallback, so an out-of-range lookup cannot
    crash. This is the same lesson from Session 2 applied to collections.
 7. Move to tuples. Open the [Lesson 8 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IG5hbWVzID0gWyJhZGEiLCAiYWxhbiJdCmxldCBzY29yZXMgPSBbMTAsIDldCgpsZXQgbGluZSBwYWlyID0KICBtYXRjaCBwYWlyOgogICAgY2FzZSAobmFtZSwgc2NvcmUpOiA_CgpsZXQgbGluZXMgPSBMaXN0LnppcCBuYW1lcyBzY29yZXMgfD4gTGlzdC5tYXAgbGluZQoKbGluZXMgfD4gU3RyaW5nLmpvaW4gIiwgIiB8PiBwcmludAo).
    Show that `List.zip names scores` produced a list of pairs and that the single `case (name, score)`

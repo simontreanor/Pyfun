@@ -61,10 +61,10 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   imported, inherited/delegated members work, and `execute conn` is the bound method
   `conn.execute` (currying for free).
 - **Heterogeneous decode into your ADTs.** Don't cast the whole object — build a
-  **decoder** with the built-in `Decode` module and run it with `Decode.decodeString :
+  **decoder** with the built-in `Decode` module and run it with `Decode.decode_string :
   Decoder a -> str -> Result a Exception`. `Decode.field "age" Decode.int` pulls and
   strictly decodes a field; `Decode.map3`/`map2`/`map4` fan several field decoders into
-  one that builds your record; `Decode.list`/`nullable`/`oneOf`/`andThen` cover arrays,
+  one that builds your record; `Decode.list`/`nullable`/`one_of`/`and_then` cover arrays,
   optional/`null`, unions, and value-dependent shapes. The first bad field
   short-circuits to `Error`, and the whole pipeline is **pure** (a `let pure` over it
   type-checks). See `json_to_adt.pyfun` — this is Elm's `elm/json`, on the one library
@@ -73,7 +73,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   any function touching the boundary is `io` with no annotation, and `let pure` over it is
   a compile error. An async library's result is the `Async` type (`-> Async a`), awaited with
   `let!` inside an `async { }` block, and the `Async` module (`sleep`, `timeout`, `parallel`,
-  `race`, `catch`, `toThread`) covers the combinators that are awkward to type as externs. For a
+  `race`, `catch`, `to_thread`) covers the combinators that are awkward to type as externs. For a
   call that is genuinely deterministic and effect-free, `extern pure` asserts it — and then
   `let pure` can *prove* whole pipelines over the boundary effect-free (`datetime.pyfun`).
   A callback-taking extern uses an effect *variable* so both pure and effectful callbacks
@@ -86,13 +86,13 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 - **Keyword arguments on the target.** A trailing `(kw = value, …)` puts Python keyword
   arguments on every emitted call, reaching keyword-only and deep-positional parameters
   without the positional fillers needed to skip past them. A literal is pinned at the
-  declaration (`extern openText : str -> a = builtins.open(mode = "rt")`), and `...`
+  declaration (`extern open_text : str -> a = builtins.open(mode = "rt")`), and `...`
   takes the value from the caller, so one extern covers every call shape instead of one per
-  fixed value: `extern parseInt : str -> int -> int = int(base = ...)` lowers
-  `parseInt "ff" 16` to `int("ff", base=16)`. Pinned literals consume no argument, so the
+  fixed value: `extern parse_int : str -> int -> int = int(base = ...)` lowers
+  `parse_int "ff" 16` to `int("ff", base=16)`. Pinned literals consume no argument, so the
   two mix (`= builtins.open(mode = "rt", encoding = ...)`), and both work on a receiver
   method (`= .write_text(encoding = ...)`). A partially applied slot extern keeps working:
-  `parseInt "ff"` is a function awaiting the base.
+  `parse_int "ff"` is a function awaiting the base.
 - **`extern import` when the heuristic can't see the module.** A dotted target's module is
   guessed by its lowercase prefix. Where that prefix is undecidable — a lowercase segment
   after the first, which might be a submodule or might be a class or value attribute — the
@@ -105,7 +105,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 
 ## Honest limits (the frontier these examples expose)
 
-- **No raw cast into records.** `extern parseUser: str -> User = json.loads`
+- **No raw cast into records.** `extern parse_user: str -> User = json.loads`
   type-checks but crashes (`'dict' object has no attribute 'name'`) — `json` returns a
   Python `dict` (subscript), a Pyfun record lowers to a class (attribute). This is a
   footgun to avoid, not a wall: the built-in `Decode` module (`json_to_adt.pyfun`) is the

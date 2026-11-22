@@ -234,7 +234,7 @@ fn compile_writes_the_python_tree_to_a_directory() {
             ("store.pyfun", "let lookup k = Some k"),
             (
                 "main.pyfun",
-                "import Store\nlet hit = Option.withDefault 0 (Store.lookup 7)",
+                "import Store\nlet hit = Option.with_default 0 (Store.lookup 7)",
             ),
         ],
     );
@@ -275,7 +275,7 @@ fn run_executes_a_multi_file_project() {
                 "main.pyfun",
                 "import Geometry\nimport Store\n\
                  let floor = Geometry.area 4 5\n\
-                 let hit = Option.withDefault 0 (Store.lookup 7)\n\
+                 let hit = Option.with_default 0 (Store.lookup 7)\n\
                  print floor\nprint hit",
             ),
         ],
@@ -310,9 +310,9 @@ fn run_forwards_arguments_to_a_multi_file_project() {
                 "main.pyfun",
                 "import Geometry\n\
                  extern import sys\n\
-                 extern getArgv : unit -> List str = sys.argv.copy\n\
+                 extern get_argv : unit -> List str = sys.argv.copy\n\
                  print (Geometry.area 4 5)\n\
-                 print (getArgv ())",
+                 print (get_argv ())",
             ),
         ],
     );
