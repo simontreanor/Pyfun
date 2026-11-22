@@ -511,8 +511,10 @@ after the release.
 17. **Typed default output** (M). Plain `compile` writes `_0: object` and unannotated `def`s, while
     `--native` already computes annotations. Add `--typed` with `py.typed`, and emit `##` docs as
     docstrings.
-18. **LSP: inlay hints, code actions, signature help** (M each). "Add missing cases" can reuse the
-    exhaustiveness witnesses.
+18. **LSP: inlay hints, code actions, signature help** (M each). **Inlay hints DONE 2026-11-22**:
+    `total: int`, `shape: Shape` and `-> float` beside each binding, in Python's notation
+    (`DESIGN.md` §9). Still to come: signature help and code actions. "Add missing cases" can
+    reuse the exhaustiveness witnesses.
 
 **Larger**
 

@@ -11573,6 +11573,73 @@ fn show(ty: &Ty) -> String {
     buf
 }
 
+/// A displayed type ([`TypeSpan::ty`]) taken apart at its top-level arrows, for
+/// an editor that shows a function's type a piece at a time (an inlay hint
+/// beside each parameter, the active parameter of a call).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownArrows<'a> {
+    /// The constraints in front of the type (`num a`, `(comparison a, a in
+    /// b)`), without their `=>`.
+    pub constraints: Option<&'a str>,
+    /// Each parameter and, last, the result, as byte ranges of the shown text.
+    /// A type that is not a function has the one part.
+    pub parts: Vec<std::ops::Range<usize>>,
+    /// The arrow after each parameter, with its effect (`->`, `->{io}`): one
+    /// fewer than `parts`.
+    pub arrows: Vec<&'a str>,
+}
+
+/// Take a displayed type apart at its top-level arrows. This reads the text
+/// [`show_into`] writes, where a function in argument position is in
+/// parentheses, so an arrow outside every parenthesis belongs to the type's own
+/// spine.
+pub fn shown_arrows(shown: &str) -> ShownArrows<'_> {
+    let bytes = shown.as_bytes();
+    let depth_zero = |upto: usize| {
+        bytes[..upto].iter().fold(0i32, |depth, b| match b {
+            b'(' => depth + 1,
+            b')' => depth - 1,
+            _ => depth,
+        }) == 0
+    };
+    // The constraints end at the one ` => ` outside parentheses.
+    let (constraints, mut start) = match shown.match_indices(" => ").find(|(at, _)| depth_zero(*at))
+    {
+        Some((at, sep)) => (Some(&shown[..at]), at + sep.len()),
+        None => (None, 0),
+    };
+    let mut parts = Vec::new();
+    let mut arrows = Vec::new();
+    let mut depth = 0i32;
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' if depth == 0 && shown[i..].starts_with(" ->") => {
+                // ` -> ` or ` ->{labels} `: the arrow runs to the next space.
+                let arrow_start = i + 1;
+                let arrow_end = shown[arrow_start..]
+                    .find(' ')
+                    .map_or(shown.len(), |n| arrow_start + n);
+                parts.push(start..i);
+                arrows.push(&shown[arrow_start..arrow_end]);
+                start = (arrow_end + 1).min(shown.len());
+                i = start;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(start..shown.len());
+    ShownArrows {
+        constraints,
+        parts,
+        arrows,
+    }
+}
+
 /// A function type shown with the effect variable `->{e}` on its arrow number
 /// `arrow` (0 is the outermost), as the fix to suggest for a closed callback
 /// arrow (#180): `Reader -> Writer ->{e} Async unit`.

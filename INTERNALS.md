@@ -504,6 +504,14 @@ stdio. All features reuse the existing front end:
 - **Document symbols** — the editor outline: every module-level definition as a flat
   `DocumentSymbol[]`, reusing `resolve::definitions` (each with a precise `range`/`selectionRange` and
   an LSP `SymbolKind` icon). Works on whatever parsed.
+- **Inlay hints** — `lsp/hints.rs` walks every `let` (top-level, in a module, in a block, in a
+  computation expression) and looks up the displayed type the checker recorded at the binding's name
+  span. A value gets `: T` after each name it binds. A function's hints are cut from its one displayed
+  type by `types::shown_arrows`, which splits the text at the arrows outside every parenthesis: one `:
+  T` per parameter and `-> R` after the last, the arrow keeping its effect. Cutting one string, in
+  place of displaying each parameter's type on its own, is what keeps a type variable's letter the same
+  across the hints; the same splitter gives signature help its parameter ranges. A literal's binding
+  and a `_`-led name are skipped.
 
 **Cross-file navigation** (with file-based modules, DESIGN §6.1): go-to-definition on a qualified
 reference to an imported file module (`Geometry.area`, `Geometry.Circle`) jumps to the definition in

@@ -1210,6 +1210,23 @@ impl Parser {
                 });
             }
         }
+        // A type written where Python annotates one (`total: int`, `-> float`),
+        // which is also how an editor shows an inferred type beside a binding
+        // (`DESIGN.md` §9). A `let` is written without one.
+        if matches!(self.peek(), Tok::Colon | Tok::Arrow) {
+            let mark = if matches!(self.peek(), Tok::Colon) {
+                ":"
+            } else {
+                "->"
+            };
+            return Err(ParseError {
+                message: format!(
+                    "a `let` is written without a type: Pyfun infers it, and the editor \
+                     shows it beside the name. Remove the `{mark}` and the type after it"
+                ),
+                span: self.span(),
+            });
+        }
         self.expect(&Tok::Eq, "`=`")?;
         let value = self.parse_block_or_expr()?;
         Ok(LetBinding {

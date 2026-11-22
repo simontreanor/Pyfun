@@ -776,6 +776,33 @@ fn a_capitalised_let_name_is_rejected_as_a_constructor() {
 }
 
 #[test]
+fn a_type_annotation_on_a_let_is_answered() {
+    // An editor shows an inferred type beside a binding the way Python
+    // annotates one (`total: int`, `-> float`). Typed in, either is answered
+    // with what a `let` looks like, at the mark that opens the annotation.
+    for (source, mark, at) in [
+        ("let total: int = 5", ":", 9),
+        ("let area shape: Shape = 2.0", ":", 14),
+        ("let add a b -> int = a + b", "->", 12),
+    ] {
+        let err = parse(source).unwrap_err();
+        assert!(
+            err.message()
+                .contains("a `let` is written without a type: Pyfun infers it"),
+            "{source}: {}",
+            err.message()
+        );
+        assert!(
+            err.message()
+                .contains(&format!("Remove the `{mark}` and the type after it")),
+            "{source}: {}",
+            err.message()
+        );
+        assert_eq!(err.span().start, at, "{source}");
+    }
+}
+
+#[test]
 fn let_rec_is_rejected_with_a_helpful_hint() {
     // Pyfun has no `rec` keyword (functions are implicitly recursive). The F#/ML
     // `let rec f x = …` would otherwise silently define a function named `rec`; we
