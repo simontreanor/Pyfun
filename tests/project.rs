@@ -1297,6 +1297,51 @@ fn e2e_a_record_update_through_a_transitive_boundary_routes_to_the_declaring_cla
 }
 
 #[test]
+fn e2e_a_record_update_picks_its_class_by_type_across_modules() {
+    // A local record, an imported one and a transitively carried one all declare
+    // `x`. Each update rebuilds the record its base is.
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Shapes",
+                "type Point = { x: int, y: int }\n\
+                 type Box = { corner: Point, x: int }\n\
+                 let origin = Point { x = 0, y = 0 }\n\
+                 let unit_box = Box { corner = origin, x = 1 }",
+            ),
+            (
+                "Wrap",
+                "import Shapes\n\
+                 type Holder = { box: Shapes.Box, x: int }\n\
+                 let held = Holder { box = Shapes.unit_box, x = 5 }",
+            ),
+            (
+                "Main",
+                "import Wrap\n\
+                 type Local = { x: int, name: str }\n\
+                 let l = Local { x = 1, name = \"n\" }\n\
+                 let b = Wrap.held.box\n\
+                 print { l with x = 2 }\n\
+                 print { b with x = 100 }\n\
+                 print { b with corner.y = 5 }\n\
+                 print { Wrap.held with box.corner.x = 7, x = 8 }",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_update_by_type");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(
+            out.replace("\r\n", "\n").trim(),
+            "Local(x=2, name='n')\n\
+             Box(corner=Point(x=0, y=0), x=100)\n\
+             Box(corner=Point(x=0, y=5), x=1)\n\
+             Holder(box=Box(corner=Point(x=7, y=0), x=1), x=8)"
+        );
+    }
+}
+
+#[test]
 fn e2e_a_transitive_record_crosses_any_depth() {
     // The record is declared three imports away; each hop's interface carries it
     // onward, so the chain works at any depth.
