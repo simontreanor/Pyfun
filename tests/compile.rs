@@ -8958,9 +8958,59 @@ fn e2e_a_sole_constructor_pattern_unpacks_in_a_parameter_and_a_let() {
         py.contains("def note_of(_pf_arg0):\n    note = _pf_arg0.note\n    return note"),
         "{py}"
     );
+    assert!(py.contains("def raw(s):\n    return s"), "{py}");
+    assert!(py.contains("k = _pf_t0._0\nlabel = _pf_t0._1"), "{py}");
+}
+
+#[test]
+fn a_newtype_pattern_in_a_binding_costs_nothing() {
+    // A newtype's constructor does not exist at run time, so its pattern in a
+    // parameter or a `let` is erased before lowering: the parameter is the
+    // payload's name, a lambda stays a lambda, and a `let` is a plain assignment.
+    let py = pyfun::compile(
+        "opaque type UserId = str\n\
+         opaque type Email = str\n\
+         type Wrapper = Wrap int UserId\n\
+         let raw (UserId s) = s\n\
+         let both (UserId u) (Email e) = f\"{u} <{e}>\"\n\
+         let inside (Wrap n (UserId s)) = f\"{n}:{s}\"\n\
+         let (UserId top) = UserId \"t\"\n\
+         let (UserId a, Email b) = (UserId \"a\", Email \"b\")\n\
+         let shout ids = ids |> List.map (fun (UserId s) -> String.upper s)\n\
+         let total ids = ids |> List.fold (fun acc (UserId s) -> acc + String.len s) 0",
+    )
+    .expect("compiles");
+    assert!(py.contains("def raw(s):\n    return s"), "{py}");
+    assert!(py.contains("def both(u, e):"), "{py}");
+    // Inside another constructor's pattern the payload is read as itself.
     assert!(
-        py.contains("def raw(_pf_arg0):\n    s = _pf_arg0\n    return s"),
+        py.contains("def inside(_pf_arg0):\n    n = _pf_arg0._0\n    s = _pf_arg0._1"),
         "{py}"
     );
-    assert!(py.contains("k = _pf_t0._0\nlabel = _pf_t0._1"), "{py}");
+    assert!(py.contains("top = \"t\""), "{py}");
+    assert!(py.contains("a, b = (\"a\", \"b\")"), "{py}");
+    assert!(py.contains("lambda s: _pf_str_upper(s)"), "{py}");
+    assert!(py.contains("lambda acc, s: acc + len(s)"), "{py}");
+    assert!(
+        !py.contains("_pf_arg0 = ") && !py.contains("s = _pf_arg0\n"),
+        "{py}"
+    );
+
+    let src = "opaque type UserId = str\n\
+               opaque type Email = str\n\
+               let raw (UserId s) = s\n\
+               let both (UserId u) (Email e) = f\"{u} <{e}>\"\n\
+               let ids = [UserId \"p\", UserId \"q\"]\n\
+               print (raw (UserId \"ada\"), both (UserId \"u\") (Email \"e\"))\n\
+               ids |> List.map (fun (UserId s) -> String.upper s) |> print\n\
+               print (seq { for (UserId s) in Seq.of_list ids: yield s } |> Seq.to_list)\n\
+               let found = option {\n  let! (UserId s) = Some (UserId \"o\")\n  return s\n}\n\
+               print found";
+    let expected = "('ada', 'u <e>')\n['P', 'Q']\n['p', 'q']\nSome('o')";
+    if let Some(out) = run_source(src) {
+        assert_eq!(out.trim(), expected);
+    }
+    if let Some((_, lines)) = run_native(src) {
+        assert_eq!(lines.join("\n").trim(), expected);
+    }
 }

@@ -519,8 +519,8 @@ after the release.
 21. ~~**A sole constructor's pattern in a parameter or a `let`**~~ **DONE 2026-11-22** (#203), for
     both kinds at once: `let unwrap (Wrap v) = v`, `let unwrap (Box { value }) = value` and the
     newtype idiom `let raw (UserId s) = s` bind where the type has no other constructor
-    (`DESIGN.md` §7). Still open: a newtype parameter lowers to `def raw(_pf_arg0): s = _pf_arg0`
-    where `def raw(s)` would do.
+    (`DESIGN.md` §7). A newtype's pattern there costs nothing: it is erased ahead of lowering, so
+    `let raw (UserId s) = s` is `def raw(s)` (#205).
 
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 

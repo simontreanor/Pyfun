@@ -398,14 +398,7 @@ impl Lowerer {
             None => {
                 let tmp = self.fresh_tmp();
                 let mut unpack = Vec::new();
-                unpack_into_as(
-                    plan.elem,
-                    &tmp,
-                    &tmp,
-                    &|n| py_value_name(n),
-                    &self.newtype_ctors,
-                    &mut unpack,
-                );
+                unpack_into_as(plan.elem, &tmp, &tmp, &|n| py_value_name(n), &mut unpack);
                 (PyForTarget::Name(tmp), unpack)
             }
         };

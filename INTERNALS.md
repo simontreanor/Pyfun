@@ -23,6 +23,7 @@ src/
     fold_loop.rs     hot folds become loops (DESIGN §5.1)
     decode_spec.rs   statically-known decoders deforest (DESIGN §5.3)
     self_tail_call.rs a saturated self tail call becomes `while True` (DESIGN §5.4)
+    newtype_patterns.rs newtype patterns in binding positions erase first (DESIGN §7.3)
   python_emitter/  Python-AST IR → readable source (py311.rs = the --target 3.11 rewrite)
   diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes; the Warning type
   lint.rs          the warnings the syntax alone shows (DESIGN §3); types/ finds the rest and joins them
