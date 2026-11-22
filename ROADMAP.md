@@ -467,8 +467,8 @@ after the release.
    type if their guards always held, the message says a guarded arm does not count.
 6. ~~**Type display**~~ **DONE 2026-11-22** (#199): a type variable prints bare (`a`, as it is written),
    a type in a message is backticked, and a type application left of an arrow drops its
-   parentheses (`DESIGN.md` §7). Still open: a constraint is not shown at all (`fun a b -> a < b`
-   prints `a -> a -> bool` with no `comparison`, and a `num` variable prints as `int`).
+   parentheses (`DESIGN.md` §7). Constraints followed in #206: a whole type shows them in front
+   (`comparison a => a -> a -> bool`, `num a => a<'u> -> a<'u>`, `a in b => a -> b -> bool`).
 
 **Consistency (breaking, 0.11.0)**
 

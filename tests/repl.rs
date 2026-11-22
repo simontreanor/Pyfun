@@ -40,7 +40,10 @@ fn repl(input: &str) -> String {
 fn repl_echoes_definition_types() {
     // A definition is remembered and its inferred type echoed (no Python needed).
     let out = repl("let double = (*) 2\n:type double\n:quit\n");
-    assert!(out.contains("double : int"), "definition type echo:\n{out}");
+    assert!(
+        out.contains("double : num a => a<'u> -> a<'u>"),
+        "definition type echo:\n{out}"
+    );
 }
 
 #[test]
@@ -79,7 +82,7 @@ fn repl_multiline_block_enables_mutual_recursion() {
          :quit\n",
     );
     assert!(
-        out.contains("is_even : int -> bool"),
+        out.contains("is_even : num a => a -> bool"),
         "grouped types:\n{out}"
     );
     assert!(out.contains("True"), "is_even 10:\n{out}");
@@ -124,7 +127,7 @@ fn repl_pure_definitions_still_evaluate() {
         return;
     }
     let out = repl("let inc x = x + 1\ninc 41\n:quit\n");
-    assert!(out.contains("inc : int -> int"), "type echo:\n{out}");
+    assert!(out.contains("inc : num a => a -> a"), "type echo:\n{out}");
     assert!(out.contains("42"), "inc 41:\n{out}");
 }
 

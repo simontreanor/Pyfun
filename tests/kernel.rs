@@ -217,7 +217,7 @@ fn a_cells_warnings_lead_its_output() {
         reply.message
     );
     assert!(
-        reply.message.ends_with("f : int -> int\n"),
+        reply.message.ends_with("f : num a => a -> a\n"),
         "{}",
         reply.message
     );
@@ -235,5 +235,5 @@ fn a_cells_warnings_lead_its_output() {
     // earlier cell's unused local is not repeated.
     let reply = engine.eval("let f n = n + 2");
     assert_eq!(reply.status, "ok");
-    assert_eq!(reply.message, "f : int -> int\n");
+    assert_eq!(reply.message, "f : num a => a -> a\n");
 }

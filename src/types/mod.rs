@@ -2718,7 +2718,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 let applied = inf.apply(ty);
                 TypeSpan {
                     span: *span,
-                    ty: show(&applied),
+                    ty: inf.show_whole(&applied, true),
                     effect: effect_summary(&applied),
                     raw: applied,
                 }
@@ -2772,7 +2772,7 @@ fn run(module: &Module, record: bool, imports: &HashMap<String, ModuleExports>) 
                 inf.hole_refinements(&env, &ty, &direct, name.as_deref());
             Hole {
                 name,
-                ty: show(&inf.apply(&ty)),
+                ty: inf.show_whole(&inf.apply(&ty), false),
                 fits,
                 more_fits,
                 refinements,
@@ -6853,6 +6853,16 @@ struct Infer {
     /// test for. A pending test over one has been handed to every scheme that
     /// mentions the variable, so it is no longer this binding's to settle.
     generalized_containers: HashSet<u32>,
+    /// Every membership test a binding was generalized over, as `(elem,
+    /// container)` in the binding's own variables, for displaying its type
+    /// (`a in b => a -> b -> bool`).
+    generalized_members: Vec<(Ty, Ty)>,
+    /// The numeric variables some binding was generalized over (or that a
+    /// top-level expression's own type leaves open): the ones a displayed type
+    /// may name under a `num` constraint. A literal's variable inside a body
+    /// is not among them; it is pinned by its context or defaults to `int`,
+    /// and that is how it displays (a hole there reads `int -> int -> int`).
+    generalized_nums: HashSet<u32>,
     /// The expression being inferred, so a constraint posed by instantiating a
     /// scheme can point at the use that posed it.
     cur_span: Option<Span>,
@@ -8498,6 +8508,10 @@ impl Infer {
     /// Drop the membership tests that wait on a variable of `ty`: they belong to
     /// a polymorphic value, not to an undecided one.
     fn release_members_of(&mut self, ty: &Ty) {
+        // The expression's type is its own to leave open, numbers included.
+        let mut open_nums = HashSet::new();
+        param_nums(&self.apply(ty), false, &mut open_nums);
+        self.generalized_nums.extend(open_nums);
         let mut vars: HashSet<u32> = HashSet::new();
         free_type_vars(&self.apply(ty), &mut |v| {
             vars.insert(v);
@@ -8509,7 +8523,11 @@ impl Infer {
                 Ty::Var(v) => vars.contains(&v),
                 _ => false,
             };
-            if !polymorphic {
+            if polymorphic {
+                // Kept for display: the expression's type is shown with it.
+                self.generalized_members
+                    .push((p.elem.clone(), p.container.clone()));
+            } else {
                 kept.push(p);
             }
         }
@@ -9019,6 +9037,60 @@ impl Infer {
             ),
             span,
         })
+    }
+
+    /// Render a **whole** type, with the constraints on its variables in front
+    /// (`DESIGN.md` §7.1): `comparison a => a -> a -> bool`, `num a => a<'u> ->
+    /// a<'u>`, `a in b => a -> b -> bool`, and `(c1, c2) => …` for several. This
+    /// is what hover, the REPL's echo, `:type` and a typed hole show. A type
+    /// quoted inside a message stays bare ([`show`]): a constraint belongs to a
+    /// binding, not to a fragment of its type.
+    ///
+    /// `ty` must already be resolved. A `num` variable is named only when the
+    /// type is a function of it ([`param_nums`]) and a binding was generalized
+    /// over it; any other displays as its default, `int`.
+    ///
+    /// `name_nums` is false for a typed hole. A hole's type is a whole type, but
+    /// its numbers are its context's (the `0` beside it, the list it folds),
+    /// not the hole's to leave open, so they display as what they default to.
+    fn show_whole(&self, ty: &Ty, name_nums: bool) -> String {
+        let mut namer = Namer::default();
+        if name_nums {
+            param_nums(ty, false, &mut namer.nums);
+            namer.nums.retain(|v| self.generalized_nums.contains(v));
+        }
+        let mut body = String::new();
+        show_into(ty, &mut namer, &mut body, false);
+        // One constraint per variable, in the order the type names them, then
+        // the membership tests over them.
+        let mut constraints: Vec<String> = Vec::new();
+        for id in namer.order.clone() {
+            let name = namer.ty(id);
+            if namer.nums.contains(&id) {
+                constraints.push(format!("num {name}"));
+            } else if self.ord.contains(&id) {
+                constraints.push(format!("comparison {name}"));
+            }
+        }
+        for (elem, container) in &self.generalized_members {
+            let Ty::Var(v) = self.apply(container) else {
+                continue;
+            };
+            if !namer.tys.contains_key(&v) {
+                continue;
+            }
+            let mut sought = String::new();
+            show_into(&self.apply(elem), &mut namer, &mut sought, true);
+            let test = format!("{sought} in {}", namer.ty(v));
+            if !constraints.contains(&test) {
+                constraints.push(test);
+            }
+        }
+        match constraints.as_slice() {
+            [] => body,
+            [one] => format!("{one} => {body}"),
+            many => format!("({}) => {body}", many.join(", ")),
+        }
     }
 
     /// The field names of constructor `name` (bare or `Module.Ctor`) when it is
@@ -11189,6 +11261,10 @@ impl Infer {
                 self.generalized_containers.insert(*v);
             }
         }
+        self.generalized_members
+            .extend(scheme.members.iter().cloned());
+        self.generalized_nums
+            .extend(scheme.num_vars.iter().copied());
         scheme
     }
 
@@ -11460,11 +11536,21 @@ fn subst_all(
 struct Namer {
     tys: HashMap<u32, String>,
     units: HashMap<u32, String>,
+    /// The type variables in the order they were named, which is the order a
+    /// type's constraints are listed in.
+    order: Vec<u32>,
+    /// Numeric variables to show as the variables they are (`a`, under a `num
+    /// a` constraint) instead of as their default, `int`. Empty for a type
+    /// quoted inside a message; see [`Infer::show_whole`].
+    nums: HashSet<u32>,
 }
 
 impl Namer {
     fn ty(&mut self, id: u32) -> String {
         let n = self.tys.len();
+        if !self.tys.contains_key(&id) {
+            self.order.push(id);
+        }
         self.tys.entry(id).or_insert_with(|| var_name(n)).clone()
     }
 
@@ -11474,7 +11560,7 @@ impl Namer {
         // (`float<'u>`): bare, it would read as a measure of that name.
         self.units
             .entry(id)
-            .or_insert_with(|| format!("'{}", var_name(n)))
+            .or_insert_with(|| format!("'{}", unit_var_name(n)))
             .clone()
     }
 }
@@ -11521,7 +11607,12 @@ fn show_domain(ty: &Ty, namer: &mut Namer, out: &mut String) {
 
 fn show_into(ty: &Ty, namer: &mut Namer, out: &mut String, atom: bool) {
     match ty {
-        // An unresolved `num` literal displays as its default, `int`.
+        // A numeric variable a whole type is polymorphic in is shown as the
+        // variable it is; any other unresolved `num` displays as its default.
+        Ty::Num(v, u) if namer.nums.contains(v) => {
+            let name = namer.ty(*v);
+            show_numeric(&name, u, namer, out);
+        }
         Ty::Int(u) | Ty::Num(_, u) => show_numeric("int", u, namer, out),
         Ty::Float(u) => show_numeric("float", u, namer, out),
         Ty::Bool => out.push_str("bool"),
@@ -11617,6 +11708,48 @@ fn show_unit(unit: &Unit, namer: &mut Namer) -> String {
         numer
     } else {
         format!("{numer}/{}", denom.join(" "))
+    }
+}
+
+/// The name of the `index`-th unit variable in a displayed type: `u`, `v`, `w`,
+/// `x`, `y`, `z`, then `u1`, …. Unit variables are lettered apart from type
+/// variables (`a`, `b`, …) so that `num a => a<'u> -> a<'u>` never reads `a<'a>`.
+fn unit_var_name(index: usize) -> String {
+    const LETTERS: &[u8] = b"uvwxyz";
+    let letter = LETTERS[index % LETTERS.len()] as char;
+    if index < LETTERS.len() {
+        letter.to_string()
+    } else {
+        format!("{letter}{}", index / LETTERS.len())
+    }
+}
+
+/// The numeric variables that occur in an argument position of `ty`: to the left
+/// of some arrow, at any depth. A function is polymorphic in those (its caller
+/// picks `int` or `float`), where a number that only comes *out* is a constant
+/// whose default, `int`, is the plain thing to show.
+fn param_nums(ty: &Ty, in_param: bool, out: &mut HashSet<u32>) {
+    match ty {
+        Ty::Num(v, _) => {
+            if in_param {
+                out.insert(*v);
+            }
+        }
+        Ty::Fun(param, result, _) => {
+            param_nums(param, true, out);
+            param_nums(result, in_param, out);
+        }
+        Ty::Tuple(elems) => {
+            for e in elems {
+                param_nums(e, in_param, out);
+            }
+        }
+        Ty::Con(_, args) => {
+            for a in args {
+                param_nums(a, in_param, out);
+            }
+        }
+        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Str | Ty::Unit | Ty::Var(_) => {}
     }
 }
 

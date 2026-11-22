@@ -52,7 +52,7 @@ The checker names each expected type:
 ```console
 note: hole `?` has type `Decoder float` — try: Decode.float, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.one_of ?, Decode.field ? ?
 note: hole `?` has type `float<m>` — try: a — or: sqrt ?, cbrt ?, abs ?, min ? ?
-note: hole `?` has type `float<'a>` — try: dist, time — or: sqrt ?, cbrt ?, abs ?, min ? ?
+note: hole `?` has type `float<'u>` — try: dist, time — or: sqrt ?, cbrt ?, abs ?, min ? ?
 ```
 
 Expected output:
