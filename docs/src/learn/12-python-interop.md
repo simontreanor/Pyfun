@@ -49,27 +49,27 @@ Plenty of Python libraries hand you an object and expect you to call methods on 
 
 ```pyfun
 extern type Path
-extern pure toPath: str -> Path = pathlib.Path
+extern pure to_path: str -> Path = pathlib.Path
 extern pure suffix: Path -> str = .suffix
-extern pure withName: Path -> str -> Path = .with_name
-extern pure asText: Path -> str = builtins.str
+extern pure with_name: Path -> str -> Path = .with_name
+extern pure as_text: Path -> str = builtins.str
 
-let renamed = withName (toPath "report.csv") "summary.csv"
+let renamed = with_name (to_path "report.csv") "summary.csv"
 
-"report.csv" |> toPath |> suffix |> print
-renamed |> asText |> print
+"report.csv" |> to_path |> suffix |> print
+renamed |> as_text |> print
 ```
 
 This prints `.csv` then `summary.csv`. `extern type Path` declares an opaque handle: Pyfun knows the type exists and keeps it distinct, and it never looks inside. The dotted targets work on attributes (`.suffix`) and on methods with their own arguments (`.with_name`), and because the receiver is just the first parameter, these compose in a pipe like any other Pyfun function. Reading the signature tells you exactly what crosses the boundary, which is the whole point of writing it down.
 
 The framing worth keeping is boundary versus engine. Pyfun shines at the boundary where the world is untyped and can fail, which is parsing, files, and the network. It adds little wrapped around an engine like numpy, whose speed lives in native code Pyfun cannot touch. Call the boundary safely and stay out of the engine's way.
 
-The clearest boundary is untrusted JSON. When an `extern` can raise, `try` from lesson 4 turns the exception into a `Result` you must handle. Building on that, the built-in `Decode` module turns raw JSON straight into your own record type or a structured error, so the rest of your program never sees an untyped shape. `Decode.field` pulls one field and runs a decoder on it, `Decode.str` and `Decode.int` decode strictly, `Decode.map2` combines two field decoders into one that builds a record, and `Decode.decodeString` runs the whole thing over a JSON string to yield `Result a Exception`.
+The clearest boundary is untrusted JSON. When an `extern` can raise, `try` from lesson 4 turns the exception into a `Result` you must handle. Building on that, the built-in `Decode` module turns raw JSON straight into your own record type or a structured error, so the rest of your program never sees an untyped shape. `Decode.field` pulls one field and runs a decoder on it, `Decode.str` and `Decode.int` decode strictly, `Decode.map2` combines two field decoders into one that builds a record, and `Decode.decode_string` runs the whole thing over a JSON string to yield `Result a Exception`.
 
 ```pyfun
 type Book = { title: str, pages: int }
 
-let bookDecoder =
+let book_decoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
     (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
@@ -77,13 +77,13 @@ let bookDecoder =
 let describe r =
   match r:
     case Ok b: f"{b.title}, {b.pages} pages"
-    case Error e: f"failed ({e.errorKind})"
+    case Error e: f"failed ({e.error_kind})"
 
-let wellFormed = """{"title": "Dune", "pages": 412}"""
-let missingField = """{"title": "Dune"}"""
+let well_formed = """{"title": "Dune", "pages": 412}"""
+let missing_field = """{"title": "Dune"}"""
 
-wellFormed |> Decode.decodeString bookDecoder |> describe |> print
-missingField |> Decode.decodeString bookDecoder |> describe |> print
+well_formed |> Decode.decode_string book_decoder |> describe |> print
+missing_field |> Decode.decode_string book_decoder |> describe |> print
 ```
 
 The well-formed object decodes to a typed `Book`. The object missing `pages` short-circuits to an `Error` carrying the Python exception, which `match` forces you to handle. The output is `Dune, 412 pages` then `failed (KeyError)`.
@@ -106,9 +106,9 @@ print wire
 
 let describe t = f"{t.player} played {t.msg}"
 
-match Decode.decodeString Decode.auto wire:
+match Decode.decode_string Decode.auto wire:
   case Ok back: print (describe back)
-  case Error e: print f"failed: {e.errorMessage}"
+  case Error e: print f"failed: {e.error_message}"
 ```
 
 ```console
@@ -131,16 +131,16 @@ pair is one parameter that Python would have to know to bundle. And a thunk, a p
 `unit -> a`, is called by Python with no arguments at all, so Pyfun wraps it for you at the call:
 
 ```pyfun
-extern runAsync: Async a -> a = asyncio.run
-extern toThread: (unit -> a) -> Async a = asyncio.to_thread
+extern run_async: Async a -> a = asyncio.run
+extern to_thread: (unit -> a) -> Async a = asyncio.to_thread
 
 let answer =
   async {
-    let! v = toThread (fun _ -> 6 * 7)
+    let! v = to_thread (fun _ -> 6 * 7)
     return v
   }
 
-print (runAsync answer)
+print (run_async answer)
 ```
 
 ```console
@@ -159,27 +159,27 @@ whatever the callback performs.
 Complete the decoder by filling both holes with the strict field decoders. `pyfun check` reports each hole's type and suggests the fit. The first report is:
 
 ```console
-note: hole `?titleDec` has type `Decoder str` — try: Decode.str, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.oneOf ?, Decode.field ? ?
+note: hole `?title_dec` has type `Decoder str` — try: Decode.str, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.one_of ?, Decode.field ? ?
 ```
 
 ```pyfun
 type Book = { title: str, pages: int }
 
-let bookDecoder =
+let book_decoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
-    (Decode.field "title" ?titleDec)
-    (Decode.field "pages" ?pagesDec)
+    (Decode.field "title" ?title_dec)
+    (Decode.field "pages" ?pages_dec)
 
 let describe r =
   match r:
     case Ok b: f"{b.title}, {b.pages} pages"
-    case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
+    case Error e: f"failed ({e.error_kind}): {e.error_message}"
 
-let wellFormed = """{"title": "Dune", "pages": 412}"""
-let missingField = """{"title": "Dune"}"""
+let well_formed = """{"title": "Dune", "pages": 412}"""
+let missing_field = """{"title": "Dune"}"""
 
-wellFormed |> Decode.decodeString bookDecoder |> describe |> print
-missingField |> Decode.decodeString bookDecoder |> describe |> print
+well_formed |> Decode.decode_string book_decoder |> describe |> print
+missing_field |> Decode.decode_string book_decoder |> describe |> print
 ```
 
 Expected output:
@@ -189,7 +189,7 @@ Dune, 412 pages
 failed (KeyError): 'pages'
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyLCBwYWdlczogaW50IH0KCmxldCBib29rRGVjb2RlciA9CiAgRGVjb2RlLm1hcDIgKGZ1biB0aXRsZSBwYWdlcyAtPiBCb29rIHsgdGl0bGUgPSB0aXRsZSwgcGFnZXMgPSBwYWdlcyB9KQogICAgKERlY29kZS5maWVsZCAidGl0bGUiID90aXRsZURlYykKICAgIChEZWNvZGUuZmllbGQgInBhZ2VzIiA_cGFnZXNEZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yS2luZH0pOiB7ZS5lcnJvck1lc3NhZ2V9IgoKbGV0IHdlbGxGb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nRmllbGQgPSAiIiJ7InRpdGxlIjogIkR1bmUifSIiIgoKd2VsbEZvcm1lZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cm1pc3NpbmdGaWVsZCB8PiBEZWNvZGUuZGVjb2RlU3RyaW5nIGJvb2tEZWNvZGVyIHw-IGRlc2NyaWJlIHw-IHByaW50Cg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=dHlwZSBCb29rID0geyB0aXRsZTogc3RyLCBwYWdlczogaW50IH0KCmxldCBib29rX2RlY29kZXIgPQogIERlY29kZS5tYXAyIChmdW4gdGl0bGUgcGFnZXMgLT4gQm9vayB7IHRpdGxlID0gdGl0bGUsIHBhZ2VzID0gcGFnZXMgfSkKICAgIChEZWNvZGUuZmllbGQgInRpdGxlIiA_dGl0bGVfZGVjKQogICAgKERlY29kZS5maWVsZCAicGFnZXMiID9wYWdlc19kZWMpCgpsZXQgZGVzY3JpYmUgciA9CiAgbWF0Y2ggcjoKICAgIGNhc2UgT2sgYjogZiJ7Yi50aXRsZX0sIHtiLnBhZ2VzfSBwYWdlcyIKICAgIGNhc2UgRXJyb3IgZTogZiJmYWlsZWQgKHtlLmVycm9yX2tpbmR9KToge2UuZXJyb3JfbWVzc2FnZX0iCgpsZXQgd2VsbF9mb3JtZWQgPSAiIiJ7InRpdGxlIjogIkR1bmUiLCAicGFnZXMiOiA0MTJ9IiIiCmxldCBtaXNzaW5nX2ZpZWxkID0gIiIieyJ0aXRsZSI6ICJEdW5lIn0iIiIKCndlbGxfZm9ybWVkIHw-IERlY29kZS5kZWNvZGVfc3RyaW5nIGJvb2tfZGVjb2RlciB8PiBkZXNjcmliZSB8PiBwcmludAptaXNzaW5nX2ZpZWxkIHw-IERlY29kZS5kZWNvZGVfc3RyaW5nIGJvb2tfZGVjb2RlciB8PiBkZXNjcmliZSB8PiBwcmludAo)
 
 <details>
 <summary>Show solution</summary>
@@ -197,7 +197,7 @@ failed (KeyError): 'pages'
 ```pyfun
 type Book = { title: str, pages: int }
 
-let bookDecoder =
+let book_decoder =
   Decode.map2 (fun title pages -> Book { title = title, pages = pages })
     (Decode.field "title" Decode.str)
     (Decode.field "pages" Decode.int)
@@ -205,13 +205,13 @@ let bookDecoder =
 let describe r =
   match r:
     case Ok b: f"{b.title}, {b.pages} pages"
-    case Error e: f"failed ({e.errorKind}): {e.errorMessage}"
+    case Error e: f"failed ({e.error_kind}): {e.error_message}"
 
-let wellFormed = """{"title": "Dune", "pages": 412}"""
-let missingField = """{"title": "Dune"}"""
+let well_formed = """{"title": "Dune", "pages": 412}"""
+let missing_field = """{"title": "Dune"}"""
 
-wellFormed |> Decode.decodeString bookDecoder |> describe |> print
-missingField |> Decode.decodeString bookDecoder |> describe |> print
+well_formed |> Decode.decode_string book_decoder |> describe |> print
+missing_field |> Decode.decode_string book_decoder |> describe |> print
 ```
 
 `Decode.str` decodes the `title` field and `Decode.int` decodes `pages`. The valid object builds a `Book`, and the incomplete one short-circuits to a `KeyError` that `describe` reports through the `Error` arm.

@@ -69,20 +69,20 @@ fn repl_multiline_block_enables_mutual_recursion() {
         return;
     }
     // Both mutually-recursive functions are entered in one `:{ … :}` block, so
-    // they type-check as a group; then `isEven 10` evaluates to True.
+    // they type-check as a group; then `is_even 10` evaluates to True.
     let out = repl(
         ":{\n\
-         let isEven n = if n == 0 then True else isOdd (n - 1)\n\
-         let isOdd n = if n == 0 then False else isEven (n - 1)\n\
+         let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         let is_odd n = if n == 0 then False else is_even (n - 1)\n\
          :}\n\
-         isEven 10\n\
+         is_even 10\n\
          :quit\n",
     );
     assert!(
-        out.contains("isEven : int -> bool"),
+        out.contains("is_even : int -> bool"),
         "grouped types:\n{out}"
     );
-    assert!(out.contains("True"), "isEven 10:\n{out}");
+    assert!(out.contains("True"), "is_even 10:\n{out}");
 }
 
 // ---- persistent-worker semantics (one long-lived Python process per session) ----

@@ -80,13 +80,13 @@ recognizer is true:
 ```pyfun
 let (|Blank|_|) s = String.strip s == ""
 
-let lineKind s =
+let line_kind s =
   match s:
     case Blank: "empty"
     case _: "text"
 
-print (lineKind "   ")
-print (lineKind "hi")
+print (line_kind "   ")
+print (line_kind "hi")
 ```
 
 ```console

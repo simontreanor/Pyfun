@@ -20,15 +20,15 @@ module Maybe =
       case None: None
   let return_ x = Some x
 
-let addOpt a b =
+let add_opt a b =
   Maybe {
     let! x = a
     let! y = b
     return x + y
   }
 
-print (addOpt (Some 3) (Some 4))
-print (addOpt (Some 3) None)
+print (add_opt (Some 3) (Some 4))
+print (add_opt (Some 3) None)
 ```
 
 ```console
@@ -50,13 +50,13 @@ def Maybe_bind(m, f):
         return _None_
 def Maybe_return_(x):
     return Some(x)
-def addOpt(a, b):
+def add_opt(a, b):
     return Maybe_bind(a, lambda x: Maybe_bind(b, lambda y: Maybe_return_(x + y)))
 ```
 
 Each `let!` becomes a `Maybe_bind` call whose continuation is a lambda binding the next name, and the
 `return` becomes `Maybe_return_`. The short-circuit falls out of `bind`: when a step is `None`, that
-branch never calls `f`, so `addOpt (Some 3) None` is `None` without running the `+`.
+branch never calls `f`, so `add_opt (Some 3) None` is `None` without running the `+`.
 
 Builders can do more than `bind` and `return_`. A sequence-style builder adds `yield_` for a
 `yield`, `combine`/`delay` to glue and defer multiple yields, and `for_` so a block can loop
@@ -69,7 +69,7 @@ desugaring rules live in the internals chapter on
 
 ## Exercise
 
-Complete the `Maybe` builder by filling both holes, then `addThree` chains three optional values and
+Complete the `Maybe` builder by filling both holes, then `add_three` chains three optional values and
 returns their sum, stopping at the first `None`. The first hole (in the `Some x` arm of `bind`) has
 type `Option 'a`, and the compiler suggests `f` among the fits, so run the continuation `f` on the
 unwrapped `x`. The second hole is the body of `return_`, which must wrap its argument back up as an
@@ -83,7 +83,7 @@ module Maybe =
       case None: None
   let return_ x = ?
 
-let addThree a b c =
+let add_three a b c =
   Maybe {
     let! x = a
     let! y = b
@@ -91,8 +91,8 @@ let addThree a b c =
     return x + y + z
   }
 
-print (addThree (Some 1) (Some 2) (Some 3))
-print (addThree (Some 1) None (Some 3))
+print (add_three (Some 1) (Some 2) (Some 3))
+print (add_three (Some 1) None (Some 3))
 ```
 
 Expected output:
@@ -102,7 +102,7 @@ Some(6)
 None_
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bW9kdWxlIE1heWJlID0KICBsZXQgYmluZCBtIGYgPQogICAgbWF0Y2ggbToKICAgICAgY2FzZSBTb21lIHg6ID8KICAgICAgY2FzZSBOb25lOiBOb25lCiAgbGV0IHJldHVybl8geCA9ID8KCmxldCBhZGRUaHJlZSBhIGIgYyA9CiAgTWF5YmUgewogICAgbGV0ISB4ID0gYQogICAgbGV0ISB5ID0gYgogICAgbGV0ISB6ID0gYwogICAgcmV0dXJuIHggKyB5ICsgegogIH0KCnByaW50IChhZGRUaHJlZSAoU29tZSAxKSAoU29tZSAyKSAoU29tZSAzKSkKcHJpbnQgKGFkZFRocmVlIChTb21lIDEpIE5vbmUgKFNvbWUgMykpCg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bW9kdWxlIE1heWJlID0KICBsZXQgYmluZCBtIGYgPQogICAgbWF0Y2ggbToKICAgICAgY2FzZSBTb21lIHg6ID8KICAgICAgY2FzZSBOb25lOiBOb25lCiAgbGV0IHJldHVybl8geCA9ID8KCmxldCBhZGRfdGhyZWUgYSBiIGMgPQogIE1heWJlIHsKICAgIGxldCEgeCA9IGEKICAgIGxldCEgeSA9IGIKICAgIGxldCEgeiA9IGMKICAgIHJldHVybiB4ICsgeSArIHoKICB9CgpwcmludCAoYWRkX3RocmVlIChTb21lIDEpIChTb21lIDIpIChTb21lIDMpKQpwcmludCAoYWRkX3RocmVlIChTb21lIDEpIE5vbmUgKFNvbWUgMykpCg)
 
 <details>
 <summary>Show solution</summary>
@@ -115,7 +115,7 @@ module Maybe =
       case None: None
   let return_ x = Some x
 
-let addThree a b c =
+let add_three a b c =
   Maybe {
     let! x = a
     let! y = b
@@ -123,8 +123,8 @@ let addThree a b c =
     return x + y + z
   }
 
-print (addThree (Some 1) (Some 2) (Some 3))
-print (addThree (Some 1) None (Some 3))
+print (add_three (Some 1) (Some 2) (Some 3))
+print (add_three (Some 1) None (Some 3))
 ```
 
 `f x` runs the rest of the block on the unwrapped value, and `Some x` wraps the final sum. The

@@ -7,8 +7,8 @@ By the end of this session, students can:
 - Explain why `None` is a source of runtime bugs in Python and how `Option` moves that possibility
   into the type.
 - Take an `Option` or `Result` apart with `match` and handle both shapes.
-- Turn a Python exception into a `Result` value with `try` and read its `errorKind` and
-  `errorMessage`.
+- Turn a Python exception into a `Result` value with `try` and read its `error_kind` and
+  `error_message`.
 - Define their own algebraic data type with several constructors.
 - Read a non-exhaustive-match diagnostic, name the case it reports, and add it.
 
@@ -21,15 +21,15 @@ Session 1 (values, functions, inference). Python's own `match`/`case` helps but 
 The centerpiece is the exhaustiveness error naming the exact case the code forgot. Build up to it
 with `Option` and `Result`, then land it on a hand-written ADT.
 
-1. Open the [Lesson 3 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHMgPQogIG1hdGNoIFN0cmluZy50b0ludCBzOgogICAgY2FzZSBTb21lIG46IGYibnVtYmVyOiB7bn0iCgpwcmludCAobGFiZWwgIjciKQpwcmludCAobGFiZWwgIm5vcGUiKQo).
+1. Open the [Lesson 3 exercise](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGxhYmVsIHMgPQogIG1hdGNoIFN0cmluZy50b19pbnQgczoKICAgIGNhc2UgU29tZSBuOiBmIm51bWJlcjoge259IgoKcHJpbnQgKGxhYmVsICI3IikKcHJpbnQgKGxhYmVsICJub3BlIikK).
    Run `check`. The compiler reports `non-exhaustive match: None is not matched`. Ask the class what
    value is missing before revealing it, then add `case None: "no number"` and Run.
 2. Make the point that in Python `int("nope")` raises, and a caller has to remember to guard it.
    Here the `None` case is not a convention to remember, it is a case the compiler refuses to let you
    skip.
-3. Open the [Lesson 4 exercise](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlSW50OiBzdHJpbmcgLT4gaW50ID0gaW50CgpsZXQgZGVzY3JpYmUgcyA9CiAgbWF0Y2ggcGFyc2VJbnQgczoKICAgIGNhc2UgT2sgbjogZiJvazoge259IgogICAgY2FzZSBFcnJvciBlOiBmImJhZDoge2UuZXJyb3JLaW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg).
-   It matches on `parseInt s` directly, so `check` reports a type mismatch: it found `int`, not a
-   `Result`. Wrap the call as `try (parseInt s)` and Run. Show that the caught `ValueError` reaches
+3. Open the [Lesson 4 exercise](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlX2ludDogc3RyIC0-IGludCA9IGludAoKbGV0IGRlc2NyaWJlIHMgPQogIG1hdGNoIHBhcnNlX2ludCBzOgogICAgY2FzZSBPayBuOiBmIm9rOiB7bn0iCiAgICBjYXNlIEVycm9yIGU6IGYiYmFkOiB7ZS5lcnJvcl9raW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg).
+   It matches on `parse_int s` directly, so `check` reports a type mismatch: it found `int`, not a
+   `Result`. Wrap the call as `try (parse_int s)` and Run. Show that the caught `ValueError` reaches
    the `Error` arm as data.
 4. Draw the contrast: `Option` models "a value might be absent," `Result` models "an operation might
    fail with a reason." Both force the caller to answer for the unhappy path.
@@ -53,7 +53,7 @@ with `Option` and `Result`, then land it on a hand-written ADT.
 - In class: the [Lesson 3 exercise](../learn/03-option.md) and the
   [Lesson 5 exercise](../learn/05-adts-and-match.md), both driven from the demo.
 - Homework: the [Lesson 4 exercise](../learn/04-result.md) (wrap the parse in `try`). Ask students to
-  read `errorKind` and `errorMessage` off the caught value in their answer.
+  read `error_kind` and `error_message` off the caught value in their answer.
 
 ## Common misconceptions
 

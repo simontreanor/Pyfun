@@ -937,12 +937,12 @@ fn is_var(e: &Expr, name: &str) -> bool {
 /// collection can appear bare as the (last, curried) argument without retention.
 fn read_op_arity(q: &str) -> Option<usize> {
     Some(match q {
-        "Map.len" | "Map.keys" | "Map.values" | "Map.toList" => 1,
+        "Map.len" | "Map.keys" | "Map.values" | "Map.to_list" => 1,
         "Map.find" | "Map.contains" => 2,
-        "Map.findOr" => 3,
-        "Set.len" | "Set.toList" => 1,
+        "Map.find_or" => 3,
+        "Set.len" | "Set.to_list" => 1,
         "Set.contains" => 2,
-        "List.len" | "List.isEmpty" => 1,
+        "List.len" | "List.is_empty" => 1,
         "List.contains" | "List.get" => 2,
         _ => return None,
     })

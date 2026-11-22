@@ -58,7 +58,7 @@ terminus. Output is split into weekday / Saturday / Sunday sections.
 The real snapshot is newline-delimited JSON, ~3 GB uncompressed (≈40 MB gzip),
 ~660k lines, one schedule object per line. Register for the data feeds
 (<https://opendata.nationalrail.co.uk> / Network Rail data feeds), download a
-`SCHEDULE` "all-TOC full" snapshot, and point `dataFile` at it — a plain `.json`
+`SCHEDULE` "all-TOC full" snapshot, and point `data_file` at it — a plain `.json`
 **or** a `.json.gz` (streamed without decompressing). To list a different
 station, change the `CHIPNHM` TIPLOC.
 

@@ -11,13 +11,13 @@
 # will join, and no `cancel` to forget.
 
 extern import asyncio
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 
 # The mailbox: an asyncio queue as an opaque handle. `put_nowait` posts from
 # anywhere; `get` is a coroutine, so its result is the `Async` type and `let!`
 # is where the agent waits for the next message.
 extern type Queue
-extern newQueue: unit -> Queue = asyncio.Queue
+extern new_queue: unit -> Queue = asyncio.Queue
 extern post: Queue -> a -> unit = .put_nowait
 extern take: Queue -> Async a = .get()
 
@@ -37,12 +37,12 @@ let finished count = async { return count }
 # threaded through the recursion. The self tail call compiles to a `while True:`
 # inside the one coroutine (`DESIGN.md` §5.4), so an agent that handles a
 # message a second for a year is still on its first stack frame.
-let agentLoop inbox count =
+let agent_loop inbox count =
   async {
     let! msg = take inbox
     return! (match msg:
-      case Said s: agentLoop inbox (heard count s)
-      case Tick: agentLoop inbox count
+      case Said s: agent_loop inbox (heard count s)
+      case Tick: agent_loop inbox count
       case Quit: finished count)
   }
 
@@ -62,13 +62,13 @@ let producer inbox =
 # leak past the end of `session`.
 let session =
   Task.scope (async {
-    let inbox = newQueue ()
+    let inbox = new_queue ()
     Task.start (producer inbox)
-    let! count = agentLoop inbox 0
+    let! count = agent_loop inbox 0
     return count
   })
 
-let count = runAsync session
+let count = run_async session
 print f"agent handled {count} messages"
 
 # `Task.start` performs `spawn`, and only a `Task.scope` body discharges it, so a

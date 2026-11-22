@@ -475,21 +475,12 @@ after the release.
    and are an error naming the capitalized one (`DESIGN.md` §7).
 10. ~~**`str` for `string`.**~~ **DONE 2026-11-22** (#189). `Decode.string` followed as `Decode.str`;
     the old type name stays reserved and is an error naming the new one (`DESIGN.md` §7).
-11. **snake_case, one rule.** Every value name is snake_case with an underscore at every word
-    boundary: 68 of the 241 standard library names change (`sort_by`, `of_list`, `is_empty`,
-    `with_default`). Python supplies the *word* and this rule supplies the spelling, so it is
-    `starts_with`, `split_lines`, `is_subset` and `take_while` where Python runs the words together
-    (`startswith`, `splitlines`, `issubset`, `takewhile`); mirroring Python letter for letter would
-    import its inconsistency (`group_by` beside `groupby`). The member suggestion already bridges
-    those spellings. The same rule settles four loose ends: CE builder methods (`return_from` and
-    `yield_from`, beside the existing `return_` and `yield_`), the `Exception` fields (`error_kind`,
-    `error_message`), multi-word module files (`import TrainTimes` reads `train_times.pyfun`), and
-    `String.trimStart`/`trimEnd`, which become Python's `lstrip`/`rstrip` beside `strip`. Types,
-    constructors and modules stay PascalCase, and a measure keeps its author's case because SI
-    symbols need it (`N`, `Pa`, `mm`). User code compiles in any case; once warnings exist (item 1)
-    a camelCase value name gets one. An `extern` names its Pyfun side freely, so Python's own
-    mixed casing stops at the boundary (`extern get_logger: … = logging.getLogger`). The largest
-    breaking change on this list, mechanical to migrate, and cheapest before 1.0.
+11. ~~**snake_case, one rule.**~~ **DONE 2026-11-22** (#191): 67 standard library names, the CE builder
+    methods (`return_from`, `yield_from`), the `Exception` fields, and every lesson, example and test
+    (`DESIGN.md` §6). An old camelCase spelling is answered with its snake_case member. Two loose ends
+    stay open: a multi-word module file (`import TrainTimes` should read `train_times.pyfun`; today
+    the stem is only lowercased), and a warning for a camelCase value name in user code, which waits
+    on item 1.
 
 **Python-familiar additions**
 

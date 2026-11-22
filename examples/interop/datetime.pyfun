@@ -23,12 +23,12 @@ extern pure days : int -> Delta = datetime.timedelta      # timedelta(days) — 
 # compile error; parsing a fixed string is pure.
 extern import datetime
 extern now : unit -> Datetime = datetime.datetime.now
-extern pure parseIso : str -> Datetime = datetime.datetime.fromisoformat
+extern pure parse_iso : str -> Datetime = datetime.datetime.fromisoformat
 
 # Members of the opaque handles: `= .attr` reads a property, `= .attr()` calls a method.
 extern pure weekday   : Datetime -> int    = .weekday()   # 0 = Monday
 extern pure isoformat : Datetime -> str = .isoformat()
-extern pure inDays    : Delta -> int       = .days
+extern pure in_days    : Delta -> int       = .days
 
 # datetime's arithmetic lives on `+`/`-`, and Python exposes every operator as a
 # plain function in the `operator` module — ready-made extern targets.
@@ -38,24 +38,24 @@ extern pure between : Datetime -> Datetime -> Delta = operator.sub   # b - a
 let launch = date 2026 7 13
 print (isoformat launch)                                # 2026-07-13T00:00:00
 print (weekday launch)                                  # 0 — a Monday
-print (isoformat (parseIso "2026-07-13"))               # 2026-07-13T00:00:00
+print (isoformat (parse_iso "2026-07-13"))               # 2026-07-13T00:00:00
 
-# `now` performs io, so `sinceLaunch` is inferred io — and prints nothing fixed.
-let sinceLaunch = inDays (between (now ()) launch)
+# `now` performs io, so `since_launch` is inferred io — and prints nothing fixed.
+let since_launch = in_days (between (now ()) launch)
 
 # The externs are pure, so the compiler verifies this pipeline touches no effect.
-let pure daysBetween a b = inDays (between b a)
-print (daysBetween launch (shift launch (days 90)))     # 90
+let pure days_between a b = in_days (between b a)
+print (days_between launch (shift launch (days 90)))     # 90
 
 # Boundary handles flow through the ordinary combinators like any other value.
-let sprintEnds = List.map (fun n -> isoformat (shift launch (days (n * 14)))) [1, 2, 3]
-print sprintEnds
+let sprint_ends = List.map (fun n -> isoformat (shift launch (days (n * 14)))) [1, 2, 3]
+print sprint_ends
 
 # An impossible date raises ValueError in Python; `try` reifies it as a Result,
 # and the match must handle both outcomes.
 let describe r =
   match r:
     case Ok d: f"valid: {isoformat d}"
-    case Error e: f"invalid: {e.errorKind}"
+    case Error e: f"invalid: {e.error_kind}"
 
 print (describe (try (date 2026 2 30)))                 # invalid: ValueError

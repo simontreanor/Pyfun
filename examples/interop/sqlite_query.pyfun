@@ -19,12 +19,12 @@ let _ = execute db "create table t (x int)"
 let _ = execute db "insert into t values (1), (2), (3)"
 
 # Rows come back as Pyfun tuples; a two-column row is a 2-tuple you destructure.
-let firstCol r =
+let first_col r =
   match r:
     case (x, _): x
 
 let rows = fetchall (execute db "select x, x * x from t order by x")
-let total = List.fold (fun acc r -> acc + firstCol r) 0 rows
+let total = List.fold (fun acc r -> acc + first_col r) 0 rows
 
 print rows                                # [(1, 1), (2, 4), (3, 9)]
 print total                               # 6

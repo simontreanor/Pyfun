@@ -16,13 +16,13 @@ extern type Event
 extern type Callback
 
 # The document, by id; a missing id raises at the boundary like any extern.
-extern byId: str -> Element = js.document.getElementById
+extern by_id: str -> Element = js.document.getElementById
 
 # Replace an element's children with one text node (`el.replaceChildren(text)`).
-extern setText: Element -> str -> unit = .replaceChildren()
+extern set_text: Element -> str -> unit = .replaceChildren()
 
 # `el.setAttribute(name, value)` and `el.append(child)`.
-extern setAttr: Element -> str -> str -> unit = .setAttribute()
+extern set_attr: Element -> str -> str -> unit = .setAttribute()
 extern append: Element -> Element -> unit = .append()
 extern create: str -> Element = js.document.createElement
 

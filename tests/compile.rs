@@ -208,8 +208,8 @@ fn e2e_newtype_crosses_the_extern_boundary_bare() {
     run_and_check(
         "
         opaque type UserId = str
-        extern pure upperId: UserId -> str = str.upper
-        let r = upperId (UserId \"abc\")
+        extern pure upper_id: UserId -> str = str.upper
+        let r = upper_id (UserId \"abc\")
         ",
         &[("r", "ABC")],
     );
@@ -219,7 +219,7 @@ fn e2e_newtype_crosses_the_extern_boundary_bare() {
 fn instance_method_extern_lowers_to_a_method_call() {
     // `= .read()` calls the method on the first argument (the receiver).
     let py =
-        pyfun::compile("type R = RH\nextern readBody: R -> str = .read()\nlet f r = readBody r")
+        pyfun::compile("type R = RH\nextern read_body: R -> str = .read()\nlet f r = read_body r")
             .unwrap();
     assert!(py.contains("return r.read()"), "{py}");
 }
@@ -267,9 +267,9 @@ fn a_unit_parameter_contributes_no_argument_wherever_it_sits() {
     // must not split the call (`abs()(-5)`), and a mid-list unit must not travel
     // as `None` (`max(3, None, 5)`).
     let py = pyfun::compile(
-        "extern myAbs: unit -> int -> int = abs\n\
+        "extern my_abs: unit -> int -> int = abs\n\
          extern pick: int -> unit -> int -> int = max\n\
-         print (myAbs () (-5))\n\
+         print (my_abs () (-5))\n\
          print (pick 3 () 5)",
     )
     .unwrap();
@@ -282,15 +282,15 @@ fn a_partial_application_of_a_unit_extern_drops_supplied_and_future_units() {
     // `functools.partial` cannot drop a unit, so the partial is a lambda: a
     // supplied unit is gone, a future unit is accepted and ignored.
     let py = pyfun::compile(
-        "extern myAbs: unit -> int -> int = abs\n\
+        "extern my_abs: unit -> int -> int = abs\n\
          extern pick: int -> unit -> int -> int = max\n\
-         let fromNeg = myAbs ()\n\
+         let from_neg = my_abs ()\n\
          let lifted = pick 4\n\
-         print (fromNeg (-7))\n\
+         print (from_neg (-7))\n\
          print (lifted () 2)",
     )
     .unwrap();
-    assert!(py.contains("fromNeg = lambda _pf_k0: abs(_pf_k0)"), "{py}");
+    assert!(py.contains("from_neg = lambda _pf_k0: abs(_pf_k0)"), "{py}");
     assert!(
         py.contains("lifted = lambda _pf_k0, _pf_k1: max(4, _pf_k1)"),
         "{py}"
@@ -305,8 +305,8 @@ fn a_unit_extern_combines_with_a_kwarg_slot_and_a_thunk() {
     let py = pyfun::compile(
         "extern import threading\n\
          extern type Thread\n\
-         extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
-         let t = newThread () (fun _ -> print \"hi\")",
+         extern new_thread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
+         let t = new_thread () (fun _ -> print \"hi\")",
     )
     .unwrap();
     assert!(
@@ -331,12 +331,12 @@ fn a_receiver_method_with_a_unit_parameter_drops_it() {
 fn e2e_unit_parameters_across_the_boundary() {
     // The issue's table plus the partial shapes, run for real.
     run_and_check(
-        "extern myAbs: unit -> int -> int = abs\n\
+        "extern my_abs: unit -> int -> int = abs\n\
          extern pick: int -> unit -> int -> int = max\n\
-         let a = myAbs () (-5)\n\
+         let a = my_abs () (-5)\n\
          let b = pick 3 () 5\n\
-         let fromNeg = myAbs ()\n\
-         let c = fromNeg (-7)\n\
+         let from_neg = my_abs ()\n\
+         let c = from_neg (-7)\n\
          let lifted = pick 4\n\
          let d = lifted () 2",
         &[("a", "5"), ("b", "5"), ("c", "7"), ("d", "4")],
@@ -349,10 +349,10 @@ fn e2e_a_unit_extern_thread_runs_its_pyfun_target() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import threading\n\
                extern type Thread\n\
-               extern newThread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
+               extern new_thread: unit -> (unit ->{io} unit) -> Thread = threading.Thread(daemon = True, target = ...)\n\
                extern start: Thread -> unit = .start()\n\
                extern join: Thread -> unit = .join()\n\
-               let t = newThread () (fun _ -> print \"from the thread\")\n\
+               let t = new_thread () (fun _ -> print \"from the thread\")\n\
                start t\n\
                join t";
     let program = pyfun::compile(src).unwrap();
@@ -518,8 +518,8 @@ fn unused_extern_import_emits_nothing() {
 fn extern_kwargs_are_appended_to_the_call() {
     // A plain extern with pinned kwargs appends them to every call.
     let py = pyfun::compile(
-        "extern openText : str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")\n\
-         let f path = openText path",
+        "extern open_text : str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")\n\
+         let f path = open_text path",
     )
     .unwrap();
     assert!(
@@ -534,8 +534,8 @@ fn receiver_method_extern_kwargs_follow_the_positional_args() {
     // positional method arguments.
     let py = pyfun::compile(
         "type P = PH\n\
-         extern writeText : P -> str -> int = .write_text(encoding=\"utf-8\")\n\
-         let f p text = writeText p text",
+         extern write_text : P -> str -> int = .write_text(encoding=\"utf-8\")\n\
+         let f p text = write_text p text",
     )
     .unwrap();
     assert!(
@@ -562,9 +562,9 @@ fn extern_kwargs_partial_application_pins_kwargs_via_functools_partial() {
     // Under-application (partial or bare) must NOT drop the pinned kwargs: they
     // ride along on `functools.partial`, so a later application still supplies them.
     let py = pyfun::compile(
-        "extern openText : str -> int -> Seq str = builtins.open(mode=\"rt\")\n\
-         let bare = openText\n\
-         let partial = openText \"a.txt\"",
+        "extern open_text : str -> int -> Seq str = builtins.open(mode=\"rt\")\n\
+         let bare = open_text\n\
+         let partial = open_text \"a.txt\"",
     )
     .unwrap();
     assert!(
@@ -582,9 +582,9 @@ fn e2e_extern_kwargs_produce_observable_output() {
     // `int` takes a real Python kwarg (`base`); pinning `base=16` proves the kwargs
     // reach the live call — `parseHex "ff"` evaluates to 255, not a parse error.
     run_and_check(
-        "extern parseHex : str -> int = int(base=16)\n\
-         let n = parseHex \"ff\"\n\
-         let m = parseHex \"10\"",
+        "extern parse_hex : str -> int = int(base=16)\n\
+         let n = parse_hex \"ff\"\n\
+         let m = parse_hex \"10\"",
         &[("n", "255"), ("m", "16")],
     );
 }
@@ -594,8 +594,8 @@ fn extern_kwarg_slot_takes_a_trailing_argument() {
     // `kw = ...` makes the keyword's value come from the caller: the target takes
     // the leading arguments positionally and the slots take the trailing ones.
     let py = pyfun::compile(
-        "extern openText : str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)\n\
-         let f path enc = openText path enc",
+        "extern open_text : str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)\n\
+         let f path enc = open_text path enc",
     )
     .unwrap();
     assert!(
@@ -621,8 +621,8 @@ fn receiver_method_extern_kwarg_slot_takes_a_trailing_argument() {
     // The receiver still claims the first argument; a slot claims one of the rest.
     let py = pyfun::compile(
         "extern type P\n\
-         extern writeText : P -> str -> str -> int = .write_text(encoding=...)\n\
-         let f p text enc = writeText p text enc",
+         extern write_text : P -> str -> str -> int = .write_text(encoding=...)\n\
+         let f p text enc = write_text p text enc",
     )
     .unwrap();
     assert!(
@@ -637,9 +637,9 @@ fn extern_kwarg_slot_partial_application_becomes_a_lambda() {
     // under-applied slot extern closes over a lambda that takes the rest. A bare
     // reference takes every argument, including the positional ones.
     let py = pyfun::compile(
-        "extern parseInt : str -> int -> int = int(base=...)\n\
-         let bare = parseInt\n\
-         let partial = parseInt \"ff\"",
+        "extern parse_int : str -> int -> int = int(base=...)\n\
+         let bare = parse_int\n\
+         let partial = parse_int \"ff\"",
     )
     .unwrap();
     assert!(
@@ -663,9 +663,9 @@ fn extern_kwarg_slot_partial_evaluates_supplied_arguments_eagerly() {
     // are bound to temporaries, and the lambda closes over those. The receiver of a
     // method extern is bound the same way.
     let py = pyfun::compile(
-        "extern parseInt : str -> int -> int = int(base=...)\n\
+        "extern parse_int : str -> int -> int = int(base=...)\n\
          extern src : unit -> str = get.line\n\
-         let partial = parseInt (src ())",
+         let partial = parse_int (src ())",
     )
     .unwrap();
     assert!(py.contains("_pf_t0 = get.line()"), "{py}");
@@ -676,9 +676,9 @@ fn extern_kwarg_slot_partial_evaluates_supplied_arguments_eagerly() {
 
     let py = pyfun::compile(
         "extern type P\n\
-         extern toPath : str -> P = pathlib.Path\n\
-         extern writeText : P -> str -> str -> int = .write_text(encoding=...)\n\
-         let partial = writeText (toPath \"a.txt\") \"body\"",
+         extern to_path : str -> P = pathlib.Path\n\
+         extern write_text : P -> str -> str -> int = .write_text(encoding=...)\n\
+         let partial = write_text (to_path \"a.txt\") \"body\"",
     )
     .unwrap();
     assert!(py.contains("_pf_t0 = pathlib.Path(\"a.txt\")"), "{py}");
@@ -713,10 +713,10 @@ fn e2e_extern_kwarg_slot_produces_observable_output() {
     // `int`'s real `base` kwarg, supplied by the caller rather than pinned: the same
     // extern parses hex and binary, and a partial application of it still works.
     run_and_check(
-        "extern parseIn : str -> int -> int = int(base=...)\n\
-         let hex = parseIn \"ff\" 16\n\
-         let bin = parseIn \"1011\" 2\n\
-         let ff = parseIn \"ff\"\n\
+        "extern parse_in : str -> int -> int = int(base=...)\n\
+         let hex = parse_in \"ff\" 16\n\
+         let bin = parse_in \"1011\" 2\n\
+         let ff = parse_in \"ff\"\n\
          let also = ff 16",
         &[("hex", "255"), ("bin", "11"), ("also", "255")],
     );
@@ -775,21 +775,21 @@ fn empty_collections_lower_to_set_and_dict() {
 
 #[test]
 fn set_functions_lower_to_emitted_helpers() {
-    let py = pyfun::compile("let r = Set.contains 1 (Set.add 1 (Set.ofList [2]))").unwrap();
+    let py = pyfun::compile("let r = Set.contains 1 (Set.add 1 (Set.of_list [2]))").unwrap();
     assert!(py.contains("def _pf_set_add(x, s):"), "{py}");
     assert!(py.contains("return s.union([x])"), "{py}");
     // `Set.contains` is a fully-applied pure predicate, so it inlines to `x in s`
     // (Lever A) rather than emitting the `_pf_set_contains` helper.
     assert!(py.contains("r = 1 in _pf_set_add(1, set([2]))"), "{py}");
     assert!(!py.contains("_pf_set_contains"), "contains inlined: {py}");
-    // `Set.ofList` is a bare builtin, no helper.
+    // `Set.of_list` is a bare builtin, no helper.
     assert!(py.contains("set([2])"), "{py}");
 }
 
 #[test]
 fn map_add_and_find_or_lower_to_emitted_helpers() {
     let py =
-        pyfun::compile("let m = Map.add \"a\" 1 Map.empty\nlet v = Map.findOr \"a\" 0 m").unwrap();
+        pyfun::compile("let m = Map.add \"a\" 1 Map.empty\nlet v = Map.find_or \"a\" 0 m").unwrap();
     assert!(py.contains("def _pf_map_add(k, v, m):"), "{py}");
     assert!(
         py.contains("return dict(list(m.items()) + [[k, v]])"),
@@ -827,8 +827,8 @@ fn list_zip_lowers_to_a_zip_helper() {
 
 #[test]
 fn map_of_list_lowers_to_dict_and_to_list_to_items() {
-    // `Map.ofList` is a bare `dict` over the pair list; `Map.toList` is a helper.
-    let py = pyfun::compile("let m = Map.ofList [(1, 2)]\nlet ps = Map.toList m").unwrap();
+    // `Map.of_list` is a bare `dict` over the pair list; `Map.to_list` is a helper.
+    let py = pyfun::compile("let m = Map.of_list [(1, 2)]\nlet ps = Map.to_list m").unwrap();
     assert!(py.contains("m = dict([(1, 2)])"), "{py}");
     assert!(py.contains("def _pf_map_to_list(m):"), "{py}");
     assert!(py.contains("return list(m.items())"), "{py}");
@@ -838,10 +838,10 @@ fn map_of_list_lowers_to_dict_and_to_list_to_items() {
 fn e2e_zip_into_a_map_and_back() {
     run_and_check(
         "
-        let m = Map.ofList (List.zip [\"a\", \"b\"] [1, 2])
-        let a = Option.withDefault 0 (Map.find \"a\" m)
+        let m = Map.of_list (List.zip [\"a\", \"b\"] [1, 2])
+        let a = Option.with_default 0 (Map.find \"a\" m)
         let n = Map.len m
-        let pairs = Map.toList m
+        let pairs = Map.to_list m
         ",
         &[("a", "1"), ("n", "2"), ("pairs", "[('a', 1), ('b', 2)]")],
     );
@@ -850,8 +850,8 @@ fn e2e_zip_into_a_map_and_back() {
 #[test]
 fn try_lowers_to_a_try_except_yielding_ok_or_error() {
     let py = pyfun::compile(
-        "extern parseInt : str -> int = int\n\
-         let safe s = try (parseInt s)",
+        "extern parse_int : str -> int = int\n\
+         let safe s = try (parse_int s)",
     )
     .unwrap();
     // The Exception record is emitted as `_Exception` (not shadowing the builtin).
@@ -868,10 +868,10 @@ fn try_lowers_to_a_try_except_yielding_ok_or_error() {
 fn e2e_try_catches_and_recovers() {
     run_and_check(
         "
-        extern parseInt : str -> int = int
-        let orZero s = Result.withDefault 0 (try (parseInt s))
-        let good = orZero \"42\"
-        let bad = orZero \"oops\"
+        extern parse_int : str -> int = int
+        let or_zero s = Result.with_default 0 (try (parse_int s))
+        let good = or_zero \"42\"
+        let bad = or_zero \"oops\"
         ",
         &[("good", "42"), ("bad", "0")],
     );
@@ -881,15 +881,15 @@ fn e2e_try_catches_and_recovers() {
 fn e2e_try_exposes_exception_kind_and_message() {
     run_and_check(
         "
-        extern parseInt : str -> int = int
-        let kindOf s =
-          match try (parseInt s):
+        extern parse_int : str -> int = int
+        let kind_of s =
+          match try (parse_int s):
             case Ok n: \"ok\"
-            case Error e: e.errorKind
-        let k = kindOf \"nope\"
+            case Error e: e.error_kind
+        let k = kind_of \"nope\"
         let matched =
-          match try (parseInt \"x\"):
-            case Error (Exception { errorKind = \"ValueError\" }): \"caught-value-error\"
+          match try (parse_int \"x\"):
+            case Error (Exception { error_kind = \"ValueError\" }): \"caught-value-error\"
             case _: \"other\"
         ",
         &[("k", "ValueError"), ("matched", "caught-value-error")],
@@ -965,10 +965,10 @@ fn e2e_mutual_recursion() {
     // at call time, so no reordering is needed) and run.
     run_and_check(
         "
-        let isEven = fun n -> if n == 0 then True else isOdd (n - 1)
-        let isOdd = fun n -> if n == 0 then False else isEven (n - 1)
-        let a = isEven 10
-        let b = isOdd 10
+        let is_even = fun n -> if n == 0 then True else is_odd (n - 1)
+        let is_odd = fun n -> if n == 0 then False else is_even (n - 1)
+        let a = is_even 10
+        let b = is_odd 10
         ",
         &[("a", "True"), ("b", "False")],
     );
@@ -1032,8 +1032,8 @@ fn e2e_string_slice_and_index_of() {
         let s = \"hello world\"
         let a = String.slice 0 5 s
         let b = String.slice 6 100 s
-        let c = Option.withDefault (0 - 1) (String.indexOf \"world\" s)
-        let d = Option.withDefault (0 - 1) (String.indexOf \"zzz\" s)
+        let c = Option.with_default (0 - 1) (String.index_of \"world\" s)
+        let d = Option.with_default (0 - 1) (String.index_of \"zzz\" s)
         ",
         &[
             ("a", "hello"),
@@ -1050,12 +1050,12 @@ fn e2e_string_slice_and_index_of() {
 fn stdlib_predicates_inline_when_fully_applied() {
     let py = pyfun::compile(
         "let a s = String.contains \"x\" s
-         let b s = String.startsWith \"x\" s
-         let c s = String.endsWith \"x\" s
+         let b s = String.starts_with \"x\" s
+         let c s = String.ends_with \"x\" s
          let d xs = List.contains 3 xs
          let e s = Set.contains 3 s
          let g m = Map.contains 3 m
-         let h xs = List.isEmpty xs",
+         let h xs = List.is_empty xs",
     )
     .unwrap();
     // The idiom is emitted directly, not a `_pf_*` helper call. Argument order
@@ -1063,22 +1063,22 @@ fn stdlib_predicates_inline_when_fully_applied() {
     assert!(py.contains("return \"x\" in s"), "String.contains: {py}");
     assert!(
         py.contains("return s.startswith(\"x\")"),
-        "startsWith: {py}"
+        "starts_with: {py}"
     );
-    assert!(py.contains("return s.endswith(\"x\")"), "endsWith: {py}");
+    assert!(py.contains("return s.endswith(\"x\")"), "ends_with: {py}");
     assert!(py.contains("return 3 in xs"), "List.contains: {py}");
     assert!(py.contains("return 3 in s"), "Set.contains: {py}");
     assert!(py.contains("return 3 in m"), "Map.contains: {py}");
-    assert!(py.contains("return not xs"), "List.isEmpty: {py}");
+    assert!(py.contains("return not xs"), "List.is_empty: {py}");
     // None of the inlined helpers are defined, since nothing references them.
     assert!(!py.contains("_pf_str_contains"), "no contains helper: {py}");
     assert!(
         !py.contains("_pf_str_starts_with"),
-        "no startsWith helper: {py}"
+        "no starts_with helper: {py}"
     );
     assert!(
         !py.contains("_pf_str_ends_with"),
-        "no endsWith helper: {py}"
+        "no ends_with helper: {py}"
     );
     assert!(
         !py.contains("_pf_list_contains"),
@@ -1092,7 +1092,7 @@ fn stdlib_predicates_inline_when_fully_applied() {
         !py.contains("_pf_map_contains"),
         "no map-contains helper: {py}"
     );
-    assert!(!py.contains("_pf_is_empty"), "no isEmpty helper: {py}");
+    assert!(!py.contains("_pf_is_empty"), "no is_empty helper: {py}");
 }
 
 #[test]
@@ -1134,17 +1134,17 @@ fn e2e_inlined_stdlib_predicates() {
         "
         let a = String.contains \"lo\" \"hello\"
         let b = String.contains \"hello\" \"lo\"
-        let c = String.startsWith \"he\" \"hello\"
-        let d = String.startsWith \"lo\" \"hello\"
-        let e = String.endsWith \"lo\" \"hello\"
-        let f = String.endsWith \"he\" \"hello\"
+        let c = String.starts_with \"he\" \"hello\"
+        let d = String.starts_with \"lo\" \"hello\"
+        let e = String.ends_with \"lo\" \"hello\"
+        let f = String.ends_with \"he\" \"hello\"
         let g = List.contains 3 [1, 2, 3]
         let h = List.contains 9 [1, 2, 3]
-        let i = Set.contains 2 (Set.ofList [1, 2, 3])
-        let j = Map.contains 1 (Map.ofList [(1, \"a\")])
-        let k = Map.contains 9 (Map.ofList [(1, \"a\")])
-        let l = List.isEmpty (List.filter (fun x -> x > 9) [1, 2, 3])
-        let m = List.isEmpty [1, 2]
+        let i = Set.contains 2 (Set.of_list [1, 2, 3])
+        let j = Map.contains 1 (Map.of_list [(1, \"a\")])
+        let k = Map.contains 9 (Map.of_list [(1, \"a\")])
+        let l = List.is_empty (List.filter (fun x -> x > 9) [1, 2, 3])
+        let m = List.is_empty [1, 2]
         ",
         &[
             ("a", "True"),
@@ -1185,16 +1185,16 @@ fn e2e_stdlib_predicate_partial_application() {
 #[test]
 fn eq_section_predicates_route_to_the_c_level_scan() {
     let py = pyfun::compile(
-        "let a l rack = List.findIndex ((==) l) rack
+        "let a l rack = List.find_index ((==) l) rack
          let b l rack = List.find ((==) l) rack
          let c l rack = List.exists ((==) l) rack
-         let d l rack = List.findIndex (fun y -> y == l) rack
-         let e l rack = List.findIndex (fun y -> l == y) rack",
+         let d l rack = List.find_index (fun y -> y == l) rack
+         let e l rack = List.find_index (fun y -> l == y) rack",
     )
     .unwrap();
     assert!(
         py.contains("return _pf_index_of(l, rack)"),
-        "findIndex: {py}"
+        "find_index: {py}"
     );
     assert!(py.contains("return _pf_find_eq(l, rack)"), "find: {py}");
     assert!(py.contains("return l in rack"), "exists: {py}");
@@ -1205,7 +1205,10 @@ fn eq_section_predicates_route_to_the_c_level_scan() {
     assert!(py.contains("return Some(xs[xs.index(x)])"), "{py}");
     assert!(py.contains("except ValueError:"), "{py}");
     // The generic scanners are not referenced, so they are not emitted.
-    assert!(!py.contains("_pf_find_index"), "no generic findIndex: {py}");
+    assert!(
+        !py.contains("_pf_find_index"),
+        "no generic find_index: {py}"
+    );
     assert!(!py.contains("_pf_list_find"), "no generic find: {py}");
     assert!(!py.contains("_pf_exists"), "no generic exists: {py}");
 }
@@ -1213,9 +1216,9 @@ fn eq_section_predicates_route_to_the_c_level_scan() {
 #[test]
 fn eq_section_specialization_keeps_the_helper_otherwise() {
     let py = pyfun::compile(
-        "let p l = List.findIndex ((==) l)
-         let q l rack = List.findIndex (fun y -> y > l) rack
-         let r rack = List.findIndex (fun y -> y == y) rack
+        "let p l = List.find_index ((==) l)
+         let q l rack = List.find_index (fun y -> y > l) rack
+         let r rack = List.find_index (fun y -> y == y) rack
          let s l rack = List.exists (fun l -> l == l) rack",
     )
     .unwrap();
@@ -1245,7 +1248,7 @@ fn eq_section_value_is_evaluated_once_before_the_list() {
     // helper call evaluated its arguments: it is the first argument of the call.
     let py = pyfun::compile(
         "let f n = n + 1
-         let a rack = List.findIndex ((==) (f 1)) rack
+         let a rack = List.find_index ((==) (f 1)) rack
          let b rack = List.exists ((==) (f 1)) rack",
     )
     .unwrap();
@@ -1257,14 +1260,14 @@ fn eq_section_value_is_evaluated_once_before_the_list() {
 fn e2e_eq_section_specialization_matches_the_helper() {
     run_and_check(
         "
-        let a = List.findIndex ((==) 3) [1, 2, 3, 3]
-        let b = List.findIndex ((==) 9) [1, 2, 3]
+        let a = List.find_index ((==) 3) [1, 2, 3, 3]
+        let b = List.find_index ((==) 9) [1, 2, 3]
         let c = List.find ((==) \"b\") [\"a\", \"b\"]
         let d = List.find ((==) \"z\") [\"a\", \"b\"]
         let e = List.exists ((==) 2) [1, 2]
         let f = List.exists ((==) 5) [1, 2]
-        let g = List.findIndex (fun y -> y == (1, 2)) [(0, 0), (1, 2)]
-        let h = List.findIndex ((==) 0) []
+        let g = List.find_index (fun y -> y == (1, 2)) [(0, 0), (1, 2)]
+        let h = List.find_index ((==) 0) []
         let i = List.find ((==) 0.0) [-0.0]
         ",
         &[
@@ -1396,7 +1399,7 @@ fn e2e_match_on_lookups_matches_the_helper() {
           match Map.find k m:
             case Some v: v
             case None: \"absent\"
-        let m = Map.ofList [(1, \"one\"), (2, \"\")]
+        let m = Map.of_list [(1, \"one\"), (2, \"\")]
         let a = look 1 m
         let b = look 2 m
         let c = look 3 m
@@ -1411,7 +1414,7 @@ fn e2e_match_on_lookups_matches_the_helper() {
         let f = get 0 [0]
         let g = get 1 [0]
         let h = get (0 - 1) [0]
-        let ok = Map.ofList [(\"k\", [])]
+        let ok = Map.of_list [(\"k\", [])]
         let i = match Map.find \"k\" ok:
           case Some xs: List.len xs
           case None: -1
@@ -1460,12 +1463,12 @@ fn e2e_option_bind_filter_to_result() {
     run_and_check(
         "
         let half = fun x -> if x % 2 == 0 then Some (x // 2) else None
-        let a = Option.withDefault 0 (Option.bind half (Some 8))
-        let b = Option.withDefault 0 (Option.bind half (Some 7))
-        let c = Option.withDefault 0 (Option.filter (fun x -> x > 5) (Some 8))
-        let d = Option.withDefault 0 (Option.filter (fun x -> x > 5) (Some 2))
-        let e = Result.withDefault 0 (Option.toResult 0 (Some 42))
-        let f = Result.isError (Option.toResult 0 None)
+        let a = Option.with_default 0 (Option.bind half (Some 8))
+        let b = Option.with_default 0 (Option.bind half (Some 7))
+        let c = Option.with_default 0 (Option.filter (fun x -> x > 5) (Some 8))
+        let d = Option.with_default 0 (Option.filter (fun x -> x > 5) (Some 2))
+        let e = Result.with_default 0 (Option.to_result 0 (Some 42))
+        let f = Result.is_error (Option.to_result 0 None)
         ",
         &[
             ("a", "4"),
@@ -1582,8 +1585,8 @@ fn e2e_numeric_conversions() {
         let c = ceil 3.2
         let d = truncate 3.9
         let e = floor (-2.5)
-        let f = Option.withDefault 0.0 (String.toFloat \"3.5\")
-        let g = Option.withDefault 0.0 (String.toFloat \"nope\")
+        let f = Option.with_default 0.0 (String.to_float \"3.5\")
+        let g = Option.with_default 0.0 (String.to_float \"nope\")
         ",
         &[
             ("a", "4"),
@@ -1656,7 +1659,7 @@ fn e2e_scientific_notation() {
 fn list_completeness_ops_lower_to_helpers() {
     let py = pyfun::compile(
         "let a = List.get 0 [1, 2]\n\
-         let b = List.isEmpty [1]\n\
+         let b = List.is_empty [1]\n\
          let c = List.contains 2 [1, 2]\n\
          let d = List.concat [1] [2]\n\
          let e = List.sort [2, 1]",
@@ -1667,10 +1670,10 @@ fn list_completeness_ops_lower_to_helpers() {
         py.contains("Some(xs[i]) if 0 <= i < len(xs) else _None_"),
         "{py}"
     );
-    // isEmpty / contains are fully-applied pure predicates: they inline (Lever A)
+    // is_empty / contains are fully-applied pure predicates: they inline (Lever A)
     // to `not xs` / `x in xs` instead of the `_pf_is_empty` / `_pf_list_contains`
     // helpers.
-    assert!(py.contains("b = not [1]"), "isEmpty inlined: {py}");
+    assert!(py.contains("b = not [1]"), "is_empty inlined: {py}");
     assert!(py.contains("c = 2 in [1, 2]"), "contains inlined: {py}");
     assert!(!py.contains("_pf_is_empty"), "{py}");
     assert!(!py.contains("_pf_list_contains"), "{py}");
@@ -1747,8 +1750,8 @@ fn e2e_list_choose_and_collect() {
         let a = List.choose (fun x -> if x > 1 then Some (x * 10) else None) xs
         let b = List.collect (fun x -> [x, x]) xs
         let c = List.collect (fun x -> x) [[1], [2, 3]]
-        let keepOdd = List.choose (fun x -> if x % 2 == 1 then Some x else None)
-        let d = keepOdd xs
+        let keep_odd = List.choose (fun x -> if x % 2 == 1 then Some x else None)
+        let d = keep_odd xs
         let e = xs |> List.collect (fun x -> [x, 0])
         ",
         &[
@@ -1766,13 +1769,13 @@ fn e2e_list_completeness_ops() {
     run_and_check(
         "
         let xs = [3, 1, 2]
-        let a = Option.withDefault 0 (List.get 0 xs)
-        let b = Option.withDefault 0 (List.get 9 xs)
+        let a = Option.with_default 0 (List.get 0 xs)
+        let b = Option.with_default 0 (List.get 9 xs)
         let c = List.contains 2 xs
         let d = List.concat xs [4]
         let e = List.sort xs
-        let f = Option.withDefault 0 (List.find (fun x -> x > 1) xs)
-        let g = List.isEmpty []
+        let f = Option.with_default 0 (List.find (fun x -> x > 1) xs)
+        let g = List.is_empty []
         ",
         &[
             ("a", "3"),
@@ -2176,8 +2179,8 @@ fn string_functions_lower_to_builtins_and_helpers() {
          let parts = String.split \",\" \"a,b\"\n\
          let joined = String.join \"-\" parts\n\
          let has = String.contains \"a\" \"abc\"\n\
-         let s = String.fromInt 7\n\
-         let chars = String.toList \"hi\"",
+         let s = String.from_int 7\n\
+         let chars = String.to_list \"hi\"",
     )
     .unwrap();
     // Bare-builtin routes (no helper).
@@ -2202,7 +2205,7 @@ fn string_functions_lower_to_builtins_and_helpers() {
 
 #[test]
 fn string_to_int_lowers_to_a_try_except_and_pulls_in_the_option_prelude() {
-    let py = pyfun::compile("let r = String.toInt \"42\"").unwrap();
+    let py = pyfun::compile("let r = String.to_int \"42\"").unwrap();
     assert!(py.contains("class Some:"), "{py}");
     assert!(py.contains("class None_:"), "{py}");
     assert!(py.contains("def _pf_str_to_int(s):"), "{py}");
@@ -2239,9 +2242,9 @@ fn e2e_string_operations() {
 fn e2e_string_to_int_parses_or_yields_none() {
     run_and_check(
         "
-        let ok = Option.withDefault 0 (String.toInt \"41\")
-        let bad = Option.withDefault 0 (String.toInt \"nope\")
-        let neg = Option.withDefault 0 (String.toInt \"-5\")
+        let ok = Option.with_default 0 (String.to_int \"41\")
+        let bad = Option.with_default 0 (String.to_int \"nope\")
+        let neg = Option.with_default 0 (String.to_int \"-5\")
         ",
         &[("ok", "41"), ("bad", "0"), ("neg", "-5")],
     );
@@ -2307,7 +2310,7 @@ fn partial_application_of_a_module_member() {
 
 #[test]
 fn result_to_option_pulls_in_both_preludes() {
-    let py = pyfun::compile("let o = Result.toOption (Ok 1)").unwrap();
+    let py = pyfun::compile("let o = Result.to_option (Ok 1)").unwrap();
     assert!(py.contains("class Ok:"), "Result prelude: {py}");
     assert!(py.contains("class Some:"), "Option prelude: {py}");
     assert!(py.contains("def _pf_result_to_option(r):"), "{py}");
@@ -2382,11 +2385,11 @@ fn adt_classes_get_structural_hash() {
     // `Map` keys — defining `__eq__` alone would make them unhashable in Python.
     run_and_check(
         "type Color = Red | Green | Blue\n\
-         let s = Set.ofList [Red, Red, Green]\n\
+         let s = Set.of_list [Red, Red, Green]\n\
          let n = Set.len s\n\
-         let hasRed = Set.contains Red s\n\
-         let hasBlue = Set.contains Blue s",
-        &[("n", "2"), ("hasRed", "True"), ("hasBlue", "False")],
+         let has_red = Set.contains Red s\n\
+         let has_blue = Set.contains Blue s",
+        &[("n", "2"), ("has_red", "True"), ("has_blue", "False")],
     );
 }
 
@@ -2445,7 +2448,7 @@ fn builtin_option_and_result_get_ordering_but_exception_does_not() {
     assert!(py.contains("class _Exception:"), "{py}");
     // The Exception class has no ordering key.
     assert!(
-        !py.contains("(0, self.errorKind"),
+        !py.contains("(0, self.error_kind"),
         "Exception gets no ordering: {py}"
     );
 }
@@ -2605,7 +2608,7 @@ fn map_traversals_walk_items_once() {
     // Walking `m.items()` reads each entry once; `m[k]` inside a loop over keys
     // would hash every key twice.
     let py = pyfun::compile(
-        "let m = Map.ofList [(1, \"a\")]\nlet t = Map.fold (fun acc k v -> acc + k) 0 m",
+        "let m = Map.of_list [(1, \"a\")]\nlet t = Map.fold (fun acc k v -> acc + k) 0 m",
     )
     .unwrap();
     assert!(py.contains("for kv in m.items():"), "{py}");
@@ -2615,7 +2618,7 @@ fn map_traversals_walk_items_once() {
 #[test]
 fn map_partition_tests_each_entry_once() {
     let py = pyfun::compile(
-        "let m = Map.ofList [(1, \"a\")]\nlet p = Map.partition (fun k v -> k > 0) m",
+        "let m = Map.of_list [(1, \"a\")]\nlet p = Map.partition (fun k v -> k > 0) m",
     )
     .unwrap();
     assert_eq!(py.matches("f(kv[0], kv[1])").count(), 1, "{py}");
@@ -2623,7 +2626,8 @@ fn map_partition_tests_each_entry_once() {
 
 #[test]
 fn set_operations_use_pythons_own_set_methods() {
-    let py = pyfun::compile("let a = Set.isSubset (Set.ofList [1]) (Set.ofList [1, 2])").unwrap();
+    let py =
+        pyfun::compile("let a = Set.is_subset (Set.of_list [1]) (Set.of_list [1, 2])").unwrap();
     assert!(py.contains("a.issubset(b)"), "{py}");
 }
 
@@ -2631,22 +2635,22 @@ fn set_operations_use_pythons_own_set_methods() {
 fn e2e_set_traversals() {
     run_and_check(
         "
-        let s = Set.ofList [3, 1, 4, 1, 5]
-        let empty = Set.isEmpty (Set.ofList [])
-        let full = Set.isEmpty s
-        let halved = List.sort (Set.toList (Set.map (fun x -> x % 2) s))
-        let kept = List.sort (Set.toList (Set.filter (fun x -> x > 2) s))
+        let s = Set.of_list [3, 1, 4, 1, 5]
+        let empty = Set.is_empty (Set.of_list [])
+        let full = Set.is_empty s
+        let halved = List.sort (Set.to_list (Set.map (fun x -> x % 2) s))
+        let kept = List.sort (Set.to_list (Set.filter (fun x -> x > 2) s))
         let total = Set.fold (fun acc x -> acc + x) 0 s
         let any = Set.exists (fun x -> x > 4) s
         let all = Set.forall (fun x -> x > 0) s
-        let sub = Set.isSubset (Set.ofList [1, 3]) s
-        let sup = Set.isSuperset s (Set.ofList [1, 3])
+        let sub = Set.is_subset (Set.of_list [1, 3]) s
+        let sup = Set.is_superset s (Set.of_list [1, 3])
         let biggest = Set.max s
         let smallest = Set.min s
-        let noMax = Set.max (Set.ofList [])
+        let no_max = Set.max (Set.of_list [])
         let split = Set.partition (fun x -> x > 2) s
-        let passing = List.sort (Set.toList (fst split))
-        let failing = List.sort (Set.toList (snd split))
+        let passing = List.sort (Set.to_list (fst split))
+        let failing = List.sort (Set.to_list (snd split))
         ",
         &[
             ("empty", "True"),
@@ -2660,7 +2664,7 @@ fn e2e_set_traversals() {
             ("sup", "True"),
             ("biggest", "Some(5)"),
             ("smallest", "Some(1)"),
-            ("noMax", "None_"),
+            ("no_max", "None_"),
             ("passing", "[3, 4, 5]"),
             ("failing", "[1]"),
         ],
@@ -2671,25 +2675,25 @@ fn e2e_set_traversals() {
 fn e2e_map_traversals() {
     run_and_check(
         "
-        let m = Map.ofList [(1, \"one\"), (2, \"two\"), (3, \"three\")]
-        let empty = Map.isEmpty (Map.ofList [])
-        let full = Map.isEmpty m
-        let shouted = Map.toList (Map.map (fun k v -> String.concat v \"!\") m)
-        let kept = Map.toList (Map.filter (fun k v -> k > 1) m)
-        let keySum = Map.fold (fun acc k v -> acc + k) 0 m
+        let m = Map.of_list [(1, \"one\"), (2, \"two\"), (3, \"three\")]
+        let empty = Map.is_empty (Map.of_list [])
+        let full = Map.is_empty m
+        let shouted = Map.to_list (Map.map (fun k v -> String.concat v \"!\") m)
+        let kept = Map.to_list (Map.filter (fun k v -> k > 1) m)
+        let key_sum = Map.fold (fun acc k v -> acc + k) 0 m
         let any = Map.exists (fun k v -> v == \"two\") m
         let all = Map.forall (fun k v -> k > 0) m
-        let joined = Map.toList (Map.union m (Map.ofList [(3, \"THREE\"), (4, \"four\")]))
+        let joined = Map.to_list (Map.union m (Map.of_list [(3, \"THREE\"), (4, \"four\")]))
         let split = Map.partition (fun k v -> k > 1) m
-        let passing = Map.toList (fst split)
-        let failing = Map.toList (snd split)
+        let passing = Map.to_list (fst split)
+        let failing = Map.to_list (snd split)
         ",
         &[
             ("empty", "True"),
             ("full", "False"),
             ("shouted", "[(1, 'one!'), (2, 'two!'), (3, 'three!')]"),
             ("kept", "[(2, 'two'), (3, 'three')]"),
-            ("keySum", "6"),
+            ("key_sum", "6"),
             ("any", "True"),
             ("all", "True"),
             (
@@ -2707,7 +2711,7 @@ fn e2e_map_traversals() {
 #[test]
 fn string_members_lower_to_pythons_own_str_methods() {
     let py =
-        pyfun::compile("let a = String.trimStart \" x\"\nlet b = String.splitLines \"y\"").unwrap();
+        pyfun::compile("let a = String.lstrip \" x\"\nlet b = String.split_lines \"y\"").unwrap();
     assert!(py.contains("s.lstrip()"), "{py}");
     assert!(py.contains("s.splitlines()"), "{py}");
 }
@@ -2716,18 +2720,18 @@ fn string_members_lower_to_pythons_own_str_methods() {
 fn e2e_string_sweep() {
     run_and_check(
         "
-        let empty = String.isEmpty \"\"
-        let full = String.isEmpty \"a\"
+        let empty = String.is_empty \"\"
+        let full = String.is_empty \"a\"
         let at = String.get 1 \"abc\"
         let past = String.get 9 \"abc\"
         let thrice = String.repeat 3 \"ab\"
         let none = String.repeat 0 \"ab\"
-        let left = String.trimStart \"  hi  \"
-        let right = String.trimEnd \"  hi  \"
-        let lines = String.splitLines \"a\\nb\\nc\\n\"
+        let left = String.lstrip \"  hi  \"
+        let right = String.rstrip \"  hi  \"
+        let lines = String.split_lines \"a\\nb\\nc\\n\"
         let backwards = String.rev \"abc\"
-        let joined = String.ofList [\"a\", \"b\", \"c\"]
-        let roundTrip = String.ofList (String.toList \"xyz\")
+        let joined = String.of_list [\"a\", \"b\", \"c\"]
+        let round_trip = String.of_list (String.to_list \"xyz\")
         ",
         &[
             ("empty", "True"),
@@ -2741,7 +2745,7 @@ fn e2e_string_sweep() {
             ("lines", "['a', 'b', 'c']"),
             ("backwards", "cba"),
             ("joined", "abc"),
-            ("roundTrip", "xyz"),
+            ("round_trip", "xyz"),
         ],
     );
 }
@@ -2776,7 +2780,7 @@ fn sign_lowers_without_a_branch() {
 #[test]
 fn seq_empty_is_an_exhausted_iterator() {
     // Bare `iter()` is a TypeError, which is what a naive lowering would emit.
-    let py = pyfun::compile("let xs = Seq.toList Seq.empty").unwrap();
+    let py = pyfun::compile("let xs = Seq.to_list Seq.empty").unwrap();
     assert!(py.contains("iter([])"), "{py}");
 }
 
@@ -2785,22 +2789,22 @@ fn e2e_the_audit_members() {
     run_and_check(
         "
         let xs = [1, 2, 3, 1, 2]
-        let taken = List.takeWhile (fun x -> x < 3) xs
-        let dropped = List.dropWhile (fun x -> x < 3) xs
-        let desc = List.sortByDescending (fun x -> x) xs
-        let counted = List.countBy (fun x -> x % 2) xs
-        let uniqBy = Seq.toList (Seq.distinctBy (fun x -> x % 2) (Seq.ofList xs))
-        let copies = Seq.toList (Seq.replicate 3 \"a\")
-        let none = Seq.toList Seq.empty
-        let at = Seq.get 2 (Seq.ofList xs)
-        let final = Seq.last (Seq.ofList xs)
-        let doubled = Seq.sumBy (fun x -> x * 2) (Seq.ofList xs)
-        let biggest = Seq.max (Seq.ofList xs)
-        let smallest = Seq.min (Seq.ofList xs)
-        let joined = Seq.reduce (fun a b -> a + b) (Seq.ofList xs)
+        let taken = List.take_while (fun x -> x < 3) xs
+        let dropped = List.drop_while (fun x -> x < 3) xs
+        let desc = List.sort_by_descending (fun x -> x) xs
+        let counted = List.count_by (fun x -> x % 2) xs
+        let uniq_by = Seq.to_list (Seq.distinct_by (fun x -> x % 2) (Seq.of_list xs))
+        let copies = Seq.to_list (Seq.replicate 3 \"a\")
+        let none = Seq.to_list Seq.empty
+        let at = Seq.get 2 (Seq.of_list xs)
+        let final = Seq.last (Seq.of_list xs)
+        let doubled = Seq.sum_by (fun x -> x * 2) (Seq.of_list xs)
+        let biggest = Seq.max (Seq.of_list xs)
+        let smallest = Seq.min (Seq.of_list xs)
+        let joined = Seq.reduce (fun a b -> a + b) (Seq.of_list xs)
         let holds = Option.forall (fun x -> x > 0) (Some 1)
         let has = Option.contains 1 (Some 1)
-        let okHas = Result.contains 1 (Ok 1)
+        let ok_has = Result.contains 1 (Ok 1)
         let negative = sign (-5)
         let zero = sign 0
         let positive = sign 42
@@ -2810,7 +2814,7 @@ fn e2e_the_audit_members() {
             ("dropped", "[3, 1, 2]"),
             ("desc", "[3, 2, 2, 1, 1]"),
             ("counted", "[(1, 3), (0, 2)]"),
-            ("uniqBy", "[1, 2]"),
+            ("uniq_by", "[1, 2]"),
             ("copies", "['a', 'a', 'a']"),
             ("none", "[]"),
             ("at", "Some(3)"),
@@ -2821,7 +2825,7 @@ fn e2e_the_audit_members() {
             ("joined", "Some(9)"),
             ("holds", "True"),
             ("has", "True"),
-            ("okHas", "True"),
+            ("ok_has", "True"),
             ("negative", "-1"),
             ("zero", "0"),
             ("positive", "1"),
@@ -2849,26 +2853,26 @@ fn e2e_option_sweep() {
         let none = List.head (List.drop 9 [1])
         let both = Option.map2 (fun a b -> a + b) some1 some2
         let missing = Option.map2 (fun a b -> a + b) some1 none
-        let kept = Option.orElse some2 some1
-        let fellBack = Option.orElse some2 none
+        let kept = Option.or_else some2 some1
+        let fell_back = Option.or_else some2 none
         let flat = Option.flatten (Some (Some 5))
-        let flatNone = Option.flatten (Some none)
-        let listed = Option.toList some1
-        let empty = Option.toList none
+        let flat_none = Option.flatten (Some none)
+        let listed = Option.to_list some1
+        let empty = Option.to_list none
         let holds = Option.exists (fun x -> x > 0) some1
-        let holdsNot = Option.exists (fun x -> x > 0) none
+        let holds_not = Option.exists (fun x -> x > 0) none
         ",
         &[
             ("both", "Some(3)"),
             ("missing", "None_"),
             ("kept", "Some(1)"),
-            ("fellBack", "Some(2)"),
+            ("fell_back", "Some(2)"),
             ("flat", "Some(5)"),
-            ("flatNone", "None_"),
+            ("flat_none", "None_"),
             ("listed", "[1]"),
             ("empty", "[]"),
             ("holds", "True"),
-            ("holdsNot", "False"),
+            ("holds_not", "False"),
         ],
     );
 }
@@ -2882,16 +2886,16 @@ fn e2e_result_sweep() {
         let bad = Error \"boom\"
         let both = Result.map2 (fun a b -> a + b) ok1 ok2
         let failed = Result.map2 (fun a b -> a + b) bad ok2
-        let kept = Result.orElse ok2 ok1
-        let fellBack = Result.orElse ok2 bad
-        let listed = Result.toList ok1
-        let empty = Result.toList bad
+        let kept = Result.or_else ok2 ok1
+        let fell_back = Result.or_else ok2 bad
+        let listed = Result.to_list ok1
+        let empty = Result.to_list bad
         ",
         &[
             ("both", "Ok(3)"),
             ("failed", "Error('boom')"),
             ("kept", "Ok(1)"),
-            ("fellBack", "Ok(2)"),
+            ("fell_back", "Ok(2)"),
             ("listed", "[1]"),
             ("empty", "[]"),
         ],
@@ -2904,7 +2908,7 @@ fn e2e_result_sweep() {
 fn seq_lazy_members_route_to_pythons_lazy_machinery() {
     // No `list(...)` anywhere: a lazy member must not force what it is given.
     let py = pyfun::compile(
-        "let s = Seq.toList (Seq.drop 1 (Seq.takeWhile (fun x -> x < 3) (Seq.ofList [1, 2])))",
+        "let s = Seq.to_list (Seq.drop 1 (Seq.take_while (fun x -> x < 3) (Seq.of_list [1, 2])))",
     )
     .unwrap();
     assert!(py.contains("itertools.islice(xs, max(n, 0), None)"), "{py}");
@@ -2914,7 +2918,7 @@ fn seq_lazy_members_route_to_pythons_lazy_machinery() {
 #[test]
 fn seq_distinct_is_a_generator_not_a_list() {
     // It has to remember what it has seen while staying lazy, so it yields.
-    let py = pyfun::compile("let s = Seq.toList (Seq.distinct (Seq.ofList [1, 1]))").unwrap();
+    let py = pyfun::compile("let s = Seq.to_list (Seq.distinct (Seq.of_list [1, 1]))").unwrap();
     assert!(py.contains("yield x"), "{py}");
     assert!(!py.contains("_pf_seq_distinct(xs):\n    out = []"), "{py}");
 }
@@ -2922,7 +2926,7 @@ fn seq_distinct_is_a_generator_not_a_list() {
 #[test]
 fn seq_unfold_yields_until_none() {
     let py =
-        pyfun::compile("let s = Seq.toList (Seq.take 1 (Seq.unfold (fun n -> Some (n, n)) 0))")
+        pyfun::compile("let s = Seq.to_list (Seq.take 1 (Seq.unfold (fun n -> Some (n, n)) 0))")
             .unwrap();
     assert!(py.contains("while True:"), "{py}");
     assert!(py.contains("isinstance(step, Some)"), "{py}");
@@ -2932,17 +2936,17 @@ fn seq_unfold_yields_until_none() {
 fn e2e_seq_lazy_members() {
     run_and_check(
         "
-        let dropped = Seq.toList (Seq.drop 2 (Seq.ofList [1, 2, 3, 4]))
-        let taken = Seq.toList (Seq.takeWhile (fun x -> x < 3) (Seq.ofList [1, 2, 3, 1]))
-        let skipped = Seq.toList (Seq.dropWhile (fun x -> x < 3) (Seq.ofList [1, 2, 3, 1]))
-        let joined = Seq.toList (Seq.concat (Seq.ofList [1, 2]) (Seq.ofList [3]))
-        let flat = Seq.toList (Seq.flatten (Seq.ofList [Seq.ofList [1, 2], Seq.ofList [3]]))
-        let mapped = Seq.toList (Seq.collect (fun x -> Seq.ofList [x, x]) (Seq.ofList [1, 2]))
-        let zipped = Seq.toList (Seq.zip (Seq.ofList [1, 2]) (Seq.ofList [\"a\", \"b\"]))
-        let ix = Seq.toList (Seq.indexed (Seq.ofList [\"a\", \"b\"]))
-        let uniq = Seq.toList (Seq.distinct (Seq.ofList [1, 1, 2, 1, 3]))
-        let pairs = Seq.toList (Seq.pairwise (Seq.ofList [1, 2, 3]))
-        let built = Seq.toList (Seq.init 4 (fun i -> i * i))
+        let dropped = Seq.to_list (Seq.drop 2 (Seq.of_list [1, 2, 3, 4]))
+        let taken = Seq.to_list (Seq.take_while (fun x -> x < 3) (Seq.of_list [1, 2, 3, 1]))
+        let skipped = Seq.to_list (Seq.drop_while (fun x -> x < 3) (Seq.of_list [1, 2, 3, 1]))
+        let joined = Seq.to_list (Seq.concat (Seq.of_list [1, 2]) (Seq.of_list [3]))
+        let flat = Seq.to_list (Seq.flatten (Seq.of_list [Seq.of_list [1, 2], Seq.of_list [3]]))
+        let mapped = Seq.to_list (Seq.collect (fun x -> Seq.of_list [x, x]) (Seq.of_list [1, 2]))
+        let zipped = Seq.to_list (Seq.zip (Seq.of_list [1, 2]) (Seq.of_list [\"a\", \"b\"]))
+        let ix = Seq.to_list (Seq.indexed (Seq.of_list [\"a\", \"b\"]))
+        let uniq = Seq.to_list (Seq.distinct (Seq.of_list [1, 1, 2, 1, 3]))
+        let pairs = Seq.to_list (Seq.pairwise (Seq.of_list [1, 2, 3]))
+        let built = Seq.to_list (Seq.init 4 (fun i -> i * i))
         ",
         &[
             ("dropped", "[3, 4]"),
@@ -2966,14 +2970,14 @@ fn e2e_seq_can_be_endless() {
     // are the real test that the lazy members stayed lazy.
     run_and_check(
         "
-        let doubles = Seq.toList (Seq.take 5 (Seq.initInfinite (fun i -> i * 2)))
-        let powers = Seq.toList (Seq.take 4 (Seq.unfold (fun s -> if s > 100 then None else Some (s, s * 2)) 1))
-        let firstBig = Seq.find (fun x -> x > 6) (Seq.initInfinite (fun i -> i * 2))
+        let doubles = Seq.to_list (Seq.take 5 (Seq.init_infinite (fun i -> i * 2)))
+        let powers = Seq.to_list (Seq.take 4 (Seq.unfold (fun s -> if s > 100 then None else Some (s, s * 2)) 1))
+        let first_big = Seq.find (fun x -> x > 6) (Seq.init_infinite (fun i -> i * 2))
         ",
         &[
             ("doubles", "[0, 2, 4, 6, 8]"),
             ("powers", "[1, 2, 4, 8]"),
-            ("firstBig", "Some(8)"),
+            ("first_big", "Some(8)"),
         ],
     );
 }
@@ -2982,17 +2986,17 @@ fn e2e_seq_can_be_endless() {
 fn e2e_seq_consuming_members() {
     run_and_check(
         "
-        let first = Seq.head (Seq.ofList [7, 8])
-        let none = Seq.head (Seq.ofList [])
-        let empty = Seq.isEmpty (Seq.ofList [])
-        let full = Seq.isEmpty (Seq.ofList [1])
-        let n = Seq.len (Seq.ofList [1, 2, 3])
-        let any = Seq.exists (fun x -> x > 2) (Seq.ofList [1, 2, 3])
-        let all = Seq.forall (fun x -> x > 0) (Seq.ofList [1, 2, 3])
-        let has = Seq.contains 2 (Seq.ofList [1, 2, 3])
-        let total = Seq.sum (Seq.ofList [1, 2, 3])
-        let found = Seq.find (fun x -> x > 1) (Seq.ofList [1, 2, 3])
-        let missing = Seq.find (fun x -> x > 9) (Seq.ofList [1, 2, 3])
+        let first = Seq.head (Seq.of_list [7, 8])
+        let none = Seq.head (Seq.of_list [])
+        let empty = Seq.is_empty (Seq.of_list [])
+        let full = Seq.is_empty (Seq.of_list [1])
+        let n = Seq.len (Seq.of_list [1, 2, 3])
+        let any = Seq.exists (fun x -> x > 2) (Seq.of_list [1, 2, 3])
+        let all = Seq.forall (fun x -> x > 0) (Seq.of_list [1, 2, 3])
+        let has = Seq.contains 2 (Seq.of_list [1, 2, 3])
+        let total = Seq.sum (Seq.of_list [1, 2, 3])
+        let found = Seq.find (fun x -> x > 1) (Seq.of_list [1, 2, 3])
+        let missing = Seq.find (fun x -> x > 9) (Seq.of_list [1, 2, 3])
         ",
         &[
             ("first", "Some(7)"),
@@ -3030,7 +3034,7 @@ fn list_distinct_lowers_to_the_order_preserving_idiom() {
 
 #[test]
 fn list_sort_by_passes_a_key_function() {
-    let py = pyfun::compile("let s = List.sortBy (fun x -> 0 - x) [1, 2]").unwrap();
+    let py = pyfun::compile("let s = List.sort_by (fun x -> 0 - x) [1, 2]").unwrap();
     assert!(py.contains("sorted(xs, key=f)"), "{py}");
 }
 
@@ -3059,9 +3063,9 @@ fn e2e_list_access_and_slicing() {
         let rest = List.tail xs
         let taken = List.take 2 xs
         let dropped = List.drop 3 xs
-        let overTake = List.take 99 xs
-        let negTake = List.take (-1) xs
-        let split = List.splitAt 2 xs
+        let over_take = List.take 99 xs
+        let neg_take = List.take (-1) xs
+        let split = List.split_at 2 xs
         ",
         &[
             ("first", "Some(3)"),
@@ -3069,8 +3073,8 @@ fn e2e_list_access_and_slicing() {
             ("rest", "Some([1, 4, 1, 5])"),
             ("taken", "[3, 1]"),
             ("dropped", "[1, 5]"),
-            ("overTake", "[3, 1, 4, 1, 5]"),
-            ("negTake", "[]"),
+            ("over_take", "[3, 1, 4, 1, 5]"),
+            ("neg_take", "[]"),
             ("split", "([3, 1], [4, 1, 5])"),
         ],
     );
@@ -3085,11 +3089,11 @@ fn e2e_list_transform_query_and_order() {
         let ix = List.indexed [\"a\", \"b\"]
         let any = List.exists (fun x -> x > 4) xs
         let all = List.forall (fun x -> x > 0) xs
-        let at = List.findIndex (fun x -> x == 4) xs
-        let missing = List.findIndex (fun x -> x == 99) xs
-        let desc = List.sortDescending xs
+        let at = List.find_index (fun x -> x == 4) xs
+        let missing = List.find_index (fun x -> x == 99) xs
+        let desc = List.sort_descending xs
         let uniq = List.distinct xs
-        let grouped = List.groupBy (fun x -> x % 2) [1, 2, 3, 4]
+        let grouped = List.group_by (fun x -> x % 2) [1, 2, 3, 4]
         ",
         &[
             ("summed", "[11, 22]"),
@@ -3112,8 +3116,8 @@ fn e2e_list_aggregate_structure_and_windows() {
         let xs = [3, 1, 4, 1, 5]
         let biggest = List.max xs
         let smallest = List.min xs
-        let noMax = List.max (List.drop 9 [1])
-        let doubled = List.sumBy (fun x -> x * 2) [1, 2, 3]
+        let no_max = List.max (List.drop 9 [1])
+        let doubled = List.sum_by (fun x -> x * 2) [1, 2, 3]
         let mean = List.average [1.0, 2.0, 4.0]
         let joined = List.reduce (fun a b -> a + b) [1, 2, 3]
         let split = List.partition (fun x -> x > 2) xs
@@ -3121,18 +3125,18 @@ fn e2e_list_aggregate_structure_and_windows() {
         let flat = List.flatten [[1, 2], [3]]
         let squares = List.init 4 (fun i -> i * i)
         let copies = List.replicate 3 \"x\"
-        let updated = List.updateAt 1 99 [1, 2, 3]
-        let untouched = List.updateAt 9 99 [1, 2, 3]
-        let inserted = List.insertAt 1 99 [1, 2, 3]
-        let removed = List.removeAt 1 [1, 2, 3]
+        let updated = List.update_at 1 99 [1, 2, 3]
+        let untouched = List.update_at 9 99 [1, 2, 3]
+        let inserted = List.insert_at 1 99 [1, 2, 3]
+        let removed = List.remove_at 1 [1, 2, 3]
         let pairs = List.pairwise [1, 2, 3]
         let windows = List.windowed 2 [1, 2, 3]
-        let chunks = List.chunkBySize 2 [1, 2, 3]
+        let chunks = List.chunk_by_size 2 [1, 2, 3]
         ",
         &[
             ("biggest", "Some(5)"),
             ("smallest", "Some(1)"),
-            ("noMax", "None_"),
+            ("no_max", "None_"),
             ("doubled", "12"),
             ("mean", "Some(2.3333333333333335)"),
             ("joined", "Some(6)"),
@@ -3187,8 +3191,8 @@ fn tuple_pattern_lowers_to_sequence_pattern() {
 fn a_tuple_parameter_unpacks_at_the_top_of_the_body() {
     // Python 3 has no tuple parameters, so the argument takes a synthetic name and
     // the body opens by unpacking it.
-    let py = pyfun::compile("let tileScore (t, sq) = t * sq").unwrap();
-    assert!(py.contains("def tileScore(_pf_arg0):"), "{py}");
+    let py = pyfun::compile("let tile_score (t, sq) = t * sq").unwrap();
+    assert!(py.contains("def tile_score(_pf_arg0):"), "{py}");
     assert!(py.contains("t, sq = _pf_arg0"), "{py}");
 }
 
@@ -3233,7 +3237,7 @@ fn a_nested_record_parameter_reads_through_a_temp() {
     let py = pyfun::compile(
         "type Cell = { letter: str }
          type Pair = { left: Cell, right: Cell }
-         let leftLetter (Pair { left = Cell { letter } }) = letter",
+         let left_letter (Pair { left = Cell { letter } }) = letter",
     )
     .unwrap();
     assert!(py.contains("_pf_arg0_0 = _pf_arg0.left"), "{py}");
@@ -3247,16 +3251,16 @@ fn e2e_record_parameters_round_trip() {
         type Cell = { row: int, col: int, letter: str }
         type Pair = { left: Cell, right: Cell }
         let describe (Cell { letter, row }) = letter
-        let leftLetter (Pair { left = Cell { letter } }) = letter
+        let left_letter (Pair { left = Cell { letter } }) = letter
         let both (Pair { left, right }) = (left.letter, right.letter)
         let a = Cell { row = 1, col = 2, letter = \"A\" }
         let b = Cell { row = 3, col = 4, letter = \"B\" }
         let p = Pair { left = a, right = b }
         let one = describe a
-        let deep = leftLetter p
-        let pairOf = both p
+        let deep = left_letter p
+        let pair_of = both p
         ",
-        &[("one", "A"), ("deep", "A"), ("pairOf", "('A', 'B')")],
+        &[("one", "A"), ("deep", "A"), ("pair_of", "('A', 'B')")],
     );
 }
 
@@ -3270,12 +3274,12 @@ fn a_wildcard_parameter_emits_pythons_throwaway_name() {
 fn e2e_tuple_parameters_round_trip() {
     run_and_check(
         "
-        let tileScore (t, sq) = t * sq
+        let tile_score (t, sq) = t * sq
         let swap (a, b) = (b, a)
         let nested ((a, b), c) = a + b + c
         let const42 _ = 42
         let pairs = List.zip [1, 2, 3] [10, 20, 30]
-        let scores = List.map tileScore pairs
+        let scores = List.map tile_score pairs
         let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs
         let swapped = swap (1, 2)
         let deep = nested ((1, 2), 3)
@@ -3362,7 +3366,7 @@ fn suffix_star_lowers_to_a_python_mid_star_sequence_pattern() {
 fn e2e_suffix_and_mid_star_patterns() {
     run_and_check(
         "
-        let lastOr fallback xs =
+        let last_or fallback xs =
           match xs:
             case [*_, last]: last
             case []: fallback
@@ -3371,8 +3375,8 @@ fn e2e_suffix_and_mid_star_patterns() {
             case []: 0
             case [x]: x
             case [first, *mid, last]: first + last + List.len mid
-        let a = lastOr 0 [5, 6, 7]
-        let b = lastOr 9 []
+        let a = last_or 0 [5, 6, 7]
+        let b = last_or 9 []
         let c = bounds [1, 2, 3, 4]
         let d = bounds [7]
         ",
@@ -3669,9 +3673,9 @@ fn a_self_tail_call_becomes_a_loop() {
 fn several_parameters_rebind_simultaneously() {
     // `n` is read by the second argument, so the two must not rebind in sequence.
     let py = pyfun::compile(
-        "let sumTo n acc =
+        "let sum_to n acc =
   if n == 0 then acc
-  else sumTo (n - 1) (acc + n)",
+  else sum_to (n - 1) (acc + n)",
     )
     .unwrap();
     assert!(py.contains("n, acc = (n - 1, acc + n)"), "{py}");
@@ -4090,7 +4094,7 @@ fn native_annotates_block_local_functions_and_leaves_unit_returns_bare() {
 fn native_ladders_reach_async_return_bang_matches() {
     // `return! (match …)` in an `async { }` block lowers through its own path,
     // which native mode now takes too, the Option/Result shape included.
-    let src = "extern runAsync: Async a -> a = asyncio.run\n\
+    let src = "extern run_async: Async a -> a = asyncio.run\n\
                let check n = if n > 0 then Ok n else Error \"negative\"\n\
                let describe n =\n  \
                  async {\n    \
@@ -4098,8 +4102,8 @@ fn native_ladders_reach_async_return_bang_matches() {
                      case Ok v: async { return f\"ok {v}\" }\n      \
                      case Error why: async { return why })\n  \
                  }\n\
-               print (runAsync (describe 3))\n\
-               print (runAsync (describe (0 - 1)))";
+               print (run_async (describe 3))\n\
+               print (run_async (describe (0 - 1)))";
     let Some((py, out)) = run_native(src) else {
         return;
     };
@@ -4136,7 +4140,7 @@ fn native_spells_out_the_comparisons_of_an_ordered_sum_type() {
                print (Some 1 <= Some 2)\n\
                print (Circle 1.0 == Circle 1.0)\n\
                print (Circle 1.0 >= Square 0.0)\n\
-               print (Set.ofList [Some 1, Some 1] |> Set.len)";
+               print (Set.of_list [Some 1, Some 1] |> Set.len)";
     let Some((py, out)) = run_native(src) else {
         return;
     };
@@ -4159,7 +4163,7 @@ fn native_annotates_an_async_tail_call_that_needs_no_nonlocal() {
     // the parameter was annotated `int` (python/mypy#22221) no longer arises,
     // and the function keeps its annotations like any other.
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let finished count = async { return count }\n\
                let countdown n acc =\n  \
                  async {\n    \
@@ -4170,7 +4174,7 @@ fn native_annotates_an_async_tail_call_that_needs_no_nonlocal() {
                  let add x = total <- total + x\n  \
                  List.iter add xs\n  \
                  total\n\
-               print (runAsync (countdown 4 0))\n\
+               print (run_async (countdown 4 0))\n\
                print (tally [1, 2, 3])";
     let Some((py, out)) = run_native(src) else {
         return;
@@ -4187,7 +4191,7 @@ fn e2e_a_start_joins_the_innermost_open_scope() {
     // its own task before the outer body carries on, and the outer scope's
     // later start still finds the outer group.
     let Some(python) = python_cmd() else { return };
-    let src = "extern runAsync: Async a -> a = asyncio.run\n\
+    let src = "extern run_async: Async a -> a = asyncio.run\n\
                let worker name = async {\n  \
                  do! Async.sleep 0.01\n  \
                  print name\n\
@@ -4202,7 +4206,7 @@ fn e2e_a_start_joins_the_innermost_open_scope() {
                  launch \"outer-2\"\n  \
                  return inner + 1\n\
                })\n\
-               print (runAsync session)";
+               print (run_async session)";
     let py = pyfun::compile(src).unwrap();
     let out = run_python(&python, &py);
     assert_eq!(
@@ -4218,7 +4222,7 @@ fn e2e_an_async_value_is_cold_and_runs_again_on_every_await() {
     // element of `Async.parallel`, even the same value twice) is a fresh run.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let job = async {\n  \
                  print \"run\"\n  \
                  return 1\n\
@@ -4230,7 +4234,7 @@ fn e2e_an_async_value_is_cold_and_runs_again_on_every_await() {
                  let! both = Async.parallel [job, job]\n  \
                  return a + b + List.sum both\n\
                }\n\
-               print (runAsync twice)";
+               print (run_async twice)";
     let py = pyfun::compile(src).unwrap();
     let out = run_python(&python, &py);
     assert_eq!(
@@ -4242,16 +4246,16 @@ fn e2e_an_async_value_is_cold_and_runs_again_on_every_await() {
 
 #[test]
 fn e2e_an_async_extern_passed_by_name_or_partially_applied_stays_cold() {
-    // `List.map pause xs` and `List.map (sleepThen 0.0) xs` build values through
+    // `List.map pause xs` and `List.map (sleep_then 0.0) xs` build values through
     // the extern's adapting lambda, so each can be awaited twice, as a saturated
     // call's can.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                extern pause: float -> Async unit = asyncio.sleep\n\
-               extern sleepThen: float -> a -> Async a = asyncio.sleep\n\
+               extern sleep_then: float -> a -> Async a = asyncio.sleep\n\
                let pauses = [0.0, 0.0] |> List.map pause\n\
-               let values = [1, 2] |> List.map (sleepThen 0.0)\n\
+               let values = [1, 2] |> List.map (sleep_then 0.0)\n\
                let main = async {\n  \
                  for p in pauses:\n    \
                    do! p\n    \
@@ -4262,7 +4266,7 @@ fn e2e_an_async_extern_passed_by_name_or_partially_applied_stays_cold() {
                    print (a + b)\n  \
                  return ()\n\
                }\n\
-               runAsync main";
+               run_async main";
     let py = pyfun::compile(src).unwrap();
     let out = run_python(&python, &py);
     assert_eq!(out.lines().collect::<Vec<_>>(), ["2", "4"], "{py}");
@@ -4275,37 +4279,37 @@ fn e2e_an_async_callback_handed_to_python_runs() {
     // client would read an empty line instead of the reply.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                extern type Reader\n\
                extern type Writer\n\
                extern type Server\n\
                extern type Bytes\n\
-               extern startServer: (Reader -> Writer ->{e} Async unit) -> str -> int -> Async Server = asyncio.start_server\n\
-               extern openConnection: str -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
+               extern start_server: (Reader -> Writer ->{e} Async unit) -> str -> int -> Async Server = asyncio.start_server\n\
+               extern open_connection: str -> int -> Async (Reader, Writer) = asyncio.open_connection\n\
                extern readline: Reader -> Async Bytes = .readline()\n\
                extern write: Writer -> Bytes -> unit = .write\n\
                extern drain: Writer -> Async unit = .drain()\n\
-               extern closeWriter: Writer -> unit = .close()\n\
-               extern closeServer: Server -> unit = .close()\n\
+               extern close_writer: Writer -> unit = .close()\n\
+               extern close_server: Server -> unit = .close()\n\
                extern encode: str -> Bytes = .encode()\n\
                extern decode: Bytes -> str = .decode()\n\
                let shout reader writer = async {\n  \
                  let! line = readline reader\n  \
                  write writer (encode (String.upper (decode line)))\n  \
                  do! drain writer\n  \
-                 closeWriter writer\n\
+                 close_writer writer\n\
                }\n\
                let main = async {\n  \
-                 let! server = startServer shout \"127.0.0.1\" 47321\n  \
-                 let! (reader, writer) = openConnection \"127.0.0.1\" 47321\n  \
+                 let! server = start_server shout \"127.0.0.1\" 47321\n  \
+                 let! (reader, writer) = open_connection \"127.0.0.1\" 47321\n  \
                  write writer (encode \"hello\\n\")\n  \
                  do! drain writer\n  \
                  let! reply = Async.timeout 5.0 (readline reader)\n  \
                  print (reply |> Option.map (fun b -> String.strip (decode b)))\n  \
-                 closeWriter writer\n  \
-                 closeServer server\n\
+                 close_writer writer\n  \
+                 close_server server\n\
                }\n\
-               runAsync main";
+               run_async main";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("lambda *_pf_a: _pf_run(shout(*_pf_a))"), "{py}");
     let out = run_python(&python, &py);
@@ -4327,7 +4331,7 @@ fn the_cookbook_agent_loops_instead_of_recursing() {
         "{py}"
     );
     assert!(py.contains("while True:"), "{py}");
-    assert!(!py.contains("return await agentLoop("), "{py}");
+    assert!(!py.contains("return await agent_loop("), "{py}");
 }
 
 #[test]
@@ -4335,10 +4339,10 @@ fn e2e_an_async_self_tail_call_recurses_past_the_stack_limit() {
     // 100k awaited tail calls only complete inside the one coroutine.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let finished acc = async { return acc }\n\
                let loop n acc =\n  async {\n    return! (if n == 0 then finished acc else loop (n - 1) (acc + n))\n  }\n\
-               print (runAsync (loop 100000 0))";
+               print (run_async (loop 100000 0))";
     let program = pyfun::compile(src).unwrap();
     assert_eq!(run_python(&python, &program).trim(), "5000050000");
 }
@@ -4347,12 +4351,12 @@ fn e2e_an_async_self_tail_call_recurses_past_the_stack_limit() {
 fn e2e_an_empty_race_raises_the_named_error() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let main = async {\n  \
                  let! r = Async.catch (Async.race [])\n  \
-                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"{e.errorKind}: {e.errorMessage}\"\n  \
+                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"{e.error_kind}: {e.error_message}\"\n  \
                  return ()\n}\n\
-               runAsync main";
+               run_async main";
     let program = pyfun::compile(src).unwrap();
     assert_eq!(
         run_python(&python, &program).trim(),
@@ -4366,7 +4370,7 @@ fn a_mut_assigned_in_an_async_block_declares_global() {
     // the assignment silently bound a local and the flag never flipped.
     let py = pyfun::compile(
         "let mut flag = False\n\
-         let raiseFlag _ =\n  async {\n    flag <- True\n    return ()\n  }",
+         let raise_flag _ =\n  async {\n    flag <- True\n    return ()\n  }",
     )
     .unwrap();
     assert!(py.contains("global flag"), "{py}");
@@ -4388,8 +4392,8 @@ fn a_function_mut_assigned_in_an_async_block_declares_nonlocal() {
     // the capture is `nonlocal`, exactly as a closure's would be.
     let py = pyfun::compile(
         "extern import asyncio\n\
-         extern runAsync: Async a -> a = asyncio.run\n\
-         let bump _ =\n  let mut n = 0\n  let work = async {\n    n <- n + 1\n    return ()\n  }\n  runAsync work\n  n",
+         extern run_async: Async a -> a = asyncio.run\n\
+         let bump _ =\n  let mut n = 0\n  let work = async {\n    n <- n + 1\n    return ()\n  }\n  run_async work\n  n",
     )
     .unwrap();
     assert!(py.contains("nonlocal n"), "{py}");
@@ -4400,10 +4404,10 @@ fn e2e_a_mut_assigned_in_an_async_block_reaches_the_module_binding() {
     // The filed repro: must print True, not the silent False.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let mut flag = False\n\
-               let raiseFlag _ =\n  async {\n    flag <- True\n    return ()\n  }\n\
-               runAsync (raiseFlag ())\n\
+               let raise_flag _ =\n  async {\n    flag <- True\n    return ()\n  }\n\
+               run_async (raise_flag ())\n\
                print flag";
     let program = pyfun::compile(src).unwrap();
     assert_eq!(run_python(&python, &program).trim(), "True");
@@ -4415,7 +4419,7 @@ fn e2e_a_mut_assigned_in_a_seq_block_reaches_the_module_binding() {
     let Some(python) = python_cmd() else { return };
     let src = "let mut hits = 0\n\
                let track xs = seq {\n  for x in xs:\n    hits <- hits + 1\n    yield x\n}\n\
-               [10, 20] |> track |> Seq.toList |> print\n\
+               [10, 20] |> track |> Seq.to_list |> print\n\
                print hits";
     let program = pyfun::compile(src).unwrap();
     let out = run_python(&python, &program).replace("\r\n", "\n");
@@ -4430,11 +4434,11 @@ fn e2e_a_self_tail_call_recurses_past_the_stack_limit() {
         let countdown n =
           if n == 0 then \"done\"
           else countdown (n - 1)
-        let sumTo n acc =
+        let sum_to n acc =
           if n == 0 then acc
-          else sumTo (n - 1) (acc + n)
+          else sum_to (n - 1) (acc + n)
         let deep = countdown 50000
-        let total = sumTo 100000 0
+        let total = sum_to 100000 0
         ",
         &[("deep", "done"), ("total", "5000050000")],
     );
@@ -4840,7 +4844,7 @@ fn e2e_expression_items_and_a_trailing_do_bang_in_an_async_block() {
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
                extern sleep: float -> Async unit = asyncio.sleep\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                let nap = async {\n  \
                  let! _ = sleep 0.001\n  \
                  print \"napped\"\n  \
@@ -4848,7 +4852,7 @@ fn e2e_expression_items_and_a_trailing_do_bang_in_an_async_block() {
                  if True then print \"yes\" else ()\n  \
                  do! sleep 0.001\n\
                }\n\
-               print (runAsync nap)";
+               print (run_async nap)";
     let program = pyfun::compile(src).unwrap();
     assert!(
         program.contains("    await asyncio.sleep(0.001)\n"),
@@ -4881,7 +4885,7 @@ fn e2e_async_module_members_run_over_asyncio() {
     // `Error` carrying the same `Exception` record `try` builds.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                extern failing: str -> Async unit = asyncio.sleep\n\
                let slow n = async { do! Async.sleep 0.01  return n }\n\
                let main = async {\n  \
@@ -4893,15 +4897,15 @@ fn e2e_async_module_members_run_over_asyncio() {
                  print t\n  \
                  let! u = Async.timeout 1.0 (slow 9)\n  \
                  print u\n  \
-                 let! v = Async.toThread (fun _ -> 41)\n  \
+                 let! v = Async.to_thread (fun _ -> 41)\n  \
                  print v\n  \
                  let! r = Async.catch (failing \"oops\")\n  \
-                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"caught {e.errorKind}\"\n  \
+                 match r:\n    case Ok _: print \"ok\"\n    case Error e: print f\"caught {e.error_kind}\"\n  \
                  let! ok = Async.catch (slow 5)\n  \
                  print ok\n  \
                  return ()\n\
                }\n\
-               runAsync main";
+               run_async main";
     let program = pyfun::compile(src).unwrap();
     assert!(
         program.contains("return list(await asyncio.gather(*map(_pf_run, xs)))"),
@@ -4921,15 +4925,15 @@ fn e2e_a_thunk_argument_to_an_extern_is_wrapped_for_python() {
     // Pyfun thunk takes the unit value, so the call site hands over `lambda: f(None)`.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
-               extern toThread: (unit -> a) -> Async a = asyncio.to_thread\n\
+               extern run_async: Async a -> a = asyncio.run\n\
+               extern to_thread: (unit -> a) -> Async a = asyncio.to_thread\n\
                let answer n = n * 7\n\
                let main = async {\n  \
-                 let! v = toThread (fun _ -> 6 * 7)\n  \
-                 let! w = toThread (fun _ -> answer 7)\n  \
+                 let! v = to_thread (fun _ -> 6 * 7)\n  \
+                 let! w = to_thread (fun _ -> answer 7)\n  \
                  return v + w\n\
                }\n\
-               print (runAsync main)";
+               print (run_async main)";
     let program = pyfun::compile(src).unwrap();
     assert!(program.contains("asyncio.to_thread(lambda: "), "{program}");
     assert!(!program.contains("to_thread(lambda _:"), "{program}");
@@ -4942,22 +4946,22 @@ fn e2e_for_items_in_seq_async_result_and_a_user_builder() {
     // user builder; a `let!` inside a `result` loop still short-circuits.
     let Some(python) = python_cmd() else { return };
     let src = "extern import asyncio\n\
-               extern runAsync: Async a -> a = asyncio.run\n\
+               extern run_async: Async a -> a = asyncio.run\n\
                module Html =\n  let yield_ n = [n]\n  let combine a b = List.concat a b\n  let delay f = f ()\n  let for_ xs f = List.collect f xs\n\
                let page rows = Html {\n  yield \"h1\"\n  for r in rows:\n    yield f\"tr {r}\"\n  yield \"p\"\n}\n\
                print (page [\"a\", \"b\"])\n\
                let squares = seq {\n  for x in [1, 2, 3]:\n    let y = x * x\n    yield y\n  yield 100\n}\n\
-               print (Seq.toList squares)\n\
-               let nested = seq { for x in [1, 2]: for y in Seq.ofList [10, 20]: yield x + y }\n\
-               print (Seq.toList nested)\n\
+               print (Seq.to_list squares)\n\
+               let nested = seq { for x in [1, 2]: for y in Seq.of_list [10, 20]: yield x + y }\n\
+               print (Seq.to_list nested)\n\
                let pairs = seq { for (a, b) in [(1, 2), (3, 4)]: yield a + b }\n\
-               print (Seq.toList pairs)\n\
+               print (Seq.to_list pairs)\n\
                let check x = if x > 0 then Ok x else Error f\"bad {x}\"\n\
-               let allGood xs = result {\n  for x in xs:\n    let! _ = check x\n  return \"all positive\"\n}\n\
-               print (allGood [1, 2, 3])\n\
-               print (allGood [1, -2, 3])\n\
+               let all_good xs = result {\n  for x in xs:\n    let! _ = check x\n  return \"all positive\"\n}\n\
+               print (all_good [1, 2, 3])\n\
+               print (all_good [1, -2, 3])\n\
                let main = async {\n  for n in [1, 2]:\n    do! Async.sleep 0.001\n    print n\n  return ()\n}\n\
-               runAsync main";
+               run_async main";
     let program = pyfun::compile(src).unwrap();
     assert!(
         program.contains(
@@ -4991,20 +4995,20 @@ fn e2e_derived_codecs_round_trip_a_rich_type() {
                type Tree = Leaf | Node Tree int Tree\n\
                type View = { board: Map (int, int) Placed, players: List Player, turn: Option Player, last: Msg, tree: Tree, pair: (str, float), tags: Set str }\n\
                let view = View {\n  \
-                 board = Map.ofList [((1, 2), Placed { letter = \"Q\", score = 10 })],\n  \
+                 board = Map.of_list [((1, 2), Placed { letter = \"Q\", score = 10 })],\n  \
                  players = [Ann, Bob],\n  turn = Some Bob,\n  last = Move \"K11 a QUIZ\",\n  \
-                 tree = Node Leaf 1 (Node Leaf 2 Leaf),\n  pair = (\"x\", 1.5),\n  tags = Set.ofList [\"a\"]\n}\n\
+                 tree = Node Leaf 1 (Node Leaf 2 Leaf),\n  pair = (\"x\", 1.5),\n  tags = Set.of_list [\"a\"]\n}\n\
                let wire = Encode.auto view\n\
                print wire\n\
-               let back = Decode.decodeString Decode.auto wire\n\
-               match back:\n  case Ok v: print (v == view)\n  case Error e: print f\"failed: {e.errorKind} {e.errorMessage}\"\n\
-               let showMsg m =\n  match m:\n    case Hello p: f\"hello {p}\"\n    case Move s: f\"move {s}\"\n    case Resign: \"resign\"\n\
-               let decodeMsg s =\n  match Decode.decodeString Decode.auto s:\n    case Ok m: showMsg m\n    case Error e: f\"error {e.errorKind}: {e.errorMessage}\"\n\
-               print (decodeMsg \"{\\\"type\\\": \\\"Resign\\\"}\")\n\
-               print (decodeMsg \"{\\\"type\\\": \\\"Hello\\\", \\\"fields\\\": [{\\\"type\\\": \\\"Ann\\\"}]}\")\n\
-               print (decodeMsg \"{\\\"type\\\": \\\"Nope\\\"}\")\n\
-               print (decodeMsg \"[1, 2]\")\n\
-               print (decodeMsg \"{\\\"type\\\": \\\"Move\\\", \\\"fields\\\": [1]}\")";
+               let back = Decode.decode_string Decode.auto wire\n\
+               match back:\n  case Ok v: print (v == view)\n  case Error e: print f\"failed: {e.error_kind} {e.error_message}\"\n\
+               let show_msg m =\n  match m:\n    case Hello p: f\"hello {p}\"\n    case Move s: f\"move {s}\"\n    case Resign: \"resign\"\n\
+               let decode_msg s =\n  match Decode.decode_string Decode.auto s:\n    case Ok m: show_msg m\n    case Error e: f\"error {e.error_kind}: {e.error_message}\"\n\
+               print (decode_msg \"{\\\"type\\\": \\\"Resign\\\"}\")\n\
+               print (decode_msg \"{\\\"type\\\": \\\"Hello\\\", \\\"fields\\\": [{\\\"type\\\": \\\"Ann\\\"}]}\")\n\
+               print (decode_msg \"{\\\"type\\\": \\\"Nope\\\"}\")\n\
+               print (decode_msg \"[1, 2]\")\n\
+               print (decode_msg \"{\\\"type\\\": \\\"Move\\\", \\\"fields\\\": [1]}\")";
     let program = pyfun::compile(src).unwrap();
     // The descriptor table names the classes and refers to the recursive tree by name.
     assert!(program.contains("_pf_codecs = {"), "{program}");
@@ -5030,7 +5034,7 @@ fn e2e_derived_codecs_read_through_a_newtype_and_a_keyword_field() {
                let row = Row { class = \"a\", id = UserId \"u1\", ok = Error \"no\" }\n\
                let wire = Encode.auto row\n\
                print wire\n\
-               match Decode.decodeString Decode.auto wire:\n  case Ok r: print (r == row)\n  case Error e: print e.errorMessage";
+               match Decode.decode_string Decode.auto wire:\n  case Ok r: print (r == row)\n  case Error e: print e.error_message";
     let program = pyfun::compile(src).unwrap();
     let out = run_python(&python, &program).replace("\r\n", "\n");
     assert_eq!(
@@ -5049,8 +5053,8 @@ fn e2e_format_module_formats_numbers_and_strings() {
                let c = Format.percent 1 0.256\n\
                let d = Format.currency \"$\" 2 1234.5\n\
                let e = Format.grouped 1234567\n\
-               let f = Format.padLeft 6 \"0\" \"42\"\n\
-               let g = Format.padRight 6 \".\" \"42\"";
+               let f = Format.pad_left 6 \"0\" \"42\"\n\
+               let g = Format.pad_right 6 \".\" \"42\"";
     let mut program = pyfun::compile(src).unwrap();
     program.push_str("\nfor s in [a, b, c, d, e, f, g]:\n    print(s)\n");
     // Normalize CRLF: Python prints `\r\n` line endings on Windows.
@@ -5257,12 +5261,12 @@ fn e2e_list_functions() {
 #[test]
 fn e2e_set_functions() {
     run_and_check(
-        "let s = Set.ofList [1, 2, 3, 3]\n\
+        "let s = Set.of_list [1, 2, 3, 3]\n\
          let n = Set.len s\n\
          let has = Set.contains 2 s\n\
-         let u = Set.len (Set.union s (Set.ofList [3, 4]))\n\
-         let i = Set.len (Set.intersect s (Set.ofList [3, 4]))\n\
-         let d = Set.len (Set.difference s (Set.ofList [3, 4]))\n\
+         let u = Set.len (Set.union s (Set.of_list [3, 4]))\n\
+         let i = Set.len (Set.intersect s (Set.of_list [3, 4]))\n\
+         let d = Set.len (Set.difference s (Set.of_list [3, 4]))\n\
          let e = Set.len Set.empty",
         &[
             ("n", "3"),
@@ -5330,14 +5334,14 @@ fn e2e_combinators() {
 fn e2e_map_functions() {
     run_and_check(
         "let m = Map.add \"a\" 1 (Map.add \"b\" 2 Map.empty)\n\
-         let found = Map.findOr \"a\" 0 m\n\
-         let dflt = Map.findOr \"z\" 99 m\n\
+         let found = Map.find_or \"a\" 0 m\n\
+         let dflt = Map.find_or \"z\" 99 m\n\
          let sz = Map.len m\n\
          let mc = Map.contains \"b\" m\n\
          let rm = Map.len (Map.remove \"b\" m)\n\
          let ks = List.len (Map.keys m)\n\
-         let hit = Option.withDefault 0 (Map.find \"a\" m)\n\
-         let miss = Option.withDefault 0 (Map.find \"z\" m)",
+         let hit = Option.with_default 0 (Map.find \"a\" m)\n\
+         let miss = Option.with_default 0 (Map.find \"z\" m)",
         &[
             ("found", "1"),
             ("dflt", "99"),
@@ -5358,16 +5362,16 @@ fn e2e_adts_and_records_as_keys_and_elements() {
     run_and_check(
         "type Color = Red | Green | Blue\n\
          type Point = { x: int, y: int }\n\
-         let cs = Set.ofList [Red, Green, Red, Blue]\n\
+         let cs = Set.of_list [Red, Green, Red, Blue]\n\
          let ncolors = Set.len cs\n\
-         let hasGreen = Set.contains Green cs\n\
+         let has_green = Set.contains Green cs\n\
          let m = Map.add (Some 1) \"one\" Map.empty\n\
-         let v = Option.withDefault \"?\" (Map.find (Some 1) m)\n\
-         let pts = Set.ofList [Point { x = 1, y = 2 }, Point { x = 1, y = 2 }, Point { x = 3, y = 4 }]\n\
+         let v = Option.with_default \"?\" (Map.find (Some 1) m)\n\
+         let pts = Set.of_list [Point { x = 1, y = 2 }, Point { x = 1, y = 2 }, Point { x = 3, y = 4 }]\n\
          let npts = Set.len pts",
         &[
             ("ncolors", "3"),
-            ("hasGreen", "True"),
+            ("has_green", "True"),
             ("v", "one"),
             ("npts", "2"),
         ],
@@ -5380,9 +5384,9 @@ fn e2e_seq_module_is_lazy() {
     // laziness, not a million-element materialization.
     run_and_check(
         "let nats = Seq.range 0 1000000\n\
-         let squares = Seq.toList (Seq.take 5 (Seq.map (fun x -> x * x) nats))\n\
-         let evens = Seq.toList (Seq.take 3 (Seq.filter (fun x -> x // 2 * 2 == x) nats))\n\
-         let total = Seq.fold (fun acc x -> acc + x) 0 (Seq.ofList [1, 2, 3, 4])",
+         let squares = Seq.to_list (Seq.take 5 (Seq.map (fun x -> x * x) nats))\n\
+         let evens = Seq.to_list (Seq.take 3 (Seq.filter (fun x -> x // 2 * 2 == x) nats))\n\
+         let total = Seq.fold (fun acc x -> acc + x) 0 (Seq.of_list [1, 2, 3, 4])",
         &[
             ("squares", "[0, 1, 4, 9, 16]"),
             ("evens", "[0, 2, 4]"),
@@ -5408,16 +5412,16 @@ fn e2e_in_file_module() {
 #[test]
 fn e2e_result_module() {
     run_and_check(
-        "let safeDiv a b = if b == 0 then Error \"div0\" else Ok (a // b)\n\
-         let r1 = safeDiv 10 2\n\
-         let r2 = safeDiv 10 0\n\
-         let a = Result.withDefault 0 (Result.map (fun x -> x + 1) r1)\n\
-         let b = Result.withDefault 0 r2\n\
-         let c = Result.isOk r1\n\
-         let d = Result.isError r2\n\
-         let e = Option.withDefault 0 (Result.toOption r1)\n\
-         let f = Result.withDefault 0 (Result.bind (fun x -> safeDiv x 3) r1)\n\
-         let g = Result.isError (Result.mapError (fun s -> s) r2)",
+        "let safe_div a b = if b == 0 then Error \"div0\" else Ok (a // b)\n\
+         let r1 = safe_div 10 2\n\
+         let r2 = safe_div 10 0\n\
+         let a = Result.with_default 0 (Result.map (fun x -> x + 1) r1)\n\
+         let b = Result.with_default 0 r2\n\
+         let c = Result.is_ok r1\n\
+         let d = Result.is_error r2\n\
+         let e = Option.with_default 0 (Result.to_option r1)\n\
+         let f = Result.with_default 0 (Result.bind (fun x -> safe_div x 3) r1)\n\
+         let g = Result.is_error (Result.map_error (fun s -> s) r2)",
         &[
             ("a", "6"),
             ("b", "0"),
@@ -5435,10 +5439,10 @@ fn e2e_option_module() {
     run_and_check(
         "let some = Some 5\n\
          let none = None\n\
-         let a = Option.withDefault 0 some\n\
-         let b = Option.withDefault 0 none\n\
-         let c = Option.isSome some\n\
-         let d = Option.isNone none\n\
+         let a = Option.with_default 0 some\n\
+         let b = Option.with_default 0 none\n\
+         let c = Option.is_some some\n\
+         let d = Option.is_none none\n\
          let e = Option.map (fun x -> x + 1) some",
         &[
             ("a", "5"),
@@ -5571,7 +5575,7 @@ fn e2e_bool_partial_active_pattern() {
 fn e2e_parameterized_active_pattern_fizzbuzz() {
     run_and_check(
         "let (|DivisibleBy|_|) d n = n % d == 0\n\
-         let fizz n =\n  match n:\n    case DivisibleBy 15: \"fizzbuzz\"\n    case DivisibleBy 3: \"fizz\"\n    case DivisibleBy 5: \"buzz\"\n    case _: String.fromInt n\n\
+         let fizz n =\n  match n:\n    case DivisibleBy 15: \"fizzbuzz\"\n    case DivisibleBy 3: \"fizz\"\n    case DivisibleBy 5: \"buzz\"\n    case _: String.from_int n\n\
          let a = fizz 15\n\
          let b = fizz 9\n\
          let c = fizz 10\n\
@@ -5657,7 +5661,7 @@ fn structural_arm_beside_active_pattern_in_value_position() {
     // (`if not _pf_t…:`) and assigns a temp instead of returning.
     let py = pyfun::compile(
         "let (|Answer|_|) o = o == Some 42\n\
-         let classify o =\n  let label =\n    match o:\n      case Answer: \"answer\"\n      case Some n: String.fromInt n\n      case None: \"none\"\n  String.concat label \"!\"",
+         let classify o =\n  let label =\n    match o:\n      case Answer: \"answer\"\n      case Some n: String.from_int n\n      case None: \"none\"\n  String.concat label \"!\"",
     )
     .unwrap();
     assert!(py.contains("if not _pf_t"), "{py}");
@@ -5674,7 +5678,7 @@ fn e2e_active_and_or_and_structural_arms_mix() {
     run_and_check(
         "let (|Answer|_|) o = o == Some 42\n\
          let (|Even|Odd|) n = if n % 2 == 0 then Even else Odd\n\
-         let describe o =\n  match o:\n    case Some x if x > 100: \"big\"\n    case Answer: \"the answer\"\n    case Some x: (match x:\n      case Even | Odd: String.fromInt x)\n    case None: \"none\"\n\
+         let describe o =\n  match o:\n    case Some x if x > 100: \"big\"\n    case Answer: \"the answer\"\n    case Some x: (match x:\n      case Even | Odd: String.from_int x)\n    case None: \"none\"\n\
          let a = describe (Some 42)\n\
          let b = describe (Some 7)\n\
          let c = describe (Some 500)\n\
@@ -5685,19 +5689,19 @@ fn e2e_active_and_or_and_structural_arms_mix() {
 
 #[test]
 fn e2e_decode_primitives_and_totality() {
-    // `Decode.decodeString` runs a decoder over JSON text totally: a good parse is
+    // `Decode.decode_string` runs a decoder over JSON text totally: a good parse is
     // `Ok`, a type mismatch or malformed input is `Error` (here folded to a default).
     run_and_check(
-        "let ok = Result.withDefault 0 (Decode.decodeString Decode.int \"42\")\n\
-         let wrongType = Result.withDefault (0 - 1) (Decode.decodeString Decode.int \"\\\"x\\\"\")\n\
-         let boolNotInt = Result.withDefault (0 - 1) (Decode.decodeString Decode.int \"true\")\n\
-         let intAsFloat = Result.withDefault 0.0 (Decode.decodeString Decode.float \"3\")\n\
-         let malformed = Result.isError (Decode.decodeString Decode.bool \"not json\")",
+        "let ok = Result.with_default 0 (Decode.decode_string Decode.int \"42\")\n\
+         let wrong_type = Result.with_default (0 - 1) (Decode.decode_string Decode.int \"\\\"x\\\"\")\n\
+         let bool_not_int = Result.with_default (0 - 1) (Decode.decode_string Decode.int \"true\")\n\
+         let int_as_float = Result.with_default 0.0 (Decode.decode_string Decode.float \"3\")\n\
+         let malformed = Result.is_error (Decode.decode_string Decode.bool \"not json\")",
         &[
             ("ok", "42"),
-            ("wrongType", "-1"),
-            ("boolNotInt", "-1"),
-            ("intAsFloat", "3.0"),
+            ("wrong_type", "-1"),
+            ("bool_not_int", "-1"),
+            ("int_as_float", "3.0"),
             ("malformed", "True"),
         ],
     );
@@ -5709,8 +5713,8 @@ fn e2e_decode_record_via_map_and_field() {
     run_and_check(
         "type Pair = { name: str, age: int }\n\
          let dec =\n  Decode.map2 (fun name age -> Pair { name = name, age = age })\n    (Decode.field \"name\" Decode.str)\n    (Decode.field \"age\" Decode.int)\n\
-         let good =\n  match Decode.decodeString dec \"\"\"{\"name\": \"ada\", \"age\": 36}\"\"\":\n    case Ok p: p.name\n    case Error e: \"?\"\n\
-         let missing = Result.isError (Decode.decodeString dec \"\"\"{\"name\": \"bob\"}\"\"\")",
+         let good =\n  match Decode.decode_string dec \"\"\"{\"name\": \"ada\", \"age\": 36}\"\"\":\n    case Ok p: p.name\n    case Error e: \"?\"\n\
+         let missing = Result.is_error (Decode.decode_string dec \"\"\"{\"name\": \"bob\"}\"\"\")",
         &[("good", "ada"), ("missing", "True")],
     );
 }
@@ -5718,15 +5722,15 @@ fn e2e_decode_record_via_map_and_field() {
 #[test]
 fn e2e_decode_list_nullable_oneof_andthen() {
     run_and_check(
-        "let nums = Result.withDefault [] (Decode.decodeString (Decode.list Decode.int) \"[1, 2, 3]\")\n\
-         let flex = Decode.oneOf [Decode.str, Decode.map String.fromInt Decode.int]\n\
-         let fromStr = Result.withDefault \"?\" (Decode.decodeString flex \"\\\"hi\\\"\")\n\
-         let fromInt = Result.withDefault \"?\" (Decode.decodeString flex \"7\")\n\
-         let n = Result.withDefault (0 - 1) (Decode.decodeString (Decode.oneOf []) \"1\")",
+        "let nums = Result.with_default [] (Decode.decode_string (Decode.list Decode.int) \"[1, 2, 3]\")\n\
+         let flex = Decode.one_of [Decode.str, Decode.map String.from_int Decode.int]\n\
+         let from_str = Result.with_default \"?\" (Decode.decode_string flex \"\\\"hi\\\"\")\n\
+         let from_int = Result.with_default \"?\" (Decode.decode_string flex \"7\")\n\
+         let n = Result.with_default (0 - 1) (Decode.decode_string (Decode.one_of []) \"1\")",
         &[
             ("nums", "[1, 2, 3]"),
-            ("fromStr", "hi"),
-            ("fromInt", "7"),
+            ("from_str", "hi"),
+            ("from_int", "7"),
             ("n", "-1"),
         ],
     );
@@ -5734,12 +5738,12 @@ fn e2e_decode_list_nullable_oneof_andthen() {
 
 #[test]
 fn decode_pipeline_is_pure() {
-    // Decoders are a pure sublanguage, so `let pure` over `decodeString` is accepted
+    // Decoders are a pure sublanguage, so `let pure` over `decode_string` is accepted
     // (unlike a raw `json.loads` extern, which is `io` at the boundary). The static
     // `Decode.int` decoder now specializes (`DESIGN.md` §5.3): direct `json.loads`
     // plus an inline guard, no interpreter helper.
     let py =
-        pyfun::compile("let pure parse s = Decode.decodeString Decode.int s\nlet r = parse \"1\"")
+        pyfun::compile("let pure parse s = Decode.decode_string Decode.int s\nlet r = parse \"1\"")
             .unwrap();
     assert!(py.contains("json.loads"), "{py}");
     assert!(!py.contains("_pf_dec_decode_string"), "{py}");
@@ -5747,12 +5751,12 @@ fn decode_pipeline_is_pure() {
 
 // ---------- decode specialization (src/lowering/decode_spec.rs) ----------
 //
-// A statically-known `Decode.decodeString dec s` is deforested from the combinator
+// A statically-known `Decode.decode_string dec s` is deforested from the combinator
 // interpreter into direct dict/list access (one `try`, byte-identical Result). These
 // positive tests assert the specialized shape is emitted (`json.loads` present,
 // `_pf_dec_decode_string` absent) and, via e2e, that value + error fidelity matches
 // the interpreter. Fallback tests assert the interpreter helper is still emitted for
-// dynamic shapes (`andThen`, a decoder parameter, a shadowed free var) and computes
+// dynamic shapes (`and_then`, a decoder parameter, a shadowed free var) and computes
 // the same value.
 
 /// Assert the decode specializer fired on `source`: no interpreter helper, direct
@@ -5785,7 +5789,7 @@ fn decode_spec_fires_on_inline_field() {
     // An inline `field` + primitive decoder deforests: json.loads + an isinstance guard,
     // no combinator interpreter.
     let py = assert_decode_specialized(
-        r#"let r = Decode.decodeString (Decode.field "name" Decode.str) """{"name": "ada"}"""
+        r#"let r = Decode.decode_string (Decode.field "name" Decode.str) """{"name": "ada"}"""
 "#,
     );
     assert!(
@@ -5803,7 +5807,7 @@ let user =
   Decode.map2 (fun name age -> Pair { name = name, age = age })
     (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
-let r = Decode.decodeString user """{"name": "ada", "age": 36}"""
+let r = Decode.decode_string user """{"name": "ada", "age": 36}"""
 "#,
     );
     assert!(
@@ -5820,9 +5824,9 @@ fn e2e_decode_spec_success_and_missing_field() {
         r#"let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: f"{e.errorKind}: {e.errorMessage}"
-let good = show (Decode.decodeString (Decode.field "name" Decode.str) """{"name": "ada"}""")
-let missing = show (Decode.decodeString (Decode.field "name" Decode.str) """{"other": 1}""")
+    case Error e: f"{e.error_kind}: {e.error_message}"
+let good = show (Decode.decode_string (Decode.field "name" Decode.str) """{"name": "ada"}""")
+let missing = show (Decode.decode_string (Decode.field "name" Decode.str) """{"other": 1}""")
 "#,
         &[("good", "ok: ada"), ("missing", "KeyError: 'name'")],
     );
@@ -5835,8 +5839,8 @@ fn e2e_decode_spec_wrong_type() {
         r#"let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: f"{e.errorKind}: {e.errorMessage}"
-let wrong = show (Decode.decodeString (Decode.field "age" Decode.int) """{"age": "old"}""")
+    case Error e: f"{e.error_kind}: {e.error_message}"
+let wrong = show (Decode.decode_string (Decode.field "age" Decode.int) """{"age": "old"}""")
 "#,
         &[("wrong", "ValueError: expected an int, got str")],
     );
@@ -5850,13 +5854,13 @@ fn e2e_decode_spec_int_bool_float_strictness() {
         r#"let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: f"{e.errorKind}: {e.errorMessage}"
-let boolNotInt = show (Decode.decodeString Decode.int "true")
-let intAsFloat = show (Decode.decodeString Decode.float "5")
+    case Error e: f"{e.error_kind}: {e.error_message}"
+let bool_not_int = show (Decode.decode_string Decode.int "true")
+let int_as_float = show (Decode.decode_string Decode.float "5")
 "#,
         &[
-            ("boolNotInt", "ValueError: expected an int, got bool"),
-            ("intAsFloat", "ok: 5.0"),
+            ("bool_not_int", "ValueError: expected an int, got bool"),
+            ("int_as_float", "ok: 5.0"),
         ],
     );
 }
@@ -5868,8 +5872,8 @@ fn e2e_decode_spec_malformed_json_kind() {
         r#"let kind r =
   match r:
     case Ok v: "ok"
-    case Error e: e.errorKind
-let malformed = kind (Decode.decodeString Decode.bool "not json")
+    case Error e: e.error_kind
+let malformed = kind (Decode.decode_string Decode.bool "not json")
 "#,
         &[("malformed", "JSONDecodeError")],
     );
@@ -5885,32 +5889,32 @@ fn e2e_decode_spec_nullable() {
       match o:
         case Some x: f"some {x}"
         case None: "none"
-    case Error e: e.errorKind
-let onNull = opt (Decode.decodeString (Decode.nullable Decode.int) "null")
-let onValue = opt (Decode.decodeString (Decode.nullable Decode.int) "5")
+    case Error e: e.error_kind
+let on_null = opt (Decode.decode_string (Decode.nullable Decode.int) "null")
+let on_value = opt (Decode.decode_string (Decode.nullable Decode.int) "5")
 "#,
-        &[("onNull", "none"), ("onValue", "some 5")],
+        &[("on_null", "none"), ("on_value", "some 5")],
     );
 }
 
 #[test]
 fn e2e_decode_spec_oneof_first_match_and_all_fail() {
-    // `oneOf` takes the first alternative that does not raise (ordering matters), and
+    // `one_of` takes the first alternative that does not raise (ordering matters), and
     // exhausts to the interpreter's exact message when none match.
     run_and_check(
         r#"let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: e.errorMessage
-let tagOf = Decode.oneOf [Decode.map (fun b -> "bool") Decode.bool, Decode.map (fun n -> "int") Decode.int]
-let firstMatch = show (Decode.decodeString tagOf "true")
-let secondMatch = show (Decode.decodeString tagOf "5")
-let allFail = show (Decode.decodeString (Decode.oneOf [Decode.str, Decode.map (fun b -> "b") Decode.bool]) "5")
+    case Error e: e.error_message
+let tag_of = Decode.one_of [Decode.map (fun b -> "bool") Decode.bool, Decode.map (fun n -> "int") Decode.int]
+let first_match = show (Decode.decode_string tag_of "true")
+let second_match = show (Decode.decode_string tag_of "5")
+let all_fail = show (Decode.decode_string (Decode.one_of [Decode.str, Decode.map (fun b -> "b") Decode.bool]) "5")
 "#,
         &[
-            ("firstMatch", "ok: bool"),
-            ("secondMatch", "ok: int"),
-            ("allFail", "Decode.oneOf: no decoder matched"),
+            ("first_match", "ok: bool"),
+            ("second_match", "ok: int"),
+            ("all_fail", "Decode.one_of: no decoder matched"),
         ],
     );
 }
@@ -5919,12 +5923,12 @@ let allFail = show (Decode.decodeString (Decode.oneOf [Decode.str, Decode.map (f
 fn e2e_decode_spec_list_of_objects_via_named_decoder() {
     // A list whose element decoder is a nested NAMED decoder over objects.
     run_and_check(
-        r#"let idDec = Decode.field "id" Decode.int
+        r#"let id_dec = Decode.field "id" Decode.int
 let show r =
   match r:
     case Ok xs: f"sum: {List.sum xs}"
-    case Error e: e.errorKind
-let total = show (Decode.decodeString (Decode.list idDec) """[{"id": 1}, {"id": 2}]""")
+    case Error e: e.error_kind
+let total = show (Decode.decode_string (Decode.list id_dec) """[{"id": 1}, {"id": 2}]""")
 "#,
         &[("total", "sum: 3")],
     );
@@ -5938,9 +5942,9 @@ fn e2e_decode_spec_succeed_and_fail() {
         r#"let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: f"{e.errorKind}: {e.errorMessage}"
-let s = show (Decode.decodeString (Decode.succeed 42) "0")
-let failed = show (Decode.decodeString (Decode.fail "boom") "0")
+    case Error e: f"{e.error_kind}: {e.error_message}"
+let s = show (Decode.decode_string (Decode.succeed 42) "0")
+let failed = show (Decode.decode_string (Decode.fail "boom") "0")
 "#,
         &[("s", "ok: 42"), ("failed", "ValueError: boom")],
     );
@@ -5948,14 +5952,14 @@ let failed = show (Decode.decodeString (Decode.fail "boom") "0")
 
 #[test]
 fn decode_andthen_falls_back() {
-    // `andThen` chooses a decoder from an already-decoded value — dynamic, so the pass
+    // `and_then` chooses a decoder from an already-decoded value — dynamic, so the pass
     // rejects it and keeps the interpreter. It still evaluates correctly.
-    let source = r#"let dec = Decode.andThen (fun n -> Decode.succeed (n + 1)) Decode.int
+    let source = r#"let dec = Decode.and_then (fun n -> Decode.succeed (n + 1)) Decode.int
 let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: e.errorKind
-let out = show (Decode.decodeString dec "41")
+    case Error e: e.error_kind
+let out = show (Decode.decode_string dec "41")
 "#;
     assert_decode_fallback(source);
     run_and_check(source, &[("out", "ok: 42")]);
@@ -5964,12 +5968,12 @@ let out = show (Decode.decodeString dec "41")
 #[test]
 fn decode_parameter_decoder_falls_back() {
     // A decoder passed as a function parameter is not statically known — fall back.
-    let source = r#"let runWith d s = Decode.decodeString d s
+    let source = r#"let run_with d s = Decode.decode_string d s
 let show r =
   match r:
     case Ok v: f"ok: {v}"
-    case Error e: e.errorKind
-let out = show (runWith Decode.int "7")
+    case Error e: e.error_kind
+let out = show (run_with Decode.int "7")
 "#;
     assert_decode_fallback(source);
     run_and_check(source, &[("out", "ok: 7")]);
@@ -5988,14 +5992,14 @@ fn decode_shadowed_free_var_falls_back() {
 let dec = Decode.map (fun x -> bump x) Decode.int
 let run u =
   let bump = 0
-  let r = Decode.decodeString dec "5"
+  let r = Decode.decode_string dec "5"
   match r:
     case Ok v: f"ok: {v} ({bump})"
-    case Error e: e.errorKind
-let useIt = run 0
+    case Error e: e.error_kind
+let use_it = run 0
 "#;
     assert_decode_fallback(source);
-    run_and_check(source, &[("useIt", "ok: 105 (0)")]);
+    run_and_check(source, &[("use_it", "ok: 105 (0)")]);
 }
 
 // ---------- interop cookbook examples (regression guard on the showcase) ----------
@@ -6215,19 +6219,19 @@ fn top_level_block_shadow_does_not_clobber_a_definition() {
     // a fresh nullary function when (and only when) a block binder collides
     // with a module-level name, so Python function scope isolates it.
     let src = "let bump n = n + 100\n\
-               let useBump x = bump x\n\
-               let useIt =\n  let bump = 0\n  useBump 5\n\
-               let after = useBump 7";
-    run_and_check(src, &[("useIt", "105"), ("after", "107")]);
+               let use_bump x = bump x\n\
+               let use_it =\n  let bump = 0\n  use_bump 5\n\
+               let after = use_bump 7";
+    run_and_check(src, &[("use_it", "105"), ("after", "107")]);
 }
 
 #[test]
 fn top_level_match_binder_shadow_does_not_clobber() {
     // Match-arm binders are frame binders too — same hazard, same wrap.
     let src = "let bump n = n + 100\n\
-               let useIt =\n  match Some 0:\n    case Some bump: bump\n    case None: 1\n\
+               let use_it =\n  match Some 0:\n    case Some bump: bump\n    case None: 1\n\
                let after = bump 7";
-    run_and_check(src, &[("useIt", "0"), ("after", "107")]);
+    run_and_check(src, &[("use_it", "0"), ("after", "107")]);
 }
 
 #[test]
@@ -6291,7 +6295,7 @@ let step acc c =
         case Push n: (m, List.concat xs [n])
         case Skip: acc
 let run cmds = List.fold step (Map.empty, []) cmds
-let out = match run [Put 1 10, Push 2, Skip, Put 3 30, Push 4]: case (m, xs): (Map.toList m, xs)"#;
+let out = match run [Put 1 10, Push 2, Skip, Put 3 30, Push 4]: case (m, xs): (Map.to_list m, xs)"#;
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
     run_and_check(src, &[("out", "([(1, 10), (3, 30)], [2, 4])")]);
@@ -6311,7 +6315,7 @@ fn fold_opt_single_map_lambda_lowers_to_subscript_assign() {
 #[test]
 fn e2e_fold_opt_single_map_lambda() {
     let src = "let m = List.fold (fun m x -> Map.add x (x * 2) m) Map.empty [1, 2, 3]\n\
-               let out = Map.toList m";
+               let out = Map.to_list m";
     run_and_check(src, &[("out", "[(1, 2), (2, 4), (3, 6)]")]);
 }
 
@@ -6337,7 +6341,7 @@ fn a_fold_inside_an_in_file_module_lowers_to_a_loop() {
     let src = "module Stats =\n  \
                let scale = 3\n  \
                let tally xs = List.fold (fun acc x -> Map.add x (x * scale) acc) Map.empty xs\n\
-               let out = Map.toList (Stats.tally [1, 2])";
+               let out = Map.to_list (Stats.tally [1, 2])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for x in xs:"), "{py}");
     // The sibling reference keeps its mangled module name inside the loop.
@@ -6368,7 +6372,7 @@ fn e2e_fold_opt_cross_slot_read() {
   match acc:
     case (m, log): (Map.add x x m, List.concat log [Map.len m])
 let r = List.fold step (Map.empty, []) [1, 2, 3]
-let out = match r: case (m, log): (Map.toList m, log)"#;
+let out = match r: case (m, log): (Map.to_list m, log)"#;
     run_and_check(src, &[("out", "([(1, 1), (2, 2), (3, 3)], [0, 1, 2])")]);
 }
 
@@ -6391,7 +6395,7 @@ fn e2e_fold_opt_extend_form() {
 fn e2e_fold_opt_seq_fold_and_piped_form() {
     let src = "let s = Seq.fold (fun m x -> Map.add x x m) Map.empty (Seq.range 0 3)\n\
                let p = [1, 2, 3] |> List.fold (fun a x -> List.concat a [x]) []\n\
-               let so = Map.toList s";
+               let so = Map.to_list s";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "both folds qualify:\n{py}");
     run_and_check(
@@ -6407,7 +6411,7 @@ fn fold_opt_nonatomic_key_is_hoisted() {
     // so the effect-ordering half of P7 is unreachable; this covers the value
     // dependency half.)
     let src = "let step m x = Map.add (x + 1) x m\n\
-               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+               let out = Map.to_list (List.fold step Map.empty [1, 2, 3])";
     let py = pyfun::compile(src).unwrap();
     let temp = py.find("= x + 1").expect("hoisted key temp");
     let mutate = py.find("] = x").expect("subscript assign");
@@ -6455,7 +6459,7 @@ fn fold_reject_swapped_slots() {
 fn fold_reject_same_slot_twice() {
     // A4: one slot returned in two positions.
     let src = r#"let dup acc x = match acc: case (m, n): (Map.add x x m, m)
-let out = match List.fold dup (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.toList a, Map.toList b)"#;
+let out = match List.fold dup (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.to_list a, Map.to_list b)"#;
     assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], [(1, 1)])")]);
 }
 
@@ -6492,7 +6496,7 @@ fn fold_reject_acc_in_nontail_nonwhitelisted_position() {
 fn fold_reject_fresh_reset_slot() {
     // A8: a slot reset to a fresh container mid-fold (punted).
     let src = r#"let rf acc x = match acc: case (m, n): if x == 0 then (Map.empty, n) else (Map.add x x m, n)
-let out = match List.fold rf (Map.empty, 0) [0, 1, 2]: case (m, n): (Map.toList m, n)"#;
+let out = match List.fold rf (Map.empty, 0) [0, 1, 2]: case (m, n): (Map.to_list m, n)"#;
     assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], 0)")]);
 }
 
@@ -6512,7 +6516,7 @@ fn fold_reject_free_var_capture_at_site() {
 fn fold_reject_wildcard_slot() {
     // A wildcard destructure slot has no name to thread.
     let src = r#"let w acc x = match acc: case (m, _): (Map.add x x m, Map.empty)
-let out = match List.fold w (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.toList a, Map.toList b)"#;
+let out = match List.fold w (Map.empty, Map.empty) [1, 2]: case (a, b): (Map.to_list a, Map.to_list b)"#;
     assert_fold_fallback(src, &[("out", "([(1, 1), (2, 2)], [])")]);
 }
 
@@ -6541,8 +6545,8 @@ fn fold_reject_partial_application() {
 #[test]
 fn fold_reject_folder_is_a_parameter() {
     // The folder is a parameter (no inlinable body).
-    let src = "let foldWith f = List.fold f Map.empty [1, 2, 3]\n\
-               let out = Map.len (foldWith (fun m x -> Map.add x x m))";
+    let src = "let fold_with f = List.fold f Map.empty [1, 2, 3]\n\
+               let out = Map.len (fold_with (fun m x -> Map.add x x m))";
     assert_fold_fallback(src, &[("out", "3")]);
 }
 
@@ -6555,7 +6559,7 @@ fn fold_local_named_folder_block_lowers_to_loop() {
     let src = "let build xs =\n  \
                  let step acc x = Map.add x (x * 2) acc\n  \
                  List.fold step Map.empty xs\n\
-               let out = Map.toList (build [1, 2, 3])";
+               let out = Map.to_list (build [1, 2, 3])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for x in xs:"), "{py}");
     assert!(py.contains("acc[x] ="), "{py}");
@@ -6569,18 +6573,18 @@ fn fold_local_named_folder_dedup_shape_lowers_to_loop() {
     // block-local tuple-accumulator folder whose arm opens a block with a plain
     // value `let k = …` (a whitelisted read of `seen` via `Map.find`), storing
     // the fresh element into the list slot.
-    let src = "type Leg = { depMin: int, dest: str }\n\
-               let dedupLegs legs =\n  \
+    let src = "type Leg = { dep_min: int, dest: str }\n\
+               let dedup_legs legs =\n  \
                  let step acc leg =\n    \
                    match acc:\n      \
                      case (seen, out):\n        \
-                       let k = f\"{leg.depMin}|{leg.dest}\"\n        \
+                       let k = f\"{leg.dep_min}|{leg.dest}\"\n        \
                        match Map.find k seen:\n          \
                          case Some _: (seen, out)\n          \
                          case None: (Map.add k True seen, List.concat out [leg])\n  \
                  match List.fold step (Map.empty, []) legs:\n    \
                    case (_, out): out\n\
-               let out = List.map (fun l -> l.depMin) (dedupLegs [Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 1, dest = \"a\" }, Leg { depMin = 2, dest = \"b\" }])";
+               let out = List.map (fun l -> l.dep_min) (dedup_legs [Leg { dep_min = 1, dest = \"a\" }, Leg { dep_min = 1, dest = \"a\" }, Leg { dep_min = 2, dest = \"b\" }])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for leg in legs:"), "{py}");
     assert!(py.contains("seen[k] = True"), "{py}");
@@ -6656,7 +6660,7 @@ fn fold_chained_map_add_updates_one_slot_inner_first() {
     // `Map.add k2 v2 (Map.add k1 v1 m)` → `m[k1]=v1` then `m[k2]=v2` — the inner
     // add is emitted first, matching the value the copy chain would build.
     let src = "let step m x = Map.add (x * 10) x (Map.add x x m)\n\
-               let out = Map.toList (List.fold step Map.empty [1, 2])";
+               let out = Map.to_list (List.fold step Map.empty [1, 2])";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
     let inner = py.find("m[x] = x").expect("inner add m[x] = x");
@@ -6700,7 +6704,7 @@ fn fold_map_remove_in_chain_lowers_to_pop() {
     // `Map.remove k (Map.add …)` → `m[…] = …` then `m.pop(k, None)` (mirrors
     // `_pf_map_remove`), inner-first.
     let src = "let step m x = Map.remove x (Map.add (x + 1) x m)\n\
-               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+               let out = Map.to_list (List.fold step Map.empty [1, 2, 3])";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
     let add = py.find("m[_pf_t0] = x").expect("inner add");
@@ -6714,7 +6718,7 @@ fn fold_set_remove_in_chain_lowers_to_discard() {
     // `Set.remove x (Set.add …)` → `s.add(…)` then `s.discard(x)` (mirrors
     // `_pf_set_remove`), inner-first.
     let src = "let step s x = Set.remove (x - 1) (Set.add x s)\n\
-               let out = Set.toList (List.fold step Set.empty [1, 2, 3])";
+               let out = Set.to_list (List.fold step Set.empty [1, 2, 3])";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
     let add = py.find("s.add(x)").expect("inner Set.add");
@@ -6737,7 +6741,7 @@ fn fold_var_init_defensive_copy_dict_list_set() {
                let lseed = []\n\
                let sseed = Set.empty\n\
                let r = List.fold step (dseed, lseed, sseed) [1, 2]\n\
-               let out = match r: case (m, l, s): (Map.toList m, l, Set.toList s)\n\
+               let out = match r: case (m, l, s): (Map.to_list m, l, Set.to_list s)\n\
                let origs = (Map.len dseed, List.len lseed, Set.len sseed)";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
@@ -6789,7 +6793,7 @@ fn fold_reject_parameterized_local_let_closure() {
     let src = "let step acc x =\n  \
                  let peek u = Map.len acc\n  \
                  Map.add x (peek 0) acc\n\
-               let out = Map.toList (List.fold step Map.empty [1, 2, 3])";
+               let out = Map.to_list (List.fold step Map.empty [1, 2, 3])";
     assert_fold_fallback(src, &[("out", "[(1, 0), (2, 1), (3, 2)]")]);
 }
 
@@ -6816,7 +6820,7 @@ fn e2e_fold_destructuring_elem_matches_fst_snd_spelling() {
     let src = "let steps = [(\"a\", 1), (\"b\", 2), (\"a\", 3)]\n\
                let slow = List.fold (fun m (p, l) -> Map.add p l m) Map.empty steps\n\
                let fast = List.fold (fun m s -> Map.add (fst s) (snd s) m) Map.empty steps\n\
-               let out = (Map.toList slow, Map.toList fast, slow == fast)";
+               let out = (Map.to_list slow, Map.to_list fast, slow == fast)";
     let py = pyfun::compile(src).unwrap();
     assert!(!py.contains("_pf_fold"), "{py}");
     run_and_check(
@@ -6828,7 +6832,7 @@ fn e2e_fold_destructuring_elem_matches_fst_snd_spelling() {
 #[test]
 fn fold_destructuring_elem_top_level_named_folder() {
     let src = "let add m (p, l) = Map.add p l m\n\
-               let out = Map.toList (List.fold add Map.empty [(1, \"x\"), (2, \"y\")])";
+               let out = Map.to_list (List.fold add Map.empty [(1, \"x\"), (2, \"y\")])";
     let py = pyfun::compile(src).unwrap();
     assert!(
         py.contains("for (p, l) in [(1, \"x\"), (2, \"y\")]:"),
@@ -6844,7 +6848,7 @@ fn fold_destructuring_elem_block_local_named_folder() {
     let src = "let build steps =\n  \
                  let add m (p, l) = Map.add p l m\n  \
                  List.fold add Map.empty steps\n\
-               let out = Map.toList (build [(1, \"x\"), (2, \"y\")])";
+               let out = Map.to_list (build [(1, \"x\"), (2, \"y\")])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for (p, l) in steps:"), "{py}");
     assert!(py.contains("m[p] = l"), "{py}");
@@ -6854,7 +6858,7 @@ fn fold_destructuring_elem_block_local_named_folder() {
 
 #[test]
 fn fold_destructuring_elem_nested_tuple() {
-    let src = "let out = Map.toList (List.fold (fun m (a, (b, c)) -> Map.add a (b + c) m) \
+    let src = "let out = Map.to_list (List.fold (fun m (a, (b, c)) -> Map.add a (b + c) m) \
                Map.empty [(\"x\", (1, 2)), (\"y\", (3, 4))])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for (a, (b, c)) in"), "{py}");
@@ -6864,7 +6868,7 @@ fn fold_destructuring_elem_nested_tuple() {
 
 #[test]
 fn fold_destructuring_elem_wildcard() {
-    let src = "let out = Set.toList (List.fold (fun s (p, _) -> Set.add p s) Set.empty \
+    let src = "let out = Set.to_list (List.fold (fun s (p, _) -> Set.add p s) Set.empty \
                [(1, \"a\"), (2, \"b\"), (1, \"c\")])";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for (p, _) in"), "{py}");
@@ -6880,7 +6884,7 @@ fn fold_destructuring_elem_tuple_accumulator() {
                  match acc:\n    \
                    case (m, ks): (Map.add k v m, List.concat ks [k])\n\
                let out = match List.fold step (Map.empty, []) [(1, \"a\"), (2, \"b\")]: \
-               case (m, ks): (Map.toList m, ks)";
+               case (m, ks): (Map.to_list m, ks)";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("for (k, v) in"), "{py}");
     assert!(py.contains("m[k] = v"), "{py}");
@@ -6895,7 +6899,7 @@ fn fold_reject_destructured_elem_name_clashes_with_enclosing_local() {
     // function's parameter, so inlining would clobber it. Fall back.
     let src = "let clash p =\n  \
                  let inner = List.fold (fun m (p, l) -> Map.add p l m) Map.empty [(1, 2)]\n  \
-                 (p, Map.toList inner)\n\
+                 (p, Map.to_list inner)\n\
                let out = clash 9";
     assert_fold_fallback(src, &[("out", "(9, [(1, 2)])")]);
 }
@@ -6905,7 +6909,7 @@ fn fold_reject_destructuring_accumulator_param_still_falls_back() {
     // The accumulator parameter is substituted by name, so destructuring it
     // (rather than matching on it in the body) still takes the safe path.
     let src = "let out = match List.fold (fun (m, n) x -> (Map.add x n m, n + 1)) \
-               (Map.empty, 0) [5, 6]: case (m, n): (Map.toList m, n)";
+               (Map.empty, 0) [5, 6]: case (m, n): (Map.to_list m, n)";
     assert_fold_fallback(src, &[("out", "([(5, 0), (6, 1)], 2)")]);
 }
 
@@ -6957,11 +6961,11 @@ fn run_source(src: &str) -> Option<String> {
 
 #[test]
 fn e2e_a_binding_named_after_an_emitted_builtin_does_not_shadow_it() {
-    // `Set.ofList` lowers to `set([…])`, so a module-level `set` binding used to
+    // `Set.of_list` lowers to `set([…])`, so a module-level `set` binding used to
     // shadow the builtin and the emitted call died with "'int' object is not
     // callable" — far from the binding that caused it.
     let out = run_source(
-        "let set = 1\nlet s = Set.ofList [\"a\"]\nprint (Set.contains \"a\" s)\nprint set",
+        "let set = 1\nlet s = Set.of_list [\"a\"]\nprint (Set.contains \"a\" s)\nprint set",
     );
     if let Some(out) = out {
         assert_eq!(out.trim(), "True\n1");
@@ -6973,7 +6977,7 @@ fn e2e_a_local_binding_named_after_a_builtin_does_not_shadow_it() {
     // Python resolves the global at call time, so a *local* binder breaks the
     // emitted call inside its own function just as a top-level one does.
     let out = run_source(
-        "let f xs =\n  let dict = 1\n  let m = Map.ofList [(\"a\", dict)]\n  Map.len m\nprint (f [])",
+        "let f xs =\n  let dict = 1\n  let m = Map.of_list [(\"a\", dict)]\n  Map.len m\nprint (f [])",
     );
     if let Some(out) = out {
         assert_eq!(out.trim(), "1");
@@ -7117,11 +7121,11 @@ fn e2e_destructuring_let_binds_every_name() {
 fn e2e_a_destructuring_let_inside_a_function_body() {
     run_and_check(
         "
-        let swapSum p =
+        let swap_sum p =
           let (a, b) = p
           let (c, d) = (b, a)
           c * 10 + d
-        let r = swapSum (1, 2)
+        let r = swap_sum (1, 2)
         ",
         &[("r", "21")],
     );
@@ -7269,7 +7273,7 @@ fn option_match_in_value_position_assigns_a_temp() {
 #[test]
 fn a_non_name_option_scrutinee_is_bound_once() {
     let py = pyfun::compile(
-        "let w xs =\n  match List.findIndex ((==) 2) xs:\n    case Some i: i\n    case other: -1",
+        "let w xs =\n  match List.find_index ((==) 2) xs:\n    case Some i: i\n    case other: -1",
     )
     .unwrap();
     assert!(py.contains("_pf_t0 = _pf_index_of(2, xs)"), "{py}");
@@ -7442,8 +7446,8 @@ fn e2e_option_ladders_and_singletons_agree_with_the_match_semantics() {
         let l = only (Some (0 - 5))
         let m = only None
         let n = Across == Across
-        let p = Set.len (Set.ofList [Across, Down, Across])
-        let q = Map.findOr Down 0 (Map.ofList [(Down, 7)])
+        let p = Set.len (Set.of_list [Across, Down, Across])
+        let q = Map.find_or Down 0 (Map.of_list [(Down, 7)])
         ",
         &[
             ("a", "big"),
@@ -7471,7 +7475,7 @@ fn e2e_slotted_records_update_compare_and_hash() {
         let p = Point { x = 1, y = 2 }
         let q = { p with x = 3 }
         let lt = p < q
-        let s = Set.len (Set.ofList [p, q, p])
+        let s = Set.len (Set.of_list [p, q, p])
         ",
         &[("q", "Point(x=3, y=2)"), ("lt", "True"), ("s", "2")],
     );
@@ -7485,7 +7489,7 @@ fn local_let_partial_application_uses_functools_partial() {
     // partial application, not a full call with one argument.
     let py = pyfun::compile(
         "
-        let addAll xs ys =
+        let add_all xs ys =
           let pair a b = a + b
           List.map (pair 10) ys
         ",
@@ -7501,10 +7505,10 @@ fn local_let_partial_application_uses_functools_partial() {
 fn e2e_local_let_partial_application_runs() {
     run_and_check(
         "
-        let addAll xs ys =
+        let add_all xs ys =
           let pair a b = a + b
           List.map (pair 10) ys
-        let r = addAll [] [1, 2]
+        let r = add_all [] [1, 2]
         ",
         &[("r", "[11, 12]")],
     );
@@ -7514,10 +7518,10 @@ fn e2e_local_let_partial_application_runs() {
 fn local_lambda_let_partial_application_uses_functools_partial() {
     // `let pair = fun a b -> …` registers the lambda's parameter count.
     let src = "
-        let addAll ys =
+        let add_all ys =
           let pair = fun a b -> a + b
           List.map (pair 10) ys
-        let r = addAll [1, 2]
+        let r = add_all [1, 2]
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("functools.partial(pair, 10)"), "{py}");
@@ -7786,8 +7790,8 @@ fn e2e_a_lookup_peephole_capture_is_renamed() {
               case Some v: v
               case None: 0
           found + v
-        let r = f (Map.ofList [(1, 5)]) 1
-        let s = f (Map.ofList [(1, 5)]) 2
+        let r = f (Map.of_list [(1, 5)]) 1
+        let s = f (Map.of_list [(1, 5)]) 2
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("if k in m:\n        _v = m[k]"), "{py}");
@@ -8525,7 +8529,7 @@ fn e2e_a_seq_let_shadowing_an_outer_name_is_renamed() {
             let n = 2
             yield n + m
           }
-        let r = f 0 |> Seq.toList
+        let r = f 0 |> Seq.to_list
         ";
     let py = pyfun::compile(src).unwrap();
     assert!(py.contains("        m = n + 1\n        _n = 2\n"), "{py}");

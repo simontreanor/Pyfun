@@ -168,7 +168,7 @@ pub enum PyStmt {
     Raise(PyExpr),
     /// `try: body except [ExcType [as name]]: handler` — a single except clause
     /// (bare when `exc_type` is `None`; binds the caught exception to `binding` when
-    /// present). Used by `String.toInt`'s total parse and by `try e` (`DESIGN.md` §6).
+    /// present). Used by `String.to_int`'s total parse and by `try e` (`DESIGN.md` §6).
     Try {
         body: Vec<PyStmt>,
         exc_type: Option<String>,

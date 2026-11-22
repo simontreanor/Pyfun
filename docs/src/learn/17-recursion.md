@@ -24,11 +24,11 @@ needs no special form either, and the order you write them in does not matter, b
 are in scope across the pair:
 
 ```pyfun
-let isEven n = if n == 0 then True else isOdd (n - 1)
-let isOdd n = if n == 0 then False else isEven (n - 1)
+let is_even n = if n == 0 then True else is_odd (n - 1)
+let is_odd n = if n == 0 then False else is_even (n - 1)
 
-print (isEven 10)
-print (isOdd 7)
+print (is_even 10)
+print (is_odd 7)
 ```
 
 ```console
@@ -40,9 +40,9 @@ How deep a recursion can go depends on its shape. When a function's recursive ca
 thing it does, and it calls itself, the compiler turns it into a loop:
 
 ```pyfun
-let countDown n acc = if n == 0 then acc else countDown (n - 1) (acc + n)
+let count_down n acc = if n == 0 then acc else count_down (n - 1) (acc + n)
 
-print (countDown 100000 0)
+print (count_down 100000 0)
 ```
 
 ```console
@@ -53,7 +53,7 @@ That is a hundred thousand levels deep and it does not overflow anything, becaus
 is the `while` loop you would have written by hand:
 
 ```python
-def countDown(n, acc):
+def count_down(n, acc):
     while True:
         if n == 0:
             return acc

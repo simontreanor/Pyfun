@@ -14,9 +14,9 @@
 //! | `let x = e` …   | `(fun x -> …) e`                                     |
 //! | `e` …           | the `let` row: the parser reads `e` as `let _ = e`   |
 //! | `return e`      | `B.return_ e`        (must be last)                  |
-//! | `return! e`     | `B.returnFrom e`     (must be last)                  |
+//! | `return! e`     | `B.return_from e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
-//! | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+//! | `yield! e` …    | `B.combine (B.yield_from e) (B.delay (fun _ -> …))`   |
 //! | `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 //! | (empty)         | `B.zero`                                             |
 //!
@@ -84,14 +84,14 @@ pub fn desugar_ce(builder: &str, items: &[CeItem], span: Span) -> Result<Expr, (
         }
         CeItem::ReturnBang(e) => {
             require_last(is_last, "`return!`", e)?;
-            Ok(call1(builder, "returnFrom", e.clone(), span))
+            Ok(call1(builder, "return_from", e.clone(), span))
         }
         CeItem::Yield(e) => {
             let y = call1(builder, "yield_", e.clone(), span);
             combined_with_rest(builder, y, rest, span)
         }
         CeItem::YieldBang(e) => {
-            let y = call1(builder, "yieldFrom", e.clone(), span);
+            let y = call1(builder, "yield_from", e.clone(), span);
             combined_with_rest(builder, y, rest, span)
         }
         CeItem::For {

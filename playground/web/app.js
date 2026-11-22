@@ -44,22 +44,22 @@ let describe m =
     return f"{name} is {age}"
   }
 
-let ada = Map.ofList [("name", "Ada"), ("age", "36")]
-let sparse = Map.ofList [("name", "Bo")]
+let ada = Map.of_list [("name", "Ada"), ("age", "36")]
+let sparse = Map.of_list [("name", "Bo")]
 
 print (describe ada)
 print (describe sparse)
 
 # \`result { }\` is the same shape where a failure carries a reason.
-let addStrings a b =
+let add_strings a b =
   result {
-    let! x = Option.toResult "not a number" (String.toInt a)
-    let! y = Option.toResult "not a number" (String.toInt b)
+    let! x = Option.to_result "not a number" (String.to_int a)
+    let! y = Option.to_result "not a number" (String.to_int b)
     return x + y
   }
 
-print (addStrings "3" "4")
-print (addStrings "3" "oops")
+print (add_strings "3" "4")
+print (add_strings "3" "oops")
 
 # \`seq { }\` lowers to a Python generator; \`async { }\` lowers to async/await.
 let counts =
@@ -69,7 +69,7 @@ let counts =
     yield 3
   }
 
-print (Seq.toList counts)
+print (Seq.to_list counts)
 
 # Try it: drop the \`return\` from the option block and read what the compiler says.
 `,
@@ -84,7 +84,7 @@ opaque type Email = str
 
 type Account = { id: UserId, email: Email, credits: int }
 
-let unwrapId u =
+let unwrap_id u =
   match u:
     case UserId s: s
 
@@ -94,7 +94,7 @@ let account = Account { id = UserId "u-1001", email = Email "ana@example.org", c
 let Account { id, credits } = account
 let (low, high) = (credits - 5, credits + 5)
 
-print (unwrapId id)
+print (unwrap_id id)
 print (f"credits between {low} and {high}")
 
 # Try it: swap \`UserId "u-1001"\` for \`Email "u-1001"\` and the compiler stops you,
@@ -109,7 +109,7 @@ type User = { name: str, age: int }
 
 # Build a decoder compositionally: \`field\` pulls one key,
 # \`map2\` combines the field decoders into the record.
-let userDecoder =
+let user_decoder =
   Decode.map2 (fun name age -> User { name = name, age = age })
     (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
@@ -118,15 +118,15 @@ let userDecoder =
 let describe r =
   match r:
     case Ok u: f"{u.name} is {u.age}"
-    case Error e: f"decode failed: {e.errorMessage}"
+    case Error e: f"decode failed: {e.error_message}"
 
 let ok      = """{"name": "ada", "age": 36}"""
 let missing = """{"name": "bob"}"""
 let wrong   = """{"name": "cy", "age": "old"}"""
 
-ok |> Decode.decodeString userDecoder |> describe |> print
-missing |> Decode.decodeString userDecoder |> describe |> print
-wrong |> Decode.decodeString userDecoder |> describe |> print
+ok |> Decode.decode_string user_decoder |> describe |> print
+missing |> Decode.decode_string user_decoder |> describe |> print
+wrong |> Decode.decode_string user_decoder |> describe |> print
 `,
   },
   {

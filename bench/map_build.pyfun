@@ -1,7 +1,7 @@
 # Map benchmark: builds a string-keyed Map inside a fold — the accumulator
 # shape the fold pass proves, so `Map.add` lowers to an in-place dict insert —
 # then hammers it with lookups. Exercises the fold-pass dict lowering,
-# `Map.find`/`Option.withDefault`, and f-string key construction.
+# `Map.find`/`Option.with_default`, and f-string key construction.
 #
 # The accumulator must stay a bare Map for the pass to fire: threading extra
 # state (e.g. an LCG seed) through a tuple slot is a known rejecting shape
@@ -19,7 +19,7 @@ let table n = List.range 0 n |> List.fold step Map.empty
 
 let m = table 500000
 
-let lookupStep acc i = acc + Option.withDefault 0 (Map.find (key (i * 3)) m)
+let lookup_step acc i = acc + Option.with_default 0 (Map.find (key (i * 3)) m)
 
-let checksum = List.range 0 500000 |> List.fold lookupStep 0
+let checksum = List.range 0 500000 |> List.fold lookup_step 0
 print (f"map_build size: {Map.len m} checksum: {checksum}")

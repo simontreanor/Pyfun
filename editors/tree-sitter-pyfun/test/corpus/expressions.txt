@@ -182,7 +182,7 @@ let chained =
 user-defined builder computation expression
 ================================================================================
 
-let maybeSum a b =
+let maybe_sum a b =
   Maybe { let! x = a
           let! y = b
           return x + y }

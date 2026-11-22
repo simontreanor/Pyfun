@@ -105,10 +105,10 @@ const PROGRAMS: &[&str] = &[
     "let grade n =\n  if n >= 90 then \"A\"\n  elif n >= 80 then \"B\"\n  else \"F\"",
     "let compose = fun f g x -> f (g x)",
     // Destructuring parameters: tuple, nested tuple, `_`, and mixed with names.
-    "let tileScore (t, sq) = t * sq",
+    "let tile_score (t, sq) = t * sq",
     "let swap (a, b) = (b, a)",
     "let nested ((a, b), c) = a + b + c",
-    "let ignoreIt _ = 42",
+    "let ignore_it _ = 42",
     "let mix a (b, c) _ = a + b + c",
     "let f = fun (a, b) -> a + b",
     "let total = List.fold (fun acc (a, b) -> acc + a * b) 0 pairs",
@@ -118,7 +118,7 @@ const PROGRAMS: &[&str] = &[
     "let explicit (Cell { letter = l }) = l",
     "let nested (Pair { left = Cell { letter } }) = letter",
     "let mixed n (Cell { letter }) _ = letter",
-    "let inTuple (a, Cell { letter }) = letter",
+    "let in_tuple (a, Cell { letter }) = letter",
     "let describe n =\n  match n:\n    case 0: \"zero\"\n    case _: \"many\"",
     // A negative integer literal pattern.
     "let sign n =\n  match n:\n    case -1: \"neg\"\n    case 0: \"zero\"\n    case _: \"pos\"",
@@ -290,26 +290,26 @@ const PROGRAMS: &[&str] = &[
     // argument; a property (`= .attr`) is read. Includes the case where the member
     // name equals the Pyfun name, which must still print the leading `.` to
     // round-trip, and must keep the method-vs-property distinction.
-    "extern readBody: a -> str = .read()",
+    "extern read_body: a -> str = .read()",
     "extern read: a -> str = .read()",
     "extern execute: a -> str -> b = .execute()",
-    "extern jsonBody: a -> b = .json()",
+    "extern json_body: a -> b = .json()",
     "extern scheme: a -> str = .scheme",
     "extern text: a -> str = .text",
     // Pinned keyword arguments on an `extern` target (`DESIGN.md` §6): a plain
     // target, a receiver-method target, multiple kwargs, and int / negative-int /
     // bool / float literal values all round-trip. The kwargs also force the `= …`
     // clause to print even when the Python name equals the Pyfun name.
-    "extern openText: str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
-    "extern writeText: a -> str -> int = .write_text(encoding=\"utf-8\")",
+    "extern open_text: str -> Seq str = builtins.open(mode=\"rt\", encoding=\"utf-8\")",
+    "extern write_text: a -> str -> int = .write_text(encoding=\"utf-8\")",
     "extern connect: str -> a = sqlite3.connect(timeout=5, check_same_thread=False)",
-    "extern gzipOpen: str -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
+    "extern gzip_open: str -> a = gzip.open(compresslevel=-1, ratio=2.5, mode=\"rt\")",
     "extern open: str -> a = open(mode=\"rt\")",
     // A `...` slot takes its value from the caller instead of the declaration, and
     // mixes freely with pinned literals on all three target forms.
-    "extern parseInt: str -> int -> int = int(base=...)",
-    "extern openText: str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)",
-    "extern writeText: a -> str -> str -> int = .write_text(encoding=...)",
+    "extern parse_int: str -> int -> int = int(base=...)",
+    "extern open_text: str -> str -> Seq str = builtins.open(mode=\"rt\", encoding=...)",
+    "extern write_text: a -> str -> str -> int = .write_text(encoding=...)",
     "extern mix: str -> int -> bool -> a = m.f(a=1, b=..., c=\"x\", d=...)",
     // Effect annotations on declared arrows (`DESIGN.md` §4): labels print back
     // as written, so single, multi, and argument-position annotations roundtrip.
@@ -321,7 +321,7 @@ const PROGRAMS: &[&str] = &[
     "extern each: (a ->{e} unit) -> List a ->{io, e} unit = mymod.each",
     "extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app",
     "type Handler = H (str ->{io} unit)",
-    "type Callbacks = { onData: str ->{io, async} unit }",
+    "type Callbacks = { on_data: str ->{io, async} unit }",
     // Interpolated strings `f"..."`: literal chunks, holes with full expressions,
     // `{{`/`}}` escapes. Printing re-escapes and reparses to the same AST.
     "let g = f\"hello {name}\"",
@@ -347,17 +347,17 @@ const PROGRAMS: &[&str] = &[
     "let g = f\"{a <= b}\"",
     // `try e` — catch an exception into a `Result` (`DESIGN.md` §6). Binds looser
     // than `+` but tighter than `|>`, so the result pipes out.
-    "let r = try (parseInt s)",
-    "let r = try parseInt s",
-    "let n = Result.withDefault 0 (try (parseInt s))",
+    "let r = try (parse_int s)",
+    "let r = try parse_int s",
+    "let n = Result.with_default 0 (try (parse_int s))",
     // String literal patterns, and a record pattern over the reserved `Exception`.
     "let f s =\n  match s:\n    case \"yes\": 1\n    case \"no\": 0\n    case _: 2",
-    "let g r =\n  match r:\n    case Ok n: n\n    case Error e: e.errorKind\n    case _: \"?\"",
-    "let h r =\n  match r:\n    case Error (Exception { errorKind = \"ValueError\" }): 1\n    case _: 0",
+    "let g r =\n  match r:\n    case Ok n: n\n    case Error e: e.error_kind\n    case _: \"?\"",
+    "let h r =\n  match r:\n    case Error (Exception { error_kind = \"ValueError\" }): 1\n    case _: 0",
     // Built-in `String` module: qualified access is the ordinary field path.
     "let g = String.concat \"a\" \"b\"",
     "let parts = String.split \",\" line",
-    "let n = String.toInt s",
+    "let n = String.to_int s",
     // In-file modules: members and qualified access.
     "module Geometry =\n    let pi = 3\n    let area r = pi * r * r",
     "module M =\n    let add a b = a + b",

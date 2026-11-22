@@ -184,14 +184,14 @@ Notice what the compiler does:
   can't be called from a `let pure`. Mark it `pure` (like `statistics.mean`) and it composes into
   pure code. An async client returns a coroutine, so its result is the `Async` type, awaited
   by `let!` in an `async { }` block: `extern fetch: str -> Async str = client.get`.
-- **Exceptions become values.** `try (parseInt s) : Result int Exception` catches whatever the
+- **Exceptions become values.** `try (parse_int s) : Result int Exception` catches whatever the
   Python side raises and hands you a `Result` to `match` on. The imperative FFI edge becomes the
-  FP error type, with `errorKind` and `errorMessage` fields.
+  FP error type, with `error_kind` and `error_message` fields.
 
 ```fsharp
-extern parseInt: str -> int = int          # Python's built-in int()
+extern parse_int: str -> int = int          # Python's built-in int()
 
-let safe s = Result.withDefault 0 (try (parseInt s))
+let safe s = Result.with_default 0 (try (parse_int s))
 print (safe "42")     # 42
 print (safe "oops")   # 0   (the ValueError was caught into an Error)
 ```
@@ -227,7 +227,7 @@ let user =
     (Decode.field "name" Decode.str)
     (Decode.field "age" Decode.int)
 
-# Decode.decodeString user : str -> Result User Exception
+# Decode.decode_string user : str -> Result User Exception
 #   good input   -> Ok (a typed User)
 #   missing/bad  -> Error (a value describing exactly what was wrong)
 ```

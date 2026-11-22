@@ -55,9 +55,9 @@ the module documentation:
 //! | `do! e` …       | `B.bind e (fun _ -> …)`   (trailing `do! e` → `e`)   |
 //! | `let x = e` …   | `(fun x -> …) e`                                     |
 //! | `return e`      | `B.return_ e`        (must be last)                  |
-//! | `return! e`     | `B.returnFrom e`     (must be last)                  |
+//! | `return! e`     | `B.return_from e`     (must be last)                  |
 //! | `yield e` …     | `B.combine (B.yield_ e) (B.delay (fun _ -> …))`      |
-//! | `yield! e` …    | `B.combine (B.yieldFrom e) (B.delay (fun _ -> …))`   |
+//! | `yield! e` …    | `B.combine (B.yield_from e) (B.delay (fun _ -> …))`   |
 //! | `for x in e: b` … | `B.combine (B.for_ e (fun x -> b)) (B.delay (fun _ -> …))` |
 //! | (empty)         | `B.zero`                                             |
 ```
@@ -92,7 +92,7 @@ The built-ins lower directly rather than through this pass, so it is worth seein
 "native" buys. Here is a small `result {}` block compiled with `pyfun compile`:
 
 ```python
-def safeDiv(a, b):
+def safe_div(a, b):
     def _pf_fn0():
         _pf_t0 = Error("div by zero") if b == 0 else Ok(a)
         if isinstance(_pf_t0, Ok):

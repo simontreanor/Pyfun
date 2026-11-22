@@ -13,18 +13,18 @@ exists and states its type; lesson 12 covers it in full. The `try` expression ru
 and catches any exception into an `Error`.
 
 ```pyfun
-extern parseInt: str -> int = int
+extern parse_int: str -> int = int
 
 let describe s =
-  match try (parseInt s):
+  match try (parse_int s):
     case Ok n: f"parsed {n}"
-    case Error e: f"failed with {e.errorKind}: {e.errorMessage}"
+    case Error e: f"failed with {e.error_kind}: {e.error_message}"
 
 print (describe "42")
 print (describe "oops")
 
-let safe = Result.withDefault 0 (try (parseInt "100"))
-let fallback = Result.withDefault 0 (try (parseInt "bad"))
+let safe = Result.with_default 0 (try (parse_int "100"))
+let fallback = Result.with_default 0 (try (parse_int "bad"))
 print safe
 print fallback
 ```
@@ -38,17 +38,17 @@ failed with ValueError: invalid literal for int() with base 10: 'oops'
 0
 ```
 
-`try (parseInt s)` has type `Result int Exception`. When `int("42")` returns cleanly you get
+`try (parse_int s)` has type `Result int Exception`. When `int("42")` returns cleanly you get
 `Ok 42`; when `int("oops")` raises, the exception is caught and delivered as `Error e`. The
-caught value is a record with two fields you can read: `e.errorKind` is the Python exception
-class name, here `ValueError`, and `e.errorMessage` is its text. Nothing escapes as a raised
+caught value is a record with two fields you can read: `e.error_kind` is the Python exception
+class name, here `ValueError`, and `e.error_message` is its text. Nothing escapes as a raised
 exception, so the failure is data you handle in the same expression. When you only want a
-default on failure, `Result.withDefault 0` gives back the `Ok` value or the fallback,
-mirroring `Option.withDefault` from lesson 3.
+default on failure, `Result.with_default 0` gives back the `Ok` value or the fallback,
+mirroring `Option.with_default` from lesson 3.
 
 ## Exercise
 
-This function tries to read a number and report the result, but it matches on `parseInt s`
+This function tries to read a number and report the result, but it matches on `parse_int s`
 directly. That call has type `int`, not `Result`, so the match does not fit. Run
 `pyfun check`:
 
@@ -56,19 +56,19 @@ directly. That call has type `int`, not `Result`, so the match does not fit. Run
 error: type mismatch: expected Result 'a 'b, found int
  --> 4:9
   |
-4 |   match parseInt s:
+4 |   match parse_int s:
   |         ^^^^^^^^^^
 ```
 
 Wrap the parse in `try` so it becomes a `Result` the match can take apart.
 
 ```pyfun
-extern parseInt: str -> int = int
+extern parse_int: str -> int = int
 
 let describe s =
-  match parseInt s:
+  match parse_int s:
     case Ok n: f"ok: {n}"
-    case Error e: f"bad: {e.errorKind}"
+    case Error e: f"bad: {e.error_kind}"
 
 print (describe "88")
 print (describe "bad")
@@ -81,23 +81,23 @@ ok: 88
 bad: ValueError
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlSW50OiBzdHIgLT4gaW50ID0gaW50CgpsZXQgZGVzY3JpYmUgcyA9CiAgbWF0Y2ggcGFyc2VJbnQgczoKICAgIGNhc2UgT2sgbjogZiJvazoge259IgogICAgY2FzZSBFcnJvciBlOiBmImJhZDoge2UuZXJyb3JLaW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=ZXh0ZXJuIHBhcnNlX2ludDogc3RyIC0-IGludCA9IGludAoKbGV0IGRlc2NyaWJlIHMgPQogIG1hdGNoIHBhcnNlX2ludCBzOgogICAgY2FzZSBPayBuOiBmIm9rOiB7bn0iCiAgICBjYXNlIEVycm9yIGU6IGYiYmFkOiB7ZS5lcnJvcl9raW5kfSIKCnByaW50IChkZXNjcmliZSAiODgiKQpwcmludCAoZGVzY3JpYmUgImJhZCIpCg)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
-extern parseInt: str -> int = int
+extern parse_int: str -> int = int
 
 let describe s =
-  match try (parseInt s):
+  match try (parse_int s):
     case Ok n: f"ok: {n}"
-    case Error e: f"bad: {e.errorKind}"
+    case Error e: f"bad: {e.error_kind}"
 
 print (describe "88")
 print (describe "bad")
 ```
 
-`try (parseInt s)` produces a `Result int Exception`, so the `Ok`/`Error` arms line up and
+`try (parse_int s)` produces a `Result int Exception`, so the `Ok`/`Error` arms line up and
 the caught `ValueError` reaches the `Error` case.
 </details>

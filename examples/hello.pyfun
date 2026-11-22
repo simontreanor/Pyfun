@@ -64,7 +64,7 @@ type Signal =
 # (`or:`) — for type-driven development. E.g.
 #     let use = String.concat ?g "!"
 # makes `pyfun check` report `note: hole ?g has type string — try: greeting — or:
-# String.upper ?, String.fromInt ?` and hover show it; `compile`/`run` refuse
+# String.upper ?, String.from_int ?` and hover show it; `compile`/`run` refuse
 # until it's filled. Fill inward from the types (and the suggested fits).
 
 # Blocks: an indented body is a sequence of statements ending in the value. They
@@ -89,7 +89,7 @@ let accumulate =
   tally 5                             # 15  (10 then +5)
 
 # A block in a `match` arm (opened after `case P:`).
-let describeSign n =
+let describe_sign n =
   match n:
     case 0: "zero"
     case _:
@@ -106,11 +106,11 @@ let answer = unwrap (Some 42)
 
 # An as-pattern (`p as x`) binds the whole matched value alongside destructuring —
 # and it's transparent to the exhaustiveness check (`Some v as w` covers Some).
-let doubleIfSome o =
+let double_if_some o =
   match o:
     case Some v as w: w
     case None: None
-let stillFortyTwo = doubleIfSome (Some 42)   # Some 42
+let still_forty_two = double_if_some (Some 42)   # Some 42
 
 let rank c =
   match c:
@@ -118,11 +118,11 @@ let rank c =
     case Green: 2
     case Blue: 3
 
-# Mutual recursion works implicitly (no `rec`/`and`): `isEven` sees `isOdd` and
+# Mutual recursion works implicitly (no `rec`/`and`): `is_even` sees `is_odd` and
 # vice versa, defined in either order.
-let isEven n = if n == 0 then True else isOdd (n - 1)
-let isOdd n = if n == 0 then False else isEven (n - 1)
-let tenEven = isEven 10               # True
+let is_even n = if n == 0 then True else is_odd (n - 1)
+let is_odd n = if n == 0 then False else is_even (n - 1)
+let ten_even = is_even 10               # True
 
 # Or-patterns: `case a | b:` matches any alternative (Python-identical). All
 # alternatives must bind the same variables (here, none).
@@ -155,22 +155,22 @@ let seven = inc2 five
 # Function composition operators: `>>` is left-to-right (f then g), `<<` is
 # right-to-left (math ∘). Tighter than `|>`, so `x |> f >> g` = `x |> (f >> g)`.
 let twice x = x * 2
-let incThenDouble = inc >> twice
-let doubleThenInc = inc << twice
-let eight = incThenDouble 3            # twice (inc 3) = 8
-let sevenC = doubleThenInc 3           # inc (twice 3) = 7
+let inc_then_double = inc >> twice
+let double_then_inc = inc << twice
+let eight = inc_then_double 3            # twice (inc 3) = 8
+let seven_c = double_then_inc 3           # inc (twice 3) = 7
 # Backward pipe `<|` applies a function to an argument (F#'s `<|`), dropping parens
 # on the right: `inc <| twice 3` = `inc (twice 3)`. Right-associative.
-let sevenB = inc <| twice 3            # inc (twice 3) = 7
+let seven_b = inc <| twice 3            # inc (twice 3) = 7
 
 # In-file modules: a namespace of `let` bindings. Members see each other
 # unqualified inside (`area` calls `square`); outside they are `Geom.member`.
 module Geom =
   let square x = x * x
   let area w h = w * h
-  let diagSq w h = square w + square h
-let floorArea = Geom.area 4 5         # 20
-let diag = Geom.diagSq 3 4            # 25
+  let diag_sq w h = square w + square h
+let floor_area = Geom.area 4 5         # 20
+let diag = Geom.diag_sq 3 4            # 25
 
 # Computation expressions (F# showcase features):
 #   result {} — railway-oriented, short-circuits on Error (built-in Ok/Error).
@@ -182,14 +182,14 @@ let checked ok v =
 
 #   option {} — the same railway over Option, for chaining lookups that may find
 #   nothing. One `case None` arm covers the whole chain instead of one per step.
-let firstTwo xs =
+let first_two xs =
   option {
     let! a = List.get 0 xs
     let! b = List.get 1 xs
     return a + b
   }
-print (firstTwo [10, 20, 30])      # Some(30)
-print (firstTwo [10])              # None_ — the emitted class name, `None` being taken in Python
+print (first_two [10, 20, 30])      # Some(30)
+print (first_two [10])              # None_ — the emitted class name, `None` being taken in Python
 
 #   seq {} — a lazy sequence, lowered to a Python generator.
 let small =
@@ -201,13 +201,13 @@ let small =
 
 #   async {} — lowered to a Python coroutine (async def / await). A coroutine must be
 #   awaited somewhere, so run one to a value with an `extern` over `asyncio.run`.
-extern runAsync: Async a -> a = asyncio.run
+extern run_async: Async a -> a = asyncio.run
 let computed =
   async {
     let! x = async { return 20 }
     return x + 1
   }
-print (runAsync computed)          # 21
+print (run_async computed)          # 21
 
 # User-defined CE builders: any in-file `module` providing `bind`/`return_` (and
 # `yield_`/`combine`/`delay`/… for sequence builders) is a builder. `Maybe { … }`
@@ -218,7 +218,7 @@ module Maybe =
       case Some x: f x
       case None: None
   let return_ x = Some x
-let addOpt a b =
+let add_opt a b =
   Maybe {
     let! x = a
     let! y = b
@@ -228,13 +228,13 @@ let addOpt a b =
 # Tuples: structural (anonymous) products, `(a, b, c)`. `()` is unit and `(x)` is
 # grouping, so a tuple has two or more elements. They lower ~1:1 to Python tuples
 # and destructure in `match` (a single variable pattern is exhaustive).
-let pairUp a b = (a, b)
+let pair_up a b = (a, b)
 let origin = (0, 0)
 let swap p =
   match p:
     case (a, b): (b, a)
 let labelled = (1, "one", True)              # (int, string, bool)
-let firstOf t =
+let first_of t =
   match t:
     case (a, _, _): a
 
@@ -273,7 +273,7 @@ let edge = cbrt 64.0<m^3>            # float<m> — 4.0, unit thirded (m^3 -> m)
 
 # Float literals support scientific notation (`1e6`, `2.5e-3`) — the exponent sign
 # is part of the literal. Physics constants read naturally, units and all:
-let lightSpeed = 3.0e8<m/s>          # float<m/s>
+let light_speed = 3.0e8<m/s>          # float<m/s>
 let planck = 6.626e-34               # float
 
 # Prefix negation `-e`: numeric and unit-preserving. It's a prefix operator (not a
@@ -288,14 +288,14 @@ let rounded = round 3.7              # 4
 # (`floor` is shadowed below by a user binding of the same name — user
 # definitions shadow prelude names — so this uses `truncate`.)
 let truncated = truncate speed       # 10   (float<m/s> -> int<m/s>, unit kept)
-# String.toFloat is a total parse (Option float), mirroring String.toInt.
-let parsedF = Option.withDefault 0.0 (String.toFloat "2.71828")  # 2.71828
+# String.to_float is a total parse (Option float), mirroring String.to_int.
+let parsed_f = Option.with_default 0.0 (String.to_float "2.71828")  # 2.71828
 
 # Exponentiation `**` is float-only, right-associative, and binds tighter than
 # unary minus (so `-2.0 ** 2.0` is `-(2.0 ** 2.0)`, like Python).
 let cube = 3.0 ** 3.0                # 27.0
 let tower = 2.0 ** 3.0 ** 2.0        # 512.0  (right-assoc: 2 ^ (3 ^ 2))
-let negPow = -2.0 ** 2.0            # -4.0   (`**` tighter than unary minus)
+let neg_pow = -2.0 ** 2.0            # -4.0   (`**` tighter than unary minus)
 
 # Numeric-literal ergonomics: `_` digit separators and 0x/0o/0b bases.
 let million = 1_000_000             # 1000000
@@ -317,24 +317,24 @@ extern pure fabs: float -> float = math.fabs
 # An async Python client returns a coroutine, so its result is the `Async`
 # type and `let!` inside an `async { }` block is where it is awaited; an
 # `->{async}` arrow that returns anything else is rejected. (Uncalled here, so
-# it erases; calling `sleepAsync` would make its caller perform `async`, so it
+# it erases; calling `sleep_async` would make its caller perform `async`, so it
 # couldn't sit inside a `let pure`.)
-extern sleepAsync: float ->{async} Async unit = asyncio.sleep
+extern sleep_async: float ->{async} Async unit = asyncio.sleep
 
 let label = show 42                  # "42"  (str(42))
 let root = fabs (0.0 - 3.0)          # 3.0   (math.fabs(-3.0))
 
 # `try e` catches a Python exception (e.g. from an `extern`) into a `Result a
 # Exception`, so the imperative FFI boundary becomes the FP error type. The
-# reserved `Exception` record exposes `errorKind` (the class name) and
-# `errorMessage`. `try` binds looser than `+` but tighter than `|>`.
-extern parseInt: str -> int = int
-let parsed42 = Result.withDefault 0 (try (parseInt "42"))    # 42
-let parsedBad = Result.withDefault 0 (try (parseInt "oops")) # 0  (ValueError caught)
-let errorKindOf s =
-  match try (parseInt s):
+# reserved `Exception` record exposes `error_kind` (the class name) and
+# `error_message`. `try` binds looser than `+` but tighter than `|>`.
+extern parse_int: str -> int = int
+let parsed42 = Result.with_default 0 (try (parse_int "42"))    # 42
+let parsed_bad = Result.with_default 0 (try (parse_int "oops")) # 0  (ValueError caught)
+let error_kind_of s =
+  match try (parse_int s):
     case Ok n: "ok"
-    case Error e: e.errorKind                                # string literal patterns
+    case Error e: e.error_kind                                # string literal patterns
 
 # Lists: the eager `List a` collection (lowers to a Python list). Literals are
 # comma-separated `[a, b, c]`. Collection functions are module-qualified
@@ -356,72 +356,72 @@ let doubled = List.map ((*) 2) ns            # [2, 4, 6, 8, 10]
 # O(1) and total (returns `Option`, so no IndexError — no `xs[0]` syntax exists);
 # `contains` is O(n) (use `Set` for O(1)); `concat` O(n+m); `sort` O(n log n);
 # `find` O(n) first-match. There's no cheap prepend — that's the linked-list non-goal.
-let third = Option.withDefault 0 (List.get 2 ns)   # 3 (0-based)
-let missing = Option.withDefault 0 (List.get 9 ns) # 0 (out of bounds -> None)
-let hasThree = List.contains 3 ns            # True
+let third = Option.with_default 0 (List.get 2 ns)   # 3 (0-based)
+let missing = Option.with_default 0 (List.get 9 ns) # 0 (out of bounds -> None)
+let has_three = List.contains 3 ns            # True
 let joined = List.concat ns [6, 7]           # [1, 2, 3, 4, 5, 6, 7]
 let ordered = List.sort [3, 1, 2]            # [1, 2, 3]
 # Derived ordering: user sum types / records / tuples compare structurally, so
 # `<` (and `List.sort`) work on them. A sum orders by variant declaration order
 # then field-by-field (Red < Green < Blue).
-let sortedColors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
-let redFirst = Red < Green                       # True
+let sorted_colors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
+let red_first = Red < Green                       # True
 # Built-in Option/Result order too: None < Some, Ok < Error (payloads orderable).
-let sortedOpts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
-let firstBig = List.find (fun x -> x > 3) ns # Some 4
+let sorted_opts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
+let first_big = List.find (fun x -> x > 3) ns # Some 4
 
 # Sets and maps lower to Python `set` / `dict`; `Map.find` returns the built-in
 # `Option`, consumed with the `Option` module.
-let uniq = Set.ofList [1, 1, 2, 3]           # {1, 2, 3}
+let uniq = Set.of_list [1, 1, 2, 3]           # {1, 2, 3}
 let scores = Map.add "ada" 10 (Map.add "alan" 9 Map.empty)
-let ada = Option.withDefault 0 (Map.find "ada" scores)   # 10
-let nobody = Option.withDefault 0 (Map.find "x" scores)  # 0
+let ada = Option.with_default 0 (Map.find "ada" scores)   # 10
+let nobody = Option.with_default 0 (Map.find "x" scores)  # 0
 
 # The `Option` module chains lookups: `bind` sequences Option-returning steps,
-# `filter` keeps a value only if it passes, `toResult` bridges to `Result`.
+# `filter` keeps a value only if it passes, `to_result` bridges to `Result`.
 let doubled = Option.bind (fun n -> Some (n * 2)) (Map.find "ada" scores)  # Some 20
-let bigScore = Option.filter (fun n -> n > 9) (Map.find "alan" scores)     # None (9 <= 9)
-let adaOrErr = Option.toResult "no ada" (Map.find "ada" scores)           # Ok 10
+let big_score = Option.filter (fun n -> n > 9) (Map.find "alan" scores)     # None (9 <= 9)
+let ada_or_err = Option.to_result "no ada" (Map.find "ada" scores)           # Ok 10
 
-# `List.zip` pairs two lists into a list of tuples; `Map.ofList` builds a map from
-# that pair list (and `Map.toList` is its inverse) — both ride on tuples.
+# `List.zip` pairs two lists into a list of tuples; `Map.of_list` builds a map from
+# that pair list (and `Map.to_list` is its inverse) — both ride on tuples.
 let names = ["ada", "alan"]
 let ages = [36, 41]
-let byName = Map.ofList (List.zip names ages)
-let adaAge = Option.withDefault 0 (Map.find "ada" byName)  # 36
-let entries = Map.toList byName               # [("ada", 36), ("alan", 41)]
+let by_name = Map.of_list (List.zip names ages)
+let ada_age = Option.with_default 0 (Map.find "ada" by_name)  # 36
+let entries = Map.to_list by_name               # [("ada", 36), ("alan", 41)]
 
 # Strings: the `String` module over the built-in `str` type. All pure; there is
-# no `char` type, so `String.toList` yields single-character strings. `String.toInt`
+# no `char` type, so `String.to_list` yields single-character strings. `String.to_int`
 # is a total parse — it returns the built-in `Option`, `None` on failure.
 let title = String.concat "Hello, " "World"   # "Hello, World"
 let loud = String.upper title                 # "HELLO, WORLD"
 let words = String.split ", " title           # ["Hello", "World"]
 let csv = String.join "," words               # "Hello,World"
-# `slice` is total Python slicing (clamps out of range); `indexOf` returns an
+# `slice` is total Python slicing (clamps out of range); `index_of` returns an
 # Option (None when absent), so neither can raise.
 let sub = String.slice 0 5 title              # "Hello"
-let commaAt = Option.withDefault (0 - 1) (String.indexOf "," title)  # 5
-let parsed = Option.withDefault 0 (String.toInt "41")   # 41
-let unparsed = Option.withDefault 0 (String.toInt "x")  # 0
+let comma_at = Option.with_default (0 - 1) (String.index_of "," title)  # 5
+let parsed = Option.with_default 0 (String.to_int "41")   # 41
+let unparsed = Option.with_default 0 (String.to_int "x")  # 0
 # Non-ASCII string literals are real UTF-8 (not one Latin-1 byte per char), so
 # `String.len "café"` is 4, not 5 — and the emitted Python is correctly encoded.
-let cafeLen = String.len "café"                # 4 (é is one character)
+let cafe_len = String.len "café"                # 4 (é is one character)
 # Escapes: \" \\ \n \t \r and Rust-style \u{HEX} (decoded to the character).
-let emojiLen = String.len "hi \u{1F600}"       # 4 ("hi " + 😀)
+let emoji_len = String.len "hi \u{1F600}"       # 4 ("hi " + 😀)
 # Raw strings `r"..."` — no escape processing, backslashes are literal (handy for
 # Windows paths and regex). `r"a\nb"` is 4 chars (a, \, n, b), not a newline.
-let winPath = r"C:\Users\pyfun"                # C:\Users\pyfun (literal backslashes)
-let rawLen = String.len r"a\nb"                # 4 (backslash and n are literal)
+let win_path = r"C:\Users\pyfun"                # C:\Users\pyfun (literal backslashes)
+let raw_len = String.len r"a\nb"                # 4 (backslash and n are literal)
 
 # String interpolation: `f"...{expr}..."` (Python-style). Holes take any full
 # expression and are stringified; `{{`/`}}` are literal braces. Lowers 1:1 to a
 # Python f-string (targets Python 3.12+).
 let who = "Ada"
-let scoreLine = f"{who} scored {parsed} ({String.upper who})"   # "Ada scored 41 (ADA)"
-let sumLine = f"{parsed} doubled is {parsed + parsed}"          # "41 doubled is 82"
+let score_line = f"{who} scored {parsed} ({String.upper who})"   # "Ada scored 41 (ADA)"
+let sum_line = f"{parsed} doubled is {parsed + parsed}"          # "41 doubled is 82"
 # Self-documenting `{expr=}` holes echo the source before the value (Python's rule):
-let debugLine = f"{parsed=}"                                    # "parsed=41"
+let debug_line = f"{parsed=}"                                    # "parsed=41"
 # Triple-quoted strings span lines (newlines and lone quotes are literal content;
 # escapes still process): plain `"""..."""`, interpolated `f"""..."""` (holes as
 # usual), and raw `r"""..."""` (backslashes literal too).
@@ -430,7 +430,7 @@ a "quoted" word"""
 let summary = f"""who: {who}
 score: {parsed}"""
 # Raw triple-quoted `r"""..."""`: spans lines AND leaves backslashes literal.
-let rawBlock = r"""C:\logs
+let raw_block = r"""C:\logs
 a\tb"""                                # backslashes + newline all literal
 
 # Prelude builtins (`print`, `abs`/`min`/`max`) make results observable:
@@ -440,28 +440,28 @@ a\tb"""                                # backslashes + newline all literal
 # printed numbers are plain Python numbers.
 print answer                         # 42
 print dropped                        # None  (ignore : 'a -> unit)
-print stillFortyTwo                   # Some(42)  (as-pattern binds the whole value)
-print tenEven                          # True  (mutual recursion: isEven/isOdd)
+print still_forty_two                   # Some(42)  (as-pattern binds the whole value)
+print ten_even                          # True  (mutual recursion: is_even/is_odd)
 print (fact 5)                       # 120  (recursive)
 print seven                          # 7
 print eight                          # 8   (inc >> twice)
-print sevenC                         # 7   (inc << twice)
-print sevenB                         # 7   (inc <| twice 3, backward pipe)
+print seven_c                         # 7   (inc << twice)
+print seven_b                         # 7   (inc <| twice 3, backward pipe)
 print (rank Green)                   # 2
 print floor                          # 20
 print speed                          # 10.0  (true division)
 print trip                           # 25    (floor division)
 print leftover                       # 10    (modulo, unit-preserving)
-print lightSpeed                     # 300000000.0  (scientific notation, unit erased)
+print light_speed                     # 300000000.0  (scientific notation, unit erased)
 print planck                         # 6.626e-34    (scientific notation)
 print rounded                        # 4     (round, float -> int)
 print truncated                      # 10    (truncate, unit-preserving)
 print side                           # 4.0   (unit-aware sqrt: float<m^2> -> float<m>)
 print edge                           # 4.0   (unit-aware cbrt: float<m^3> -> float<m>)
-print parsedF                        # 2.71828  (String.toFloat)
+print parsed_f                        # 2.71828  (String.to_float)
 print cube                            # 27.0  (exponentiation)
 print tower                           # 512.0  (right-associative `**`)
-print negPow                          # -4.0  (`**` binds tighter than unary minus)
+print neg_pow                          # -4.0  (`**` binds tighter than unary minus)
 print million                         # 1000000  (digit separators)
 print mask                            # 255      (0xFF)
 print stress                         # 5.0   (derived-measure alias, erased)
@@ -525,13 +525,13 @@ let shape xs =
     case []: "empty"
     case [only]: "one"
     case [a, *mid, z]: "first and last, some middle"
-let lastOf xs =
+let last_of xs =
   match xs:
     case []: 0
     case [*init, last]: last
 print (shape [1, 2, 3, 4])            # first and last, some middle
 print (shape [7])                     # one
-print (lastOf [10, 20, 30])           # 30  (non-last star: [*init, last])
+print (last_of [10, 20, 30])           # 30  (non-last star: [*init, last])
 
 # Externs in action (call out to Python's str / math.fabs).
 print label                           # 42
@@ -539,8 +539,8 @@ print root                            # 3.0
 
 # `try` in action: recover a default, and read the caught exception's kind.
 print parsed42                        # 42
-print parsedBad                       # 0    (try caught the ValueError)
-print (errorKindOf "nope")            # ValueError
+print parsed_bad                       # 0    (try caught the ValueError)
+print (error_kind_of "nope")            # ValueError
 
 # Lists in action.
 print squares                         # [1, 4, 9, 16, 25]
@@ -550,22 +550,22 @@ print count                           # 5
 print product                         # 120                  (`(*)` section)
 print doubled                         # [2, 4, 6, 8, 10]     (`(*) 2` section)
 print third                           # 3    (List.get, O(1), total via Option)
-print hasThree                        # True (List.contains, O(n))
+print has_three                        # True (List.contains, O(n))
 print joined                          # [1, 2, 3, 4, 5, 6, 7]  (List.concat)
 print ordered                         # [1, 2, 3]  (List.sort, O(n log n))
-print sortedColors                    # [Red, Green, Blue]  (derived ADT ordering)
-print sortedOpts                      # [None_, Some(1), Some(3)]  (Option orders)
-print redFirst                        # True
-print firstBig                        # Some(4)  (List.find, first match)
+print sorted_colors                    # [Red, Green, Blue]  (derived ADT ordering)
+print sorted_opts                      # [None_, Some(1), Some(3)]  (Option orders)
+print red_first                        # True
+print first_big                        # Some(4)  (List.find, first match)
 
 # Sets, maps, and options in action.
 print (Set.len uniq)                  # 3
 print ada                             # 10
 print nobody                          # 0
 print doubled                         # Some(20)  (Option.bind)
-print bigScore                        # None_     (Option.filter, 9 <= 9)
-print adaOrErr                        # Ok(10)    (Option.toResult)
-print adaAge                          # 36   (zip -> Map.ofList -> find)
+print big_score                        # None_     (Option.filter, 9 <= 9)
+print ada_or_err                        # Ok(10)    (Option.to_result)
+print ada_age                          # 36   (zip -> Map.of_list -> find)
 print entries                         # [('ada', 36), ('alan', 41)]
 
 # Strings in action.
@@ -573,29 +573,29 @@ print loud                            # HELLO, WORLD
 print words                           # ['Hello', 'World']
 print csv                             # Hello,World
 print sub                             # Hello  (String.slice, total)
-print commaAt                         # 5      (String.indexOf -> Option int)
+print comma_at                         # 5      (String.index_of -> Option int)
 print (String.len title)             # 12
 print parsed                          # 41   (total parse of "41")
-print unparsed                        # 0    (String.toInt "x" -> None)
-print cafeLen                         # 4    (UTF-8 "café" is 4 characters)
-print emojiLen                        # 4    (\u{1F600} is one character)
-print winPath                         # C:\Users\pyfun   (raw string)
-print rawLen                          # 4    (r"a\nb" is 4 literal characters)
-print scoreLine                       # Ada scored 41 (ADA)   (f-string)
-print sumLine                         # 41 doubled is 82
-print debugLine                       # parsed=41             (f-string `{x=}`)
+print unparsed                        # 0    (String.to_int "x" -> None)
+print cafe_len                         # 4    (UTF-8 "café" is 4 characters)
+print emoji_len                        # 4    (\u{1F600} is one character)
+print win_path                         # C:\Users\pyfun   (raw string)
+print raw_len                          # 4    (r"a\nb" is 4 literal characters)
+print score_line                       # Ada scored 41 (ADA)   (f-string)
+print sum_line                         # 41 doubled is 82
+print debug_line                       # parsed=41             (f-string `{x=}`)
 print banner                          # two lines: == pyfun == / a "quoted" word
 print summary                         # two lines: who: Ada / score: 41
-print (String.len rawBlock)           # 12   (r""" — backslashes/tab-escape are literal chars)
+print (String.len raw_block)           # 12   (r""" — backslashes/tab-escape are literal chars)
 
 # In-file module members.
-print floorArea                       # 20
+print floor_area                       # 20
 print diag                            # 25
 
 # A block-bodied `match` arm.
-print (describeSign 0)                # zero
-print (describeSign 7)                # positive
-print (describeSign (0 - 3))          # negative
+print (describe_sign 0)                # zero
+print (describe_sign 7)                # positive
+print (describe_sign (0 - 3))          # negative
 
 # Or-patterns, guards, and `elif`.
 print (size 2)                        # small  (or-pattern 1 | 2 | 3)
@@ -607,14 +607,14 @@ print (grade 83)                      # B
 print (grade 68)                      # F
 
 # A user-defined computation expression (the Maybe monad).
-print (addOpt (Some 3) (Some 4))      # Some(7)
-print (addOpt (Some 3) None)          # None_  (short-circuits)
+print (add_opt (Some 3) (Some 4))      # Some(7)
+print (add_opt (Some 3) None)          # None_  (short-circuits)
 
 # Tuples: construction, destructuring, and the Python tuple they become.
-print (pairUp 1 2)                     # (1, 2)
+print (pair_up 1 2)                     # (1, 2)
 print origin                          # (0, 0)
 print (swap (1, 2))                   # (2, 1)
-print (firstOf labelled)              # 1
+print (first_of labelled)              # 1
 
 # Active patterns (DESIGN.md 7.2.1): named recognizers whose cases are matched
 # like constructors. A total pattern (|A|B|) is a closed case set, so its match
@@ -633,7 +633,7 @@ let clamped n =
     case _: 0
 
 let (|Blank|_|) s = String.strip s == ""
-let lineKind s =
+let line_kind s =
   match s:
     case Blank: "empty"
     case _: "text"
@@ -642,5 +642,5 @@ print (parity 4)                      # even
 print (parity 7)                      # odd
 print (clamped 9)                     # 9
 print (clamped (0 - 5))               # 0
-print (lineKind "   ")                # empty
-print (lineKind "hi")                 # text
+print (line_kind "   ")                # empty
+print (line_kind "hi")                 # text

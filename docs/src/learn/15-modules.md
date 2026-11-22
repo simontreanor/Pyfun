@@ -9,10 +9,10 @@ outside you reach them qualified as `Module.member`.
 module Geom =
   let square x = x * x
   let area w h = w * h
-  let diagSq w h = square w + square h
+  let diag_sq w h = square w + square h
 
 print (Geom.area 4 5)
-print (Geom.diagSq 3 4)
+print (Geom.diag_sq 3 4)
 ```
 
 ```console
@@ -20,7 +20,7 @@ print (Geom.diagSq 3 4)
 25
 ```
 
-`diagSq` calls `square` directly because they share the module. From the top level you write
+`diag_sq` calls `square` directly because they share the module. From the top level you write
 `Geom.area`, which reads like `math.sqrt` does in Python. This grouping is purely organizational, so
 an in-file module runs anywhere Pyfun runs, including the playground.
 
@@ -37,8 +37,8 @@ let nine = Geometry.square 3
 let widen = Geometry.area 10
 let strip = widen 2
 
-let hit = Store.lookup 1 |> Option.withDefault 0
-let miss = Store.lookup 9 |> Option.withDefault 0
+let hit = Store.lookup 1 |> Option.with_default 0
+let miss = Store.lookup 9 |> Option.with_default 0
 
 print floor
 print nine
@@ -120,14 +120,14 @@ longer forces the two into a single file.
 ## Exercise
 
 Here is a flat program with two temperature conversions. Group both functions into an in-file module
-called `Temp`, then call them qualified as `Temp.cToF` and `Temp.fToC`. The output stays the same.
+called `Temp`, then call them qualified as `Temp.c_to_f` and `Temp.f_to_c`. The output stays the same.
 
 ```pyfun
-let cToF c = c * 9 // 5 + 32
-let fToC f = (f - 32) * 5 // 9
+let c_to_f c = c * 9 // 5 + 32
+let f_to_c f = (f - 32) * 5 // 9
 
-print (cToF 100)
-print (fToC 212)
+print (c_to_f 100)
+print (f_to_c 212)
 ```
 
 Expected output:
@@ -137,18 +137,18 @@ Expected output:
 100
 ```
 
-[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGNUb0YgYyA9IGMgKiA5IC8vIDUgKyAzMgpsZXQgZlRvQyBmID0gKGYgLSAzMikgKiA1IC8vIDkKCnByaW50IChjVG9GIDEwMCkKcHJpbnQgKGZUb0MgMjEyKQo)
+[Open in the playground](https://simontreanor.github.io/Pyfun/playground/#code=bGV0IGNfdG9fZiBjID0gYyAqIDkgLy8gNSArIDMyCmxldCBmX3RvX2MgZiA9IChmIC0gMzIpICogNSAvLyA5CgpwcmludCAoY190b19mIDEwMCkKcHJpbnQgKGZfdG9fYyAyMTIpCg)
 
 <details>
 <summary>Show solution</summary>
 
 ```pyfun
 module Temp =
-  let cToF c = c * 9 // 5 + 32
-  let fToC f = (f - 32) * 5 // 9
+  let c_to_f c = c * 9 // 5 + 32
+  let f_to_c f = (f - 32) * 5 // 9
 
-print (Temp.cToF 100)
-print (Temp.fToC 212)
+print (Temp.c_to_f 100)
+print (Temp.f_to_c 212)
 ```
 
 The two functions now live under `Temp`, and the call sites qualify them. As a take-home step, move

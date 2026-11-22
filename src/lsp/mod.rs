@@ -1849,8 +1849,8 @@ let n = max 1",
         let items = out[0].get("result").unwrap().as_array().unwrap();
         let item = items
             .iter()
-            .find(|i| i.get("label").and_then(Json::as_str) == Some("List.updateAt"))
-            .expect("List.updateAt should be offered");
+            .find(|i| i.get("label").and_then(Json::as_str) == Some("List.update_at"))
+            .expect("List.update_at should be offered");
         let detail = item.get("detail").and_then(Json::as_str).unwrap();
         assert!(
             detail.starts_with("int -> 'a ->") && detail.ends_with("-> List 'a"),

@@ -12,16 +12,16 @@ extern type Response
 extern type Bytes
 extern import urllib.request
 extern urlopen: str -> Response = urllib.request.urlopen
-extern readBody: Response -> Bytes = .read()                 # resp.read() — a method
+extern read_body: Response -> Bytes = .read()                 # resp.read() — a method
 extern decode: Bytes -> str -> str = codecs.decode
 
 # `fetch` calls `io` externs, so it is inferred `io`; `try` makes a bad URL an `Error`.
-let fetch url = try (decode (readBody (urlopen url)) "utf-8")
+let fetch url = try (decode (read_body (urlopen url)) "utf-8")
 
 let describe r =
   match r:
     case Ok body: f"ok: {body}"
-    case Error e: f"failed: {e.errorKind}"
+    case Error e: f"failed: {e.error_kind}"
 
 print (describe (fetch "data:text/plain,hello%20pyfun"))   # ok: hello pyfun
 print (describe (fetch "://malformed"))                    # failed: ValueError
@@ -45,5 +45,5 @@ print (f"{scheme u} {path u}")                             # https /data.json
 # instance (`httpx.AsyncClient()`), so `get` binds as an instance-access extern
 # on it. Uncalled here.
 extern type AsyncClient
-extern newAsyncClient: unit -> AsyncClient = httpx.AsyncClient
-extern getAsync: AsyncClient -> str ->{async} Async Response = .get
+extern new_async_client: unit -> AsyncClient = httpx.AsyncClient
+extern get_async: AsyncClient -> str ->{async} Async Response = .get
