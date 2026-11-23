@@ -150,6 +150,20 @@
 					<key>name</key>
 					<string>keyword.declaration.pyfun</string>
 				</dict>
+				<dict>
+					<key>captures</key>
+					<dict>
+						<key>1</key>
+						<dict>
+							<key>name</key>
+							<string>keyword.declaration.pyfun</string>
+						</dict>
+					</dict>
+					<key>comment</key>
+					<string>`from Geometry import area`: `from` is a keyword only at the head of that statement, ahead of a module name, so a value called `from` is left alone.</string>
+					<key>match</key>
+					<string>^\s*(from)(?=\s+[A-Z][A-Za-z0-9_]*\s+import\b)</string>
+				</dict>
 			</array>
 		</dict>
 		<key>keywords</key>

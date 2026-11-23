@@ -340,6 +340,10 @@ pub fn lower_in_project_tracing(
 ) -> Result<LoweredModule, LowerError> {
     // As in the single-file path, with the imported newtypes' qualified
     // constructors (`Ids.UserId`) beside this module's own.
+    // A name brought in by `from Module import name` lowers as the
+    // `Module.name` it stands for (`DESIGN.md` §6.1).
+    let expanded = crate::from_imports::expand(module);
+    let module: &Module = &expanded;
     let mut newtypes = local_newtypes(module);
     newtypes.extend(ctx.newtype_ctors.iter().cloned());
     let module = &newtype_patterns::erase(module, &newtypes);

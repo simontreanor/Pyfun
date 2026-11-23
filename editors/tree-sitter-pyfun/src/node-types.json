@@ -2566,6 +2566,20 @@
             "named": true
           }
         ]
+      },
+      "name": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "constructor_identifier",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
       }
     }
   },
@@ -5073,6 +5087,10 @@
   {
     "type": "float",
     "named": true
+  },
+  {
+    "type": "from",
+    "named": false
   },
   {
     "type": "fun",

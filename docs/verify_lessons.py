@@ -133,7 +133,7 @@ for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):
         if sol_m and norm(block) == norm(sol_m.group(1)):
             continue
         deliberate = "?" in re.sub(r'"[^"]*"', "", block)  # holes outside strings
-        if re.search(r"^import [A-Z]", block, re.MULTILINE):
+        if re.search(r"^(?:import|from) [A-Z]", block, re.MULTILINE):
             continue  # file-based module example: cannot compile as a lone temp file
         proc = run_pyfun("check", block)
         if proc.returncode != 0 and not deliberate:

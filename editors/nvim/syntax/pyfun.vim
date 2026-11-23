@@ -8,6 +8,8 @@ endif
 
 " Declarations and control flow
 syn keyword pyfunDeclaration let mut pure type opaque measure module extern import fun
+" `from` is a keyword only at the head of `from Module import ...`.
+syn match pyfunDeclaration /^\s*from\ze\s\+\u\w*\s\+import\>/
 syn keyword pyfunConditional if then elif else
 syn keyword pyfunKeyword match case with do try as return yield
 syn keyword pyfunOperatorWord and or not

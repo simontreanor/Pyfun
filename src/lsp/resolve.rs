@@ -121,12 +121,17 @@ pub fn definitions(module: &Module) -> Vec<Symbol> {
                     }
                 }
             }
-            // An imported module appears in the outline under its name.
-            Item::Import { name, span } => out.push(Symbol {
-                name: name.clone(),
-                span: span.span(),
-                kind: SymbolKind::Module,
-            }),
+            // An imported module appears in the outline under its name. A
+            // `from` import binds the names it lists and not the module.
+            Item::Import { name, span, names } => {
+                if names.is_empty() {
+                    out.push(Symbol {
+                        name: name.clone(),
+                        span: span.span(),
+                        kind: SymbolKind::Module,
+                    });
+                }
+            }
             // An `extern import` binds no Pyfun name — nothing to navigate to.
             Item::ExternImport { .. } => {}
             // An active pattern's cases behave like constructors — each appears
@@ -253,7 +258,23 @@ pub fn mentioned_modules(module: &Module) -> std::collections::HashSet<String> {
 
 /// Walk the whole module, collecting references and local binder spans.
 fn walk(module: &Module) -> Resolver {
+    // A name brought in by `from Module import name` is read as the
+    // `Module.name` it stands for, so it navigates across files like one.
+    let expanded = crate::from_imports::expand(module);
+    let module: &Module = &expanded;
     let mut r = Resolver::default();
+    // Each name in a `from` import's list is itself a reference to that member.
+    for item in &module.items {
+        if let Item::Import { name, names, .. } = item {
+            for imported in names {
+                r.quals.push(QualRef {
+                    module: name.clone(),
+                    member: imported.name.clone(),
+                    span: imported.span.span(),
+                });
+            }
+        }
+    }
     // Constructor names first: a record-shaped literal or pattern tagged with
     // one (`Rect { width = 2.0 }`) is a use of the constructor, not of a type.
     for item in &module.items {

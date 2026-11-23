@@ -1380,8 +1380,22 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   parses (as an ordinary top-level item), pretty-prints, and round-trips; it is a no-op in single-file
   checking and lowering until the multi-file driver resolves it. (Enforcing "imports before
   other items" is left to that driver, matching the cross-file declare-before-use rule.)
-  `from X import y` / `open` (unqualified import) are **deferred** (`open`-everything maps to Python's
-  discouraged `import *`).
+  `open` (import everything, unqualified) is **not offered**: it maps to Python's discouraged
+  `import *`.
+- **`from Geometry import area, Circle`: names written bare.** The statement is Python's and follows it
+  strictly. It binds the names it lists (values, constructors, record tags; a type name may be listed
+  too, though a type is already one flat namespace across the project) and nothing else: the module
+  itself is not bound, so `Geometry.pi` still needs `import Geometry`, and the two lines can stand
+  together. There is no `import *`, which would bring in names the file never shows. A local binder of
+  the same name (a parameter, a `let`, a pattern variable) shadows the import, as in Python; a
+  top-level definition of the same name is an error, as is the same name from two modules, since one
+  name means one thing in a file. A listed name the module does not have is an error, and one nothing
+  uses is a warning. `from` is a keyword only at the head of this statement, ahead of a module name.
+It is a rewrite ahead of everything else (`from_imports.rs`): each bare use becomes the `Geometry.area`
+  it stands for, at the same span, so the checker, the lowering and the editor see a program written
+  out in full. The emitted Python is therefore the same as for the qualified form, `import geometry`
+  and `geometry.area(...)`, and go-to-definition, find-references and rename follow a bare name to its
+  module.
 - **Parallel `.py` output.** Each `foo.pyfun` compiles to a sibling `foo.py` with a real `import`; member
   names stay **un-mangled** (`area`, not `Geometry_area` — the mangling is an in-file-module workaround we
   drop here), and a cross-module reference `Geometry.area` lowers to Python `geometry.area`. This matches
@@ -1556,8 +1570,8 @@ keeps the in-file behaviour. The **project-wide LSP cache** is described in `INT
 (decided not to build):** visibility (`pub`) — Pyfun is all-public by design, the Python-natural model,
 so enforced visibility would fight the ethos; and **TCO** — CPython has none and the `List`/`Seq`
 combinators are the stack-safe path, so deep self-recursion matching hand-written Python's
-`RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** `from X import y` / `open`;
-nested/dotted packages & multi-word stem naming; de-duplicated `_pf_*` runtime.
+`RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** nested/dotted packages;
+de-duplicated `_pf_*` runtime.
 
 ### 6.2 Façade packages: `pyfun.toml`, `pyfun add`, `pyfun install`
 

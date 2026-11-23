@@ -2417,9 +2417,13 @@ fn unused_imports(
         .collect();
     let mut out = Vec::new();
     for item in &module.items {
-        let Item::Import { name, span } = item else {
+        let Item::Import { name, span, names } = item else {
             continue;
         };
+        // A `from` import is used name by name ([`from_import_problems`]).
+        if !names.is_empty() {
+            continue;
+        }
         // An import that did not resolve has its own error.
         let Some(exports) = imports.get(name) else {
             continue;
@@ -2521,6 +2525,13 @@ fn run_inner(
     missing_cases: &mut Vec<MissingCases>,
 ) -> RunResult {
     let mut errors = Vec::new();
+    // `from Module import name`: the file is checked as it reads with each such
+    // name written out as `Module.name` (`DESIGN.md` §6.1).
+    let written = module;
+    let expanded = crate::from_imports::expand(module);
+    let module: &Module = &expanded;
+    let (from_errors, from_unused) = from_import_problems(written, imports);
+    errors.extend(from_errors);
     // `build_decls` registers imported type *names* mid-way through, so a local
     // `type` declaration can be written in terms of an imported type; it hands back
     // the names it accepted for the body merge below.
@@ -2888,6 +2899,7 @@ fn run_inner(
     let mut warnings = std::mem::take(&mut inf.warnings);
     *missing_cases = std::mem::take(&mut inf.missing_cases);
     warnings.extend(unused_imports(module, imports, &inf.touched_records));
+    warnings.extend(from_unused);
     warnings.extend(crate::lint::lint(module, !holes.is_empty()));
     warnings.sort_by_key(|w| (w.span.start, w.span.end));
 
@@ -3957,6 +3969,63 @@ fn seed_task_prelude(env: &mut Env) {
         "Test.fail".to_string(),
         scheme(vec![0], vec![], pf(Ty::Str, a())),
     );
+}
+
+/// The errors and warnings of a file's `from` imports: what
+/// [`crate::from_imports::report`] reads off the file alone, and each listed
+/// name the module turns out not to have.
+fn from_import_problems(
+    module: &Module,
+    imports: &HashMap<String, ModuleExports>,
+) -> (Vec<TypeError>, Vec<Warning>) {
+    let report = crate::from_imports::report(module);
+    let mut errors: Vec<TypeError> = report
+        .errors
+        .into_iter()
+        .map(|p| TypeError {
+            message: p.message,
+            span: p.span,
+        })
+        .collect();
+    let mut missing: HashSet<Span> = HashSet::new();
+    for item in &module.items {
+        let Item::Import { name, names, .. } = item else {
+            continue;
+        };
+        // An import that did not resolve has its own error.
+        let Some(exports) = imports.get(name) else {
+            continue;
+        };
+        for imported in names {
+            let n = &imported.name;
+            let has = exports.schemes.contains_key(n)
+                || exports
+                    .types
+                    .iter()
+                    .any(|t| &t.name == n || t.ctors.iter().any(|(c, _)| c == n))
+                || exports.records.iter().any(|r| &r.name == n)
+                || exports.opaques.iter().any(|o| &o.name == n)
+                || exports.newtypes.contains(n);
+            if !has {
+                missing.insert(imported.span.span());
+                errors.push(TypeError {
+                    message: format!("module `{name}` has no `{n}` to import"),
+                    span: imported.span.span(),
+                });
+            }
+        }
+    }
+    let warnings = report
+        .unused
+        .into_iter()
+        .filter(|p| !missing.contains(&p.span))
+        .map(|p| Warning {
+            message: p.message,
+            span: p.span,
+            kind: WarningKind::UnusedImport,
+        })
+        .collect();
+    (errors, warnings)
 }
 
 /// Whether `name` is a test: a top-level function whose name opens with
