@@ -68,6 +68,11 @@
           "comment": "Other binding/declaration keywords (benign). `import` brings in a module (§6.1) and `as` names an as-pattern.",
           "match": "\\b(fun|type|opaque|measure|module|import|as)\\b",
           "name": "keyword.declaration.pyfun"
+        },
+        {
+          "comment": "`from Geometry import area`: `from` is a keyword only at the head of that statement, ahead of a module name, so a value called `from` is left alone.",
+          "match": "^\\s*(from)(?=\\s+[A-Z][A-Za-z0-9_]*\\s+import\\b)",
+          "captures": { "1": { "name": "keyword.declaration.pyfun" } }
         }
       ]
     },

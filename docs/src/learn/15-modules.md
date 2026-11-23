@@ -74,6 +74,31 @@ A cross-module call lowers to plain Python attribute access like `geometry.area(
 projects need the installed compiler on disk, since the playground runs a single source at a time.
 For practice there, an in-file `module` gives you the same qualified-use experience.
 
+## Asking for names
+
+Writing `Geometry.` in front of every use is clear, and it gets long when one file leans on a few
+functions all the time. You can ask the module for those names and then write them bare:
+
+```pyfun
+from Geometry import area, square
+
+let floor = area 4 5
+let nine = square 3
+
+print floor
+print nine
+```
+
+This is Python's statement and it does what Python's does. It brings in the names you list and
+nothing more, so `Geometry.pi` would still need its own `import Geometry` line. You can have both
+lines in one file.
+
+A name of your own wins inside the place where you bind it. In `let double area = area * 2` the
+`area` is the parameter. At the top of the file a name means one thing, so defining your own `area`
+beside the import is an error, and the message tells you which two met.
+
+The Python that comes out is the same either way: `import geometry`, then `geometry.area(4, 5)`.
+
 ## Types cross too
 
 Functions are the obvious thing to share, but the types themselves cross a module boundary as well,

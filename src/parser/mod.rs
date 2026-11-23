@@ -38,9 +38,9 @@ pub mod ast;
 use crate::lexer::{FStrPart, Span, Tok, Token};
 use ast::{
     ActivePatternDecl, ApCase, BinOp, BlockStmt, CeBuilder, CeItem, CollectionForm, Expr, ExprKind,
-    ExternArg, ExternDecl, FieldDecl, FieldInit, FieldPattern, FieldUpdate, InterpPart, Item,
-    LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, Receiver, TypeDecl, TypeDeclKind,
-    TypeExpr, UnOp, UnitExpr, VariantDecl,
+    ExternArg, ExternDecl, FieldDecl, FieldInit, FieldPattern, FieldUpdate, ImportedName,
+    InterpPart, Item, LetBinding, MatchArm, Module, NodeSpan, Param, Pattern, Receiver, TypeDecl,
+    TypeDeclKind, TypeExpr, UnOp, UnitExpr, VariantDecl,
 };
 
 /// An error produced during parsing.
@@ -467,7 +467,12 @@ impl Parser {
                         .to_string(),
                 );
             }
-            "from" if line().any(|t| matches!(t, Tok::Import)) => {
+            // `from Geometry import area` is Pyfun's own; a lowercase module
+            // is Python's.
+            "from"
+                if line().any(|t| matches!(t, Tok::Import))
+                    && !matches!(self.peek2(), Tok::Ident(module) if is_upper(module)) =>
+            {
                 return at("a Python module is bound at the boundary: write \
                      `extern import module`, then a typed `extern name: … = module.name` \
                      for each function you call"
@@ -549,6 +554,15 @@ impl Parser {
             Tok::Extern => Ok(Item::Extern(self.parse_extern()?)),
             Tok::Module => self.parse_module_item(),
             Tok::Import => self.parse_import(),
+            // `from Name import a, B`. `from` is a keyword only here, ahead of
+            // a module name and `import`.
+            Tok::Ident(word)
+                if word == "from"
+                    && matches!(self.peek2(), Tok::Ident(module) if is_upper(module))
+                    && *self.peek3() == Tok::Import =>
+            {
+                self.parse_from_import()
+            }
             // `let (|…` opens an active-pattern definition (`DESIGN.md` §7.2): an
             // `(` immediately after `let` is unambiguous, since a binding name is
             // an identifier or `_`.
@@ -615,7 +629,43 @@ impl Parser {
         }
         let name = self.parse_upper_ident("an imported module name")?;
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
-        Ok(Item::Import { name, span })
+        Ok(Item::Import {
+            name,
+            span,
+            names: Vec::new(),
+        })
+    }
+
+    /// `from Name import a, B`: the names a module is asked for, each then
+    /// written bare (`DESIGN.md` §6.1).
+    fn parse_from_import(&mut self) -> Result<Item, ParseError> {
+        let start = self.cur_start();
+        self.bump(); // `from`
+        let name = self.parse_upper_ident("an imported module name")?;
+        self.expect(&Tok::Import, "`import`")?;
+        if matches!(self.peek(), Tok::Star) {
+            return Err(ParseError {
+                message: format!(
+                    "name what you import (`from {name} import area, Circle`): `*` would \
+                     bring in names this file never shows"
+                ),
+                span: self.span(),
+            });
+        }
+        let mut names = Vec::new();
+        loop {
+            let at = self.cur_start();
+            let imported = self.parse_ident("a name to import")?;
+            names.push(ImportedName {
+                name: imported,
+                span: NodeSpan::new(Span::new(at, self.prev_end())),
+            });
+            if !self.eat(&Tok::Comma) {
+                break;
+            }
+        }
+        let span = NodeSpan::new(Span::new(start, self.prev_end()));
+        Ok(Item::Import { name, span, names })
     }
 
     fn parse_measure(&mut self) -> Result<Item, ParseError> {

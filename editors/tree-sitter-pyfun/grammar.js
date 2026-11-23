@@ -184,9 +184,18 @@ module.exports = grammar({
       field('body', $._block),
     ),
 
-    import_declaration: $ => seq(
-      'import',
-      field('module', $._module_identifier),
+    // `import Geometry`, or `from Geometry import area, Circle`.
+    import_declaration: $ => choice(
+      seq(
+        'import',
+        field('module', $._module_identifier),
+      ),
+      seq(
+        'from',
+        field('module', $._module_identifier),
+        'import',
+        sep1(field('name', choice($.identifier, $.constructor_identifier)), ','),
+      ),
     ),
 
     extern_import_declaration: $ => seq(

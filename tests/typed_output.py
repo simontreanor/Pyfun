@@ -173,7 +173,7 @@ def corpus():
             yield f"lesson_{md.stem[:2]}_{i}", block
     for path in sorted((REPO / "examples").rglob("*.pyfun")):
         text = path.read_text(encoding="utf-8")
-        if re.search(r"^import [A-Z]", text, re.MULTILINE):
+        if re.search(r"^(?:import|from) [A-Z]", text, re.MULTILINE):
             continue
         name = "_".join(path.relative_to(REPO / "examples").with_suffix("").parts)
         yield "ex_" + re.sub(r"\W", "_", name), text

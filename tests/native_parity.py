@@ -57,7 +57,7 @@ def corpus(work: Path):
     """(name, path) for every program to compare; lesson blocks are written out."""
     for md in sorted(LEARN.glob("[0-9][0-9]-*.md")):
         for i, block in enumerate(BLOCK_RE.findall(md.read_text(encoding="utf-8"))):
-            if re.search(r"^import [A-Z]", block, re.MULTILINE):
+            if re.search(r"^(?:import|from) [A-Z]", block, re.MULTILINE):
                 continue  # a file-based module example needs its sibling files
             path = work / f"{md.stem.replace('-', '_')}_{i}.pyfun"
             path.write_text(block, encoding="utf-8", newline="\n")

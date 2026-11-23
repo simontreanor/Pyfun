@@ -67,9 +67,14 @@ pub enum Item {
     /// capitalized name, accessed `Name.member` (`DESIGN.md` §6.1). Top-of-file
     /// only. Slice 1 parses and pretty-prints it; the multi-file driver that
     /// resolves it lands in a later slice (semantics stubbed for now).
+    ///
+    /// `from Name import a, B` names what it brings in (`names`, empty for the
+    /// plain form): those names are then written bare, and the module itself
+    /// is not bound, as in Python (`DESIGN.md` §6.1).
     Import {
         name: String,
         span: NodeSpan,
+        names: Vec<ImportedName>,
     },
     /// `extern import python.path [as alias]` — declare the Python module that
     /// extern targets in this file are rooted at (`DESIGN.md` §6), mirroring
@@ -121,6 +126,13 @@ pub struct ActivePatternDecl {
     /// exactly one, a partial pattern may have leading extra parameters).
     pub params: Vec<Param>,
     pub value: Expr,
+    pub span: NodeSpan,
+}
+
+/// One name a `from Module import …` brings in, with where it was written.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportedName {
+    pub name: String,
     pub span: NodeSpan,
 }
 

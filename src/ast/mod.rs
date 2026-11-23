@@ -62,7 +62,15 @@ pub fn print_item(item: &Item) -> String {
             s.push_str(&lines.join("\n"));
             s
         }
-        Item::Import { name, .. } => format!("import {name}"),
+        Item::Import { name, names, .. } if names.is_empty() => format!("import {name}"),
+        Item::Import { name, names, .. } => format!(
+            "from {name} import {}",
+            names
+                .iter()
+                .map(|n| n.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Item::ExternImport { path, alias, .. } => match alias {
             Some(a) => format!("extern import {} as {a}", path.join(".")),
             None => format!("extern import {}", path.join(".")),

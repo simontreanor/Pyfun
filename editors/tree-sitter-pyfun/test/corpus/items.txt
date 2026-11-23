@@ -469,3 +469,25 @@ type Wrapper = Wrap { value: int } | Bare int
     (variant
       (constructor_identifier)
       (type_variable))))
+
+================================================================================
+from import
+================================================================================
+
+from Geometry import area, Circle
+let total s = area s
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (module_identifier)
+    (identifier)
+    (constructor_identifier))
+  (let_binding
+    (identifier)
+    (parameter
+      (identifier))
+    (application
+      (identifier)
+      (identifier))))
