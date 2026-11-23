@@ -12,7 +12,7 @@ const GEOMETRY: (&str, &str) = (
 );
 
 fn build(main: &str) -> project::Project {
-    let files = vec![
+    let files = [
         ("Main".to_string(), main.to_string()),
         (GEOMETRY.0.to_string(), GEOMETRY.1.to_string()),
         (
