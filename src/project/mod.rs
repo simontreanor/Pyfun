@@ -289,7 +289,27 @@ pub fn compile_with(
     target: crate::python_emitter::PyTarget,
     native: bool,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
-    compile_project(project, target, native, false, false)
+    compile_project(project, target, native, false, false, false)
+}
+
+/// [`compile`] for `pyfun test` (`DESIGN.md` §9): in each test module (one
+/// whose file is `test_*.pyfun`), a `let test_name _ = …` is emitted as the
+/// `def test_name():` pytest collects.
+pub fn compile_tests(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
+    compile_project(
+        project,
+        crate::python_emitter::PyTarget::default(),
+        false,
+        false,
+        false,
+        true,
+    )
+}
+
+/// Whether the module named `name` is a test module: its file is
+/// `test_*.pyfun`, the name pytest looks for.
+pub fn is_test_module(name: &str) -> bool {
+    module_stem(name).starts_with("test_")
 }
 
 /// [`compile`] with **typed output** (`--typed`, `DESIGN.md` §5.7): every
@@ -302,6 +322,7 @@ pub fn compile_typed(project: &Project) -> Result<CompiledProject, crate::loweri
         false,
         false,
         true,
+        false,
     )
 }
 
@@ -315,6 +336,7 @@ pub fn compile_traced(project: &Project) -> Result<CompiledProject, crate::lower
         false,
         true,
         false,
+        false,
     )
 }
 
@@ -324,6 +346,7 @@ fn compile_project(
     native: bool,
     trace: bool,
     typed: bool,
+    tests: bool,
 ) -> Result<CompiledProject, crate::lowering::LowerError> {
     use crate::lowering::{self, ImportContext};
     use crate::python_emitter;
@@ -531,6 +554,11 @@ fn compile_project(
             lowering::annotate_typed(&module.ast, lowered.py, &recorded_types, &imported)
         } else {
             lowered.py
+        };
+        let lowered_py = if tests && is_test_module(&module.name) {
+            lowering::as_pytest(&module.ast, lowered_py)
+        } else {
+            lowered_py
         };
         let python = python_emitter::emit_for(&lowered_py, target);
         if let Some(map) = traced

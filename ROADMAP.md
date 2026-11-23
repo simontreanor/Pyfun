@@ -506,8 +506,12 @@ after the release.
 
 15. **`pyfun fmt`** (L). Named in `DESIGN.md` §10 and absent from the CLI. Needs comments kept as
     trivia, which `pyfun parse` drops.
-16. **`pyfun test`** (M). Compile `test_*` functions to `test_*.py` and let pytest run them.
-    Follow-ons: checked examples in `##` doc comments, and derived Hypothesis generators.
+16. ~~**`pyfun test`**~~ **DONE 2026-11-23**: `test_*` functions in `test_*.pyfun` files run under
+    pytest, and a `Test` module (`Test.equal`, `Test.is_true`, `Test.fail`) lowers to `assert`, so
+    pytest reports a failure with its own diff (`DESIGN.md` §9). A `Test` member is an error outside a
+    test. Follow-ons: let a helper assert once the `exn` label (item 19) can say so in its type; report
+    a failure in `.pyfun` lines, as `pyfun run` does; a lesson on testing; checked examples in `##` doc
+    comments; derived Hypothesis generators.
 17. ~~**Typed default output**~~ **DONE 2026-11-22**: `pyfun compile --typed` annotates every top-level
     function, value and class with its inferred type (type variables as Python 3.12 type parameters, a
     sum type as an alias over its classes), a typed project carries `py.typed`, and a `##` comment is
