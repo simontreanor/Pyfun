@@ -119,21 +119,21 @@ later add-on, and it shapes inference and lowering — so it must be designed in
 
 **Implemented (inference-first, zero pollution).** Function arrows (`Ty::Fun`) carry a latent
 [`Effect`] — a **set of concrete labels** (`EffLabel`: `io` — printing, observable mutation via `<-` —,
-`async`, and `spawn`, which `Task.start` performs and only a `Task.scope` discharges, §8) plus effect
-*variables* for polymorphism. Effects are **inferred and never written in
-ordinary code**: a pure function reads exactly as before (`let add a b = a + b`); `print : a ->{io}
-unit` and impurity **propagate automatically** (calling an impure function makes you impure), and
-labels from different calls **union** (a body that prints and fetches is `->{io, async}`). Defining a
-function is pure — its body's effect is the *latent* effect on its innermost arrow. Effect variables
-generalize/instantiate alongside type/unit/num variables, so higher-order functions stay
-effect-polymorphic (`let pure apply f x = f x` is pure *up to its argument*: `apply print` is impure
-at the call site, `apply` itself is not). The one **opt-in, definition-level** assertion is `let pure
-f … = …`, which is a compile error if the binding introduces *any* concrete label (the violation
-names the set: "performs `io, async`"). Effects are **fully erased at lowering** (zero runtime
-residue, like units); `pure` produces no Python. The sources beyond `print` are `<-` (§3) and the
-Python FFI boundary — a plain `extern` is effectful-by-default (§6), the third `io` source. Display
-is **canonical and deterministic**: labels render in a fixed order, `io` first (`->{io}`, `->{async}`,
-`->{io, async}`); a pure or purely-polymorphic arrow stays the familiar `->`.
+`async`, `spawn`, which `Task.start` performs and only a `Task.scope` discharges (§8), and `exn`, which
+an `extern` declares and `try` discharges (§6)) plus effect *variables* for polymorphism. Effects are
+**inferred and never written in ordinary code**: a pure function reads exactly as before (`let add a b
+= a + b`); `print : a ->{io} unit` and impurity **propagate automatically** (calling an impure function
+makes you impure), and labels from different calls **union** (a body that prints and fetches is `->{io,
+async}`). Defining a function is pure — its body's effect is the *latent* effect on its innermost
+arrow. Effect variables generalize/instantiate alongside type/unit/num variables, so higher-order
+functions stay effect-polymorphic (`let pure apply f x = f x` is pure *up to its argument*: `apply
+print` is impure at the call site, `apply` itself is not). The one **opt-in, definition-level**
+assertion is `let pure f … = …`, which is a compile error if the binding introduces *any* concrete
+label (the violation names the set: "performs `io, async`"). Effects are **fully erased at lowering**
+(zero runtime residue, like units); `pure` produces no Python. The sources beyond `print` are `<-` (§3)
+and the Python FFI boundary — a plain `extern` is effectful-by-default (§6), the third `io` source.
+Display is **canonical and deterministic**: labels render in a fixed order, `io` first (`->{io}`,
+`->{async}`, `->{io, async}`); a pure or purely-polymorphic arrow stays the familiar `->`.
 
 **Effect annotations on declared arrows.** Function arrows in *declared* types — `type`
 declarations (ADT ctor / record field types) and `extern` signatures — may carry an explicit
@@ -1219,9 +1219,9 @@ than importing Python's imperative `try/except/finally/raise` (and an exception 
 no types for), the feature is a single **expression**: `try e : Result <e> Exception` (`ExprKind::Try`). It
 runs `e`, and a thrown Python exception becomes `Error`; success is `Ok`. `try` is a prefix keyword binding
 looser than `+`/comparison but tighter than `|>`, so `try parse s` is `try (parse s)` while `try parse s
-|> Result.with_default 0` pipes the `Result` out; parens capture a wider body. It does **not** change
-effects — the body's `io` still happens (`try` catches a *thrown* exception, it doesn't suppress the
-call). The `Error` payload is a **reserved built-in record `Exception`** with `error_kind : str` (the
+|> Result.with_default 0` pipes the `Result` out; parens capture a wider body. The body's `io` still
+happens (`try` catches a *thrown* exception, it doesn't suppress the call); the one effect it takes
+away is `exn`, below. The `Error` payload is a **reserved built-in record `Exception`** with `error_kind : str` (the
 class name, `type(e).__name__`) and `error_message : str` (`str(e)`) — read by field access (`e.error_kind`)
 or matched (`case Error (Exception { error_kind = "ValueError" }): …`). It reuses the ordinary record
 machinery (so its two fields join the global field registry, and a user `type Exception` is rejected as
@@ -1232,6 +1232,34 @@ There is deliberately **no `raise`, no `finally`, no exception hierarchy** (Pyfu
 `Error`; the `result {}` CE + `Result` module compose the rest). Enabled by **string-literal patterns**
 (`case "yes":`, `Pattern::Str` — a refutable leaf over the infinite `str` type, so a string `match`
 still needs a wildcard).
+
+**`exn`: a call that may raise says so.** An exception is the one thing a Python call can do that its
+Pyfun type did not show. The `exn` effect label shows it. It is **declared, never guessed**: an
+`extern` carries it when its arrow says so, and from there it is inferred through every caller like any
+other label.
+
+```pyfun
+extern pure to_number : str ->{exn} int = int
+extern read_text : str ->{io, exn} str = pathlib.Path.read_text
+
+let total texts = List.sum (List.map to_number texts)   # List str ->{exn} int
+let safe text = try (to_number text)                    # str -> Result int Exception
+let load path = try (read_text path)                    # str ->{io} Result str Exception
+```
+
+`try` is its **handler**, the second after `Task.scope` (§8): the exception raised while the body runs
+becomes the `Error` of the result, so the `exn` the body performs stops at the `try` and the rest of
+its effect passes through. `Async.catch` does the same for what is awaited. A function that `try` hands
+back runs later, outside it, and keeps its own `exn`. `let pure` holds a function to not raising, and a
+declared arrow without the label (`type Reader = Reader(str -> int)`) takes only a function that
+cannot.
+
+The label is opt-in at the boundary. An extern that does not mention it is typed as before, and may
+still raise unseen; nothing in an existing program changes. The rule for an annotated arrow is also
+unchanged: its effects are taken as written, so a file read that may fail is `->{io, exn}` and a
+conversion that may fail is `->{exn}`. A program may perform `exn` at top level, as it may perform
+`io`: an uncaught exception ends it with a traceback in its own lines (§9). Like every effect, the
+label is erased from the emitted Python.
 
 **Seq — the lazy module.** The `seq {}` CE produces a `Seq a` (a Python generator); the
 `Seq` module is its lazy operation library, the counterpart to the eager `List`. `Seq.map`/`filter`/

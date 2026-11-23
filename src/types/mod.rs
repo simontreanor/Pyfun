@@ -153,6 +153,12 @@ pub enum EffLabel {
     /// argument of a `Task.scope` discharges it, and a top-level evaluation that
     /// still performs it is an error, since nothing would own the task.
     Spawn,
+    /// A call that may raise a Python exception. Declared, never inferred from
+    /// nothing: an `extern` carries it when its arrow says so (`->{io, exn}`),
+    /// and it flows from there like any label. `try e` and `Async.catch` are
+    /// its handlers: they turn the exception into an `Error`, so the `exn` of
+    /// what they wrap stops at them (`DESIGN.md` §4, §6).
+    Exn,
 }
 
 impl EffLabel {
@@ -161,6 +167,7 @@ impl EffLabel {
             EffLabel::Io => "io",
             EffLabel::Async => "async",
             EffLabel::Spawn => "spawn",
+            EffLabel::Exn => "exn",
         }
     }
 
@@ -171,6 +178,7 @@ impl EffLabel {
             "io" => Some(EffLabel::Io),
             "async" => Some(EffLabel::Async),
             "spawn" => Some(EffLabel::Spawn),
+            "exn" => Some(EffLabel::Exn),
             _ => None,
         }
     }
@@ -6789,8 +6797,8 @@ fn resolve(
                             return Err(TypeError {
                                 message: format!(
                                     "unknown effect label `{name}` (known labels: `io`, \
-                                     `async`; an effect variable is only allowed in an \
-                                     `extern` signature)"
+                                     `async`, `exn`; an effect variable is only allowed in \
+                                     an `extern` signature)"
                                 ),
                                 span,
                             });
@@ -8305,7 +8313,16 @@ impl Infer {
             ExprKind::Collection { expansion, .. } => self.infer_expr(expansion, env),
 
             ExprKind::Try { body } => {
-                let inner = self.infer_expr(body, env)?;
+                // `try` is the handler for `exn`: an exception raised while the
+                // body is evaluated becomes the `Error` of the result, so the
+                // `exn` the body performs stops here and the rest of its effect
+                // passes through (`DESIGN.md` §4).
+                let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+                let inner = self.infer_expr(body, env);
+                let mut performed = self.apply_eff(&self.cur_eff.clone());
+                performed.labels.remove(&EffLabel::Exn);
+                self.cur_eff = outer.union(&performed);
+                let inner = inner?;
                 Ok(Ty::Con(
                     "Result".to_string(),
                     vec![self.apply(&inner), Ty::Con("Exception".to_string(), vec![])],
@@ -9854,6 +9871,18 @@ impl Infer {
             let result = self.infer_apply_plain(func, arg, span, env);
             let mut inner = self.apply_eff(&self.cur_eff.clone());
             inner.labels.remove(&EffLabel::Spawn);
+            self.cur_eff = outer.union(&inner);
+            return result;
+        }
+        // `Async.catch c` is `try` for what is awaited: the exception `c` raises
+        // becomes an `Error` when the result is awaited, so the `exn` performed
+        // in building `c` stops here, as it does at `try`.
+        if qualified_name(func).as_deref() == Some("Async.catch") && env.contains_key("Async.catch")
+        {
+            let outer = std::mem::replace(&mut self.cur_eff, Effect::pure());
+            let result = self.infer_apply_plain(func, arg, span, env);
+            let mut inner = self.apply_eff(&self.cur_eff.clone());
+            inner.labels.remove(&EffLabel::Exn);
             self.cur_eff = outer.union(&inner);
             return result;
         }

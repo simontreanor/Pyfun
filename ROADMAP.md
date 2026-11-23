@@ -525,7 +525,12 @@ after the release.
 
 **Larger**
 
-19. **An `exn` effect label** on externs, discharged by `try` (L).
+19. ~~**An `exn` effect label**~~ **DONE 2026-11-23**: an `extern` whose arrow says `->{exn}` or
+    `->{io, exn}` may raise, the label is inferred through its callers, and `try` and `Async.catch`
+    discharge it; `let pure` and an unlabelled declared arrow hold a function to not raising. Opt-in:
+    an extern that does not mention it is typed as before (`DESIGN.md` §6). Open: whether `Test.*`
+    should carry `exn` in place of the rule that keeps it inside tests (item 16), and whether the
+    cookbook's externs should be marked.
 20. **`from X import y` and nested packages** (M each), both deferred in `DESIGN.md` §6.1.
 21. ~~**A sole constructor's pattern in a parameter or a `let`**~~ **DONE 2026-11-22** (#203), for
     both kinds at once: `let unwrap (Wrap v) = v`, `let unwrap (Box { value }) = value` and the
