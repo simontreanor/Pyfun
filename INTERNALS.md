@@ -38,7 +38,8 @@ src/
   kernel.rs        the REPL session inverted, for the Jupyter kernel
   packages.rs      `pyfun add` / `install` / `remove`: façade packages (DESIGN §6.2)
   native_build.rs  `pyfun build --native`: compile, then mypyc (DESIGN §5.6)
-  main.rs          the CLI: check/compile/run/build/add/install/remove/parse/lsp/repl/kernel-engine
+  main.rs          the CLI: check/compile/run/test/build/add/install/remove/parse/lsp/repl/kernel-engine
+  test_cmd.rs      `pyfun test`: compile the test files and run pytest over them (DESIGN §9)
 editors/vscode/    minimal VS Code client that launches `pyfun lsp`
 tests/             parser tests, compile tests, .pyfun fixtures (favor snapshot/golden tests)
 ```
@@ -675,6 +676,22 @@ the cell's label (`In[7]`, from Jupyter's execution count) ahead of the cell and
 as the blob frame's first line. `eval` is unchanged, three frames with a bare blob, so an older kernel
 package keeps working with a newer engine; a newer kernel that is answered `unknown op` by an older
 engine falls back to `eval` and Python's own traceback.
+
+## `pyfun test` — implements DESIGN §9
+
+`Test` is a prelude module like the others (`types::TEST_PRELUDE`, its schemes beside `Encode.auto`'s).
+Two things are particular to it. `types::test_misuse` runs after inference and reports each
+`Test.member` reference that does not lie inside the body of a top-level function named `test_*`; it
+reads the references `lsp::resolve` already collects, and steps aside when the file has a module of its
+own called `Test`. And `Lowerer::lower_application` turns a member with all its arguments into a
+`PyStmt::Assert` ahead of a `None` value, which is why the assertion shows as a statement wherever the
+call stood; a member passed as a value keeps a `_pf_test_*` helper that holds the same `assert`.
+
+The command is `src/test_cmd.rs`. It resolves each test file's project, checks it, compiles it with
+`project::compile_tests`, and stages every project's files in one temp directory, where pytest is run
+with the user's working directory unchanged. `compile_tests` differs from `compile` in one step:
+`lowering::as_pytest` drops the one parameter of each `test_*` function in a test module, binding a
+named one to `None`, because pytest would read a parameter as a fixture to supply.
 
 ## Names Python already owns — implements DESIGN §5
 

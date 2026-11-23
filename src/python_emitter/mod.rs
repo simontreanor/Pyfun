@@ -169,6 +169,12 @@ pub enum PyStmt {
     Match { subject: PyExpr, cases: Vec<PyCase> },
     /// `raise RuntimeError(message)` — used for non-exhaustive-match guards.
     RaiseRuntimeError(String),
+    /// `assert test` or `assert test, message`: what a `Test` member lowers to
+    /// (`DESIGN.md` §9).
+    Assert {
+        test: PyExpr,
+        message: Option<PyExpr>,
+    },
     /// `raise <expr>` — a general raise (a constructed exception or a re-raised
     /// binding). Used by the `Decode` prelude's strict primitives.
     Raise(PyExpr),
@@ -725,6 +731,13 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
                 );
                 emit_block(&case.body, depth + 2, out);
             }
+        }
+        PyStmt::Assert { test, message } => {
+            let text = match message {
+                Some(message) => format!("assert {}, {}", expr(test), expr(message)),
+                None => format!("assert {}", expr(test)),
+            };
+            line(out, depth, &text);
         }
         PyStmt::RaiseRuntimeError(message) => {
             line(

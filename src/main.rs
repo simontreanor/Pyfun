@@ -30,6 +30,7 @@ mod kernel;
 mod native_build;
 mod packages;
 mod repl;
+mod test_cmd;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -69,6 +70,7 @@ fn main() -> ExitCode {
             }
             None => fail("`run` needs a file path"),
         },
+        Some("test") => test_cmd::run(&args[1..]),
         Some("parse") => match args.get(1) {
             Some(path) => parse_only(path),
             None => fail("`parse` needs a file path"),
@@ -123,6 +125,8 @@ fn help() {
         "                                            their inferred types, for a type checker"
     );
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
+    eprintln!("  pyfun test    [path...] [-- pytest args]  run the `test_*` functions of each");
+    eprintln!("                                            `test_*.pyfun` file with pytest");
     eprintln!(
         "  pyfun build   --native <file.pyfun> -o <dir>  compile to a C extension with mypyc;"
     );

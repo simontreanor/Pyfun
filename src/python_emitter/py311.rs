@@ -29,6 +29,7 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         | PyStmt::Nonlocal(_)
         | PyStmt::Global(_)
         | PyStmt::RaiseRuntimeError(_)
+        | PyStmt::Assert { .. }
         | PyStmt::Continue
         | PyStmt::Line(..)
         | PyStmt::Doc(_)

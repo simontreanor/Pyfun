@@ -189,6 +189,47 @@ pub fn annotate_typed(
     typed::annotate(module, py, binding_types, imported)
 }
 
+/// The pytest shape of a test file (`pyfun test`, `DESIGN.md` §9): each
+/// top-level `let test_name _ = …` becomes `def test_name():`. pytest calls a
+/// test with no arguments (a parameter would be read as a fixture to supply),
+/// and the one parameter a Pyfun function must have carries nothing. A
+/// parameter that was given a name is bound to `None` in its place.
+pub fn as_pytest(module: &Module, mut py: PyModule) -> PyModule {
+    let tests: HashSet<String> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            crate::parser::ast::Item::Let(binding) if binding.params.len() == 1 => binding
+                .name()
+                .filter(|name| crate::types::is_test_name(name))
+                .map(py_value_name),
+            _ => None,
+        })
+        .collect();
+    for stmt in &mut py.body {
+        if let PyStmt::FuncDef {
+            name, params, body, ..
+        } = stmt
+            && tests.contains(name.as_str())
+            && params.len() == 1
+        {
+            let param = params.remove(0);
+            if param != "_" {
+                // After a docstring, which has to stay first.
+                let at = usize::from(matches!(body.first(), Some(PyStmt::Doc(_))));
+                body.insert(
+                    at,
+                    PyStmt::Assign {
+                        target: param,
+                        value: PyExpr::NoneLit,
+                    },
+                );
+            }
+        }
+    }
+    py
+}
+
 /// Typed output for a project's shared runtime module (`_pyfun_rt.py`).
 pub fn annotate_typed_runtime(py: PyModule) -> PyModule {
     typed::annotate_runtime(py)
@@ -3067,6 +3108,56 @@ impl Lowerer {
     fn lower_application(&mut self, expr: &Expr, locals: &HashSet<String>) -> Lowered {
         let mut args_ast = Vec::new();
         let head = flatten_app(expr, &mut args_ast);
+        // A `Test` member with all its arguments is an `assert` statement where
+        // it stands, so pytest can show the expression that failed and the
+        // values in it (`DESIGN.md` §9). Passed around as a value it keeps a
+        // helper.
+        if let Some(member) = crate::types::qualified_name(head)
+            .as_deref()
+            .and_then(|q| q.strip_prefix("Test."))
+            && !self.imported_modules.contains("Test")
+        {
+            let arity = match member {
+                "equal" => 2,
+                "is_true" | "fail" => 1,
+                _ => 0,
+            };
+            if arity != 0 && args_ast.len() == arity {
+                let mut stmts = Vec::new();
+                let mut args = Vec::with_capacity(arity);
+                for arg in &args_ast {
+                    let (arg_stmts, arg_val) = self.lower_value(arg, locals)?;
+                    stmts.extend(arg_stmts);
+                    args.push(arg_val);
+                }
+                let assert = match member {
+                    // `assert actual == expected`: the tested value on the left,
+                    // where pytest's report puts it.
+                    "equal" => {
+                        let actual = args.pop().expect("two arguments");
+                        let expected = args.pop().expect("two arguments");
+                        PyStmt::Assert {
+                            test: PyExpr::BinOp {
+                                op: PyBinOp::Eq,
+                                left: Box::new(actual),
+                                right: Box::new(expected),
+                            },
+                            message: None,
+                        }
+                    }
+                    "is_true" => PyStmt::Assert {
+                        test: args.pop().expect("one argument"),
+                        message: None,
+                    },
+                    _ => PyStmt::Assert {
+                        test: PyExpr::Bool(false),
+                        message: Some(args.pop().expect("one argument")),
+                    },
+                };
+                stmts.push(assert);
+                return Ok((stmts, PyExpr::NoneLit));
+            }
+        }
         // `Async.sleep secs` builds `_pf_Async(asyncio.sleep, secs)` directly, so an
         // immediate `do!` reads `await asyncio.sleep(secs)`; a bare `Async.sleep`
         // passed as a value keeps its helper.
@@ -4034,6 +4125,11 @@ impl Lowerer {
                 self.note_task_scope_var();
                 asy(self, "_pf_task_start")
             }
+            // Test: a member passed around as a value (a full application is an
+            // `assert` where it stands; see `lower_application`).
+            "Test.equal" => coll(self, "_pf_test_equal"),
+            "Test.is_true" => coll(self, "_pf_test_is_true"),
+            "Test.fail" => coll(self, "_pf_test_fail"),
             // Encode.auto: the derived encoder reads the value's shape at run time
             // (a record's fields, a case's class name), so it needs no descriptor.
             "Encode.auto" => {
@@ -9897,6 +9993,35 @@ fn collection_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Ve
                     exc_type: Some("ValueError".to_string()),
                     binding: None,
                     handler: vec![PyStmt::Return(none())],
+                }],
+            ),
+            // Test helpers: the `assert` each member is, as a function.
+            "_pf_test_equal" => def(
+                helper,
+                &["expected", "actual"],
+                vec![PyStmt::Assert {
+                    test: PyExpr::BinOp {
+                        op: PyBinOp::Eq,
+                        left: Box::new(name("actual")),
+                        right: Box::new(name("expected")),
+                    },
+                    message: None,
+                }],
+            ),
+            "_pf_test_is_true" => def(
+                helper,
+                &["condition"],
+                vec![PyStmt::Assert {
+                    test: name("condition"),
+                    message: None,
+                }],
+            ),
+            "_pf_test_fail" => def(
+                helper,
+                &["message"],
+                vec![PyStmt::Assert {
+                    test: PyExpr::Bool(false),
+                    message: Some(name("message")),
                 }],
             ),
             // String.to_float(s) -> total parse: Some(float(s)) or None_ on ValueError

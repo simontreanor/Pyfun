@@ -743,6 +743,12 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
 /// `Decode.auto`, one derived encoder for any value whose type has a JSON form.
 pub const ENCODE_PRELUDE: &[(&str, usize)] = &[("auto", 1)];
 
+/// The `Test` module (`DESIGN.md` §9): what a test expects. Each member lowers
+/// to a Python `assert`, which is what pytest reads to explain a failure. They
+/// are the one way Pyfun code fails on purpose, so they belong to tests alone
+/// ([`test_misuse`]).
+pub const TEST_PRELUDE: &[(&str, usize)] = &[("equal", 2), ("is_true", 1), ("fail", 1)];
+
 /// The built-in module namespaces. A `Module.member` reference is parsed as the
 /// ordinary field-access node `Field { base: Var("Module"), name: "member" }` (so
 /// no parser change was needed); the checker and lowering recognize a base that is
@@ -795,6 +801,15 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     (
         "Encode.auto",
         "Encode any value with a JSON form to a JSON string: records as objects, sum-type cases as `{\"type\": …, \"fields\": […]}`, `Option` as `null` or the value, a `Map` with string keys as an object and any other as a list of pairs. Round-trips `Decode.auto`.",
+    ),
+    (
+        "Test.equal",
+        "In a test: the second value must equal the first, the expected one. A failure shows both.",
+    ),
+    ("Test.is_true", "In a test: the condition must hold."),
+    (
+        "Test.fail",
+        "In a test: fail here, with this message. Fits any type, so it can stand in a branch that must not be reached.",
     ),
     (
         "Task.scope",
@@ -1598,6 +1613,7 @@ pub const MODULE_PRELUDES: &[(&str, &[(&str, usize)])] = &[
     ("Async", ASYNC_PRELUDE),
     ("Task", TASK_PRELUDE),
     ("Encode", ENCODE_PRELUDE),
+    ("Test", TEST_PRELUDE),
 ];
 
 /// The `Option` module (`DESIGN.md` §6): helpers over the built-in `Option a` type
@@ -2826,6 +2842,9 @@ fn run_inner(
         })
         .collect();
 
+    // An assertion outside a test.
+    errors.extend(test_misuse(module));
+
     // Derived codecs (`Decode.auto`): each site's `Decoder a` is resolved now, and
     // an `a` that is still open is an error at the site, since there is nothing
     // to derive from.
@@ -3915,6 +3934,71 @@ fn seed_task_prelude(env: &mut Env) {
         "Encode.auto".to_string(),
         scheme(vec![0], vec![], pf(a(), Ty::Str)),
     );
+    // Test.equal : a -> a -> unit   (expected first, as the sentence reads)
+    env.insert(
+        "Test.equal".to_string(),
+        scheme(vec![0], vec![], pf(a(), pf(a(), Ty::Unit))),
+    );
+    // Test.is_true : bool -> unit
+    env.insert(
+        "Test.is_true".to_string(),
+        scheme(vec![], vec![], pf(Ty::Bool, Ty::Unit)),
+    );
+    // Test.fail : str -> a   (it never returns, so it fits wherever it stands)
+    env.insert(
+        "Test.fail".to_string(),
+        scheme(vec![0], vec![], pf(Ty::Str, a())),
+    );
+}
+
+/// Whether `name` is a test: a top-level function whose name opens with
+/// `test_`, which is how pytest finds one.
+pub fn is_test_name(name: &str) -> bool {
+    name.starts_with("test_")
+}
+
+/// Each use of a `Test` member outside a test. An assertion is the one way
+/// Pyfun code fails on purpose, and it is kept to the functions pytest runs
+/// (`DESIGN.md` §9), so that nothing a program does at run time can fail this
+/// way. A module of the user's own named `Test` is theirs, and is left alone.
+fn test_misuse(module: &Module) -> Vec<TypeError> {
+    let own = module.items.iter().any(|item| match item {
+        Item::Import { name, .. } | Item::Module { name, .. } => name == "Test",
+        _ => false,
+    });
+    if own {
+        return Vec::new();
+    }
+    // The bodies of this module's tests.
+    let tests: Vec<Span> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Let(binding)
+                if !binding.params.is_empty() && binding.name().is_some_and(is_test_name) =>
+            {
+                Some(binding.value.span())
+            }
+            _ => None,
+        })
+        .collect();
+    crate::lsp::resolve::qualified_references(module)
+        .into_iter()
+        .filter(|q| q.module == "Test" && TEST_PRELUDE.iter().any(|(m, _)| *m == q.member))
+        .filter(|q| {
+            !tests
+                .iter()
+                .any(|body| body.start <= q.span.start && q.span.end <= body.end)
+        })
+        .map(|q| TypeError {
+            message: format!(
+                "`Test.{}` belongs in a test: a top-level function whose name opens with \
+                 `test_` (`let test_area _ = …`), which `pyfun test` runs",
+                q.member
+            ),
+            span: q.span,
+        })
+        .collect()
 }
 
 /// Collect the type variables of a declared type — bare lowercase names that are

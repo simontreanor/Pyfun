@@ -2711,6 +2711,43 @@ again, so they reach inside a constructor or a tuple (`(False, _)`) and stop whe
 An unused local `let` gets "Rename to `_name`", and an unused `import` or `extern import` gets "Remove
 the unused import".
 
+**Tests (`pyfun test`).** Tests are run by pytest, found by pytest's own two conventions: a test file
+is `test_*.pyfun`, and a test is a top-level function in it whose name opens with `test_`. `pyfun test`
+type-checks each test file with the modules it imports, compiles them, and runs pytest over the result;
+`pyfun test path…` names files or directories, and what follows `--` goes to pytest (`pyfun test -- -k
+area`).
+
+```pyfun
+import Shapes
+
+## A rectangle is its sides multiplied.
+let test_rect _ =
+    Test.equal 6.0 (Shapes.area (Shapes.Rect { width = 2.0, height = 3.0 }))
+```
+
+A test says what it expects with the `Test` module: `Test.equal expected actual`, `Test.is_true
+condition`, and `Test.fail message` for a branch that must not be reached (it fits a branch of any
+type). Each lowers to a Python `assert` where it stands, the tested value on the left, so a failure is
+explained by pytest in its own way, with the expression and the values in it:
+
+```text
+    def test_wrong():
+>       assert _pf_map(lambda x: x + 1, [0, 1, 3]) == [1, 2, 3]
+E       assert [1, 2, 4] == [1, 2, 3]
+E         At index 2 diff: 4 != 3
+```
+
+A test is the function of one ignored parameter (`let test_rect _ = …`), since every Pyfun function
+takes one; it is emitted as `def test_rect():`, which is what pytest calls. Its `##` comment is its
+docstring.
+
+An assertion is the one way Pyfun code fails on purpose (everything else signals failure with `Error`,
+§6), so it is kept to tests: a `Test` member used anywhere but inside a `test_*` function is an error.
+A helper shared by several tests therefore returns a value (`let is_sorted xs = …`) and the test
+asserts on it (`Test.is_true (is_sorted xs)`). This is the strict end of the choice, and it can be
+loosened without breaking a test; the `exn` effect label (`ROADMAP.md`) is the way to let a helper
+assert and have its type say so.
+
 **Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
 infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP
 surfaces on hover. It is the type-driven-development tool from Haskell/Idris/Agda, and fits here because
