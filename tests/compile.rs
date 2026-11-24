@@ -975,6 +975,25 @@ fn e2e_mutual_recursion() {
 }
 
 #[test]
+fn e2e_a_helper_between_mutually_recursive_functions() {
+    // Issue #185: the cycle reads a function, a value and an in-file module
+    // written between its members, and the output keeps the source's order.
+    run_and_check(
+        "
+        let is_even n = if n == 0 then True else is_odd (n - 1)
+        let helper n = n + 1
+        let step = 2
+        module Steps =
+          let none = 0
+        let is_odd n = if n == 0 then False else is_even (helper n - step + Steps.none)
+        let a = is_even 10
+        let b = is_odd 10
+        ",
+        &[("a", "True"), ("b", "False")],
+    );
+}
+
+#[test]
 fn as_pattern_lowers_to_python_as() {
     let py = pyfun::compile("let f o =\n  match o:\n    case Some v as w: w\n    case None: None")
         .unwrap();

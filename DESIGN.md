@@ -1447,7 +1447,17 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   (which would clash with the boolean `and`). A value cycle (`let a = b\nlet b = a`) is not a function
   group, so it stays rejected; and a one-way forward reference between *independent* (non-cyclic) bindings
   still requires declare-before-use. Lowering is unchanged (Python module-level `def`s resolve names at
-  call time). **Tail-call optimization is a non-goal** (below) — CPython does no TCO and caps recursion
+  call time). **Lines between a cycle's members.** A cycle cannot run until its last member is defined,
+  so everything written above that line is ready for it: a function, a value or an in-file module
+  between the members is in scope for the whole cycle (`plan_items` finds what the cycle reads there, and
+  `TopItems` infers it ahead of the cycle). Such a name still enters scope for every *other* line at the
+  place it is written. The cycle's own names are in scope from its first member on, but Python defines
+  each function where it is written, so a top-level value or expression between the members that uses one
+  of them is an error (`is_even` cannot be used yet: it needs `is_odd`, which is defined below this
+  line); it would be a `NameError` when the program ran. A function written between the members may call
+  the cycle, and then waits with it: a value that uses that function before the cycle is whole gets the
+  same error. The check reads names, not calls, so a line that only hands the function on (`let table =
+  [is_even]`) is rejected too and has to move below the cycle. **Tail-call optimization is a non-goal** (below) — CPython does no TCO and caps recursion
   (~1000 frames), so deep recursion can `RecursionError` exactly like hand-written Python; the
   **stack-safe path is the `List`/`Seq` combinators** (they lower to Python's iterative `reduce`/`map`).
 
