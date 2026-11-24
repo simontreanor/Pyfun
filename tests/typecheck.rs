@@ -141,6 +141,164 @@ fn accepts_mutual_recursion() {
 }
 
 #[test]
+fn a_cycle_reads_what_is_written_between_its_members() {
+    // Issue #185: a helper between two mutually recursive functions is in scope
+    // for the one below it.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let helper n = n + 1\n\
+             let is_odd n = if n == 0 then False else is_even (helper n - 2)\n\
+             let r = is_even 4"
+        )
+        .is_ok()
+    );
+    // A plain value too, and a destructured one.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let step = 1\n\
+             let (one, two) = (1, 2)\n\
+             let is_odd n = if n == 0 then False else is_even (n + one - two + step - 1)"
+        )
+        .is_ok()
+    );
+    // What the helper reads is carried along, and the helper stays polymorphic.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let base = 1\n\
+             let id x = x\n\
+             let down n = id (n - base)\n\
+             let is_odd n = if id (n == 0) then False else is_even (down n)\n\
+             let s = id \"text\""
+        )
+        .is_ok()
+    );
+    // An in-file module between the members.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             module Steps =\n  let one = 1\n  let down n = n - one\n\
+             let is_odd n = if n == 0 then False else is_even (Steps.down n)"
+        )
+        .is_ok()
+    );
+    // One cycle written inside another, which reads it.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let ping n = if n == 0 then \"ping\" else pong (n - 1)\n\
+             let pong n = if n == 0 then \"pong\" else ping (n - 1)\n\
+             let is_odd n = if n == 0 then False else String.len (ping n) == 4 and is_even (n - 1)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn names_between_a_cycle_still_enter_scope_at_their_own_line() {
+    // The helper is inferred ahead of the cycle, but a line above it that is no
+    // part of the cycle cannot see it.
+    assert_error_contains(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         let early = helper 1\n\
+         let helper n = n + 1\n\
+         let is_odd n = if n == 0 then False else is_even (helper n - 2)",
+        "unbound name `helper`",
+    );
+    assert_error_contains(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         let other n = helper n\n\
+         let helper n = n + 1\n\
+         let is_odd n = if n == 0 then False else is_even (helper n - 2)",
+        "unbound name `helper`",
+    );
+    // A helper with a mistake in it reports the mistake once.
+    let msgs = errors(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         let helper n = n + \"one\"\n\
+         let is_odd n = if n == 0 then False else is_even (helper n - 2)",
+    );
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+}
+
+#[test]
+fn a_line_between_a_cycle_cannot_run_it() {
+    // Python defines each function where it is written, so a cycle cannot run
+    // until its last member is defined. A value that would run it there is an
+    // error, where it used to be a `NameError` when the program ran.
+    let early = "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+                 let early = is_even 4\n\
+                 let is_odd n = if n == 0 then False else is_even (n - 1)";
+    assert_eq!(
+        errors(early),
+        [
+            "`is_even` cannot be used yet: it needs `is_odd`, which is defined below this line \
+             (move this line below `is_odd`)"
+        ]
+    );
+    // The error points at the name.
+    let err = &pyfun::check(early).unwrap_err()[0];
+    assert_eq!(&early[err.span.start..err.span.end], "is_even");
+    // The last member is in scope from the first one on, and no readier.
+    assert_eq!(
+        errors(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let early = is_odd 3\n\
+             let is_odd n = if n == 0 then False else is_even (n - 1)"
+        ),
+        [
+            "`is_odd` cannot be used yet: it is defined below this line (move this line below `is_odd`)"
+        ]
+    );
+    // A top-level expression, and a function handed on without being called.
+    assert_error_contains(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         print (is_even 2)\n\
+         let is_odd n = if n == 0 then False else is_even (n - 1)",
+        "`is_even` cannot be used yet",
+    );
+    assert_error_contains(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         let table = [is_even]\n\
+         let is_odd n = if n == 0 then False else is_even (n - 1)",
+        "`is_even` cannot be used yet",
+    );
+    // A function between the members may call the cycle; a value that calls
+    // that function there may not.
+    let through = "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+                   let twice n = is_even (n * 2)\n\
+                   let check = fun n -> twice n\n";
+    let rest = "let is_odd n = if n == 0 then False else is_even (n - 1)\n";
+    assert!(pyfun::check(&format!("{through}{rest}let r = check 3")).is_ok());
+    assert_eq!(
+        errors(&format!("{through}let r = check 3\n{rest}")),
+        [
+            "`check` cannot be used yet: it needs `is_odd`, which is defined below this line \
+             (move this line below `is_odd`)"
+        ]
+    );
+    // The same through an in-file module.
+    assert_error_contains(
+        "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+         module Parity =\n  let twice n = is_even (n * 2)\n\
+         let r = Parity.twice 3\n\
+         let is_odd n = if n == 0 then False else is_even (n - 1)",
+        "`Parity` cannot be used yet: it needs `is_odd`",
+    );
+    // A local of the same name is another thing.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let fine =\n  let is_even = 1\n  is_even + 1\n\
+             let is_odd n = if n == 0 then False else is_even (n - 1)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn mutual_recursion_preserves_polymorphism() {
     // Grouping is by genuine cycle (SCC), so an independent polymorphic helper used
     // by two recursive functions at different types still generalizes.

@@ -2589,73 +2589,9 @@ fn run_inner(
     // Names of this module's top-level `let` values, for its export interface.
     let mut exported: Vec<String> = Vec::new();
 
-    // Mutual-recursion grouping: find cycles among top-level `let` bindings so
-    // mutually-recursive functions (and forward references between them) type-check.
-    // Only all-function cycles are grouped (a value cycle stays declare-before-use,
-    // erroring as before); each group is processed at its first member's position.
-    enum Role {
-        /// Process this whole group here (member item indices, in source order).
-        Leader(Vec<usize>),
-        /// A non-first member of a group already processed at its leader.
-        Skip,
-    }
-    let roles: HashMap<usize, Role> = {
-        let lets: Vec<(usize, &LetBinding)> = module
-            .items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, it)| match it {
-                Item::Let(b) => Some((i, b)),
-                _ => None,
-            })
-            .collect();
-        let name_to_local: HashMap<&str, usize> = lets
-            .iter()
-            .enumerate()
-            .filter_map(|(local, (_, b))| b.name().map(|n| (n, local)))
-            .collect();
-        let succ: Vec<Vec<usize>> = lets
-            .iter()
-            .map(|(_, b)| {
-                let mut bound = HashSet::new();
-                for p in &b.params {
-                    pattern_names(&p.pattern, &mut bound);
-                }
-                let mut refs = HashSet::new();
-                collect_free(&b.value, &bound, &mut refs);
-                let mut out: Vec<usize> = refs
-                    .iter()
-                    .filter_map(|n| name_to_local.get(n.as_str()).copied())
-                    .collect();
-                out.sort_unstable();
-                out.dedup();
-                out
-            })
-            .collect();
-        // A binding is a "function" (safe to pre-bind in a cycle) if it takes
-        // parameters or its value is a lambda — the same test the lowerer uses for
-        // arity. A value cycle (`let a = b\nlet b = a`) is not grouped, so it stays
-        // declare-before-use and errors as before.
-        let is_fn =
-            |b: &LetBinding| !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. });
-        let mut roles = HashMap::new();
-        for comp in strongly_connected(&succ) {
-            // Only group genuine multi-member cycles whose members are all functions.
-            if comp.len() < 2 || !comp.iter().all(|&l| is_fn(lets[l].1)) {
-                continue;
-            }
-            let mut member_items: Vec<usize> = comp.iter().map(|&l| lets[l].0).collect();
-            member_items.sort_unstable();
-            for (k, &item_idx) in member_items.iter().enumerate() {
-                if k == 0 {
-                    roles.insert(item_idx, Role::Leader(member_items.clone()));
-                } else {
-                    roles.insert(item_idx, Role::Skip);
-                }
-            }
-        }
-        roles
-    };
+    // Cycles of mutually recursive functions are inferred together, with what
+    // they read from between their members (`plan_items`).
+    let mut tops = TopItems::new(module);
 
     // What each top-level evaluation performs, checked for an unhandled `spawn`
     // once inference is done (a later item can still resolve an effect variable).
@@ -2672,57 +2608,24 @@ fn run_inner(
             // `import` is resolved by the multi-file driver, which feeds the
             // imported schemes in via `seed`; the item itself binds nothing here.
             Item::Import { .. } => {}
-            Item::Let(_) if matches!(roles.get(&idx), Some(Role::Skip)) => {
-                // Already inferred with its group's leader.
-            }
-            Item::Let(_) if matches!(roles.get(&idx), Some(Role::Leader(_))) => {
-                let Some(Role::Leader(members)) = roles.get(&idx) else {
-                    unreachable!()
-                };
-                let group: Vec<&LetBinding> = members
-                    .iter()
-                    .map(|&mi| match &module.items[mi] {
-                        Item::Let(b) => b,
-                        _ => unreachable!("group members are `let` items"),
-                    })
-                    .collect();
-                for (name, res) in inf.infer_mutual_group(&group, &env) {
-                    exported.push(name.clone());
-                    match res {
-                        Ok(scheme) => {
-                            env.insert(name, scheme);
+            Item::Let(_) | Item::Module { .. } => {
+                tops.infer(idx, &env, &mut inf, &mut errors, &mut top_effects);
+                // A cycle's functions enter scope together, at its first member.
+                if let Item::Let(binding) = item {
+                    match tops.plan.groups.get(&idx) {
+                        Some(members) => {
+                            for &member in members {
+                                if let Item::Let(b) = &module.items[member] {
+                                    exported.extend(b.bound_names());
+                                }
+                            }
                         }
-                        Err(e) => {
-                            errors.push(e);
-                            let ty = inf.fresh();
-                            env.insert(name, Scheme::mono(ty));
-                        }
+                        None if tops.plan.leader_of.contains_key(&idx) => {}
+                        None => exported.extend(binding.bound_names()),
                     }
                 }
-            }
-            Item::Let(binding) => {
-                exported.extend(binding.bound_names());
-                match inf.infer_binding(binding, &env) {
-                    Ok((bound, eff)) => {
-                        // A function's body effect is latent; only evaluating a
-                        // value binding performs it.
-                        if binding.params.is_empty() {
-                            top_effects.push((binding.value.span(), eff));
-                        }
-                        for (name, scheme) in bound {
-                            env.insert(name, scheme);
-                        }
-                    }
-                    Err(e) => {
-                        errors.push(e);
-                        // Bind every name the target *would* have bound, at a fresh
-                        // type, so later items report their own errors instead of a
-                        // cascade of "unbound name".
-                        for name in binding.bound_names() {
-                            let ty = inf.fresh();
-                            env.insert(name, Scheme::mono(ty));
-                        }
-                    }
+                for (name, scheme) in tops.reveal(idx) {
+                    env.insert(name, scheme);
                 }
             }
             // An active pattern registers its cases (and, for a total pattern,
@@ -2736,6 +2639,10 @@ fn run_inner(
                 Err(e) => errors.push(e),
             },
             Item::Expr(expr) => {
+                let early = tops.plan.early.get(&idx);
+                if let Some(early) = early {
+                    inf.watch = Some((early.name.clone(), None));
+                }
                 let outer = std::mem::replace(&mut inf.cur_eff, Effect::pure());
                 match inf.infer_expr(expr, &env) {
                     // A test over a variable of the expression's own type is not
@@ -2751,37 +2658,9 @@ fn run_inner(
                 }
                 let performed = std::mem::replace(&mut inf.cur_eff, outer);
                 top_effects.push((expr.span(), performed));
-            }
-            // A module is typed in its own scope: members see prior siblings
-            // unqualified (and qualified); only `Module.member` escapes to the outer
-            // env (so the bare names are not visible after the module).
-            Item::Module { name, items, .. } => {
-                let mut module_env = env.clone();
-                for member in items {
-                    let bound = match inf.infer_binding(member, &module_env) {
-                        Ok((bound, eff)) => {
-                            if member.params.is_empty() {
-                                top_effects.push((member.value.span(), eff));
-                            }
-                            bound
-                        }
-                        Err(e) => {
-                            errors.push(e);
-                            member
-                                .bound_names()
-                                .into_iter()
-                                .map(|n| (n, Scheme::mono(inf.fresh())))
-                                .collect()
-                        }
-                    };
-                    // A member is visible to its siblings bare and to the outside
-                    // qualified — including each name a destructuring member binds.
-                    for (member_name, scheme) in bound {
-                        let qualified = format!("{name}.{member_name}");
-                        module_env.insert(member_name, scheme.clone());
-                        module_env.insert(qualified.clone(), scheme.clone());
-                        env.insert(qualified, scheme);
-                    }
+                if let Some(early) = early {
+                    let seen = inf.watch.take().and_then(|(_, span)| span);
+                    errors.push(early.error(seen.unwrap_or(expr.span())));
                 }
             }
         }
@@ -4687,6 +4566,411 @@ fn pattern_names(pat: &Pattern, out: &mut HashSet<String>) {
 /// via reachability (n is small — the top-level binding count). Two distinct nodes
 /// share a component iff each reaches the other. Returned as node-index lists; the
 /// order is by ascending first member.
+/// A top-level line that uses `name` while `needs`, a function `name` cannot run
+/// without, is still to be defined.
+struct EarlyUse {
+    name: String,
+    needs: String,
+}
+
+impl EarlyUse {
+    fn error(&self, span: Span) -> TypeError {
+        let EarlyUse { name, needs } = self;
+        let message = if name == needs {
+            format!(
+                "`{name}` cannot be used yet: it is defined below this line (move this line below `{name}`)"
+            )
+        } else {
+            format!(
+                "`{name}` cannot be used yet: it needs `{needs}`, which is defined below this line (move this line below `{needs}`)"
+            )
+        };
+        TypeError { message, span }
+    }
+}
+
+/// How the top-level bindings of a module are inferred (`DESIGN.md` §7.1): which
+/// cycles of functions go together, what each cycle reads that is written between
+/// its members, and which lines would run a cycle before it is whole.
+#[derive(Default)]
+struct ItemPlan {
+    /// A cycle's first member (its item index) to all its members, in source order.
+    groups: HashMap<usize, Vec<usize>>,
+    /// Every later member of a cycle to the cycle's first member.
+    leader_of: HashMap<usize, usize>,
+    /// A cycle's first member to the items between its first and last members
+    /// that the cycle reads, in source order. They are inferred ahead of it.
+    ahead: HashMap<usize, Vec<usize>>,
+    /// A value or expression item that uses a function whose cycle is not whole yet.
+    early: HashMap<usize, EarlyUse>,
+    /// The same for a value inside an in-file module: (item, member).
+    early_members: HashMap<(usize, usize), EarlyUse>,
+}
+
+/// A binding is a "function" (safe to pre-bind in a cycle, and not run where it
+/// is written) if it takes parameters or its value is a lambda, the same test
+/// the lowerer uses for arity.
+fn binds_function(b: &LetBinding) -> bool {
+    !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. })
+}
+
+/// The names a binding reads from outside itself; `hidden` are names that mean
+/// something nearer (the earlier members of its in-file module).
+fn binding_reads(b: &LetBinding, hidden: &HashSet<String>) -> HashSet<String> {
+    let mut bound = hidden.clone();
+    for p in &b.params {
+        pattern_names(&p.pattern, &mut bound);
+    }
+    let mut refs = HashSet::new();
+    collect_free(&b.value, &bound, &mut refs);
+    refs
+}
+
+/// What an in-file module reads from outside itself.
+fn module_reads(members: &[LetBinding]) -> HashSet<String> {
+    let mut own = HashSet::new();
+    let mut refs = HashSet::new();
+    for member in members {
+        refs.extend(binding_reads(member, &own));
+        own.extend(member.bound_names());
+    }
+    refs
+}
+
+fn plan_items(module: &Module) -> ItemPlan {
+    let mut plan = ItemPlan::default();
+    // The items that bind names: each `let`, and each in-file module (read
+    // through its name, `Shapes.area`).
+    let binders: Vec<usize> = module
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| matches!(it, Item::Let(_) | Item::Module { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let mut name_to_local: HashMap<String, usize> = HashMap::new();
+    for (local, &idx) in binders.iter().enumerate() {
+        match &module.items[idx] {
+            Item::Let(b) => {
+                for name in b.bound_names() {
+                    name_to_local.insert(name, local);
+                }
+            }
+            Item::Module { name, .. } => {
+                name_to_local.insert(name.clone(), local);
+            }
+            _ => {}
+        }
+    }
+    let reads: Vec<HashSet<String>> = binders
+        .iter()
+        .map(|&idx| match &module.items[idx] {
+            Item::Let(b) => binding_reads(b, &HashSet::new()),
+            Item::Module { items, .. } => module_reads(items),
+            _ => HashSet::new(),
+        })
+        .collect();
+    let succ: Vec<Vec<usize>> = reads
+        .iter()
+        .map(|refs| {
+            let mut out: Vec<usize> = refs
+                .iter()
+                .filter_map(|n| name_to_local.get(n.as_str()).copied())
+                .collect();
+            out.sort_unstable();
+            out.dedup();
+            out
+        })
+        .collect();
+    let is_fn =
+        |local: usize| matches!(&module.items[binders[local]], Item::Let(b) if binds_function(b));
+    // A member of a cycle, by item index: the cycle's last member (item index
+    // and name). Until that line the member cannot run.
+    let mut whole_at: HashMap<usize, (usize, String)> = HashMap::new();
+    for comp in strongly_connected(&succ) {
+        // Only group genuine multi-member cycles whose members are all functions.
+        // A value cycle (`let a = b\nlet b = a`) is not grouped, so it stays
+        // declare-before-use and errors as before.
+        if comp.len() < 2 || !comp.iter().all(|&l| is_fn(l)) {
+            continue;
+        }
+        let mut member_items: Vec<usize> = comp.iter().map(|&l| binders[l]).collect();
+        member_items.sort_unstable();
+        let first = member_items[0];
+        let last = member_items[member_items.len() - 1];
+        // What the cycle reads, directly or through another item, that is
+        // written between its first and last members. No such item reads the
+        // cycle back, or it would be a member.
+        let members: HashSet<usize> = comp.iter().copied().collect();
+        let mut seen: HashSet<usize> = HashSet::new();
+        let mut stack: Vec<usize> = comp.clone();
+        let mut ahead = Vec::new();
+        while let Some(local) = stack.pop() {
+            for &next in &succ[local] {
+                let at = binders[next];
+                if members.contains(&next) || at <= first || at >= last || !seen.insert(next) {
+                    continue;
+                }
+                ahead.push(at);
+                stack.push(next);
+            }
+        }
+        ahead.sort_unstable();
+        plan.ahead.insert(first, ahead);
+        let last_name = match &module.items[last] {
+            Item::Let(b) => b.name().unwrap_or_default().to_string(),
+            _ => String::new(),
+        };
+        for &item_idx in &member_items {
+            whole_at.insert(item_idx, (last, last_name.clone()));
+            if item_idx != first {
+                plan.leader_of.insert(item_idx, first);
+            }
+        }
+        plan.groups.insert(first, member_items);
+    }
+
+    // A cycle's functions are in scope from its first member on, but Python
+    // defines each where it is written, so none of them can run before the last.
+    // `unready` maps such a name to the line it waits for (item index and name).
+    // A function written in between that reads one waits with it; a value or an
+    // expression that reads one would run it there, which is an error.
+    let mut unready: HashMap<String, (usize, String)> = HashMap::new();
+    let early_use = |refs: &HashSet<String>,
+                     idx: usize,
+                     unready: &HashMap<String, (usize, String)>|
+     -> Option<(usize, EarlyUse)> {
+        refs.iter()
+            .filter_map(|n| unready.get(n).map(|(until, needs)| (*until, n, needs)))
+            .filter(|(until, _, _)| *until > idx)
+            // The furthest line first, so one move settles the whole line.
+            .max_by(|a, b| (a.0, b.1).cmp(&(b.0, a.1)))
+            .map(|(until, name, needs)| {
+                (
+                    until,
+                    EarlyUse {
+                        name: name.clone(),
+                        needs: needs.clone(),
+                    },
+                )
+            })
+    };
+    for (idx, item) in module.items.iter().enumerate() {
+        if let Some(members) = plan.groups.get(&idx) {
+            for &m in members {
+                if let (Item::Let(b), Some(whole)) = (&module.items[m], whole_at.get(&m)) {
+                    for name in b.bound_names() {
+                        unready.insert(name, whole.clone());
+                    }
+                }
+            }
+        }
+        match item {
+            Item::Let(_) if whole_at.contains_key(&idx) => {}
+            Item::Let(b) => {
+                let found = early_use(&binding_reads(b, &HashSet::new()), idx, &unready);
+                for name in b.bound_names() {
+                    unready.remove(&name);
+                }
+                match found {
+                    Some((until, early)) if binds_function(b) => {
+                        for name in b.bound_names() {
+                            unready.insert(name, (until, early.needs.clone()));
+                        }
+                    }
+                    Some((_, early)) => {
+                        plan.early.insert(idx, early);
+                    }
+                    None => {}
+                }
+            }
+            Item::Module { name, items, .. } => {
+                let mut own = HashSet::new();
+                let mut waits: Option<(usize, String)> = None;
+                for (k, member) in items.iter().enumerate() {
+                    let found = early_use(&binding_reads(member, &own), idx, &unready);
+                    own.extend(member.bound_names());
+                    match found {
+                        Some((until, early)) if binds_function(member) => {
+                            if waits.as_ref().is_none_or(|(u, _)| *u < until) {
+                                waits = Some((until, early.needs));
+                            }
+                        }
+                        Some((_, early)) => {
+                            plan.early_members.insert((idx, k), early);
+                        }
+                        None => {}
+                    }
+                }
+                // A module with a function that waits is read through the
+                // module's name, so the whole name waits.
+                unready.remove(name);
+                if let Some(waits) = waits {
+                    unready.insert(name.clone(), waits);
+                }
+            }
+            Item::Expr(expr) => {
+                let mut refs = HashSet::new();
+                collect_free(expr, &HashSet::new(), &mut refs);
+                if let Some((_, early)) = early_use(&refs, idx, &unready) {
+                    plan.early.insert(idx, early);
+                }
+            }
+            _ => {}
+        }
+    }
+    plan
+}
+
+/// The top-level bindings of a module while they are inferred. A cycle of
+/// functions is inferred at its first member together with what it reads from
+/// between its members; each item's names still enter scope at its own line.
+struct TopItems<'a> {
+    module: &'a Module,
+    plan: ItemPlan,
+    done: HashSet<usize>,
+    /// What an inferred item binds, held until its own line is reached.
+    bound: HashMap<usize, Vec<(String, Scheme)>>,
+}
+
+impl<'a> TopItems<'a> {
+    fn new(module: &'a Module) -> Self {
+        TopItems {
+            module,
+            plan: plan_items(module),
+            done: HashSet::new(),
+            bound: HashMap::new(),
+        }
+    }
+
+    /// Infer the `let` or in-file module at `idx` against `env`, unless it was
+    /// inferred already, ahead of a cycle that reads it.
+    fn infer(
+        &mut self,
+        idx: usize,
+        env: &Env,
+        inf: &mut Infer,
+        errors: &mut Vec<TypeError>,
+        top_effects: &mut Vec<(Span, Effect)>,
+    ) {
+        // A later member of a cycle is inferred with the first.
+        let idx = self.plan.leader_of.get(&idx).copied().unwrap_or(idx);
+        if !self.done.insert(idx) {
+            return;
+        }
+        let module = self.module;
+        if let Some(members) = self.plan.groups.get(&idx).cloned() {
+            // The cycle sees what is in scope at its first member, and what it
+            // reads from between its members. Those items do not read the cycle,
+            // so they can be inferred first, in the order they are written.
+            let mut group_env = env.clone();
+            for item in self.plan.ahead.get(&idx).cloned().unwrap_or_default() {
+                let item = self.plan.leader_of.get(&item).copied().unwrap_or(item);
+                self.infer(item, &group_env, inf, errors, top_effects);
+                for (name, scheme) in self.bound.get(&item).into_iter().flatten() {
+                    group_env.insert(name.clone(), scheme.clone());
+                }
+            }
+            let group: Vec<&LetBinding> = members
+                .iter()
+                .map(|&mi| match &module.items[mi] {
+                    Item::Let(b) => b,
+                    _ => unreachable!("group members are `let` items"),
+                })
+                .collect();
+            let mut bound = Vec::new();
+            for (name, res) in inf.infer_mutual_group(&group, &group_env) {
+                match res {
+                    Ok(scheme) => bound.push((name, scheme)),
+                    Err(e) => {
+                        errors.push(e);
+                        bound.push((name, Scheme::mono(inf.fresh())));
+                    }
+                }
+            }
+            self.bound.insert(idx, bound);
+            return;
+        }
+        match &module.items[idx] {
+            Item::Let(binding) => {
+                let early = self.plan.early.get(&idx);
+                if let Some(early) = early {
+                    inf.watch = Some((early.name.clone(), None));
+                }
+                let bound = match inf.infer_binding(binding, env) {
+                    Ok((bound, eff)) => {
+                        // A function's body effect is latent; only evaluating a
+                        // value binding performs it.
+                        if binding.params.is_empty() {
+                            top_effects.push((binding.value.span(), eff));
+                        }
+                        bound
+                    }
+                    Err(e) => {
+                        errors.push(e);
+                        // Bind every name the target *would* have bound, at a fresh
+                        // type, so later items report their own errors instead of a
+                        // cascade of "unbound name".
+                        binding
+                            .bound_names()
+                            .into_iter()
+                            .map(|n| (n, Scheme::mono(inf.fresh())))
+                            .collect()
+                    }
+                };
+                if let Some(early) = early {
+                    let seen = inf.watch.take().and_then(|(_, span)| span);
+                    errors.push(early.error(seen.unwrap_or(binding.value.span())));
+                }
+                self.bound.insert(idx, bound);
+            }
+            // A module is typed in its own scope: members see prior siblings
+            // unqualified (and qualified); only `Module.member` escapes to the outer
+            // env (so the bare names are not visible after the module).
+            Item::Module { name, items, .. } => {
+                let mut module_env = env.clone();
+                let mut escaping = Vec::new();
+                for (k, member) in items.iter().enumerate() {
+                    let bound = match inf.infer_binding(member, &module_env) {
+                        Ok((bound, eff)) => {
+                            if member.params.is_empty() {
+                                top_effects.push((member.value.span(), eff));
+                            }
+                            bound
+                        }
+                        Err(e) => {
+                            errors.push(e);
+                            member
+                                .bound_names()
+                                .into_iter()
+                                .map(|n| (n, Scheme::mono(inf.fresh())))
+                                .collect()
+                        }
+                    };
+                    if let Some(early) = self.plan.early_members.get(&(idx, k)) {
+                        errors.push(early.error(member.value.span()));
+                    }
+                    // A member is visible to its siblings bare and to the outside
+                    // qualified — including each name a destructuring member binds.
+                    for (member_name, scheme) in bound {
+                        let qualified = format!("{name}.{member_name}");
+                        module_env.insert(member_name, scheme.clone());
+                        module_env.insert(qualified.clone(), scheme.clone());
+                        escaping.push((qualified, scheme));
+                    }
+                }
+                self.bound.insert(idx, escaping);
+            }
+            _ => {}
+        }
+    }
+
+    /// The names the item at `idx` brings into scope at its own line.
+    fn reveal(&mut self, idx: usize) -> Vec<(String, Scheme)> {
+        self.bound.remove(&idx).unwrap_or_default()
+    }
+}
+
 fn strongly_connected(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let n = succ.len();
     let reach: Vec<HashSet<usize>> = (0..n)
@@ -7025,6 +7309,9 @@ struct SubstSnapshot {
 
 #[derive(Default)]
 struct Infer {
+    /// A name to look out for while one top-level line is inferred, and where
+    /// the line first reads it: the place an [`EarlyUse`] error points at.
+    watch: Option<(String, Option<Span>)>,
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
@@ -8217,7 +8504,14 @@ impl Infer {
                 Some(_) if self.named_ctor_fields(name).is_some() => {
                     Err(self.named_ctor_as_function(name, span))
                 }
-                Some(scheme) => Ok(self.instantiate(scheme)),
+                Some(scheme) => {
+                    if let Some((watched, seen @ None)) = &mut self.watch
+                        && watched == name
+                    {
+                        *seen = Some(span);
+                    }
+                    Ok(self.instantiate(scheme))
+                }
                 None if MODULES.contains(&name.as_str()) || self.decls.modules.contains(name) => {
                     Err(TypeError {
                         message: format!("`{name}` is a module; use `{name}.member`"),
