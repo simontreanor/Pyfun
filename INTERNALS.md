@@ -729,12 +729,11 @@ document. `tests/fmt.rs` runs the formatter over every program in the repository
 ## `pyfun test` — implements DESIGN §9
 
 `Test` is a prelude module like the others (`types::TEST_PRELUDE`, its schemes beside `Encode.auto`'s).
-Two things are particular to it. `types::test_misuse` runs after inference and reports each
-`Test.member` reference that does not lie inside the body of a top-level function named `test_*`; it
-reads the references `lsp::resolve` already collects, and steps aside when the file has a module of its
-own called `Test`. And `Lowerer::lower_application` turns a member with all its arguments into a
-`PyStmt::Assert` ahead of a `None` value, which is why the assertion shows as a statement wherever the
-call stood; a member passed as a value keeps a `_pf_test_*` helper that holds the same `assert`.
+Two things are particular to it. Each member's last arrow carries `exn`, so the ordinary effect
+inference is what says which functions assert; there is no rule about where a member may be written.
+And `Lowerer::lower_application` turns a member with all its arguments into a `PyStmt::Assert` ahead
+of a `None` value, which is why the assertion shows as a statement wherever the call stood, in a test
+or in a helper; a member passed as a value keeps a `_pf_test_*` helper that holds the same `assert`.
 
 The command is `src/test_cmd.rs`. It resolves each test file's project, checks it, compiles it with
 `project::compile_tests`, and stages every project's files in one temp directory, where pytest is run

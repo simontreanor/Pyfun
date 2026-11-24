@@ -65,21 +65,26 @@ fn an_expectation_inside_a_tests_own_lambda_is_in_the_test() {
 }
 
 #[test]
-fn an_expectation_outside_a_test_is_an_error() {
+fn a_helper_may_assert_and_its_type_says_so() {
+    // An expectation is allowed anywhere. It performs `exn`, which a helper
+    // that asserts inherits, so `let pure` keeps one out and `try` handles it.
     for source in [
         "let helper x = Test.is_true (x > 0)",
         "let check = List.iter (Test.equal 1)",
         "Test.equal 1 1",
-        // A value named like a test is not a function pytest runs.
-        "let test_value = Test.equal 1 1",
+        "let positive x = Test.is_true (x > 0)\nlet test_one _ = positive 1",
+        "let positive x = Test.is_true (x > 0)\nlet pure caught x = try (positive x)",
     ] {
-        let message = error_of(source);
-        assert!(
-            message
-                .contains("belongs in a test: a top-level function whose name opens with `test_`"),
-            "{source}: {message}"
-        );
+        compile(source);
     }
+    let message = error_of("let pure positive x = Test.is_true (x > 0)");
+    assert!(
+        message.contains("is declared `pure` but performs `exn`"),
+        "{message}"
+    );
+    // A helper keeps the `assert`, where pytest explains the failure.
+    let py = compile("let positive x = Test.is_true (x > 0)");
+    assert!(py.contains("def positive(x):\n    assert x > 0"), "{py}");
 }
 
 // ---------- The command ----------
@@ -187,6 +192,37 @@ fn a_failing_test_is_reported_by_pytest_with_both_values() {
     let _ = fs::remove_dir_all(&dir);
     assert!(ok, "{stdout}\n{stderr}");
     assert!(stdout.contains("1 passed, 1 deselected"), "{stdout}");
+}
+
+#[test]
+fn a_failure_inside_a_helper_is_explained_there() {
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    // A helper shared by tests asserts for them, and one test handles a
+    // failed expectation with `try`.
+    let dir = workdir(
+        "helper",
+        &[(
+            "test_sorted.pyfun",
+            "let is_sorted xs = List.sort xs == xs\n\n\
+             let expect_sorted xs = Test.is_true (is_sorted xs)\n\n\
+             let test_sorted _ =\n    expect_sorted [1, 2, 3]\n\n\
+             let test_unsorted _ =\n    expect_sorted [3, 1]\n\n\
+             let test_caught _ =\n    match try (expect_sorted [2, 1]):\n        case Ok _: Test.fail \"it should have failed\"\n        case Error e: Test.equal \"AssertionError\" e.error_kind\n",
+        )],
+    );
+    let (ok, stdout, stderr) = pyfun_test(&dir, &[]);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("1 failed, 2 passed"), "{stdout}");
+    // pytest reads the helper's `assert` as it reads a test's.
+    assert!(stdout.contains("def expect_sorted(xs):"), "{stdout}");
+    assert!(
+        stdout.contains("where False = is_sorted([3, 1])"),
+        "{stdout}"
+    );
 }
 
 #[test]
