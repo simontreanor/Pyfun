@@ -36,6 +36,7 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
 |------|---------|:---:|-------|
 | [`json_decode.pyfun`](./json_decode.pyfun) | `json` (stdlib) | ✅ | `try` → `Result` totality; homogeneous JSON → `List`/`Map`; total `Map.find` lookup |
 | [`json_to_adt.pyfun`](./json_to_adt.pyfun) | `Decode` (built-in) | ✅ | **the headline** — decode a heterogeneous object into your own record, totally, with the Elm-style built-in `Decode` module (`Decode.map3` + `Decode.field`); the whole pipeline is *pure* |
+| [`json_edit.pyfun`](./json_edit.pyfun) | `Decode` and `Json` (built-in) | ✅ | JSON a record cannot describe: `Decode.dict` for an object keyed by ids, `Decode.index` for an array whose positions each mean something else, and the `Json` type to read any document, change one part by `match` and write the rest back as it was |
 | [`sqlite_query.pyfun`](./sqlite_query.pyfun) | `sqlite3` (stdlib) | ✅ | opaque handle types + unbound-method externs; rows as tuples; `List`/tuple decoding |
 | [`read_files.pyfun`](./read_files.pyfun) | `pathlib` (stdlib) | ✅ | inferred `io` effect + propagation; `let pure` rejection; `try` → `Result` on a missing file |
 | [`http_fetch.pyfun`](./http_fetch.pyfun) | `urllib` (stdlib) | ✅ | inferred `io` / `->{async}` effects; the effect *guarantee* (`let pure` over `io` is a compile error); instance-method body read |
@@ -65,10 +66,15 @@ The honest headline is therefore **not** "rewrite the popular libraries in Pyfun
   Decoder a -> str -> Result a Exception`. `Decode.field "age" Decode.int` pulls and
   strictly decodes a field; `Decode.map3`/`map2`/`map4` fan several field decoders into
   one that builds your record; `Decode.list`/`nullable`/`one_of`/`and_then` cover arrays,
-  optional/`null`, unions, and value-dependent shapes. The first bad field
+  optional/`null`, unions, and value-dependent shapes; `Decode.dict` reads an object whose
+  keys are data into a `Map`, and `Decode.index` one position of an array. The first bad field
   short-circuits to `Error`, and the whole pipeline is **pure** (a `let pure` over it
   type-checks). See `json_to_adt.pyfun` — this is Elm's `elm/json`, on the one library
   every Python programmer has imported.
+- **JSON as data, when there is no shape to name.** `Decode.value` reads any JSON as the
+  built-in `Json` type (`JNull`, `JBool`, `JInt`, `JFloat`, `JStr`, `JList`, `JObject`), a
+  sum type you `match` on and build like your own, and `Encode.value` writes it back with
+  ints, floats and key order as they came. See `json_edit.pyfun`.
 - **Effects for free.** A plain `extern` is `io`; the checker infers and propagates it, so
   any function touching the boundary is `io` with no annotation, and `let pure` over it is
   a compile error. An async library's result is the `Async` type (`-> Async a`), awaited with

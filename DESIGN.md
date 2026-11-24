@@ -1080,7 +1080,10 @@ Result a Exception`, so malformed input is a value you `match`, never a crash. P
 `Decode.str`/`int`/`float`/`bool` are **strict** (a JSON number does not decode as a string;
 `Decode.int` rejects a JSON bool — a Python `bool` is an `int` subclass — while `Decode.float` accepts a
 JSON int); structure combinators `Decode.field name dec`, `Decode.list dec`, `Decode.nullable dec` (JSON
-`null` → `Option`); and composition `Decode.map`/`map2`/`map3`/`map4` (the fan-in that builds a record
+`null` → `Option`), `Decode.dict dec` (an object whose keys are data, every value alike: a `Map str a`
+in the object's order) and `Decode.index i dec` (the element at one position of an array, counted from
+0 like `List.get`, for an array whose positions each mean something else: `[1, [4, "10"]]`; an array
+too short is an `Error` saying which index was wanted and how long the array is); and composition `Decode.map`/`map2`/`map3`/`map4` (the fan-in that builds a record
 from several field decoders at once), `Decode.and_then` (a decoder chosen from an already-decoded value),
 `Decode.one_of` (first decoder that succeeds — decode a union), `Decode.succeed`/`Decode.fail`. **Every
 arrow is `pure`** — decoders are a pure, total sublanguage, so composing *and running* them introduces no
@@ -1090,9 +1093,48 @@ raw `extern json.loads` boundary is conservatively `io`. Representation: a `Deco
 combinators build such callables (closures), and `decode_string` runs one inside `try`, catching any raise
 into `Ok`/`Error(_Exception(kind, message))` exactly like the `try e` boundary form. Lowering routes each
 member to an emitted `_pf_dec_*` helper (built from the IR, not string-spliced — the strict primitives use
-the new general `PyStmt::Raise` node and the `is` comparison for `null`). The generalized decoder story
-(user-registered combinators, a `Value` type for already-parsed data) is deferred; the shipped set already
-covers records, lists, options, and unions.
+the new general `PyStmt::Raise` node and the `is` comparison for `null`). User-registered combinators
+stay deferred.
+
+**JSON as data — the `Json` type.** A decoder turns JSON into the program's own types, which is right
+where the shape is known. A tool that *edits* a file has to carry the parts it does not understand and
+write them back as they were, and some JSON has no shape worth a type. For those there is one built-in
+sum type:
+
+```pyfun
+type Json =
+  | JNull
+  | JBool bool
+  | JInt int
+  | JFloat float
+  | JStr str
+  | JList (List Json)
+  | JObject (Map str Json)
+```
+
+`Decode.value : Decoder Json` takes any JSON as it is, and `Encode.value : Json -> str` writes a value
+back. The round trip keeps what a JSON document says: an int stays an int and a float a float (`JInt 1`
+and `JFloat 1.0` are different values, and `1` and `1.0` different texts), and an object keeps its keys
+in the order they came, since a `Map` is a Python dict. It does not keep the document's spacing or its
+string escapes. `Json` is a sum type to the rest of the language: `match` on it is checked for
+exhaustiveness over the seven constructors, values are built with them, `==` is structural, and the
+`Map` and `List` modules work on what `JObject` and `JList` hold. It has no order (`<` on two `Json`
+values is an error, as it is on a `Map`). **Why constructors with a `J`.** They are bare names, like
+`Some` and `Ok`, so they share the program's one constructor namespace; `Null`, `Bool`, `List` and
+`Str` would take names a program wants or the language already uses. The names are reserved: a
+program's own `type Json` or `JNull` constructor is an error that says the name is built in.
+**Derived codecs.** A `Json` inside a type the derived codecs handle travels as the JSON it stands for,
+so `type Doc = { id: int, extra: Json }` reads and writes `extra` untouched, and `Encode.auto` on a
+`Json` value gives what `Encode.value` gives. **Representation.** One class per constructor, exactly
+as a user sum type lowers (`JInt(1)`, `case JList(xs):`, `JNull` built once as `_JNull`), emitted only
+in a file that builds or matches a `Json` or uses `Decode.value` / `Encode.value`, and placed in the
+shared `_pyfun_rt.py` of a project so the type is one type across its files. `Decode.value` is a
+helper that wraps the parsed document (a `bool` is tested before an `int`, since Python's `bool` is
+one), so reading costs a copy of the tree. The alternative, a `Json` that *is* the parsed Python
+value with no classes, was turned down: `1 == 1.0` and `True == 1` hold in Python, so equality and
+`match` would not tell `JInt` from `JFloat` from `JBool`. The derived encoder tells a `Json` value by
+its class's name, which the reservation makes sound, so a program without `Json` carries none of its
+classes. Typed output names the type by an alias, `type Json = JNull | JBool | …`.
 
 **Browser target — `pyfun bundle`.** The playground already runs the compiler under WASM and
 CPython under Pyodide; `pyfun bundle <entry> -o <dir>` ships a *program* the same way: a static
@@ -1118,8 +1160,8 @@ Signalling for a peer-to-peer transport is the program's problem, not the langua
 they drift. `Encode.auto : a -> str` and `Decode.auto : Decoder a` are derived from the type, so
 both ends are one line and the property the tests state once is `Decode.decode_string Decode.auto
 (Encode.auto v) == Ok v` for every type the derivation accepts: the primitives, records, sum types,
-tuples, `List`, `Set`, `Map`, `Option`, `Result`, newtypes (erased, so the wire carries the
-underlying value), and any recursion through them. **The shape** is the convention serde
+tuples, `List`, `Set`, `Map`, `Option`, `Result`, `Json` (which travels as the JSON it stands for,
+above), newtypes (erased, so the wire carries the underlying value), and any recursion through them. **The shape** is the convention serde
 (`#[serde(tag = "type")]`), Pydantic discriminated unions and System.Text.Json share: a record is an
 object keyed by its Pyfun field names; a sum-type case is `{"type": "Move", "fields": [...]}` with
 positional payloads (`{"type": "Resign"}` for a nullary case; F#'s `{"Case", "Fields"}` is the outlier
@@ -2642,6 +2684,12 @@ Decisions:
    constructor does; decision 2). There is **no bare `{ f = v }` literal** — that form is removed, which is
    what eliminates the dict false friend outright. The type-declaration body keeps bare braces (`type Point
    = { x: int, y: int }` — a *type* body, not an expression), and access `p.x` is unchanged.
+   **A brace after an uppercase name is a record only when it starts with a field name.** Anything else
+   there is a collection literal the name is applied to, so a constructor takes a `Map` or a `Set`
+   without parentheses: `JObject {"id": JInt 1}`, `Some {1, 2}`, `JObject {}`. A record's name with
+   empty braces (`Point {}`) is therefore the name alone, and the checker says how a record is built
+   (`` `Point` is a record, built with its fields: `Point { x = …, y = … }` ``). The formatter spaces
+   the two the way their kinds are spaced: `Point { x = 1 }` and `JObject {"id": JInt 1}`.
 4. **Update stays bare: `{ e with f = v }`, and a field may be a dotted path.** The base expression `e`
    already fixes the record type, and the `with` keyword makes the form unambiguously an update (Python has
    no `{ … with … }`), so it is not a false friend and needs no tag. Lowering binds the base to a temp

@@ -1,0 +1,63 @@
+# Decode and Json (built-in): JSON whose shape a record cannot describe.
+#
+#   pyfun run examples/interop/json_edit.pyfun
+#
+# Two shapes turn up in real files that `Decode.field` and `Decode.list` do not reach.
+# An object may use its keys as data: a table of things by id. An array may give each
+# position its own meaning: `["cat", [10, -4]]` for a name and a place. `Decode.dict`
+# reads the first into a `Map`, and `Decode.index` reads one position of the second.
+
+type Sprite = { name: str, x: int, y: int }
+
+# One sprite is stored as `[name, [x, y]]`.
+let sprite =
+  Decode.map3 (fun name x y -> Sprite { name = name, x = x, y = y })
+    (Decode.index 0 Decode.str)
+    (Decode.index 1 (Decode.index 0 Decode.int))
+    (Decode.index 1 (Decode.index 1 Decode.int))
+
+# The file keys its sprites by id, so the ids are the keys of a `Map`.
+let sprites = Decode.field "sprites" (Decode.dict sprite)
+
+let saved = """{"version": 3, "sprites": {"k9": ["cat", [10, -4]], "a2": ["ball", [0, 7]]}, "extra": {"tempo": 60.0, "tags": ["demo", null]}}"""
+
+let place (id, s) = f"{id}: {s.name} at ({s.x}, {s.y})"
+
+let list_sprites r =
+  match r:
+    case Ok found: found |> Map.to_list |> List.map place |> String.join "; "
+    case Error e: f"decode failed ({e.error_kind}): {e.error_message}"
+
+# The `Map` keeps the order of the file: `k9` comes before `a2`.
+saved |> Decode.decode_string sprites |> list_sprites |> print
+
+# A tool that edits a file has to write back the parts it does not understand, as they
+# were. `Decode.value` reads any JSON as a `Json` value: a sum type to `match` on, with
+# `JInt` and `JFloat` kept apart and an object's keys in the order they came.
+
+# Raise the version by one and leave the rest alone.
+let bump j =
+  match j:
+    case JObject m:
+      match Map.find "version" m:
+        case Some (JInt n): m |> Map.add "version" (JInt (n + 1)) |> JObject
+        case _: j
+    case _: j
+
+let rewrite r =
+  match r:
+    case Ok j: j |> bump |> Encode.value
+    case Error e: f"decode failed ({e.error_kind}): {e.error_message}"
+
+# `60.0` is still `60.0`, and `extra` is still last.
+saved |> Decode.decode_string Decode.value |> rewrite |> print
+
+# A `Json` value is built with the same constructors, and reads like the JSON it becomes.
+let fresh = JObject {"version": JInt 1, "sprites": JObject {}, "extra": JNull}
+
+fresh |> Encode.value |> print
+
+# Output:
+#   k9: cat at (10, -4); a2: ball at (0, 7)
+#   {"version": 4, "sprites": {"k9": ["cat", [10, -4]], "a2": ["ball", [0, 7]]}, "extra": {"tempo": 60.0, "tags": ["demo", null]}}
+#   {"version": 1, "sprites": {}, "extra": null}

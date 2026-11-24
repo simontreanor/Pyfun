@@ -211,12 +211,21 @@ fn brace_kind(real: &[&Token], i: usize, head: Option<&Tok>) -> Braces {
         if prev.tok == Tok::Arrow && prev.span.end == real[i].span.start {
             return Braces::Tight;
         }
-        // A record's tag, a constructor's fields, a builder's block.
-        if let Tok::Ident(name) = &prev.tok
-            && (name.starts_with(|c: char| c.is_ascii_uppercase())
-                || matches!(name.as_str(), "async" | "seq" | "result" | "option"))
-        {
-            return Braces::Spaced;
+        // A record's tag, a constructor's fields, a builder's block. After an
+        // uppercase name a brace that does not start with a field name is a map
+        // or a set the name is applied to (`JObject {"id": JInt 1}`), which the
+        // scan below settles.
+        if let Tok::Ident(name) = &prev.tok {
+            let upper = name.starts_with(|c: char| c.is_ascii_uppercase());
+            let field_next = matches!(
+                next,
+                Some(Tok::Ident(n)) if !n.starts_with(|c: char| c.is_ascii_uppercase())
+            );
+            if matches!(name.as_str(), "async" | "seq" | "result" | "option")
+                || (upper && field_next)
+            {
+                return Braces::Spaced;
+            }
         }
     }
     if matches!(head, Some(Tok::Type)) {
@@ -529,6 +538,20 @@ mod tests {
         assert_eq!(
             fmt("let job = async {return 1}\nextern now : unit ->{io} float = time.time\n"),
             "let job = async { return 1 }\nextern now: unit ->{io} float = time.time\n"
+        );
+    }
+
+    #[test]
+    fn a_literal_after_a_constructor_is_tight() {
+        // A brace after an uppercase name is a record when it starts with a
+        // field name, and a map or a set the name is applied to otherwise.
+        assert_eq!(
+            format("let j = JObject { \"id\" : JInt 1,\"o\":JObject {  } }\n").unwrap(),
+            "let j = JObject {\"id\": JInt 1, \"o\": JObject {}}\n"
+        );
+        assert_eq!(
+            format("let s = Some { 1,2 }\nlet p = P {x=1}\n").unwrap(),
+            "let s = Some {1, 2}\nlet p = P { x = 1 }\n"
         );
     }
 

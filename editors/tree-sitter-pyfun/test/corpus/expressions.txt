@@ -310,6 +310,39 @@ let grade x =
       (string))))
 
 ================================================================================
+a constructor applied to a map or a set literal
+================================================================================
+
+let j = JObject {"id": JInt 1, "o": JObject {}}
+let s = Some {1, 2}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (application
+      (constructor_identifier)
+      (map_expression
+        (map_entry
+          (string)
+          (application
+            (constructor_identifier)
+            (integer)))
+        (map_entry
+          (string)
+          (application
+            (constructor_identifier)
+            (map_expression))))))
+  (let_binding
+    (identifier)
+    (application
+      (constructor_identifier)
+      (set_expression
+        (integer)
+        (integer)))))
+
+================================================================================
 map and set literals, beside a record update
 ================================================================================
 

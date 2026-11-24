@@ -411,7 +411,7 @@ fn old_str_type_error(span: Span) -> TypeError {
 /// and **`List`** (lexicographic, handled explicitly in [`Infer::require_ord_rec`],
 /// matching the Python list it lowers to). `Set`/`Map` have no natural order, and
 /// `Async`/`Seq`/`Exception` aren't comparable.
-const RESERVED_UNORDERED: [&str; 5] = ["Set", "Map", "Async", "Seq", "Exception"];
+const RESERVED_UNORDERED: [&str; 6] = ["Set", "Map", "Async", "Seq", "Exception", "Json"];
 
 /// A depth cap on the structural-ordering check, so a pathological *non-regular*
 /// recursive type (whose expansion never repeats a `(name, args)` key) can't loop
@@ -734,6 +734,8 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
     ("bool", 0),
     ("field", 2),
     ("list", 1),
+    ("dict", 1),
+    ("index", 2),
     ("nullable", 1),
     ("map", 2),
     ("map2", 3),
@@ -745,11 +747,26 @@ pub const DECODE_PRELUDE: &[(&str, usize)] = &[
     ("one_of", 1),
     ("decode_string", 2),
     ("auto", 0),
+    ("value", 0),
 ];
 
 /// The `Encode` module (`DESIGN.md` §6, "Derived codecs"): the mirror of
 /// `Decode.auto`, one derived encoder for any value whose type has a JSON form.
-pub const ENCODE_PRELUDE: &[(&str, usize)] = &[("auto", 1)];
+pub const ENCODE_PRELUDE: &[(&str, usize)] = &[("auto", 1), ("value", 1)];
+
+/// The constructors of the built-in `Json` type (`DESIGN.md` §6, "JSON as
+/// data"), each with the number of values it holds: parsed JSON as a value a
+/// program can `match` on, build and change. Shared with lowering, which emits a
+/// class for each.
+pub const JSON_CTORS: &[(&str, usize)] = &[
+    ("JNull", 0),
+    ("JBool", 1),
+    ("JInt", 1),
+    ("JFloat", 1),
+    ("JStr", 1),
+    ("JList", 1),
+    ("JObject", 1),
+];
 
 /// The `Test` module (`DESIGN.md` §9): what a test expects. Each member lowers
 /// to a Python `assert`, which is what pytest reads to explain a failure. They
@@ -809,6 +826,14 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
     (
         "Encode.auto",
         "Encode any value with a JSON form to a JSON string: records as objects, sum-type cases as `{\"type\": …, \"fields\": […]}`, `Option` as `null` or the value, a `Map` with string keys as an object and any other as a list of pairs. Round-trips `Decode.auto`.",
+    ),
+    (
+        "Decode.value",
+        "A decoder that takes any JSON as it is, giving a `Json` value to `match` on: `JNull`, `JBool`, `JInt`, `JFloat`, `JStr`, `JList`, `JObject`.",
+    ),
+    (
+        "Encode.value",
+        "Encode a `Json` value to a JSON string. What `Decode.value` read is written back as the same JSON, with an object's keys in the order they came.",
     ),
     (
         "Test.equal",
@@ -1545,6 +1570,14 @@ pub const MEMBER_DOCS: &[(&str, &str)] = &[
         "Decode a JSON array, every element with the same decoder.",
     ),
     (
+        "Decode.dict",
+        "Decode a JSON object whose keys are data, every value with the same decoder, giving a `Map` in the object's order.",
+    ),
+    (
+        "Decode.index",
+        "Decode the element at one position of a JSON array, counted from 0.",
+    ),
+    (
         "Decode.nullable",
         "Decode a value that may be JSON null, giving `Option`.",
     ),
@@ -1980,6 +2013,8 @@ pub enum Codec {
     Bool,
     Str,
     Unit,
+    /// Any JSON, kept as a `Json` value (`Decode.value`).
+    Json,
     List(Box<Codec>),
     Set(Box<Codec>),
     Option(Box<Codec>),
@@ -3280,6 +3315,10 @@ fn build_decls(
     let mut decls = Decls::default();
     let mut env = Env::new();
     seed_builtin_types(&mut decls, &mut env);
+    // What the language itself defines, for the message when a program
+    // declares one of these names again.
+    let builtin_types: HashSet<String> = decls.type_arity.keys().cloned().collect();
+    let builtin_ctors: HashSet<String> = decls.ctors.keys().cloned().collect();
     seed_prelude(&mut env);
     seed_list_prelude(&mut env);
     seed_set_prelude(&mut env);
@@ -3349,7 +3388,7 @@ fn build_decls(
     for item in &module.items {
         if let Item::Type(decl) = item {
             let span = decl.span.span();
-            if BUILTIN_TYPES.contains(&decl.name.as_str()) {
+            if BUILTIN_TYPES.contains(&decl.name.as_str()) || builtin_types.contains(&decl.name) {
                 errors.push(TypeError {
                     message: format!("cannot redefine builtin type `{}`", decl.name),
                     span,
@@ -3397,6 +3436,16 @@ fn build_decls(
                     (0..decl.params.len() as u32).map(Ty::Var).collect(),
                 );
                 for variant in variants {
+                    if builtin_ctors.contains(&variant.name) {
+                        errors.push(TypeError {
+                            message: format!(
+                                "cannot redefine builtin constructor `{}`",
+                                variant.name
+                            ),
+                            span,
+                        });
+                        continue;
+                    }
                     if decls.ctors.contains_key(&variant.name) {
                         errors.push(TypeError {
                             message: format!("constructor `{}` is already defined", variant.name),
@@ -3832,6 +3881,15 @@ fn seed_task_prelude(env: &mut Env) {
     env.insert(
         "Encode.auto".to_string(),
         scheme(vec![0], vec![], pf(a(), Ty::Str)),
+    );
+    // Encode.value : Json -> str
+    env.insert(
+        "Encode.value".to_string(),
+        scheme(
+            vec![],
+            vec![],
+            pf(Ty::Con("Json".to_string(), vec![]), Ty::Str),
+        ),
     );
     // Test.equal : a -> a -> unit   (expected first, as the sentence reads)
     env.insert(
@@ -6170,6 +6228,17 @@ fn seed_decode_prelude(env: &mut Env) {
     );
     // Decode.list dec : a JSON array of homogeneous values.
     put("list", scheme(vec![0], pf(dec(v(0)), dec(list(v(0))))));
+    // Decode.dict dec : a JSON object with arbitrary keys, every value alike.
+    let map = |k: Ty, v: Ty| Ty::Con("Map".to_string(), vec![k, v]);
+    put(
+        "dict",
+        scheme(vec![0], pf(dec(v(0)), dec(map(str_(), v(0))))),
+    );
+    // Decode.index i dec : the element at one position of a JSON array.
+    put(
+        "index",
+        scheme(vec![0], pf(int(), pf(dec(v(0)), dec(v(0))))),
+    );
     // Decode.nullable dec : JSON null -> None, otherwise Some (decoded).
     put("nullable", scheme(vec![0], pf(dec(v(0)), dec(opt(v(0))))));
     // Combinators.
@@ -6217,6 +6286,11 @@ fn seed_decode_prelude(env: &mut Env) {
     // Decode.auto : a decoder derived from the type it is used at (resolved after
     // inference into a `Codec`, `DESIGN.md` §6 "Derived codecs").
     put("auto", scheme(vec![0], dec(v(0))));
+    // Decode.value : any JSON, as the built-in `Json` type.
+    put(
+        "value",
+        scheme(vec![], dec(Ty::Con("Json".to_string(), vec![]))),
+    );
     // Decode.succeed x : a decoder that ignores its input and yields `x`.
     put("succeed", scheme(vec![0], pf(v(0), dec(v(0)))));
     // Decode.fail msg : a decoder that always fails with `msg`.
@@ -7086,6 +7160,45 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
             field_names: None,
         },
     );
+
+    // `Json` — parsed JSON as data (`DESIGN.md` §6, "JSON as data"): a sum type
+    // like any other to `match` and exhaustiveness, with no type parameters.
+    // Reserved, so a user `type Json` or a constructor of these names is an error.
+    let json_ty = Ty::Con("Json".to_string(), vec![]);
+    decls.type_arity.insert("Json".to_string(), 0);
+    decls.type_ctors.insert(
+        "Json".to_string(),
+        JSON_CTORS
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect(),
+    );
+    for (name, _) in JSON_CTORS {
+        let holds = match *name {
+            "JBool" => Some(Ty::Bool),
+            "JInt" => Some(Ty::Int(Unit::dimensionless())),
+            "JFloat" => Some(Ty::Float(Unit::dimensionless())),
+            "JStr" => Some(Ty::Str),
+            "JList" => Some(Ty::Con("List".to_string(), vec![json_ty.clone()])),
+            "JObject" => Some(Ty::Con("Map".to_string(), vec![Ty::Str, json_ty.clone()])),
+            _ => None,
+        };
+        let arity = usize::from(holds.is_some());
+        let ty = match holds {
+            Some(held) => Ty::Fun(Box::new(held), Box::new(json_ty.clone()), Effect::pure()),
+            None => json_ty.clone(),
+        };
+        let scheme = Scheme::mono(ty);
+        env.insert(name.to_string(), scheme.clone());
+        decls.ctors.insert(
+            name.to_string(),
+            CtorInfo {
+                scheme,
+                arity,
+                field_names: None,
+            },
+        );
+    }
 
     // `Exception` — the reserved record carrying a caught Python exception's
     // `error_kind` (the class name, `type(e).__name__`) and `error_message` (`str(e)`).
@@ -8518,6 +8631,22 @@ impl Infer {
                         span,
                     })
                 }
+                // A record's name alone is no value: `Point {}`, or `Point`
+                // handed on like a function.
+                None if self.decls.records.contains_key(name) => {
+                    let fields: Vec<String> = self.decls.records[name]
+                        .fields
+                        .iter()
+                        .map(|(field, _)| format!("{field} = …"))
+                        .collect();
+                    Err(TypeError {
+                        message: format!(
+                            "`{name}` is a record, built with its fields: `{name} {{ {} }}`",
+                            fields.join(", ")
+                        ),
+                        span,
+                    })
+                }
                 None => Err(TypeError {
                     message: match python_builtin_spelling(name) {
                         Some(spelling) => {
@@ -9359,6 +9488,7 @@ impl Infer {
                         ),
                     ],
                 },
+                ("Json", 0) => Codec::Json,
                 ("Seq", 1) => {
                     return Err(
                         "cannot derive a decoder for a lazy `Seq`: decode a `List` and convert \

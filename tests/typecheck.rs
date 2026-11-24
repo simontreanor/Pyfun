@@ -48,6 +48,84 @@ fn decode_map4_does_not_corrupt_let_polymorphism() {
 }
 
 #[test]
+fn decode_dict_and_index_are_typed() {
+    // Issue #186: an object whose keys are data is a `Map`, and one position
+    // of an array decodes with its own decoder.
+    assert!(
+        pyfun::check(
+            "let d = Decode.dict (Decode.index 1 Decode.str)\n\
+             let n =\n  match Decode.decode_string d \"{}\":\n    case Ok m: Map.len m\n    case Error e: 0\n\
+             let first = Decode.map2 (fun a b -> (a, b)) (Decode.index 0 Decode.int) (Decode.index 1 Decode.bool)"
+        )
+        .is_ok()
+    );
+    assert_error_contains("let d = Decode.index \"0\" Decode.int", "type mismatch");
+    // The keys are strings, so the map is keyed by `str`.
+    assert_error_contains(
+        "let d = Decode.dict Decode.int\n\
+         let f r =\n  match r:\n    case Ok m: Map.find 1 m\n    case Error e: None\n\
+         let r = f (Decode.decode_string d \"{}\")",
+        "type mismatch",
+    );
+}
+
+#[test]
+fn json_is_a_built_in_sum_type() {
+    // `Decode.value` reads any JSON as a `Json`, which is matched like any sum
+    // type, built with its constructors, and written back with `Encode.value`.
+    assert!(
+        pyfun::check(
+            "let strip j =\n  match j:\n    case JObject m: JObject (Map.remove \"id\" m)\n    case other: other\n\
+             let text j = Encode.value (strip j)\n\
+             let r = Decode.decode_string Decode.value \"[1]\"\n\
+             let built = JObject {\"n\": JInt 1, \"xs\": JList [JNull, JBool True, JFloat 1.5, JStr \"s\"]}\n\
+             let empty = JObject {}\n\
+             let same = built == empty"
+        )
+        .is_ok()
+    );
+    // Exhaustiveness knows the seven constructors.
+    assert_error_contains(
+        "let f j =\n  match j:\n    case JNull: 0\n    case JBool b: 1\n    case JInt n: 2\n    case JFloat x: 3\n    case JStr s: 4\n    case JList xs: 5",
+        "JObject",
+    );
+    // An int is not a float, and what a constructor holds is checked.
+    assert_error_contains("let j = JInt 1.5", "type mismatch");
+    assert_error_contains("let j = JObject {1: JNull}", "type mismatch");
+    assert_error_contains("let s = Encode.value 1", "type mismatch");
+    // JSON has no order.
+    assert_error_contains("let b = JInt 1 < JInt 2", "Json");
+    // The names are the language's.
+    assert_error_contains("type Json = | A | B", "cannot redefine builtin type `Json`");
+    assert_error_contains(
+        "type Mine = | JNull | Other",
+        "cannot redefine builtin constructor `JNull`",
+    );
+    // A derived codec keeps a `Json` field as it comes.
+    assert!(
+        pyfun::check(
+            "type Doc = { id: int, extra: Json }\n\
+             let show d = Encode.auto (Doc { id = d.id, extra = d.extra })\n\
+             let r =\n  match Decode.decode_string Decode.auto \"{}\":\n    case Ok d: show d\n    case Error e: e.error_message"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_constructor_takes_a_map_or_set_literal() {
+    // A brace after an uppercase name is a record only when it starts with a
+    // field name; otherwise it is a literal the name is applied to.
+    assert!(pyfun::check("let s = Some {1, 2}\nlet m = Some {\"a\": 1}\nlet e = Some {}").is_ok());
+    assert!(pyfun::check("type P = { x: int }\nlet p = P { x = 1 }").is_ok());
+    // A record's name with nothing in the braces says how a record is built.
+    assert_error_contains(
+        "type P = { x: int, y: int }\nlet p = P {}",
+        "`P` is a record, built with its fields: `P { x = …, y = … }`",
+    );
+}
+
+#[test]
 fn accepts_basic_and_curried_functions() {
     assert!(pyfun::check("let add a b = a + b\nlet r = add 1 2").is_ok());
 }
@@ -742,7 +820,10 @@ fn accepts_parameterized_and_recursive_adts() {
 #[test]
 fn rejects_redefining_builtin_result() {
     // `Result`, `Ok`, and `Error` are reserved by the result computation expression.
-    assert_error_contains("type Result a b = Ok a | Bad b", "already defined");
+    assert_error_contains(
+        "type Result a b = Ok a | Bad b",
+        "cannot redefine builtin type `Result`",
+    );
 }
 
 // ---------- opaque types (zero-cost newtypes) ----------
@@ -3462,7 +3543,10 @@ fn input_is_a_prelude_builtin_with_the_io_effect() {
 
 #[test]
 fn rejects_redefining_builtin_list() {
-    assert_error_contains("type List a = Empty | More a", "already defined");
+    assert_error_contains(
+        "type List a = Empty | More a",
+        "cannot redefine builtin type `List`",
+    );
 }
 
 // ---------- sets & maps (the hashed collections, `DESIGN.md` §6) ----------
@@ -3769,7 +3853,10 @@ fn unknown_module_member_is_rejected() {
 
 #[test]
 fn rejects_redefining_builtin_option() {
-    assert_error_contains("type Option a = None | Some a", "already defined");
+    assert_error_contains(
+        "type Option a = None | Some a",
+        "cannot redefine builtin type `Option`",
+    );
 }
 
 #[test]
@@ -3833,8 +3920,8 @@ fn seq_and_list_are_distinct_types() {
 
 #[test]
 fn rejects_redefining_builtin_map_and_set() {
-    assert_error_contains("type Set a = Empty", "already defined");
-    assert_error_contains("type Map a = Empty", "already defined");
+    assert_error_contains("type Set a = Empty", "cannot redefine builtin type `Set`");
+    assert_error_contains("type Map a = Empty", "cannot redefine builtin type `Map`");
 }
 
 // ---------- in-file modules (`DESIGN.md` §6) ----------

@@ -37,6 +37,7 @@ pub(super) fn annotate(
     binding_types: &HashMap<Span, Ty>,
     imported: &[(String, &Module)],
 ) -> PyModule {
+    add_json_alias(&mut py);
     let decls = Decls::of(module, &py, imported);
     let mut uses = Uses::default();
 
@@ -58,6 +59,7 @@ pub(super) fn annotate_runtime(mut py: PyModule) -> PyModule {
         reached: HashMap::new(),
     };
     let mut uses = Uses::default();
+    add_json_alias(&mut py);
     annotate_classes(&mut py, &decls, &mut uses);
     // The runtime's one module-level variable: the task scope in force.
     for stmt in &mut py.body {
@@ -70,6 +72,46 @@ pub(super) fn annotate_runtime(mut py: PyModule) -> PyModule {
     }
     add_imports(&mut py, &uses);
     py
+}
+
+/// The built-in `Json` type goes by one name in annotations: `type Json =
+/// JNull | JBool | …` after its classes, where this file defines them, and a
+/// `Json` beside them on the import where they come from the shared runtime.
+/// The two classes that hold more JSON say so.
+fn add_json_alias(py: &mut PyModule) {
+    let classes: Vec<&str> = crate::types::JSON_CTORS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    for stmt in &mut py.body {
+        match stmt {
+            PyStmt::ImportFrom { module, names }
+                if module == "_pyfun_rt" && names.iter().any(|n| n == "JObject") =>
+            {
+                names.push("Json".to_string());
+            }
+            PyStmt::ClassDef {
+                name, field_types, ..
+            } if field_types.len() == 1 => match name.as_str() {
+                "JList" => field_types[0] = "list[\"Json\"]".to_string(),
+                "JObject" => field_types[0] = "dict[str, \"Json\"]".to_string(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let Some(last) = py.body.iter().rposition(
+        |s| matches!(s, PyStmt::ClassDef { name, .. } if classes.contains(&name.as_str())),
+    ) else {
+        return;
+    };
+    py.body.insert(
+        last + 1,
+        PyStmt::Assign {
+            target: "type Json".to_string(),
+            value: PyExpr::Name(classes.join(" | ")),
+        },
+    );
 }
 
 /// What the module declares, as the speller needs it.
@@ -426,6 +468,8 @@ impl Speller<'_> {
                 self.uses.awaitable = true;
                 format!("Awaitable[{a}]")
             }
+            // Parsed JSON goes by its alias, where this file has it.
+            ("Json", []) if self.decls.taken.contains("JObject") => "Json".to_string(),
             // A caught exception is the prelude's record of it.
             ("Exception", []) if self.decls.taken.contains("_Exception") => {
                 "_Exception".to_string()
