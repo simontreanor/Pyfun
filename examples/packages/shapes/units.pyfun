@@ -1,0 +1,4 @@
+# The module `Shapes.Units`, beside `Shapes.Geometry` in the folder `shapes`.
+let centimetres_per_metre = 100.0
+
+let to_centimetres metres = metres * centimetres_per_metre

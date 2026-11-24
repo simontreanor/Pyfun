@@ -395,7 +395,7 @@ fn stage_and_run(
         staged.push((traceback::TABLE_FILE, traceback::table(traced).into()));
     }
     for (name, source) in &staged {
-        if let Err(e) = std::fs::write(dir.join(name), source.as_bytes()) {
+        if let Err(e) = project::write_file(&dir, name, source) {
             let _ = std::fs::remove_dir_all(&dir);
             return fail(&format!("cannot stage {name}: {e}"));
         }
@@ -448,6 +448,13 @@ fn render_project_error(entry: &str, error: &ProjectError) -> ExitCode {
                 // the span; the error's `Display` keeps the byte offsets as the
                 // only location information this path has.
                 Err(_) => eprintln!("error: in module `{name}`: {error}"),
+            }
+        }
+        ProjectError::Missing { name, importer } => {
+            eprintln!("error: {error}");
+            let root = Path::new(entry).parent().unwrap_or_else(|| Path::new(""));
+            if let Some(hint) = project::missing_hint(root, name, importer.as_deref()) {
+                eprintln!("note: {hint}");
             }
         }
         other => eprintln!("error: {other}"),
@@ -601,8 +608,8 @@ fn compile_project(args: &CompileArgs) -> ExitCode {
                 return fail(&format!("cannot create {dir}: {e}"));
             }
             for (name, source) in &files {
-                let path = Path::new(dir).join(name);
-                if let Err(e) = std::fs::write(&path, source) {
+                if let Err(e) = project::write_file(Path::new(dir), name, source) {
+                    let path = Path::new(dir).join(name);
                     return fail(&format!("cannot write {}: {e}", path.display()));
                 }
             }
@@ -652,10 +659,11 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
                     .unwrap_or_else(|| root.join(project::module_file_name(module)))
                     .display()
                     .to_string();
+                // A package module's path is spelled with the entry's slashes.
                 if entry.contains('/') {
                     file.replace('\\', "/")
                 } else {
-                    file
+                    file.replace('/', std::path::MAIN_SEPARATOR_STR)
                 }
             };
             (project::module_py_name(module), path)

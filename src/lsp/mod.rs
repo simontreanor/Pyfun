@@ -35,13 +35,14 @@ pub mod actions;
 pub mod hints;
 pub mod json;
 pub mod resolve;
+mod roots;
 pub mod signature;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::Analysis;
@@ -68,16 +69,6 @@ fn uri_to_path(uri: &str) -> Option<PathBuf> {
     Some(PathBuf::from(decoded))
 }
 
-/// Replace the final path segment of a `file:` URI with `filename`, yielding a
-/// sibling module's URI without re-encoding the path (preserves the client's
-/// exact encoding).
-fn sibling_uri(uri: &str, filename: &str) -> String {
-    match uri.rfind('/') {
-        Some(i) => format!("{}/{filename}", &uri[..i]),
-        None => filename.to_string(),
-    }
-}
-
 /// Whether `module` has an `import <name>` (so `name` is an imported *file*
 /// module, eligible for cross-file navigation).
 fn module_imports(module: &crate::syntax::Module, name: &str) -> bool {
@@ -85,11 +76,6 @@ fn module_imports(module: &crate::syntax::Module, name: &str) -> bool {
         .items
         .iter()
         .any(|i| matches!(i, crate::syntax::Item::Import { name: n, .. } if n == name))
-}
-
-/// The module name a document URI belongs to (`…/geometry.pyfun` → `Geometry`).
-fn current_module(uri: &str) -> Option<String> {
-    crate::project::module_name_from_path(&uri_to_path(uri)?)
 }
 
 /// Within a qualified reference's source span (`Geometry.area`), the sub-span of
@@ -118,17 +104,18 @@ fn member_subspan(
 
 /// The cross-file *value* target at `offset`, as (defining module, member): a
 /// qualified reference (`Geometry.area`), or a bare module-level name resolved
-/// against the current file's own module. `None` for a local binder or no symbol.
+/// against the current file's own module (`current`, its name in the project).
+/// `None` for a local binder or no symbol.
 fn value_target(
     module: &crate::syntax::Module,
-    uri: &str,
+    current: Option<String>,
     offset: usize,
 ) -> Option<(String, String)> {
     if let Some(q) = resolve::qualified_at(module, offset) {
         return Some((q.module, q.member));
     }
     match resolve::symbol_at(module, offset) {
-        Some((_, resolve::Target::Module(name))) => Some((current_module(uri)?, name)),
+        Some((_, resolve::Target::Module(name))) => Some((current?, name)),
         _ => None,
     }
 }
@@ -209,6 +196,9 @@ type Deps = Vec<(String, Option<u64>)>;
 /// next request.
 struct CachedAnalysis {
     version: u64,
+    /// The top folder of the project the imports were read from: an analysis
+    /// made from another top is stale.
+    root: String,
     deps: Deps,
     analysis: Rc<Analysis>,
 }
@@ -251,6 +241,10 @@ pub struct Server {
     /// module file's URI, so two open documents importing `Geometry` share one
     /// parse + check of `geometry.pyfun` across requests (`DESIGN.md` §9).
     exports: RefCell<HashMap<String, CachedExports>>,
+    /// How far above each document a file imports it by a dotted name (see
+    /// [`roots`]): found by walking the folders above, so kept until a
+    /// document opens or closes, or one's imports change.
+    roots: RefCell<HashMap<String, usize>>,
     /// Monotonic clock stamping each document edit with a fresh version.
     clock: u64,
     pub exit: bool,
@@ -333,6 +327,7 @@ impl Server {
         ) else {
             return vec![];
         };
+        self.roots.borrow_mut().clear();
         self.set_document(uri, text);
         vec![self.diagnostics_for(uri)]
     }
@@ -356,6 +351,15 @@ impl Server {
         else {
             return vec![];
         };
+        // A file that starts or stops importing a module can move the top of
+        // that module's project.
+        let imports_before = self
+            .documents
+            .get(uri)
+            .map(|doc| crate::project::import_names_in(&doc.text));
+        if imports_before != Some(crate::project::import_names_in(text)) {
+            self.roots.borrow_mut().clear();
+        }
         self.set_document(uri, text);
         vec![self.diagnostics_for(uri)]
     }
@@ -371,6 +375,7 @@ impl Server {
         };
         self.documents.remove(uri);
         self.cache.borrow_mut().remove(uri);
+        self.roots.borrow_mut().clear();
         // Clear diagnostics for the closed file.
         vec![publish_diagnostics(uri, Json::Array(vec![]))]
     }
@@ -401,8 +406,10 @@ impl Server {
     /// a dependent when one of its imports changes.
     fn analysis(&self, uri: &str) -> Option<Rc<Analysis>> {
         let doc = self.documents.get(uri)?;
+        let root = self.project_dir(uri);
         if let Some(entry) = self.cache.borrow().get(uri)
             && entry.version == doc.version
+            && entry.root == root
             && self.deps_fresh(&entry.deps)
         {
             return Some(entry.analysis.clone());
@@ -413,12 +420,13 @@ impl Server {
         // invalidated when one of them changes.
         let mut deps = Vec::new();
         let analysis = Rc::new(crate::analyze_with_imports(&doc.text, |module| {
-            self.resolve_imports_cached(uri, module, &mut deps)
+            self.resolve_imports_cached(&root, module, &mut deps)
         }));
         self.cache.borrow_mut().insert(
             uri.to_string(),
             CachedAnalysis {
                 version: doc.version,
+                root: root.clone(),
                 deps,
                 analysis: analysis.clone(),
             },
@@ -461,7 +469,7 @@ impl Server {
     /// every file consulted, for the caller's own cache validation.
     fn resolve_imports_cached(
         &self,
-        uri: &str,
+        root: &str,
         module: &crate::syntax::Module,
         deps: &mut Deps,
     ) -> HashMap<String, crate::types::ModuleExports> {
@@ -474,7 +482,7 @@ impl Server {
         for item in &module.items {
             if let crate::syntax::Item::Import { name, .. } = item
                 && let Some(exports) =
-                    self.resolve_exports_cached(uri, name, &mut pass, deps, &mut tainted)
+                    self.resolve_exports_cached(root, name, &mut pass, deps, &mut tainted)
             {
                 out.insert(name.clone(), exports);
             }
@@ -482,8 +490,9 @@ impl Server {
         out
     }
 
-    /// Resolve the export interface of the imported module `name` (a sibling of
-    /// `base_uri`), mirroring the compiler-side `project::resolve_exports`
+    /// Resolve the export interface of the imported module `name` (read from
+    /// the project's top folder `root`, as every module of the project names its
+    /// imports from there), mirroring the compiler-side `project::resolve_exports`
     /// (parse + recursively resolve its own imports + `check_module`; a missing
     /// file, parse error, or cycle yields `None`) with three editor additions:
     /// the source comes from the open buffer when the file is open (else disk);
@@ -499,7 +508,7 @@ impl Server {
     /// different side); the per-pass memo still reuses it within this pass.
     fn resolve_exports_cached(
         &self,
-        base_uri: &str,
+        root: &str,
         name: &str,
         pass: &mut ResolvePass,
         deps: &mut Deps,
@@ -513,7 +522,7 @@ impl Server {
             *caller_tainted |= *tainted;
             return Some(exports.clone());
         }
-        let uri = sibling_uri(base_uri, &crate::project::module_file_name(name));
+        let uri = roots::child_uri(root, &crate::project::module_file_name(name));
         let Some(source) = self.module_source(&uri) else {
             deps.push((uri, None)); // record the absence: creating it invalidates
             return None;
@@ -539,7 +548,7 @@ impl Server {
         for item in &module.items {
             if let crate::syntax::Item::Import { name: import, .. } = item
                 && let Some(exports) =
-                    self.resolve_exports_cached(&uri, import, pass, &mut my_deps, &mut tainted)
+                    self.resolve_exports_cached(root, import, pass, &mut my_deps, &mut tainted)
             {
                 imports.insert(import.clone(), exports);
             }
@@ -734,9 +743,8 @@ impl Server {
 
         // A type declared in an imported module jumps to that module's file.
         if let Some((tmod, name, _)) = self.type_target(module, uri, offset)
-            && current_module(uri).as_deref() != Some(tmod.as_str())
-            && let Some((target_uri, source)) =
-                self.sibling_source(uri, &crate::project::module_file_name(&tmod))
+            && self.module_name(uri).as_deref() != Some(tmod.as_str())
+            && let Some((target_uri, source)) = self.module_in_project(uri, &tmod)
             && let Ok(other) = crate::parse(&source)
             && let Some(span) = user_type_decl_span(&other, &name)
         {
@@ -776,15 +784,11 @@ impl Server {
     }
 
     /// Resolve a qualified reference to an imported file module (`Geometry.area`)
-    /// to a `Location` in that module's `.pyfun` file: find its sibling URI, read
-    /// it (preferring an open buffer over disk), and locate the member's
-    /// definition span. `None` if the file or member can't be found.
+    /// to a `Location` in that module's `.pyfun` file: find its URI in the
+    /// project, read it (preferring an open buffer over disk), and locate the
+    /// member's definition span. `None` if the file or member can't be found.
     fn locate_cross_file(&self, uri: &str, module_name: &str, member: &str) -> Option<Json> {
-        let target_uri = sibling_uri(uri, &crate::project::module_file_name(module_name));
-        let source = match self.documents.get(&target_uri) {
-            Some(doc) => doc.text.clone(),
-            None => std::fs::read_to_string(uri_to_path(&target_uri)?).ok()?,
-        };
+        let (target_uri, source) = self.module_in_project(uri, module_name)?;
         let module = crate::parse(&source).ok()?;
         let sym = resolve::definitions(&module)
             .into_iter()
@@ -793,17 +797,6 @@ impl Server {
             ("uri", str(&target_uri)),
             ("range", span_range(&source, sym.span)),
         ]))
-    }
-
-    /// A sibling project file's source, from its open buffer if there is one, else
-    /// from disk.
-    fn sibling_source(&self, uri: &str, file_name: &str) -> Option<(String, String)> {
-        let file_uri = sibling_uri(uri, file_name);
-        let source = match self.documents.get(&file_uri) {
-            Some(doc) => doc.text.clone(),
-            None => std::fs::read_to_string(uri_to_path(&file_uri)?).ok()?,
-        };
-        Some((file_uri, source))
     }
 
     /// The **user type** under the cursor, resolved to the module that declares
@@ -825,7 +818,7 @@ impl Server {
                 .any(|s| s.name == name && s.kind == resolve::SymbolKind::Record)
         };
         let (qualifier, name, from_tag) = match resolve::type_at(module, offset) {
-            Some((written, _)) => match written.split_once('.') {
+            Some((written, _)) => match written.rsplit_once('.') {
                 Some((q, n)) => (Some(q.to_string()), n.to_string(), false),
                 None => (None, written, false),
             },
@@ -835,14 +828,16 @@ impl Server {
             }
         };
         match qualifier {
-            None if user_type_decl_span(module, &name).is_some() => {
-                Some((current_module(uri)?, name.clone(), is_record(module, &name)))
-            }
+            None if user_type_decl_span(module, &name).is_some() => Some((
+                self.module_name(uri)?,
+                name.clone(),
+                is_record(module, &name),
+            )),
             None => module.items.iter().find_map(|item| {
                 let crate::syntax::Item::Import { name: m, .. } = item else {
                     return None;
                 };
-                let (_, source) = self.sibling_source(uri, &crate::project::module_file_name(m))?;
+                let (_, source) = self.module_in_project(uri, m)?;
                 let other = crate::parse(&source).ok()?;
                 user_type_decl_span(&other, &name)
                     .map(|_| (m.clone(), name.clone(), is_record(&other, &name)))
@@ -851,8 +846,7 @@ impl Server {
                 if !module_imports(module, &q) {
                     return None;
                 }
-                let (_, source) =
-                    self.sibling_source(uri, &crate::project::module_file_name(&q))?;
+                let (_, source) = self.module_in_project(uri, &q)?;
                 let other = crate::parse(&source).ok()?;
                 user_type_decl_span(&other, &name)?;
                 let record = is_record(&other, &name);
@@ -880,35 +874,26 @@ impl Server {
         include_decl: bool,
         strict: bool,
     ) -> Option<Vec<(String, Json)>> {
-        let dir = uri_to_path(uri)?.parent()?.to_path_buf();
-        let mut files: Vec<String> = std::fs::read_dir(&dir)
-            .ok()?
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
-                    .then(|| p.file_name()?.to_str().map(str::to_string))
-                    .flatten()
-            })
-            .collect();
-        files.sort();
-
         let qualified = format!("{target_module}.{ty}");
         let mut out: Vec<(String, Json)> = Vec::new();
         let mut declaring_found = false;
-        for fname in files {
-            let Some((file_uri, source)) = self.sibling_source(uri, &fname) else {
+        for file in self.project_files(uri) {
+            let Some(source) = self.module_source(&file.uri) else {
                 continue;
             };
+            // A file that never says the name has no occurrence of it, and so
+            // need not parse for the answer to be whole.
+            if !source.contains(ty) {
+                continue;
+            }
             let Ok(m) = crate::parse(&source) else {
                 if strict {
                     return None;
                 }
                 continue;
             };
-            let is_declaring = crate::project::module_name_from_path(Path::new(&fname)).as_deref()
-                == Some(target_module);
-            if is_declaring {
+            let file_uri = file.uri.clone();
+            if file.module == target_module {
                 let Some(decl) = user_type_decl_span(&m, ty) else {
                     continue;
                 };
@@ -919,7 +904,9 @@ impl Server {
                 for span in resolve::type_use_references(&m, ty) {
                     out.push((file_uri.clone(), span_range(&source, span)));
                 }
-            } else if module_imports(&m, target_module) {
+            } else if module_imports(&m, target_module)
+                && self.imports_from_top(uri, &file, target_module)
+            {
                 let shadowed = user_type_decl_span(&m, ty).is_some();
                 for t in resolve::type_references(&m) {
                     if t.name == qualified {
@@ -963,39 +950,25 @@ impl Server {
         strict: bool,
     ) -> Option<Vec<(String, Json)>> {
         let wanted_kind = symbol_kind_of(member);
-        let dir = uri_to_path(uri)?.parent()?.to_path_buf();
-        let mut files: Vec<String> = std::fs::read_dir(&dir)
-            .ok()?
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
-                    .then(|| p.file_name()?.to_str().map(str::to_string))
-                    .flatten()
-            })
-            .collect();
-        files.sort(); // deterministic output
-
         let mut out: Vec<(String, Json)> = Vec::new();
         let mut defining_found = false;
-        for fname in files {
-            let file_uri = sibling_uri(uri, &fname);
-            let source = match self.documents.get(&file_uri) {
-                Some(doc) => doc.text.clone(),
-                None => match std::fs::read_to_string(dir.join(&fname)) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                },
+        for file in self.project_files(uri) {
+            let Some(source) = self.module_source(&file.uri) else {
+                continue;
             };
+            // A file that never says the name has no occurrence of it, and so
+            // need not parse for the answer to be whole.
+            if !source.contains(member) {
+                continue;
+            }
             let Ok(m) = crate::parse(&source) else {
                 if strict {
                     return None; // an unparseable file might hide an occurrence
                 }
                 continue;
             };
-            let is_defining = crate::project::module_name_from_path(Path::new(&fname)).as_deref()
-                == Some(target_module);
-            if is_defining {
+            let file_uri = file.uri.clone();
+            if file.module == target_module {
                 // The defining file: the definition (a *value*) plus its bare uses.
                 if let Some(sym) = resolve::definitions(&m)
                     .into_iter()
@@ -1011,7 +984,7 @@ impl Server {
                         out.push((file_uri.clone(), span_range(&source, r.span)));
                     }
                 }
-            } else {
+            } else if self.imports_from_top(uri, &file, target_module) {
                 // An importer: qualified uses `target_module.member` (rewrite the
                 // member identifier only, keeping the `Module.` qualifier).
                 for q in resolve::qualified_references(&m) {
@@ -1086,7 +1059,7 @@ impl Server {
 
         // A top-level value or constructor (bare or qualified) is searched across
         // all project files; anything else (a local binder) stays within this file.
-        if let Some((tmod, member)) = value_target(module, uri, offset)
+        if let Some((tmod, member)) = value_target(module, self.module_name(uri), offset)
             && let Some(occ) =
                 self.symbol_occurrences(uri, &tmod, &member, include_declaration, false)
         {
@@ -1152,7 +1125,7 @@ impl Server {
         // A cross-file value or constructor: the editable range is the member
         // identifier (the part a qualified `Geometry.area` rewrites, or a bare
         // name's own span).
-        if let Some((tmod, member)) = value_target(module, uri, offset)
+        if let Some((tmod, member)) = value_target(module, self.module_name(uri), offset)
             && self
                 .symbol_occurrences(uri, &tmod, &member, true, true)
                 .is_some()
@@ -1240,7 +1213,7 @@ impl Server {
         // whether the target *is* such a symbol; if so, a strict scan must succeed
         // (every project file parses) or we refuse — never silently fall back to an
         // incomplete in-file-only rewrite.
-        if let Some((tmod, member)) = value_target(module, uri, offset)
+        if let Some((tmod, member)) = value_target(module, self.module_name(uri), offset)
             && self
                 .symbol_occurrences(uri, &tmod, &member, true, false)
                 .is_some()
@@ -1617,34 +1590,13 @@ impl Server {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for doc_uri in self.documents.keys() {
-            let Some(dir) = uri_to_path(doc_uri).and_then(|p| p.parent().map(Path::to_path_buf))
-            else {
-                continue;
-            };
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            let mut files: Vec<String> = entries
-                .flatten()
-                .filter_map(|e| {
-                    let p = e.path();
-                    (p.extension().and_then(|x| x.to_str()) == Some("pyfun"))
-                        .then(|| p.file_name()?.to_str().map(str::to_string))
-                        .flatten()
-                })
-                .collect();
-            files.sort(); // deterministic output
-            for fname in files {
-                let file_uri = sibling_uri(doc_uri, &fname);
-                if !seen.insert(file_uri.clone()) {
+            for file in self.project_files(doc_uri) {
+                let file_uri = file.uri;
+                if !seen.insert(file.path) {
                     continue;
                 }
-                let source = match self.documents.get(&file_uri) {
-                    Some(doc) => doc.text.clone(),
-                    None => match std::fs::read_to_string(dir.join(&fname)) {
-                        Ok(s) => s,
-                        Err(_) => continue,
-                    },
+                let Some(source) = self.module_source(&file_uri) else {
+                    continue;
                 };
                 let Ok(module) = crate::parse(&source) else {
                     continue;
@@ -3593,6 +3545,306 @@ let n = max 1",
             ),
         ])
         .to_string()
+    }
+
+    /// A project on disk with a package: `main.pyfun` at the top, and three
+    /// modules under `shapes/`. Returns its folder.
+    fn package_project(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_pkg_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shapes")).unwrap();
+        for (name, source) in [
+            ("main.pyfun", PKG_MAIN),
+            ("shapes/geometry.pyfun", PKG_GEOMETRY),
+            ("shapes/util.pyfun", "let double x = x * 2.0\n"),
+            ("shapes/scene.pyfun", PKG_SCENE),
+        ] {
+            std::fs::write(dir.join(name), source).unwrap();
+        }
+        dir
+    }
+
+    const PKG_MAIN: &str =
+        "import Shapes.Geometry\nlet floor = Geometry.area (Geometry.Circle 1.0)\n";
+    const PKG_GEOMETRY: &str = "import Shapes.Util\ntype Shape = Circle(float)\nlet area shape =\n    match shape:\n        case Circle(r): Util.double r\n";
+    const PKG_SCENE: &str =
+        "from Shapes.Geometry import area, Circle\nlet one = area (Circle 1.0)\n";
+
+    /// The diagnostics a `didOpen` of `uri` publishes.
+    fn diagnostics_on_open(server: &mut Server, uri: &str, text: &str) -> Vec<Json> {
+        let out = server.handle(&json::parse(&open_msg(uri, text)).unwrap());
+        out[0]
+            .get("params")
+            .unwrap()
+            .get("diagnostics")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .to_vec()
+    }
+
+    /// The `(file, line)` of each location or edit of a result, sorted.
+    fn places(uris_and_lines: Vec<(String, i64)>, dir: &std::path::Path) -> Vec<(String, i64)> {
+        let top = format!("{}/", file_uri(dir));
+        let mut out: Vec<(String, i64)> = uris_and_lines
+            .into_iter()
+            .map(|(uri, line)| (uri.trim_start_matches(&top).to_string(), line))
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn start_line(range_holder: &Json) -> i64 {
+        range_holder
+            .get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(Json::as_i64)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_program_reads_a_module_from_its_package() {
+        let dir = package_project("main");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("main.pyfun"));
+        let diags = diagnostics_on_open(&mut server, &uri, PKG_MAIN);
+        assert!(diags.is_empty(), "{diags:?}");
+        // Go-to-definition on `area` lands in the package's file.
+        let out =
+            server.handle(&json::parse(&pos_msg("textDocument/definition", &uri, 1, 22)).unwrap());
+        let result = out[0].get("result").unwrap();
+        assert_eq!(
+            result.get("uri").and_then(Json::as_str),
+            Some(file_uri(&dir.join("shapes/geometry.pyfun")).as_str())
+        );
+        assert_eq!(start_line(result), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_module_in_a_package_reads_its_imports_from_the_top() {
+        // `shapes/geometry.pyfun` says `import Shapes.Util`: found one folder up.
+        let dir = package_project("inside");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("shapes/geometry.pyfun"));
+        let diags = diagnostics_on_open(&mut server, &uri, PKG_GEOMETRY);
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(server.project_dir(&uri), file_uri(&dir));
+        assert_eq!(server.module_name(&uri).as_deref(), Some("Shapes.Geometry"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_module_that_imports_nothing_is_placed_by_who_imports_it() {
+        // `shapes/util.pyfun` has no import to go by; `geometry.pyfun` beside
+        // it names it `Shapes.Util`, which makes the folder above the top.
+        let dir = package_project("named");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("shapes/util.pyfun"));
+        diagnostics_on_open(&mut server, &uri, "let double x = x * 2.0\n");
+        assert_eq!(server.project_dir(&uri), file_uri(&dir));
+        assert_eq!(server.module_name(&uri).as_deref(), Some("Shapes.Util"));
+        // A file nobody imports by a dotted name is the top of its own project.
+        let main = file_uri(&dir.join("main.pyfun"));
+        diagnostics_on_open(&mut server, &main, PKG_MAIN);
+        assert_eq!(server.module_name(&main).as_deref(), Some("Main"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn references_from_a_package_module_reach_every_importer() {
+        let dir = package_project("refs");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("shapes/geometry.pyfun"));
+        diagnostics_on_open(&mut server, &uri, PKG_GEOMETRY);
+        // On the definition of `area` (line 2).
+        let out = server.handle(&json::parse(&references_msg(&uri, 2, 5, true)).unwrap());
+        let locations = out[0].get("result").unwrap().as_array().unwrap();
+        let found = places(
+            locations
+                .iter()
+                .map(|l| {
+                    (
+                        l.get("uri").and_then(Json::as_str).unwrap().to_string(),
+                        start_line(l),
+                    )
+                })
+                .collect(),
+            &dir,
+        );
+        assert_eq!(
+            found,
+            vec![
+                // `Geometry.area` in the program above.
+                ("main.pyfun".to_string(), 1),
+                // The definition.
+                ("shapes/geometry.pyfun".to_string(), 2),
+                // The name in the `from` import's list, and its bare use.
+                ("shapes/scene.pyfun".to_string(), 0),
+                ("shapes/scene.pyfun".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rename_covers_a_package() {
+        let dir = package_project("rename");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("main.pyfun"));
+        diagnostics_on_open(&mut server, &uri, PKG_MAIN);
+        // On `area` of `Geometry.area`.
+        let out = server.handle(&json::parse(&rename_msg(&uri, 1, 22, "surface")).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        let Json::Object(by_file) = changes else {
+            panic!("{changes:?}");
+        };
+        let found = places(
+            by_file
+                .iter()
+                .flat_map(|(file, edits)| {
+                    edits
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(move |edit| (file.clone(), start_line(edit)))
+                })
+                .collect(),
+            &dir,
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("main.pyfun".to_string(), 1),
+                ("shapes/geometry.pyfun".to_string(), 2),
+                ("shapes/scene.pyfun".to_string(), 0),
+                ("shapes/scene.pyfun".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_type_is_renamed_through_a_package() {
+        let dir = package_project("type");
+        std::fs::write(
+            dir.join("main.pyfun"),
+            "import Shapes.Geometry\ntype Scene = Scene(List Geometry.Shape)\n",
+        )
+        .unwrap();
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("shapes/geometry.pyfun"));
+        diagnostics_on_open(&mut server, &uri, PKG_GEOMETRY);
+        // On `Shape` of `type Shape = …` (line 1).
+        let out = server.handle(&json::parse(&rename_msg(&uri, 1, 6, "Figure")).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        let Json::Object(by_file) = changes else {
+            panic!("{changes:?}");
+        };
+        let found = places(
+            by_file
+                .iter()
+                .flat_map(|(file, edits)| {
+                    edits
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(move |edit| (file.clone(), start_line(edit)))
+                })
+                .collect(),
+            &dir,
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("main.pyfun".to_string(), 1),
+                ("shapes/geometry.pyfun".to_string(), 1),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_nearer_module_of_the_same_name_is_the_one_a_file_means() {
+        // `demo/` is a folder of its own programs with its own `geometry`:
+        // `demo/main.pyfun` means that one, so a rename in the top folder's
+        // `geometry.pyfun` leaves it alone.
+        let dir = std::env::temp_dir().join(format!("pyfun_lsp_pkg_near_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("demo")).unwrap();
+        let geometry = "let area w h = w * h\n";
+        let user = "import Geometry\nlet floor = Geometry.area 4 5\n";
+        for (name, source) in [
+            ("geometry.pyfun", geometry),
+            ("main.pyfun", user),
+            ("demo/geometry.pyfun", geometry),
+            ("demo/main.pyfun", user),
+        ] {
+            std::fs::write(dir.join(name), source).unwrap();
+        }
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("geometry.pyfun"));
+        diagnostics_on_open(&mut server, &uri, geometry);
+        let out = server.handle(&json::parse(&rename_msg(&uri, 0, 5, "surface")).unwrap());
+        let changes = out[0].get("result").unwrap().get("changes").unwrap();
+        let Json::Object(by_file) = changes else {
+            panic!("{changes:?}");
+        };
+        let mut files: Vec<String> = by_file
+            .iter()
+            .map(|(file, _)| {
+                file.trim_start_matches(&format!("{}/", file_uri(&dir)))
+                    .to_string()
+            })
+            .collect();
+        files.sort();
+        assert_eq!(files, vec!["geometry.pyfun", "main.pyfun"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_never_says_the_name_need_not_parse() {
+        // A half-written file elsewhere in the project does not stop a rename
+        // it could not be part of.
+        let dir = package_project("broken");
+        std::fs::write(dir.join("shapes/draft.pyfun"), "let = = (\n").unwrap();
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("main.pyfun"));
+        diagnostics_on_open(&mut server, &uri, PKG_MAIN);
+        let out = server.handle(&json::parse(&rename_msg(&uri, 1, 22, "surface")).unwrap());
+        assert!(out[0].get("result").unwrap().get("changes").is_some());
+        // One that does say it, and does not parse, still refuses the rename.
+        std::fs::write(dir.join("shapes/draft.pyfun"), "let x = area (\n").unwrap();
+        let out = server.handle(&json::parse(&rename_msg(&uri, 1, 22, "surface")).unwrap());
+        assert_eq!(out[0].get("result"), Some(&Json::Null));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_symbols_cover_a_package() {
+        let dir = package_project("symbols");
+        let mut server = Server::default();
+        let uri = file_uri(&dir.join("main.pyfun"));
+        diagnostics_on_open(&mut server, &uri, PKG_MAIN);
+        let request = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("workspace/symbol")),
+            ("params", obj(vec![("query", str("double"))])),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&request).unwrap());
+        let symbols = out[0].get("result").unwrap().as_array().unwrap();
+        assert_eq!(symbols.len(), 1, "{symbols:?}");
+        assert_eq!(
+            symbols[0]
+                .get("location")
+                .and_then(|l| l.get("uri"))
+                .and_then(Json::as_str),
+            Some(file_uri(&dir.join("shapes/util.pyfun")).as_str())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A `textDocument/rename` request with a `newName`.

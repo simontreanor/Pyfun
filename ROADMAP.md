@@ -531,10 +531,13 @@ after the release.
     an extern that does not mention it is typed as before (`DESIGN.md` §6). Open: whether `Test.*`
     should carry `exn` in place of the rule that keeps it inside tests (item 16), and whether the
     cookbook's externs should be marked.
-20. **`from X import y` and nested packages** (M each). **`from Geometry import area, Circle` DONE
-    2026-11-23**, strictly as Python has it: the listed names are written bare, the module is not
-    bound, there is no `*`, and the emitted Python keeps `geometry.area(...)` (`DESIGN.md` §6.1). Still
-    to come: nested packages, decided as `import Shapes.Geometry` used as `Geometry.area`.
+20. ~~**`from X import y` and nested packages**~~ **DONE 2026-11-24.** `from Geometry import area,
+    Circle`, strictly as Python has it: the listed names are written bare, the module is not bound,
+    there is no `*`, and the emitted Python keeps `geometry.area(...)`. Packages: `import
+    Shapes.Geometry` reads `shapes/geometry.pyfun` and is used as `Geometry.area`; the top of a project
+    is the folder of the file being run; the output is `shapes/geometry.py` beside an `__init__.py`,
+    used as `shapes.geometry.area(...)`; one module per last name in a file; and the editor finds the
+    top of a project from the imports themselves (`DESIGN.md` §6.1).
 21. ~~**A sole constructor's pattern in a parameter or a `let`**~~ **DONE 2026-11-22** (#203), for
     both kinds at once: `let unwrap (Wrap v) = v`, `let unwrap (Box { value }) = value` and the
     newtype idiom `let raw (UserId s) = s` bind where the type has no other constructor

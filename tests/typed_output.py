@@ -5,9 +5,10 @@ Three things are checked, with mypy:
 1. A consumer of a typed module is held to its types. A small program is
    compiled with `--typed` and a Python script uses it; mypy must accept every
    correct use and reject every wrong one, at the line that makes it.
-2. A typed project is clean. `examples/modules` is compiled with `--typed -o`;
-   the directory must hold `py.typed`, pass mypy with nothing to report, and
-   print what the untyped project prints.
+2. A typed project is clean. `examples/modules` and `examples/packages` (a
+   project with a package) are compiled with `--typed -o`; each directory must
+   hold `py.typed`, pass mypy with nothing to report, and print what the
+   untyped project prints.
 3. No annotation is malformed. Every lesson program and single-file example
    is compiled with `--typed`; each must parse as Python, and mypy must find
    nothing wrong with an annotation itself (a name it cannot resolve, a type
@@ -147,22 +148,23 @@ def consumer_is_held_to_the_types(work: Path):
 
 
 def typed_project_is_clean(work: Path):
-    entry = REPO / "examples" / "modules" / "main.pyfun"
-    out = work / "typed"
-    done = run([str(PYFUN), "compile", "--typed", str(entry), "-o", str(out)])
-    check("a typed project compiles", done.returncode == 0, done.stderr)
-    check("a typed project carries py.typed", (out / "py.typed").is_file())
-    errors = mypy(out, ".")
-    check("a typed project passes mypy", not errors, "\n".join(errors))
-    plain = work / "plain"
-    run([str(PYFUN), "compile", str(entry), "-o", str(plain)])
-    typed_out = run([sys.executable, "main.py"], cwd=out)
-    plain_out = run([sys.executable, "main.py"], cwd=plain)
-    check(
-        "a typed project prints what the untyped one prints",
-        typed_out.returncode == 0 and typed_out.stdout == plain_out.stdout,
-        typed_out.stderr,
-    )
+    for project in ["modules", "packages"]:
+        entry = REPO / "examples" / project / "main.pyfun"
+        out = work / f"typed_{project}"
+        done = run([str(PYFUN), "compile", "--typed", str(entry), "-o", str(out)])
+        check(f"the typed {project} project compiles", done.returncode == 0, done.stderr)
+        check(f"the typed {project} project carries py.typed", (out / "py.typed").is_file())
+        errors = mypy(out, ".")
+        check(f"the typed {project} project passes mypy", not errors, "\n".join(errors))
+        plain = work / f"plain_{project}"
+        run([str(PYFUN), "compile", str(entry), "-o", str(plain)])
+        typed_out = run([sys.executable, "main.py"], cwd=out)
+        plain_out = run([sys.executable, "main.py"], cwd=plain)
+        check(
+            f"the typed {project} project prints what the untyped one prints",
+            typed_out.returncode == 0 and typed_out.stdout == plain_out.stdout,
+            typed_out.stderr,
+        )
 
 
 def corpus():

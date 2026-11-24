@@ -1,0 +1,25 @@
+# The module `Shapes.Geometry`: the file `geometry.pyfun` in the folder `shapes`.
+# It compiles to `shapes/geometry.py`, and a use of it elsewhere is emitted as
+# `shapes.geometry.area(...)` under `import shapes.geometry`.
+#
+# A module in a package names its neighbour from the top of the project too,
+# as Python does: `Shapes.Units`, where a bare `Units` would be a module in the
+# top folder.
+import Shapes.Units
+
+type Shape = Circle(float) | Rect { width: float, height: float }
+
+let pi = 3.0
+
+let area shape =
+    match shape:
+        case Circle(r): pi * r * r
+        case Rect { width, height }: width * height
+
+let perimeter shape =
+    match shape:
+        case Circle(r): 2.0 * pi * r
+        case Rect { width, height }: 2.0 * (width + height)
+
+## A shape's perimeter in centimetres.
+let perimeter_cm shape = shape |> perimeter |> Units.to_centimetres

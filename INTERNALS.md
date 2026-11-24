@@ -556,11 +556,31 @@ stdio. All features reuse the existing front end:
   `_` inserted ahead of its name, an unused import has its line removed. Each test applies the edit and
   checks the result again.
 
+**Imports written short** (DESIGN §6.1) are put back in full by `src/imports.rs` before anything else
+reads the file: a bare name from `from Module import name` becomes `Module.name`, and a module in a
+package, used by the last part of its name, gets the whole of it (`Geometry.area` becomes
+`Shapes.Geometry.area`). `types::run_inner`, `lowering::lower_in_project_tracing` and
+`lsp::resolve::walk` each call `imports::expand` at their entry; `imports::report` gives the checker
+the errors (a name imported twice, two modules under one last name, a path spelled out at a use). Past
+that point a module's name is its dotted path, and every `Module.member` string is split at its last
+dot.
+
+**The top of a document's project** is worked out in `lsp/roots.rs`, since the editor is not told which
+file is run. `Server::root_level` takes the further of two answers: `project::import_root_level` (the
+nearest folder from which the document's own imports are found, read off its `import` lines by
+`project::import_names_in` so a half-written file still answers), and `named_from_above` (the nearest
+folder holding a file that imports the document by a dotted name, found by a bounded walk and kept in
+`Server::roots` until a document opens or closes or one's imports change). `project_dir`,
+`module_name`, `module_in_project` and `project_files` then serve every cross-file feature, and
+`imports_from_top` leaves out a file whose own nearer module of the same path is the one it means. A
+cached analysis records the top it was made from.
+
 **Cross-file navigation** (with file-based modules, DESIGN §6.1): go-to-definition on a qualified
 reference to an imported file module (`Geometry.area`, `Geometry.Circle`) jumps to the definition in
 that module's `.pyfun` (`resolve::qualified_at` records expression-position qualified refs with spans;
-the server resolves the sibling URI and locates the member via `resolve::definitions`);
-`workspace/symbol` searches every definition across the project directory's `.pyfun` files; and
+the server resolves the module's URI under the project's top and locates the member via
+`resolve::definitions`); `workspace/symbol` searches every definition across the project's `.pyfun`
+files; and
 find-references + rename for top-level `let` values *and* constructors span the whole project
 (`Server::symbol_occurrences` scans the directory's files and collects the definition, its bare uses in
 the defining file, and every qualified use elsewhere, rewriting only the member identifier via
@@ -824,7 +844,8 @@ colour in their own `editor.tokenColorCustomizations`.
 ## Façade packages — implements DESIGN §6.2
 
 `project::locate_module(dir, name)` is the one resolution rule, used by `build_from_path` (the CLI
-graph) and `resolve_exports` (the LSP): the sibling `name.pyfun`, else the same file in each
+graph) and `resolve_exports` (the LSP): the module's own file under the project's top folder
+(`name.pyfun`, or `shapes/name.pyfun` for `Shapes.Name`), else the same file in each
 directory under `<root>/.pyfun/facades/` for the nearest `pyfun.toml` (`manifest::find_root`,
 `manifest::facade_dirs`). `src/packages.rs` implements the commands: the installer is `uv pip`
 when `uv` is on PATH, else `python -m pip`; the façade's `.pyfun` files are found by asking the

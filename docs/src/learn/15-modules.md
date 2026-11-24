@@ -99,6 +99,44 @@ beside the import is an error, and the message tells you which two met.
 
 The Python that comes out is the same either way: `import geometry`, then `geometry.area(4, 5)`.
 
+## Modules in folders
+
+When a project grows you will want to keep related modules together in a folder. Say the geometry
+code moves into a folder called `shapes`:
+
+```console
+main.pyfun
+shapes/
+    geometry.pyfun
+    units.pyfun
+```
+
+The import line gives the path, folder first, each part capitalized:
+
+```pyfun
+import Shapes.Geometry
+
+let room = Geometry.Rect { width = 4.0, height = 5.0 }
+
+room |> Geometry.area |> print
+```
+
+You write the path once. After that the module goes by the last part of its name, so the rest of
+the file reads as it did before the move. `from Shapes.Units import to_centimetres` takes a path in
+the same way.
+
+Every import starts from the folder of the file you run, which is `main.pyfun` here. That holds
+inside the folder too: `geometry.pyfun` reaches its neighbour with `import Shapes.Units`. A bare
+`import Units` there would look for a `units.pyfun` beside `main.pyfun`, and the error message
+gives you the line to write.
+
+The last part is the name you use, so one file imports one module called `Geometry`. When you need
+a second one from another folder, ask it for names: `from Solids.Geometry import volume`.
+
+The Python that comes out keeps the folders. There is a `shapes/geometry.py`, and where you wrote
+`Geometry.area room` it says `shapes.geometry.area(room)`. The whole project is in
+`examples/packages/`.
+
 ## Types cross too
 
 Functions are the obvious thing to share, but the types themselves cross a module boundary as well,

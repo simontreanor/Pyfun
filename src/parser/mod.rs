@@ -556,11 +556,7 @@ impl Parser {
             Tok::Import => self.parse_import(),
             // `from Name import a, B`. `from` is a keyword only here, ahead of
             // a module name and `import`.
-            Tok::Ident(word)
-                if word == "from"
-                    && matches!(self.peek2(), Tok::Ident(module) if is_upper(module))
-                    && *self.peek3() == Tok::Import =>
-            {
+            Tok::Ident(word) if word == "from" && self.module_path_then_import_ahead() => {
                 self.parse_from_import()
             }
             // `let (|…` opens an active-pattern definition (`DESIGN.md` §7.2): an
@@ -627,7 +623,7 @@ impl Parser {
                 span: self.span(),
             });
         }
-        let name = self.parse_upper_ident("an imported module name")?;
+        let name = self.parse_module_path()?;
         let span = NodeSpan::new(Span::new(start, self.prev_end()));
         Ok(Item::Import {
             name,
@@ -636,12 +632,41 @@ impl Parser {
         })
     }
 
+    /// The name a module is imported by: `Geometry`, or its path through the
+    /// folders it sits in, `Shapes.Geometry` (`DESIGN.md` §6.1). The dotted
+    /// path is the module's name from here on; the code then says `Geometry`.
+    fn parse_module_path(&mut self) -> Result<String, ParseError> {
+        let mut name = self.parse_upper_ident("an imported module name")?;
+        while self.eat(&Tok::Dot) {
+            name.push('.');
+            name.push_str(&self.parse_upper_ident("a module name after the `.`")?);
+        }
+        Ok(name)
+    }
+
+    /// Whether the tokens after this one spell a module path and then
+    /// `import`: what makes the word `from` here the head of a statement.
+    fn module_path_then_import_ahead(&self) -> bool {
+        let tok = |i: usize| self.tokens.get(i).map(|t| &t.tok);
+        let mut i = self.pos + 1;
+        loop {
+            if !matches!(tok(i), Some(Tok::Ident(module)) if is_upper(module)) {
+                return false;
+            }
+            match tok(i + 1) {
+                Some(Tok::Import) => return true,
+                Some(Tok::Dot) => i += 2,
+                _ => return false,
+            }
+        }
+    }
+
     /// `from Name import a, B`: the names a module is asked for, each then
     /// written bare (`DESIGN.md` §6.1).
     fn parse_from_import(&mut self) -> Result<Item, ParseError> {
         let start = self.cur_start();
         self.bump(); // `from`
-        let name = self.parse_upper_ident("an imported module name")?;
+        let name = self.parse_module_path()?;
         self.expect(&Tok::Import, "`import`")?;
         if matches!(self.peek(), Tok::Star) {
             return Err(ParseError {

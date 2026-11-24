@@ -342,7 +342,7 @@ pub fn lower_in_project_tracing(
     // constructors (`Ids.UserId`) beside this module's own.
     // A name brought in by `from Module import name` lowers as the
     // `Module.name` it stands for (`DESIGN.md` §6.1).
-    let expanded = crate::from_imports::expand(module);
+    let expanded = crate::imports::expand(module);
     let module: &Module = &expanded;
     let mut newtypes = local_newtypes(module);
     newtypes.extend(ctx.newtype_ctors.iter().cloned());
@@ -3036,8 +3036,10 @@ impl Lowerer {
     /// fold pass and closure capture rely on.
     fn py_module_ref(&mut self, base: &str) -> String {
         let module = crate::project::module_stem(base);
-        if self.binder_names.contains(&module) {
-            let alias = format!("_pf_{module}");
+        // `import shapes.geometry` binds the first part of the path, `shapes`.
+        let bound = module.split('.').next().unwrap_or(&module);
+        if self.binder_names.contains(bound) {
+            let alias = format!("_pf_{}", module.replace('.', "_"));
             self.needed_imports.insert(format!("{module} as {alias}"));
             alias
         } else {
@@ -4039,7 +4041,7 @@ impl Lowerer {
     /// for a nullary one; an imported constructor (`Geometry.Circle`) routes to
     /// its module the way a qualified reference does.
     fn ctor_reference(&mut self, ctor: &str, nullary: bool) -> PyExpr {
-        if let Some((base, member)) = ctor.split_once('.')
+        if let Some((base, member)) = ctor.rsplit_once('.')
             && self.imported_modules.contains(base)
         {
             let module = self.py_module_ref(base);
@@ -4639,7 +4641,7 @@ impl Lowerer {
                     self.needed_combinators.insert("_pf_id");
                     return PyExpr::Name("_pf_id".to_string());
                 }
-                let (base, member) = other.split_once('.').unwrap_or((other, ""));
+                let (base, member) = other.rsplit_once('.').unwrap_or((other, ""));
                 if self.imported_modules.contains(base) {
                     let module = self.py_module_ref(base);
                     let attr = PyExpr::Attribute {
@@ -4671,7 +4673,7 @@ impl Lowerer {
                 } else {
                     // An in-file `module` member: the flat `Geometry_area` name its
                     // definition emitted (mangled the same way).
-                    PyExpr::Name(match other.split_once('.') {
+                    PyExpr::Name(match other.rsplit_once('.') {
                         Some((m, member)) => format!("{m}_{}", py_value_name(member)),
                         None => py_value_name(other),
                     })
@@ -4686,7 +4688,7 @@ impl Lowerer {
     /// geometry` hoisted) so it matches the *same* class the module defines; a bare
     /// constructor is just mangled away from Python keywords.
     fn ctor_class_name(&mut self, name: &str) -> String {
-        if let Some((base, member)) = name.split_once('.')
+        if let Some((base, member)) = name.rsplit_once('.')
             && self.imported_modules.contains(base)
         {
             let module = self.py_module_ref(base);
@@ -4705,7 +4707,7 @@ impl Lowerer {
     /// (`record_class_modules`) routes the same way — an update on such a record
     /// reconstructs via the declaring module's class.
     fn record_class_name(&mut self, tag: &str) -> String {
-        if let Some((base, rec)) = tag.split_once('.')
+        if let Some((base, rec)) = tag.rsplit_once('.')
             && (self.imported_modules.contains(base) || self.record_class_modules.contains(base))
         {
             let module = self.py_module_ref(base);

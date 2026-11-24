@@ -780,12 +780,8 @@
               "value": "import"
             },
             {
-              "type": "FIELD",
-              "name": "module",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_module_identifier"
-              }
+              "type": "SYMBOL",
+              "name": "_module_path"
             }
           ]
         },
@@ -797,12 +793,8 @@
               "value": "from"
             },
             {
-              "type": "FIELD",
-              "name": "module",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_module_identifier"
-              }
+              "type": "SYMBOL",
+              "name": "_module_path"
             },
             {
               "type": "STRING",
@@ -860,6 +852,39 @@
               ]
             }
           ]
+        }
+      ]
+    },
+    "_module_path": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "FIELD",
+          "name": "module",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_module_identifier"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "STRING",
+                "value": "."
+              },
+              {
+                "type": "FIELD",
+                "name": "module",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_module_identifier"
+                }
+              }
+            ]
+          }
         }
       ]
     },

@@ -1391,11 +1391,39 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   top-level definition of the same name is an error, as is the same name from two modules, since one
   name means one thing in a file. A listed name the module does not have is an error, and one nothing
   uses is a warning. `from` is a keyword only at the head of this statement, ahead of a module name.
-It is a rewrite ahead of everything else (`from_imports.rs`): each bare use becomes the `Geometry.area`
+  It is a rewrite ahead of everything else (`imports.rs`): each bare use becomes the `Geometry.area`
   it stands for, at the same span, so the checker, the lowering and the editor see a program written
   out in full. The emitted Python is therefore the same as for the qualified form, `import geometry`
   and `geometry.area(...)`, and go-to-definition, find-references and rename follow a bare name to its
   module.
+- **Packages: `import Shapes.Geometry`, used as `Geometry.area`.** A module in a folder is named by its
+  path from the top of the project, each part capitalized, so `import Shapes.Geometry` reads
+  `shapes/geometry.pyfun`. The path is written once, on the import line, and the code then uses its
+  last part: `Geometry.area`, `Geometry.Circle(r)` in a pattern, `Geometry.Shape` in a type, exactly as
+  it reads for a module at the top. `from Shapes.Geometry import area` takes the same path. Python's
+  own `import shapes.geometry` has every use say `shapes.geometry.area`; what its programmers reach for
+  is `from shapes import geometry`, which binds the last part, and that is the binding this statement
+  makes. Moving a module into a folder is then a change to one line of each file that imports it.
+  Since the last part is the name in the code, a file imports one module by each last name. A second
+  `import Solids.Geometry` is an error that points to `from Solids.Geometry import …`, which binds no
+  module name and can stand beside the first. Writing the whole path at a use (`Shapes.Geometry.area`)
+  is an error that gives the short form.
+  **The top of the project is the folder of the file being run**, as the script's folder is for Python,
+  and every module names its imports from there: `shapes/geometry.pyfun` imports its neighbour as
+  `import Shapes.Util`. There are no relative imports. Two mistakes get a note of their own: a
+  neighbour imported by its bare name (the note gives the full path to write), and a file inside a
+  package checked on its own (the note names the folder its imports are found from).
+  **Output.** `shapes/geometry.py` beside an empty `shapes/__init__.py` (a regular package, which is
+  what pytest and mypy expect of a folder of modules), `import shapes.geometry` at the head of an
+  importing file, and `shapes.geometry.area(box)` at each use. When a binding of the file takes the
+  package's name (`let shapes = …`), the import goes by an alias, `import shapes.geometry as
+  _pf_shapes_geometry`, as it does for a flat module.
+  **How.** Past the parser a module's name is its dotted path: in the project graph, in the checker's
+  environment (`Shapes.Geometry.area`), in the lowering context and in messages. The rewrite that
+  serves `from` imports (`imports.rs`) also writes each short name out in full, so nothing downstream
+  knows a short name exists, and a `Module.member` string is split at its last dot.
+  `project::module_stem`, `module_file_name` and `module_py_name` turn the name into `shapes.geometry`,
+  `shapes/geometry.pyfun` and `shapes/geometry.py`.
 - **Parallel `.py` output.** Each `foo.pyfun` compiles to a sibling `foo.py` with a real `import`; member
   names stay **un-mangled** (`area`, not `Geometry_area` — the mangling is an in-file-module workaround we
   drop here), and a cross-module reference `Geometry.area` lowers to Python `geometry.area`. This matches
@@ -1433,7 +1461,7 @@ One function (`project::module_stem`) serves all three, so the source file, the 
 Python `import` cannot disagree. An underscore before a digit is kept in the name (`day_1.pyfun` is
 `Day_1`), which keeps the mapping reversible. Before 0.11 the stem was only lowercased, so
 `import TrainTimes` read `traintimes.pyfun`; a missing-module error names the file it looked for.
-(Nested/dotted packages are deferred — **flat, single-directory namespace** for the MVP.)
+A folder is named the same way, so `import Rail.TrainTimes` reads `rail/train_times.pyfun`.
 
 **Resolution & ordering.** A multi-file **driver**: from an entry file,
 parse it, follow `import` edges (resolved relative to the entry's directory = the source root), and build
@@ -1565,12 +1593,24 @@ and the resolver walks type annotations (`resolve::walk_type`) collecting upperc
 type renames to an uppercase type name; builtins are refused, and a document outside a project directory
 keeps the in-file behaviour. The **project-wide LSP cache** is described in `INTERNALS.md`.
 
+**The top of a project, for the editor** (`lsp/roots.rs`). The compiler is told which file is run; the
+editor is told only which file is open, and that may be a module deep in a package. The server places
+the top above the document's own folder on two kinds of evidence: what the document imports (`import
+Shapes.Util` in `shapes/geometry.pyfun` is found one folder up), and who imports the document (a file
+above that says `import Shapes.Geometry` and means this one, which settles a module that imports
+nothing). The furthest of the two is the top. Every cross-file answer is given from there, with each
+file named by its path from the top, and the scans behind find-references, rename and workspace symbols
+walk the whole tree under it: bounded, inside the repository, past hidden folders and build output. A
+file in that tree with a nearer module of the same path (a folder of separate programs beside the
+project's modules) means that one and is left out. A file that never mentions the name being sought
+need not parse for a rename to go ahead.
+
 **Post-Phase-2 follow-ons (each detailed above):** cross-module sum-type ADTs, cross-module records
 (§8.3), cross-module externs and measures, and cross-file LSP navigation. **Explicit non-goals
 (decided not to build):** visibility (`pub`) — Pyfun is all-public by design, the Python-natural model,
 so enforced visibility would fight the ethos; and **TCO** — CPython has none and the `List`/`Seq`
 combinators are the stack-safe path, so deep self-recursion matching hand-written Python's
-`RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** nested/dotted packages;
+`RecursionError` is acceptable. **Still deferred (no demonstrated need yet):** relative imports;
 de-duplicated `_pf_*` runtime.
 
 ### 6.2 Façade packages: `pyfun.toml`, `pyfun add`, `pyfun install`

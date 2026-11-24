@@ -2558,7 +2558,7 @@
     "named": true,
     "fields": {
       "module": {
-        "multiple": false,
+        "multiple": true,
         "required": true,
         "types": [
           {

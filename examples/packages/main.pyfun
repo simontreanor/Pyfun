@@ -1,0 +1,27 @@
+# A project with a package (`DESIGN.md` §6.1). From the repository's top folder:
+#   pyfun run     examples/packages/main.pyfun          # run the whole project
+#   pyfun check   examples/packages/main.pyfun          # type-check every module
+#   pyfun compile examples/packages/main.pyfun -o out   # emit the .py tree
+#
+# A module in a folder is imported by its path from the folder of the file you
+# run: `Shapes.Geometry` is `shapes/geometry.pyfun`. The path is written once,
+# here, and the code then uses the last part of it, `Geometry.area`.
+import Shapes.Geometry
+
+# `from` asks a module for names, which are then written bare.
+from Shapes.Units import to_centimetres
+
+let room = Geometry.Rect { width = 4.0, height = 5.0 }
+let pond = Geometry.Circle 1.0
+
+# Constructors are matched through the same short name.
+let describe shape =
+    match shape:
+        case Geometry.Circle(r): f"a circle of radius {r}"
+        case Geometry.Rect { width, height }: f"a {width} by {height} rectangle"
+
+room |> describe |> print                                # a 4.0 by 5.0 rectangle
+pond |> describe |> print                                # a circle of radius 1.0
+room |> Geometry.area |> print                           # 20.0
+room |> Geometry.perimeter |> to_centimetres |> print    # 1800.0
+[room, pond] |> List.map Geometry.perimeter_cm |> print  # [1800.0, 600.0]

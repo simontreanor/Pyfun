@@ -1,16 +1,20 @@
-//! `from Module import a, B` (`DESIGN.md` §6.1): the names a file asks a module
-//! for, written bare from then on.
+//! What a file's `import` lines let it write (`DESIGN.md` §6.1), put back into
+//! the one form the rest of the compiler knows: a module's whole name, a dot,
+//! and the member.
 //!
-//! The rest of the compiler knows one way to refer to another module's member,
-//! the qualified `Module.member`. So this is a rewrite ahead of it: each bare
-//! use of an imported name becomes the qualified reference it stands for, at
-//! the same span, and the checker, the lowering and the language server see a
-//! program that was written out in full. A local binder of the same name
-//! shadows the import, as it does in Python.
+//! Two things are shorter in the source than that. `from Module import a, B`
+//! lets the listed names be written bare, and `import Shapes.Geometry` lets the
+//! module be written by the last part of its name, `Geometry.area`. So this is
+//! a rewrite ahead of everything else: each such use becomes the reference it
+//! stands for (`Shapes.Geometry.area`), at the same span, and the checker, the
+//! lowering and the language server see a program that was written out in
+//! full. A local binder of the same name shadows a `from` import, as it does
+//! in Python.
 //!
-//! The statement follows Python strictly. It binds the names it lists and
-//! nothing else, so `Module.other` still needs `import Module`; and a name it
-//! lists cannot also be defined at the top of the file.
+//! `from` follows Python strictly. It binds the names it lists and nothing
+//! else, so `Module.other` still needs `import Module`; and a name it lists
+//! cannot also be defined at the top of the file. A file imports one module
+//! by each last name, since that name is how the code says it.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -18,10 +22,11 @@ use std::collections::{HashMap, HashSet};
 use crate::lexer::Span;
 use crate::parser::ast::{
     BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item, LetBinding, Module, NodeSpan,
-    Pattern, TypeDeclKind,
+    Pattern, TypeDeclKind, TypeExpr,
 };
+use crate::project::module_short_name;
 
-/// Something wrong, or unused, in a file's `from` imports.
+/// Something wrong, or unused, in a file's imports.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Problem {
     pub message: String,
@@ -31,17 +36,19 @@ pub struct Problem {
 /// What [`report`] finds.
 #[derive(Debug, Default)]
 pub struct Report {
-    /// A name imported twice or also defined in the file, and a `Module.x`
-    /// written for a module that was only imported `from`.
+    /// A name imported twice or also defined in the file, a `Module.x`
+    /// written for a module that was only imported `from`, and two modules
+    /// imported under one last name.
     pub errors: Vec<Problem>,
     /// Each imported name nothing in the file uses.
     pub unused: Vec<Problem>,
 }
 
 /// `module` with every bare use of a `from`-imported name written out as
-/// `Module.name`. Borrowed, untouched, when the file has no such import.
+/// `Module.name`, and every module in a package written by its whole name.
+/// Borrowed, untouched, when the file has no such import.
 pub fn expand(module: &Module) -> Cow<'_, Module> {
-    if !has_from_imports(module) {
+    if !needs_rewriting(module) {
         return Cow::Borrowed(module);
     }
     let mut expanded = module.clone();
@@ -49,9 +56,10 @@ pub fn expand(module: &Module) -> Cow<'_, Module> {
     Cow::Owned(expanded)
 }
 
-/// The errors and the unused names of `module`'s `from` imports.
+/// The errors of `module`'s imports, and the names its `from` imports list
+/// that nothing uses.
 pub fn report(module: &Module) -> Report {
-    if !has_from_imports(module) {
+    if !needs_rewriting(module) {
         return Report::default();
     }
     let mut rewriter = Rewriter::new(module);
@@ -80,35 +88,23 @@ pub fn report(module: &Module) -> Report {
     report
 }
 
-/// The modules `module` imports with `from` and never with a plain `import`.
-pub fn from_only_modules(module: &Module) -> HashSet<String> {
-    let mut plain = HashSet::new();
-    let mut from = HashSet::new();
-    for item in &module.items {
-        if let Item::Import { name, names, .. } = item {
-            if names.is_empty() {
-                plain.insert(name.clone());
-            } else {
-                from.insert(name.clone());
-            }
-        }
-    }
-    from.retain(|name| !plain.contains(name));
-    from
-}
-
-fn has_from_imports(module: &Module) -> bool {
-    module
-        .items
-        .iter()
-        .any(|item| matches!(item, Item::Import { names, .. } if !names.is_empty()))
+/// Whether any import of `module` lets something be written short: a `from`
+/// import's names, or a module in a package.
+fn needs_rewriting(module: &Module) -> bool {
+    module.items.iter().any(
+        |item| matches!(item, Item::Import { name, names, .. } if !names.is_empty() || name.contains('.')),
+    )
 }
 
 struct Rewriter {
     /// Each imported name: the module it comes from and where it was listed.
     aliases: HashMap<String, (String, Span)>,
-    /// Modules imported only with `from`: `Module.x` is not theirs to write.
-    from_only: HashSet<String>,
+    /// Each module a plain `import` binds, by the name the code uses for it
+    /// (the last part), to its whole name.
+    plain: HashMap<String, String>,
+    /// Modules imported only with `from`, the same way: `Module.x` is not
+    /// theirs to write.
+    from_only: HashMap<String, String>,
     /// The names in scope that are not the import: the file's own top-level
     /// names (innermost first is not needed, only membership), then each
     /// enclosing binder's.
@@ -121,11 +117,40 @@ impl Rewriter {
     fn new(module: &Module) -> Rewriter {
         let mut rewriter = Rewriter {
             aliases: HashMap::new(),
-            from_only: from_only_modules(module),
+            plain: HashMap::new(),
+            from_only: HashMap::new(),
             scopes: Vec::new(),
             used: HashSet::new(),
             errors: Vec::new(),
         };
+        for item in &module.items {
+            let Item::Import { name, names, span } = item else {
+                continue;
+            };
+            let short = module_short_name(name).to_string();
+            if !names.is_empty() {
+                rewriter.from_only.insert(short, name.clone());
+                continue;
+            }
+            match rewriter.plain.get(&short) {
+                Some(other) if other != name => rewriter.errors.push(Problem {
+                    message: format!(
+                        "`{short}` already means `{other}` in this file, so `{name}` cannot be \
+                         imported beside it: a module is used by the last part of its name. \
+                         Ask this one for what you need, with `from {name} import …`"
+                    ),
+                    span: span.span(),
+                }),
+                Some(_) => {}
+                None => {
+                    rewriter.plain.insert(short, name.clone());
+                }
+            }
+        }
+        let plain = &rewriter.plain;
+        rewriter
+            .from_only
+            .retain(|short, _| !plain.contains_key(short));
         let own = own_names(module);
         for item in &module.items {
             let Item::Import { name, names, .. } = item else {
@@ -194,11 +219,50 @@ impl Rewriter {
                     self.expr(&mut decl.value);
                     self.scopes.pop();
                 }
-                Item::Measure { .. }
-                | Item::Type(_)
-                | Item::Extern(_)
-                | Item::Import { .. }
-                | Item::ExternImport { .. } => {}
+                Item::Type(decl) => match &mut decl.kind {
+                    TypeDeclKind::Sum(variants) => {
+                        for variant in variants {
+                            for field in &mut variant.fields {
+                                self.type_expr(field);
+                            }
+                        }
+                    }
+                    TypeDeclKind::Record(fields) => {
+                        for field in fields {
+                            self.type_expr(&mut field.ty);
+                        }
+                    }
+                    TypeDeclKind::Newtype(underlying) => self.type_expr(underlying),
+                    TypeDeclKind::Opaque => {}
+                },
+                Item::Extern(decl) => self.type_expr(&mut decl.ty),
+                Item::Measure { .. } | Item::Import { .. } | Item::ExternImport { .. } => {}
+            }
+        }
+    }
+
+    /// A type written `Geometry.Shape` names its module by the last part too.
+    fn type_expr(&mut self, ty: &mut TypeExpr) {
+        match ty {
+            TypeExpr::Con(name, span, args) => {
+                if let Some((module, member)) = name.rsplit_once('.') {
+                    let (module, member) = (module.to_string(), member.to_string());
+                    if let Some(whole) = self.whole_name(&module, span.span()) {
+                        *name = format!("{whole}.{member}");
+                    }
+                }
+                for arg in args {
+                    self.type_expr(arg);
+                }
+            }
+            TypeExpr::Fun(from, to, _) => {
+                self.type_expr(from);
+                self.type_expr(to);
+            }
+            TypeExpr::Tuple(elems) => {
+                for elem in elems {
+                    self.type_expr(elem);
+                }
             }
         }
     }
@@ -217,25 +281,36 @@ impl Rewriter {
         Some(module)
     }
 
-    /// `Module.x` written out by hand, for a module imported only with `from`.
-    fn qualified_by_hand(&mut self, module: &str, span: Span) {
-        if self.from_only.contains(module) {
+    /// The whole name of the module written `module` in a `module.x`, when
+    /// it is longer than what was written: a module in a package, imported
+    /// plainly. Reports a module that was only imported `from`, which has no
+    /// name of its own to write here.
+    fn whole_name(&mut self, module: &str, span: Span) -> Option<String> {
+        if let Some(whole) = self.plain.get(module) {
+            return (whole != module).then(|| whole.clone());
+        }
+        if let Some(whole) = self.from_only.get(module) {
             self.errors.push(Problem {
                 message: format!(
-                    "`{module}` is not imported as a module: `from {module} import …` brings in \
-                     the names it lists. Add `import {module}` to write `{module}.…`"
+                    "`{module}` is not imported as a module: `from {whole} import …` brings in \
+                     the names it lists. Add `import {whole}` to write `{module}.…`"
                 ),
                 span,
             });
+            // Read on as the module it names, so the mistake is reported once.
+            return (whole != module).then(|| whole.clone());
         }
+        None
     }
 
     /// A constructor or record tag, bare or qualified by hand.
     fn tag(&mut self, name: &mut String, span: Span) {
-        match name.split_once('.') {
-            Some((module, _)) => {
-                let module = module.to_string();
-                self.qualified_by_hand(&module, span);
+        match name.rsplit_once('.') {
+            Some((module, member)) => {
+                let (module, member) = (module.to_string(), member.to_string());
+                if let Some(whole) = self.whole_name(&module, span) {
+                    *name = format!("{whole}.{member}");
+                }
             }
             None => {
                 if let Some(module) = self.imported(name) {
@@ -243,6 +318,28 @@ impl Rewriter {
                 }
             }
         }
+    }
+
+    /// The module a chain of capitalized names spells out in full
+    /// (`Shapes.Geometry`), when the file imports one by that whole name.
+    fn spelled_out(&self, expr: &Expr) -> Option<String> {
+        fn path(expr: &Expr) -> Option<String> {
+            match &expr.kind {
+                ExprKind::Var(name) if name.starts_with(char::is_uppercase) => Some(name.clone()),
+                ExprKind::Field { base, name } if name.starts_with(char::is_uppercase) => {
+                    Some(format!("{}.{name}", path(base)?))
+                }
+                _ => None,
+            }
+        }
+        let whole = path(expr)?;
+        (whole.contains('.')
+            && self
+                .plain
+                .values()
+                .chain(self.from_only.values())
+                .any(|name| *name == whole))
+        .then_some(whole)
     }
 
     fn binding(&mut self, binding: &mut LetBinding) {
@@ -363,12 +460,25 @@ impl Rewriter {
                     };
                 }
             }
-            ExprKind::Field { base, .. } => {
+            ExprKind::Field { base, name } => {
                 if let ExprKind::Var(module) = &base.kind
                     && module.chars().next().is_some_and(char::is_uppercase)
                 {
                     let module = module.clone();
-                    self.qualified_by_hand(&module, span);
+                    if let Some(whole) = self.whole_name(&module, span) {
+                        base.kind = ExprKind::Var(whole);
+                    }
+                } else if let Some(whole) = self.spelled_out(base) {
+                    // `Shapes.Geometry.area`, the path written again at the use.
+                    let short = module_short_name(&whole).to_string();
+                    self.errors.push(Problem {
+                        message: format!(
+                            "write `{short}.{name}`: the `import` line gives the module's whole \
+                             name once, and the code then uses the last part of it"
+                        ),
+                        span,
+                    });
+                    base.kind = ExprKind::Var(whole);
                 } else {
                     self.expr(base);
                 }
@@ -422,8 +532,10 @@ impl Rewriter {
             }
             ExprKind::Ce { builder, items } => {
                 if let CeBuilder::User(module) = builder {
-                    let module = module.clone();
-                    self.qualified_by_hand(&module, span);
+                    let written = module.clone();
+                    if let Some(whole) = self.whole_name(&written, span) {
+                        *module = whole;
+                    }
                 }
                 self.items(items);
             }

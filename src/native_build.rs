@@ -110,11 +110,13 @@ fn build_project(path: &Path, out: &Path) -> ExitCode {
     }
     let mut modules = Vec::new();
     for (name, source) in &files {
-        if let Err(e) = std::fs::write(out.join(name), source) {
+        if let Err(e) = pyfun::project::write_file(out, name, source) {
             return fail(&format!("cannot write {name}: {e}"));
         }
+        // The runtime and a package's empty `__init__.py` stay Python.
         if let Some(stem) = name.strip_suffix(".py")
             && stem != "_pyfun_rt"
+            && !stem.ends_with("__init__")
         {
             modules.push(stem.to_string());
         }

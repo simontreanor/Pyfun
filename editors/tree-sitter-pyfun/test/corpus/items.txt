@@ -471,6 +471,25 @@ type Wrapper = Wrap { value: int } | Bare int
       (type_variable))))
 
 ================================================================================
+import from a package
+================================================================================
+
+import Shapes.Geometry
+from Rail.Network.Times import next_train
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (import_declaration
+    (module_identifier)
+    (module_identifier))
+  (import_declaration
+    (module_identifier)
+    (module_identifier)
+    (module_identifier)
+    (identifier)))
+
+================================================================================
 from import
 ================================================================================
 

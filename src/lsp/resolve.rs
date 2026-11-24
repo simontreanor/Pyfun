@@ -250,7 +250,7 @@ pub fn mentioned_modules(module: &Module) -> std::collections::HashSet<String> {
     out.extend(
         r.type_refs
             .into_iter()
-            .filter_map(|t| t.name.split_once('.').map(|(m, _)| m.to_string())),
+            .filter_map(|t| t.name.rsplit_once('.').map(|(m, _)| m.to_string())),
     );
     out.extend(r.builder_modules);
     out
@@ -260,7 +260,7 @@ pub fn mentioned_modules(module: &Module) -> std::collections::HashSet<String> {
 fn walk(module: &Module) -> Resolver {
     // A name brought in by `from Module import name` is read as the
     // `Module.name` it stands for, so it navigates across files like one.
-    let expanded = crate::from_imports::expand(module);
+    let expanded = crate::imports::expand(module);
     let module: &Module = &expanded;
     let mut r = Resolver::default();
     // Each name in a `from` import's list is itself a reference to that member.
@@ -473,7 +473,7 @@ impl Resolver {
                 name_span,
                 args,
             } => {
-                match name.split_once('.') {
+                match name.rsplit_once('.') {
                     Some((module, member)) => self.quals.push(QualRef {
                         module: module.to_string(),
                         member: member.to_string(),
@@ -496,7 +496,7 @@ impl Resolver {
                 // A qualified tag (`Geometry.Point`) is a cross-file reference to an
                 // imported record's definition; a bare tag is an in-file type-name
                 // occurrence (navigable/renamable in-file).
-                match ty.split_once('.') {
+                match ty.rsplit_once('.') {
                     Some((module, member)) => self.quals.push(QualRef {
                         module: module.to_string(),
                         member: member.to_string(),
@@ -746,7 +746,7 @@ impl Resolver {
                 // A qualified tag (`Geometry.Point`) is a cross-file reference to an
                 // imported record's definition; a bare tag is an in-file type-name
                 // occurrence (nav/rename).
-                match ty.split_once('.') {
+                match ty.rsplit_once('.') {
                     Some((module, member)) => self.quals.push(QualRef {
                         module: module.to_string(),
                         member: member.to_string(),
@@ -776,7 +776,7 @@ impl Resolver {
                 // file module), not a reference to a local/definition — record it for
                 // cross-file navigation rather than resolving the module base.
                 if let Some(q) = crate::types::qualified_name(expr) {
-                    let module = q.split('.').next().unwrap_or("").to_string();
+                    let module = q.rsplit_once('.').map_or("", |(m, _)| m).to_string();
                     self.quals.push(QualRef {
                         module,
                         member: name.clone(),
