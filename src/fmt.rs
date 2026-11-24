@@ -367,8 +367,13 @@ impl<'a> Writer<'a> {
                     self.out.push(' ');
                 }
             }
-            self.out
-                .push_str(&self.source[token.span.start..token.span.end]);
+            let text = &self.source[token.span.start..token.span.end];
+            // A doc comment's token runs to the end of its line, spaces and all.
+            self.out.push_str(if matches!(token.tok, Tok::Doc(_)) {
+                text.trim_end()
+            } else {
+                text
+            });
             end = token.span.end;
         }
         let tail = &self.source[end..];

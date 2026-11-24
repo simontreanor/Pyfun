@@ -100,6 +100,36 @@ fn every_program_formats_to_the_same_program_and_stays_put() {
 }
 
 #[test]
+fn a_program_with_its_indentation_shaken_formats_back() {
+    // Every program that is already formatted, with each line's indentation
+    // tripled, and again with it stretched unevenly: the blocks are the same
+    // blocks, so the formatter must give back the text it started from.
+    let mut shaken_programs = 0;
+    for (name, source) in corpus() {
+        // Inside a multi-line string a line's indentation is the string's own.
+        if source.contains("\"\"\"") || pyfun::fmt::format(&source).ok().as_deref() != Some(&source)
+        {
+            continue;
+        }
+        let stretches: [fn(usize) -> usize; 2] = [|n| n * 3, |n| n / 2 * 5];
+        for stretch in stretches {
+            let shaken: String = source
+                .lines()
+                .map(|line| {
+                    let body = line.trim_start_matches(' ');
+                    let indent = line.len() - body.len();
+                    format!("{}{body}   \n", " ".repeat(stretch(indent)))
+                })
+                .collect();
+            let formatted = pyfun::fmt::format(&shaken).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(formatted, source, "{name}");
+        }
+        shaken_programs += 1;
+    }
+    assert!(shaken_programs > 100, "only {shaken_programs} programs");
+}
+
+#[test]
 fn the_lessons_and_examples_are_formatted() {
     // What the repository teaches from is written the way the formatter
     // writes it.
