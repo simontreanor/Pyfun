@@ -10,6 +10,7 @@
 pub mod ast;
 pub mod desugar;
 pub mod diagnostics;
+pub mod fmt;
 pub mod imports;
 pub mod lexer;
 pub mod lint;

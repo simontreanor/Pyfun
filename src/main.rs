@@ -26,6 +26,7 @@ use pyfun::syntax::{Item, Module};
 use pyfun::traceback::{self, Traced};
 
 mod bundle;
+mod fmt_cmd;
 mod kernel;
 mod native_build;
 mod packages;
@@ -71,6 +72,7 @@ fn main() -> ExitCode {
             None => fail("`run` needs a file path"),
         },
         Some("test") => test_cmd::run(&args[1..]),
+        Some("fmt") => fmt_cmd::run(&args[1..]),
         Some("parse") => match args.get(1) {
             Some(path) => parse_only(path),
             None => fail("`parse` needs a file path"),
@@ -127,6 +129,13 @@ fn help() {
     eprintln!("  pyfun run     <file.pyfun> [--] [args...] compile then execute with Python");
     eprintln!("  pyfun test    [path...] [-- pytest args]  run the `test_*` functions of each");
     eprintln!("                                            `test_*.pyfun` file with pytest");
+    eprintln!("  pyfun fmt     [--check] [path...]         format files in place: spacing and");
+    eprintln!(
+        "                                            indentation, with every line break kept"
+    );
+    eprintln!(
+        "                                            (`--check` only says which would change)"
+    );
     eprintln!(
         "  pyfun build   --native <file.pyfun> -o <dir>  compile to a C extension with mypyc;"
     );

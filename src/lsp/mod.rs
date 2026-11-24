@@ -308,6 +308,10 @@ impl Server {
                 let result = self.code_actions(msg);
                 vec![response(id, result)]
             }
+            Some("textDocument/formatting") => {
+                let result = self.formatting(msg);
+                vec![response(id, result)]
+            }
             Some("workspace/symbol") => {
                 let result = self.workspace_symbols(msg);
                 vec![response(id, result)]
@@ -569,6 +573,31 @@ impl Server {
             .insert(name.to_string(), (exports.clone(), tainted));
         *caller_tainted |= tainted;
         Some(exports)
+    }
+
+    /// Format the document (`pyfun fmt`, `DESIGN.md` §9): one edit that
+    /// replaces its text, or none when it is already formatted. A document
+    /// that does not parse is left alone; its diagnostics say why.
+    fn formatting(&self, msg: &Json) -> Json {
+        let uri = msg
+            .get("params")
+            .and_then(|p| p.get("textDocument"))
+            .and_then(|d| d.get("uri"))
+            .and_then(Json::as_str);
+        let Some(text) = uri.and_then(|uri| self.text(uri)) else {
+            return Json::Null;
+        };
+        match crate::fmt::format(text) {
+            Ok(formatted) if formatted != text => Json::Array(vec![obj(vec![
+                (
+                    "range",
+                    span_range(text, crate::lexer::Span::new(0, text.len())),
+                ),
+                ("newText", str(&formatted)),
+            ])]),
+            Ok(_) => Json::Array(vec![]),
+            Err(_) => Json::Null,
+        }
     }
 
     /// Build a `publishDiagnostics` notification for `uri` from its analysis.
@@ -1819,6 +1848,7 @@ fn initialize_result() -> Json {
                 ("completionProvider", obj(vec![])),
                 ("documentSymbolProvider", Json::Bool(true)),
                 ("inlayHintProvider", Json::Bool(true)),
+                ("documentFormattingProvider", Json::Bool(true)),
                 (
                     "codeActionProvider",
                     obj(vec![(
@@ -3845,6 +3875,41 @@ let n = max 1",
             Some(file_uri(&dir.join("shapes/util.pyfun")).as_str())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn formatting_replaces_the_document_or_says_nothing() {
+        let mut server = Server::default();
+        let uri = "file:///fmt.pyfun";
+        server.handle(&json::parse(&open_msg(uri, "let  x=1\nlet f y =\n    y+x\n")).unwrap());
+        let request = obj(vec![
+            ("jsonrpc", str("2.0")),
+            ("id", int(1)),
+            ("method", str("textDocument/formatting")),
+            (
+                "params",
+                obj(vec![("textDocument", obj(vec![("uri", str(uri))]))]),
+            ),
+        ])
+        .to_string();
+        let out = server.handle(&json::parse(&request).unwrap());
+        let edits = out[0].get("result").unwrap().as_array().unwrap();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(
+            edits[0].get("newText").and_then(Json::as_str),
+            Some("let x = 1\nlet f y =\n  y + x\n")
+        );
+        // The edit covers the whole document: three lines, ending after the last.
+        let end = edits[0].get("range").unwrap().get("end").unwrap();
+        assert_eq!(end.get("line").and_then(Json::as_i64), Some(3));
+        // A formatted document gets no edit.
+        server.handle(&json::parse(&change_msg(uri, "let x = 1\n")).unwrap());
+        let out = server.handle(&json::parse(&request).unwrap());
+        assert_eq!(out[0].get("result"), Some(&Json::Array(vec![])));
+        // One that does not parse is left alone.
+        server.handle(&json::parse(&change_msg(uri, "let = =\n")).unwrap());
+        let out = server.handle(&json::parse(&request).unwrap());
+        assert_eq!(out[0].get("result"), Some(&Json::Null));
     }
 
     /// A `textDocument/rename` request with a `newName`.

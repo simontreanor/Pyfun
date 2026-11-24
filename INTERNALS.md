@@ -40,6 +40,8 @@ src/
   native_build.rs  `pyfun build --native`: compile, then mypyc (DESIGN §5.6)
   main.rs          the CLI: check/compile/run/test/build/add/install/remove/parse/lsp/repl/kernel-engine
   test_cmd.rs      `pyfun test`: compile the test files and run pytest over them (DESIGN §9)
+  fmt.rs           the formatter: spacing and indentation over the token stream (DESIGN §9)
+  fmt_cmd.rs       `pyfun fmt`: format files in place, or `--check` them
 editors/vscode/    minimal VS Code client that launches `pyfun lsp`
 tests/             parser tests, compile tests, .pyfun fixtures (favor snapshot/golden tests)
 ```
@@ -696,6 +698,28 @@ the cell's label (`In[7]`, from Jupyter's execution count) ahead of the cell and
 as the blob frame's first line. `eval` is unchanged, three frames with a bare blob, so an older kernel
 package keeps working with a newer engine; a newer kernel that is answered `unknown op` by an older
 engine falls back to `eval` and Python's own traceback.
+
+## `pyfun fmt` — implements DESIGN §9
+
+`src/fmt.rs` works on the lexer's token stream, with no AST of its own. Each real token is copied from
+the source by its span, and what is written again is the text between tokens. A gap on one line becomes
+one space or none (`wants_space`, a table over the pair of tokens, with three marks worked out
+beforehand in `Marks::of`: how each pair of braces is spaced (`brace_kind`), the gaps left as written
+inside a unit or a `measure`, and the gap closed after the `*` of a `*rest` pattern). A gap that
+crosses a line (`Writer::between_lines`) carries the comment that closes the first line, the comment
+and blank lines between, and the indentation of the next line.
+
+Indentation is a mapping of columns (`Columns`): a stack of `(column in the source, column written)`,
+where a line deeper than the top opens a level one step in and a shallower line pops to its level. The
+offside rule reads columns, so equal columns staying equal and deeper ones staying deeper keeps the
+blocks. A comment line takes the level of the code after it, or of the block above when it is deeper
+than that code.
+
+`fmt::format` parses the source, writes the text, and parses that: the two modules must be equal (a
+`NodeSpan` compares equal to any other, so positions do not count). A mismatch retries with the
+indentation as written, and then gives `FormatError::Unsafe`. `src/fmt_cmd.rs` is the command (files,
+folders, `--check`, `-`), and the server's `formatting` handler returns one edit over the whole
+document. `tests/fmt.rs` runs the formatter over every program in the repository.
 
 ## `pyfun test` — implements DESIGN §9
 

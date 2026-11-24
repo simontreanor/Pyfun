@@ -504,8 +504,11 @@ after the release.
 
 **Tooling**
 
-15. **`pyfun fmt`** (L). Named in `DESIGN.md` §10 and absent from the CLI. Needs comments kept as
-    trivia, which `pyfun parse` drops.
+15. ~~**`pyfun fmt`**~~ **DONE 2026-11-24**: spacing, indentation (two spaces), blank lines and the end
+    of the file, with every line break and comment kept, and the result checked to parse to the same
+    program before a file is written. `--check` for CI, `-` for standard input, and
+    `textDocument/formatting` in the language server (`DESIGN.md` §9). The lessons and examples are
+    kept formatted by a test. Follow-on, a decision of its own: breaking a line that is too long.
 16. ~~**`pyfun test`**~~ **DONE 2026-11-23**: `test_*` functions in `test_*.pyfun` files run under
     pytest, and a `Test` module (`Test.equal`, `Test.is_true`, `Test.fail`) lowers to `assert`, so
     pytest reports a failure with its own diff (`DESIGN.md` §9). A `Test` member is an error outside a

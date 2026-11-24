@@ -12,14 +12,14 @@ type Shape = Circle(float) | Rect { width: float, height: float }
 let pi = 3.0
 
 let area shape =
-    match shape:
-        case Circle(r): pi * r * r
-        case Rect { width, height }: width * height
+  match shape:
+    case Circle(r): pi * r * r
+    case Rect { width, height }: width * height
 
 let perimeter shape =
-    match shape:
-        case Circle(r): 2.0 * pi * r
-        case Rect { width, height }: 2.0 * (width + height)
+  match shape:
+    case Circle(r): 2.0 * pi * r
+    case Rect { width, height }: 2.0 * (width + height)
 
 ## A shape's perimeter in centimetres.
 let perimeter_cm shape = shape |> perimeter |> Units.to_centimetres
