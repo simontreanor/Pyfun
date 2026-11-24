@@ -107,7 +107,7 @@ pub fn run(args: Args<'_>) -> ExitCode {
         return crate::fail(&format!("cannot create {}: {e}", out.display()));
     }
     for (name, python) in &files {
-        if let Err(e) = std::fs::write(out.join(name), python) {
+        if let Err(e) = project::write_file(out, name, python) {
             return crate::fail(&format!("cannot write {name}: {e}"));
         }
     }

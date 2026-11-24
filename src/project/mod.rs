@@ -24,7 +24,8 @@ use crate::parser::ast::{Item, Module};
 /// One module, loaded, parsed, and with its import edges extracted.
 #[derive(Debug)]
 pub struct LoadedModule {
-    /// The capitalized module name (`Geometry`), as written in `import`.
+    /// The module's name as an `import` writes it: `Geometry`, or its path
+    /// from the project's top folder, `Shapes.Geometry`.
     pub name: String,
     /// The original source text (kept so diagnostics can be rendered against it).
     pub source: String,
@@ -89,19 +90,118 @@ impl std::fmt::Display for ProjectError {
 
 impl std::error::Error for ProjectError {}
 
-/// The file stem a module name maps to: the name in snake_case, as PEP 8 names a
-/// module (`Geometry` → `geometry`, `TrainTimes` → `train_times`). One function
-/// serves the `.pyfun` source, the emitted `.py` and the Python `import`, so the
-/// three can never disagree (`DESIGN.md` §6.1).
+/// The Python name of a module: each part of its path in snake_case, as PEP 8
+/// names a module and a package (`Geometry` → `geometry`, `TrainTimes` →
+/// `train_times`, `Shapes.Geometry` → `shapes.geometry`). One function serves
+/// the `.pyfun` source, the emitted `.py` and the Python `import`, so the three
+/// can never disagree (`DESIGN.md` §6.1).
 pub fn module_stem(name: &str) -> String {
-    crate::types::to_snake_case(name)
+    name.split('.')
+        .map(crate::types::to_snake_case)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
-/// The source file name a module name resolves to: its stem + `.pyfun`
-/// (the flat, single-directory convention of `DESIGN.md` §6.1).
-pub fn module_file_name(name: &str) -> String {
-    format!("{}.pyfun", module_stem(name))
+/// The name code uses a module by: the last part of its path (`Shapes.Geometry`
+/// → `Geometry`), which is all of it for a module at the top.
+pub fn module_short_name(name: &str) -> &str {
+    name.rsplit('.').next().unwrap_or(name)
 }
+
+/// The source file a module name resolves to, from the project's top folder:
+/// `Geometry` → `geometry.pyfun`, `Shapes.Geometry` → `shapes/geometry.pyfun`.
+pub fn module_file_name(name: &str) -> String {
+    format!("{}.pyfun", module_stem(name).replace('.', "/"))
+}
+
+/// The emitted Python file for a module, from the output's top folder:
+/// `Geometry` → `geometry.py`, `Shapes.Geometry` → `shapes/geometry.py`.
+pub fn module_py_name(name: &str) -> String {
+    format!("{}.py", module_stem(name).replace('.', "/"))
+}
+
+/// An empty `__init__.py` for each folder the emitted `files` sit in, nearest
+/// the top first: what makes `shapes/` the package `import shapes.geometry`
+/// names, for Python and for the tools that read a project (pytest, mypy).
+pub fn package_inits(files: &[(String, String)]) -> Vec<(String, String)> {
+    let mut inits: Vec<String> = Vec::new();
+    for (name, _) in files {
+        let mut folder = name.as_str();
+        while let Some((parent, _)) = folder.rsplit_once('/') {
+            let init = format!("{parent}/__init__.py");
+            if !inits.contains(&init) {
+                inits.push(init);
+            }
+            folder = parent;
+        }
+    }
+    inits.sort();
+    inits
+        .into_iter()
+        .map(|name| (name, String::new()))
+        .collect()
+}
+
+/// What an import that names no file under `root` may have meant, for the
+/// message: the module sits beside the one that asked for it, or the file
+/// being run is itself inside a package.
+pub fn missing_hint(root: &Path, name: &str, importer: Option<&str>) -> Option<String> {
+    let file = module_file_name(name);
+    if let Some(by) = importer
+        && let Some((package, _)) = by.rsplit_once('.')
+    {
+        let beside = format!("{package}.{name}");
+        if root.join(module_file_name(&beside)).is_file() {
+            return Some(format!(
+                "`{}` sits beside `{by}`. An import names a module from the top folder of the \
+                 program, so write `import {beside}`",
+                module_file_name(&beside)
+            ));
+        }
+    }
+    let root = std::path::absolute(root).ok()?;
+    let above = root
+        .ancestors()
+        .skip(1)
+        .take(MAX_ROOT_LEVELS)
+        .find(|folder| folder.join(&file).is_file())?;
+    Some(format!(
+        "`{file}` is found from `{}`. An import names a module from the folder of the file \
+         being run, so run or check the program's main file there",
+        above.display()
+    ))
+}
+
+/// Write one emitted file under `dir`, making the package folders its name
+/// sits in (`shapes/geometry.py`).
+pub fn write_file(dir: &Path, name: &str, contents: &str) -> std::io::Result<()> {
+    let path = dir.join(name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, contents)
+}
+
+/// How far above a file's own folder its imports are read from, when nothing
+/// names the file being run (the editor): the nearest folder, at or above the
+/// file's, from which each import is found, and the furthest of those. A file
+/// in `shapes/` that imports `Shapes.Util` is one folder below the top. `found`
+/// answers whether a path is a module's source.
+pub fn import_root_level(dir: &Path, imports: &[String], found: impl Fn(&Path) -> bool) -> usize {
+    let mut level = 0;
+    for name in imports {
+        let file = module_file_name(name);
+        let nearest = dir
+            .ancestors()
+            .take(MAX_ROOT_LEVELS + 1)
+            .position(|folder| found(&folder.join(&file)));
+        level = level.max(nearest.unwrap_or(0));
+    }
+    level
+}
+
+/// How many folders above a file the top of its project is looked for.
+pub const MAX_ROOT_LEVELS: usize = 6;
 
 /// The module name for a source path: its file stem in PascalCase, each
 /// underscore-separated word capitalized (`geometry.pyfun` → `Geometry`,
@@ -118,6 +218,47 @@ pub fn module_name_from_path(path: &Path) -> Option<String> {
         name.push_str(&capitalize(word));
     }
     Some(name)
+}
+
+/// The module name of a source file from its path under the project's top
+/// folder, written with `/`: `shapes/geometry.pyfun` → `Shapes.Geometry`.
+pub fn module_name_from_rel(rel: &str) -> Option<String> {
+    let parts: Option<Vec<String>> = rel
+        .split('/')
+        .map(|part| module_name_from_path(Path::new(part)))
+        .collect();
+    Some(parts?.join("."))
+}
+
+/// The modules a source text imports, read off its `import` and `from` lines
+/// without parsing it, so a file that is half written still says what it
+/// imports. Only a line that opens at the margin with a capitalized module
+/// path counts.
+pub fn import_names_in(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in source.lines() {
+        let rest = if let Some(rest) = line.strip_prefix("import ") {
+            rest
+        } else if let Some(rest) = line.strip_prefix("from ") {
+            rest
+        } else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(rest.len());
+        let name = &rest[..end];
+        let is_from = line.starts_with("from ");
+        let then_import = rest[end..].trim_start().starts_with("import");
+        if name.starts_with(|c: char| c.is_ascii_uppercase())
+            && !name.ends_with('.')
+            && (!is_from || then_import)
+        {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 /// Resolve the module graph rooted at `entry`, loading sources through `load`.
@@ -147,10 +288,11 @@ where
     Ok(Project { modules })
 }
 
-/// The file module `name` resolves to from a module in `dir`: the sibling
-/// `<name>.pyfun` first, then the same file in each façade vendored into the
-/// enclosing project (`<root>/.pyfun/facades/*/`, `DESIGN.md` §6.2), so a
-/// project's own module always wins over a façade of the same name.
+/// The file module `name` resolves to from the project folder `dir`: its own
+/// `<name>.pyfun` first (`shapes/geometry.pyfun` for `Shapes.Geometry`), then
+/// the same file in each façade vendored into the enclosing project
+/// (`<root>/.pyfun/facades/*/`, `DESIGN.md` §6.2), so a project's own module
+/// always wins over a façade of the same name.
 pub fn locate_module(dir: &Path, name: &str) -> Option<PathBuf> {
     let file = module_file_name(name);
     let sibling = dir.join(&file);
@@ -309,7 +451,7 @@ pub fn compile_tests(project: &Project) -> Result<CompiledProject, crate::loweri
 /// Whether the module named `name` is a test module: its file is
 /// `test_*.pyfun`, the name pytest looks for.
 pub fn is_test_module(name: &str) -> bool {
-    module_stem(name).starts_with("test_")
+    module_stem(module_short_name(name)).starts_with("test_")
 }
 
 /// [`compile`] with **typed output** (`--typed`, `DESIGN.md` §5.7): every
@@ -568,6 +710,7 @@ fn compile_project(
         }
         files.push((module_py_name(&module.name), python));
     }
+    files.extend(package_inits(&files));
     if needs_runtime {
         files.push((
             "_pyfun_rt.py".to_string(),
@@ -605,7 +748,11 @@ pub fn resolve_imports(
     let mut cache = HashMap::new();
     let mut visiting = HashSet::new();
     let mut out = HashMap::new();
-    for name in collect_imports(module) {
+    let imports = collect_imports(module);
+    // A file inside a package names its imports from the top of the project.
+    let level = import_root_level(dir, &imports, |file| file.is_file());
+    let dir = dir.ancestors().nth(level).unwrap_or(dir);
+    for name in imports {
         if let Some(exports) = resolve_exports(dir, &name, &mut cache, &mut visiting) {
             out.insert(name, exports);
         }
@@ -761,12 +908,6 @@ fn export_ctor_fields(module: &Module) -> HashMap<String, Vec<String>> {
     out
 }
 
-/// The emitted Python file name for a module (`Geometry` → `geometry.py`,
-/// `TrainTimes` → `train_times.py`).
-pub fn module_py_name(name: &str) -> String {
-    format!("{}.py", module_stem(name))
-}
-
 /// Whether a module visit is in progress (on the DFS path) or finished.
 enum Visit {
     Visiting,
@@ -832,7 +973,7 @@ where
 }
 
 /// The module names imported by a parsed module, in source order.
-fn collect_imports(module: &Module) -> Vec<String> {
+pub fn collect_imports(module: &Module) -> Vec<String> {
     module
         .items
         .iter()

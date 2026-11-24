@@ -55,6 +55,7 @@ pub(super) fn annotate_runtime(mut py: PyModule) -> PyModule {
         types: HashMap::new(),
         imported: HashMap::new(),
         taken: HashSet::new(),
+        reached: HashMap::new(),
     };
     let mut uses = Uses::default();
     annotate_classes(&mut py, &decls, &mut uses);
@@ -82,6 +83,11 @@ struct Decls<'a> {
     /// Every name the emitted module binds at top level, which a type
     /// parameter must not shadow.
     taken: HashSet<String>,
+    /// How this file reaches each imported Python module: the name to spell a
+    /// type through, and the `import` that binds it. That is the module's own
+    /// name, or the alias it goes by when a binding of the file took the name
+    /// (`import shapes.geometry as _pf_shapes_geometry` beside a `shapes`).
+    reached: HashMap<&'a str, (String, String)>,
 }
 
 impl<'a> Decls<'a> {
@@ -129,10 +135,48 @@ impl<'a> Decls<'a> {
             Item::Type(decl) => Some(decl.name.clone()),
             _ => None,
         }));
+        let mut bound: HashSet<&str> = HashSet::new();
+        let mut aliases: HashMap<&str, &str> = HashMap::new();
+        for stmt in &py.body {
+            match stmt {
+                PyStmt::ClassDef { name, .. }
+                | PyStmt::FuncDef { name, .. }
+                | PyStmt::TypedFuncDef { name, .. }
+                | PyStmt::Class { name, .. } => {
+                    bound.insert(name);
+                }
+                PyStmt::Assign { target, .. } => {
+                    bound.insert(target);
+                }
+                PyStmt::Import(spec) => {
+                    if let Some((module, alias)) = spec.split_once(" as ") {
+                        aliases.insert(module, alias);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut reached = HashMap::new();
+        for (py_module, _) in others {
+            let first = py_module.split('.').next().unwrap_or(py_module);
+            let alias = match aliases.get(py_module.as_str()) {
+                Some(alias) => Some(alias.to_string()),
+                None if bound.contains(first) => {
+                    Some(format!("_pf_{}", py_module.replace('.', "_")))
+                }
+                None => None,
+            };
+            let entry = match alias {
+                Some(alias) => (alias.clone(), format!("{py_module} as {alias}")),
+                None => (py_module.clone(), py_module.clone()),
+            };
+            reached.insert(py_module.as_str(), entry);
+        }
         Decls {
             types,
             imported,
             taken,
+            reached,
         }
     }
 
@@ -187,7 +231,8 @@ struct Uses {
     awaitable: bool,
     callable: bool,
     iterable: bool,
-    /// The Python modules a spelled type went through (`geo.Shape`).
+    /// The imports a spelled type went through (`geo`, for `geo.Shape`), each
+    /// as the text after `import`.
     modules: BTreeSet<String>,
 }
 
@@ -388,10 +433,13 @@ impl Speller<'_> {
             _ => {
                 // The module's own type, or one of an imported module's, which
                 // is reached through that module.
-                let (decl, prefix) = match self.decls.types.get(name) {
-                    Some(decl) => (*decl, String::new()),
+                let (decl, prefix, import) = match self.decls.types.get(name) {
+                    Some(decl) => (*decl, String::new(), None),
                     None => match self.decls.imported.get(name) {
-                        Some((module, decl)) => (*decl, format!("{module}.")),
+                        Some((module, decl)) => match self.decls.reached.get(module) {
+                            Some((by, import)) => (*decl, format!("{by}."), Some(import)),
+                            None => return self.any(),
+                        },
                         None => return self.any(),
                     },
                 };
@@ -399,8 +447,8 @@ impl Speller<'_> {
                     return self.any();
                 }
                 let through = |uses: &mut Uses| {
-                    if let Some(module) = prefix.strip_suffix('.') {
-                        uses.modules.insert(module.to_string());
+                    if let Some(import) = import {
+                        uses.modules.insert(import.clone());
                     }
                 };
                 match &decl.kind {

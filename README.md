@@ -386,9 +386,11 @@ pyfun bundle  hello.pyfun -o site    # a static web page that runs it (Pyodide)
 pyfun repl                           # interactive REPL
 ```
 
-Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`, and any command
-drives the whole graph. Clone the repo for a runnable tour in [`examples/`](https://github.com/simontreanor/Pyfun/tree/main/examples), including a
-multi-module project (`pyfun run examples/modules/main.pyfun`).
+Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`,
+`import Shapes.Geometry` one in a folder (`shapes/geometry.pyfun`), and any command drives the whole
+graph. Clone the repo for a runnable tour in [`examples/`](https://github.com/simontreanor/Pyfun/tree/main/examples), including a
+multi-module project (`pyfun run examples/modules/main.pyfun`) and one with a package
+(`pyfun run examples/packages/main.pyfun`).
 
 Typed declarations for a Python library can be shared as a **façade package**, an ordinary pip
 package that carries `.pyfun` files. `pyfun add <package>` installs one, vendors its declarations

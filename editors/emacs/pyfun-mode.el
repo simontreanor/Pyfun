@@ -54,7 +54,7 @@ Contextual: each is a builder only immediately before an opening brace.")
     ;; The bang forms, which `regexp-opt' cannot reach through `symbols'.
     ("\\_<\\(?:let\\|do\\|return\\|yield\\)!" . font-lock-keyword-face)
     ;; `from' is a keyword only at the head of `from Module import ...'.
-    ("^\\s-*\\(from\\)\\s-+[A-Z][A-Za-z0-9_]*\\s-+import\\_>"
+    ("^\\s-*\\(from\\)\\s-+[A-Z][A-Za-z0-9_.]*\\s-+import\\_>"
      (1 font-lock-keyword-face))
     ("\\_<\\(?:True\\|False\\)\\_>" . font-lock-constant-face)
     ;; Uppercase-initial identifiers: types, constructors, modules.

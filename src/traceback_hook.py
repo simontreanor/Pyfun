@@ -144,19 +144,27 @@ def _staged_lookup(here):
     staged = {}
 
     def lookup(filename):
+        # A module in a package is staged in its folder (`shapes/geometry.py`),
+        # and the table names it by that path.
         directory = os.path.dirname(filename)
-        known = staged.get(directory)
-        if known is None:
-            known = os.path.normcase(os.path.realpath(directory)) == here
-            staged[directory] = known
-        if not known:
+        package = staged.get(directory)
+        if package is None:
+            real = os.path.normcase(os.path.realpath(directory))
+            if real == here:
+                package = ""
+            elif real.startswith(here + os.sep):
+                package = real[len(here) + 1 :].replace(os.sep, "/") + "/"
+            else:
+                package = False
+            staged[directory] = package
+        if package is False:
             return None
         if not tables:
             import json
 
             with open(os.path.join(here, "_pyfun_lines.json"), encoding="utf-8") as f:
                 tables.append(json.load(f))
-        return tables[0].get(os.path.basename(filename), HIDE)
+        return tables[0].get(package + os.path.basename(filename), HIDE)
 
     return lookup
 

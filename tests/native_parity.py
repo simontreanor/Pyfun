@@ -26,6 +26,7 @@ LEARN = REPO / "docs" / "src" / "learn"
 EXAMPLES = [
     "examples/hello.pyfun",
     "examples/modules/main.pyfun",
+    "examples/packages/main.pyfun",
     "examples/interop/structured_concurrency.pyfun",
 ]
 # Programs known to fail natively, each with its reason (ROADMAP: Typed-emit +

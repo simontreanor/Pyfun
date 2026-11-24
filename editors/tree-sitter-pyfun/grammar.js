@@ -184,18 +184,25 @@ module.exports = grammar({
       field('body', $._block),
     ),
 
-    // `import Geometry`, or `from Geometry import area, Circle`.
+    // `import Geometry`, or `from Geometry import area, Circle`. A module in
+    // a package is named by its path, `Shapes.Geometry`: one `module` field
+    // per part.
     import_declaration: $ => choice(
       seq(
         'import',
-        field('module', $._module_identifier),
+        $._module_path,
       ),
       seq(
         'from',
-        field('module', $._module_identifier),
+        $._module_path,
         'import',
         sep1(field('name', choice($.identifier, $.constructor_identifier)), ','),
       ),
+    ),
+
+    _module_path: $ => seq(
+      field('module', $._module_identifier),
+      repeat(seq('.', field('module', $._module_identifier))),
     ),
 
     extern_import_declaration: $ => seq(

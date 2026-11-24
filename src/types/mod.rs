@@ -2528,7 +2528,7 @@ fn run_inner(
     // `from Module import name`: the file is checked as it reads with each such
     // name written out as `Module.name` (`DESIGN.md` §6.1).
     let written = module;
-    let expanded = crate::from_imports::expand(module);
+    let expanded = crate::imports::expand(module);
     let module: &Module = &expanded;
     let (from_errors, from_unused) = from_import_problems(written, imports);
     errors.extend(from_errors);
@@ -3972,13 +3972,13 @@ fn seed_task_prelude(env: &mut Env) {
 }
 
 /// The errors and warnings of a file's `from` imports: what
-/// [`crate::from_imports::report`] reads off the file alone, and each listed
+/// [`crate::imports::report`] reads off the file alone, and each listed
 /// name the module turns out not to have.
 fn from_import_problems(
     module: &Module,
     imports: &HashMap<String, ModuleExports>,
 ) -> (Vec<TypeError>, Vec<Warning>) {
-    let report = crate::from_imports::report(module);
+    let report = crate::imports::report(module);
     let mut errors: Vec<TypeError> = report
         .errors
         .into_iter()
@@ -8498,7 +8498,7 @@ impl Infer {
                             Ok(ty)
                         }
                         None => {
-                            let module = q.split('.').next().unwrap_or("");
+                            let module = q.rsplit_once('.').map_or("", |(m, _)| m);
                             let hint = match closest_member(module, name, env) {
                                 Some(m) => format!(" (did you mean `{module}.{m}`?)"),
                                 None => String::new(),
@@ -8960,7 +8960,7 @@ impl Infer {
     /// site's word: "construct" or "match"). Anything else is "not a record type"
     /// (or "not a member of `M`" for an unknown qualified tag).
     fn resolve_record_tag(&self, tag: &str, span: Span, verb: &str) -> Result<String, TypeError> {
-        if let Some((module, rec)) = tag.split_once('.') {
+        if let Some((module, rec)) = tag.rsplit_once('.') {
             if let Some(bare) = self.decls.record_aliases.get(tag) {
                 return Ok(bare.clone());
             }

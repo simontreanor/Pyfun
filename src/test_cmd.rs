@@ -76,7 +76,7 @@ pub fn run(args: &[String]) -> ExitCode {
         return fail(&format!("cannot create temp dir: {e}"));
     }
     for (name, python) in &staged {
-        if let Err(e) = std::fs::write(dir.join(name), python) {
+        if let Err(e) = project::write_file(&dir, name, python) {
             let _ = std::fs::remove_dir_all(&dir);
             return fail(&format!("cannot stage {name}: {e}"));
         }

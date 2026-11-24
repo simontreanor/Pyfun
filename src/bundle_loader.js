@@ -28,6 +28,9 @@ const pyodide = await loadPyodide({
 // they are staged in the working directory, which is first on `sys.path`.
 for (const name of FILES) {
   const source = await (await fetch(new URL(name, import.meta.url))).text();
+  // A module in a package sits in its folder: `shapes/geometry.py`.
+  const folder = name.split("/").slice(0, -1).join("/");
+  if (folder) pyodide.FS.mkdirTree(folder);
   pyodide.FS.writeFile(name, source);
 }
 for (const name of ASSETS) {
