@@ -14,18 +14,18 @@
 # libraries do the grinding. `extern` is the boundary that lets you have both —
 # leverage the fast thing that already exists rather than re-emulate it in Pyfun.
 
-extern scan: str -> ( (Map str str)
-                       , (List ( str, str, str
-                               , (List (str, str, str)) )) )
-       = nr_stream.scan
+extern scan: str -> ((Map str str)
+  , (List (str, str, str
+    , (List (str, str, str)))))
+  = nr_stream.scan
 extern write_utf8: str -> str -> int = nr_stream.write_utf8
 
 type Stop = { tiploc: str, arr: str, dep: str }
-type Run  = { uid: str, days: str, stp: str, stops: List Stop }
-type Leg  = { dest: str, final_dest: str, rdays: str, dep_min: int, arr_min: int, jt: int, via: List str }
+type Run = { uid: str, days: str, stp: str, stops: List Stop }
+type Leg = { dest: str, final_dest: str, rdays: str, dep_min: int, arr_min: int, jt: int, via: List str }
 
 let data_file = "examples/interop/network-rail/sample.ndjson"
-let out_file  = "examples/interop/network-rail/chippenham-routes.md"
+let out_file = "examples/interop/network-rail/chippenham-routes.md"
 
 # --- shape the boundary's tuples into typed records ---
 let to_stop t =
@@ -75,7 +75,7 @@ let walk_legs days term dep_m via stops =
         if arr_m < 0 then walk_legs days term dep_m onward rest
         else:
           let leg = Leg { dest = s.tiploc, final_dest = term, rdays = days, dep_min = dep_m,
-                          arr_min = arr_m, jt = jtime dep_m arr_m, via = via }
+            arr_min = arr_m, jt = jtime dep_m arr_m, via = via }
           List.concat [leg] (walk_legs days term dep_m onward rest)
       else walk_legs days term dep_m via rest
 
@@ -169,7 +169,7 @@ let render_group names g =
 let day_section names label day all_legs =
   let legs = dedup_legs (List.filter (fun l -> runs_on day l.rdays) all_legs)
   let pairs = List.map (fun g -> match g: case (dest, ls): (name_of names dest, render_group names g))
-                       (Map.to_list (List.fold group_by_dest Map.empty legs))
+    (Map.to_list (List.fold group_by_dest Map.empty legs))
   let body = String.join "\n\n" (List.map (fun p -> match p: case (nm, txt): txt) (List.sort pairs))
   f"## {label}\n\n{body}"
 

@@ -2793,6 +2793,45 @@ again, so they reach inside a constructor or a tuple (`(False, _)`) and stop whe
 An unused local `let` gets "Rename to `_name`", and an unused `import` or `extern import` gets "Remove
 the unused import".
 
+**Formatting (`pyfun fmt`).** One way to space and indent a program, applied in place: `pyfun fmt`
+formats every `.pyfun` file under the current folder, `pyfun fmt path…` the files and folders named,
+`pyfun fmt --check` only says which files would change (and fails when any would, for CI), and `pyfun
+fmt -` reads a program from standard input and writes it formatted, for an editor. The language server
+answers `textDocument/formatting` with the same result, so "format document" and format-on-save work in
+every editor that has the server.
+
+**It keeps every line break.** The formatter never joins or splits a line, so it has no line width to
+hold to, and a layout chosen for the reader stays as written: a pipeline with a step per line, a list
+with an element per line, a short `match` arm on one line and a long one on two. This is `gofmt`'s
+bargain. What it settles is what is left to taste on a line:
+
+- **Indentation**: two spaces a level, as the lessons and examples are written. A line that continues a
+  statement (inside brackets, or led by an operator) is one level in from where it hung.
+- **Spaces between tokens**: one around `=`, `==`, `|>`, `->`, `+`, `*`, `/` and their kind; one after
+  a comma and none before; none inside `( )` and `[ ]`; a `:` hugs what is before it. Braces are spaced
+  by what they hold: `Rect { width = 2.0 }`, `{ p with x = 1 }`, `async { return 1 }` and a record
+  type's `{ x: int }` are spaced, a map `{"a": 1}`, a set `{1, 2}` and an arrow's effects `->{io}` are
+  tight. What reads two ways is left as written, a space kept as one space and none kept as none: `-`
+  (a negative number or a subtraction), `<` and `>` (a unit `5.0<m/s>` or a comparison), `|` and `.`.
+- **Comments** are kept, each at the level of the code it goes with. A comment after code on a line has
+  two spaces before it at least, and keeps more when the author lined a column of them up.
+- **Blank lines and the end**: one blank line at most between lines, none at the head of the file, no
+  space at the end of a line, one newline at the end of the file. A string, an f-string and a number
+  are never touched, and a file keeps the line endings it has.
+
+**It cannot change what a program means.** Indentation carries meaning, so the result is checked before
+anything is written: the formatted text must parse to the program the source parses to (the AST
+compares without positions). When it does not, the formatter tries again with the indentation left
+alone, and failing that reports the file and leaves it as it is. A file that does not parse is reported
+with its error and left too. Every program in the repository (the examples, the lessons' code, the
+regression programs) is held to this in the test suite: it formats, formatting it again changes
+nothing, and no comment or line is lost. The lessons and examples are themselves kept formatted by a
+test.
+
+**Not done:** breaking a line that is too long, and joining ones that would fit. That needs a line
+width and a rule for every construct, and it would take the layout out of the author's hands; it is a
+separate decision from this one.
+
 **Tests (`pyfun test`).** Tests are run by pytest, found by pytest's own two conventions: a test file
 is `test_*.pyfun`, and a test is a top-level function in it whose name opens with `test_`. `pyfun test`
 type-checks each test file with the modules it imports, compiles them, and runs pytest over the result;
@@ -2804,7 +2843,7 @@ import Shapes
 
 ## A rectangle is its sides multiplied.
 let test_rect _ =
-    Test.equal 6.0 (Shapes.area (Shapes.Rect { width = 2.0, height = 3.0 }))
+  Test.equal 6.0 (Shapes.area (Shapes.Rect { width = 2.0, height = 3.0 }))
 ```
 
 A test says what it expects with the `Test` module: `Test.equal expected actual`, `Test.is_true
@@ -2944,7 +2983,7 @@ outside it is deferred. Hold the line:
 
 - Prose: **Pyfun** (capitalized like "Python"); never "PyFun" (reads as two words).
 - Machine-facing: lowercase `pyfun` — CLI command, Rust crate, PyPI package, repo.
-- File extension: **`.pyfun`**. CLI: `pyfun compile foo.pyfun`, `pyfun check foo.pyfun`, later
+- File extension: **`.pyfun`**. CLI: `pyfun compile foo.pyfun`, `pyfun check foo.pyfun`,
   `pyfun fmt`, `pyfun lsp`.
 - `pyfun-lang` is the PyPI distribution name (`pip install pyfun-lang`), because the bare `pyfun`
   was already taken by an abandoned 2015 package. Settled, not provisional: write it plainly with

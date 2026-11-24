@@ -16,9 +16,9 @@ let pond = Geometry.Circle 1.0
 
 # Constructors are matched through the same short name.
 let describe shape =
-    match shape:
-        case Geometry.Circle(r): f"a circle of radius {r}"
-        case Geometry.Rect { width, height }: f"a {width} by {height} rectangle"
+  match shape:
+    case Geometry.Circle(r): f"a circle of radius {r}"
+    case Geometry.Rect { width, height }: f"a {width} by {height} rectangle"
 
 room |> describe |> print                                # a 4.0 by 5.0 rectangle
 pond |> describe |> print                                # a circle of radius 1.0

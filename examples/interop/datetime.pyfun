@@ -13,8 +13,8 @@ extern type Delta
 
 # A class is callable, so a class target is a constructor: `date 2026 7 13` lowers
 # to datetime.datetime(2026, 7, 13), auto-importing the class's module.
-extern pure date : int -> int -> int -> Datetime = datetime.datetime
-extern pure days : int -> Delta = datetime.timedelta      # timedelta(days) — first positional
+extern pure date: int -> int -> int -> Datetime = datetime.datetime
+extern pure days: int -> Delta = datetime.timedelta      # timedelta(days) — first positional
 
 # Classmethods sit behind the *lowercase* class, which the import heuristic would
 # read as a submodule — an `extern import` declares the module explicitly, exactly
@@ -22,18 +22,18 @@ extern pure days : int -> Delta = datetime.timedelta      # timedelta(days) — 
 # extern: a fresh value each call is an effect, and `let pure` over it would be a
 # compile error; parsing a fixed string is pure.
 extern import datetime
-extern now : unit -> Datetime = datetime.datetime.now
-extern pure parse_iso : str -> Datetime = datetime.datetime.fromisoformat
+extern now: unit -> Datetime = datetime.datetime.now
+extern pure parse_iso: str -> Datetime = datetime.datetime.fromisoformat
 
 # Members of the opaque handles: `= .attr` reads a property, `= .attr()` calls a method.
-extern pure weekday   : Datetime -> int    = .weekday()   # 0 = Monday
-extern pure isoformat : Datetime -> str = .isoformat()
-extern pure in_days    : Delta -> int       = .days
+extern pure weekday: Datetime -> int = .weekday()   # 0 = Monday
+extern pure isoformat: Datetime -> str = .isoformat()
+extern pure in_days: Delta -> int = .days
 
 # datetime's arithmetic lives on `+`/`-`, and Python exposes every operator as a
 # plain function in the `operator` module — ready-made extern targets.
-extern pure shift   : Datetime -> Delta -> Datetime = operator.add   # d + delta
-extern pure between : Datetime -> Datetime -> Delta = operator.sub   # b - a
+extern pure shift: Datetime -> Delta -> Datetime = operator.add   # d + delta
+extern pure between: Datetime -> Datetime -> Delta = operator.sub   # b - a
 
 let launch = date 2026 7 13
 print (isoformat launch)                                # 2026-07-13T00:00:00

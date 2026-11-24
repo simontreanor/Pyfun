@@ -31,18 +31,18 @@
 # the platform locale (cp1252 on Windows) — both correct for the feed and ~5s
 # faster on the full file. Pinning them as `extern` keyword arguments reaches
 # `encoding` (a keyword-only / deep-positional arg) with no positional filler.
-extern open_text : str -> Seq str = builtins.open(mode="rt", encoding="utf-8")
-extern gzip_text : str -> Seq str = gzip.open(mode="rt", encoding="utf-8")
+extern open_text: str -> Seq str = builtins.open(mode = "rt", encoding = "utf-8")
+extern gzip_text: str -> Seq str = gzip.open(mode = "rt", encoding = "utf-8")
 extern type Path
-extern to_path : str -> Path = pathlib.Path
-extern write_text : Path -> str -> int = pathlib.Path.write_text(encoding="utf-8", newline="\n")
+extern to_path: str -> Path = pathlib.Path
+extern write_text: Path -> str -> int = pathlib.Path.write_text(encoding = "utf-8", newline = "\n")
 
 type Stop = { tiploc: str, arr: str, dep: str }
-type Run  = { uid: str, days: str, stp: str, stops: List Stop }
-type Leg  = { dest: str, final_dest: str, rdays: str, dep_min: int, arr_min: int, jt: int, via: List str }
+type Run = { uid: str, days: str, stp: str, stops: List Stop }
+type Leg = { dest: str, final_dest: str, rdays: str, dep_min: int, arr_min: int, jt: int, via: List str }
 
 let data_file = "examples/interop/network-rail/sample.ndjson"
-let out_file  = "examples/interop/network-rail/chippenham-routes.md"
+let out_file = "examples/interop/network-rail/chippenham-routes.md"
 
 # --- streaming boundary, in Pyfun: the file object is a lazy Seq of lines ---
 let lines path =
@@ -137,7 +137,7 @@ let walk_legs days term dep_m via stops =
         if arr_m < 0 then walk_legs days term dep_m onward rest
         else:
           let leg = Leg { dest = s.tiploc, final_dest = term, rdays = days, dep_min = dep_m,
-                          arr_min = arr_m, jt = jtime dep_m arr_m, via = via }
+            arr_min = arr_m, jt = jtime dep_m arr_m, via = via }
           List.concat [leg] (walk_legs days term dep_m onward rest)
       else walk_legs days term dep_m via rest
 
@@ -234,7 +234,7 @@ let render_group names g =
 let day_section names label day all_legs =
   let legs = dedup_legs (List.filter (fun l -> runs_on day l.rdays) all_legs)
   let pairs = List.map (fun g -> match g: case (dest, ls): (name_of names dest, render_group names g))
-                       (Map.to_list (List.fold group_by_dest Map.empty legs))
+    (Map.to_list (List.fold group_by_dest Map.empty legs))
   let body = String.join "\n\n" (List.map (fun p -> match p: case (nm, txt): txt) (List.sort pairs))
   f"## {label}\n\n{body}"
 

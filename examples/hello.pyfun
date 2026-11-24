@@ -93,8 +93,8 @@ let describe_sign n =
   match n:
     case 0: "zero"
     case _:
-        let positive = n > 0
-        if positive then "positive" else "negative"
+      let positive = n > 0
+      if positive then "positive" else "negative"
 
 # Exhaustive pattern matching over an ADT (checked at compile time).
 let unwrap o =
@@ -330,7 +330,7 @@ let root = fabs (0.0 - 3.0)          # 3.0   (math.fabs(-3.0))
 # `error_message`. `try` binds looser than `+` but tighter than `|>`.
 extern parse_int: str -> int = int
 let parsed42 = Result.with_default 0 (try (parse_int "42"))    # 42
-let parsed_bad = Result.with_default 0 (try (parse_int "oops")) # 0  (ValueError caught)
+let parsed_bad = Result.with_default 0 (try (parse_int "oops"))  # 0  (ValueError caught)
 let error_kind_of s =
   match try (parse_int s):
     case Ok n: "ok"
@@ -344,7 +344,7 @@ let error_kind_of s =
 let ns = [1, 2, 3, 4, 5]
 let squares = List.map (fun x -> x * x) ns   # [1, 4, 9, 16, 25]
 let bigs = List.filter (fun x -> x > 2) ns   # [3, 4, 5]
-let total = List.fold (fun a b -> a + b) 0 ns # 15
+let total = List.fold (fun a b -> a + b) 0 ns  # 15
 let count = List.len ns                      # 5
 
 # An operator section `(op)` is a binary operator as a curried function, so the
@@ -357,7 +357,7 @@ let doubled = List.map ((*) 2) ns            # [2, 4, 6, 8, 10]
 # `contains` is O(n) (use `Set` for O(1)); `concat` O(n+m); `sort` O(n log n);
 # `find` O(n) first-match. There's no cheap prepend — that's the linked-list non-goal.
 let third = Option.with_default 0 (List.get 2 ns)   # 3 (0-based)
-let missing = Option.with_default 0 (List.get 9 ns) # 0 (out of bounds -> None)
+let missing = Option.with_default 0 (List.get 9 ns)  # 0 (out of bounds -> None)
 let has_three = List.contains 3 ns            # True
 let joined = List.concat ns [6, 7]           # [1, 2, 3, 4, 5, 6, 7]
 let ordered = List.sort [3, 1, 2]            # [1, 2, 3]
@@ -368,7 +368,7 @@ let sorted_colors = List.sort [Blue, Red, Green]  # [Red, Green, Blue]
 let red_first = Red < Green                       # True
 # Built-in Option/Result order too: None < Some, Ok < Error (payloads orderable).
 let sorted_opts = List.sort [Some 3, None, Some 1]  # [None, Some 1, Some 3]
-let first_big = List.find (fun x -> x > 3) ns # Some 4
+let first_big = List.find (fun x -> x > 3) ns  # Some 4
 
 # Sets and maps lower to Python `set` / `dict`; `Map.find` returns the built-in
 # `Option`, consumed with the `Option` module.
