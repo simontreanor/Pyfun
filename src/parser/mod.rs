@@ -2099,8 +2099,12 @@ impl Parser {
                 }
                 // `Point { x = 1, y = 2 }` — a constructor-tagged record literal
                 // (`DESIGN.md` §8.3): an uppercase name before a `{` whose body is
-                // not a CE item (that case was handled just above).
-                if is_upper(&name) && *self.peek2() == Tok::LBrace {
+                // not a CE item (that case was handled just above). A record's
+                // body starts with a field name; a brace that starts with
+                // anything else is a `Map` or `Set` literal the name is applied
+                // to (`JObject {"id": JInt 1}`, `Some {1, 2}`, `JObject {}`).
+                let record_body = matches!(self.peek3(), Tok::Ident(field) if !is_upper(field));
+                if is_upper(&name) && *self.peek2() == Tok::LBrace && record_body {
                     self.bump(); // type tag
                     let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
                     return self.parse_record_literal(name, ty_span, start);

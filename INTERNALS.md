@@ -492,6 +492,11 @@ stdio. All features reuse the existing front end:
   `types::Codecs`, one `Codec` per `Decode.auto` site keyed by span plus the named table, and
   `lowering::lower_collecting` / `lower_in_project` take it beside the float-literal spans —
   `DESIGN.md` §6, "Derived codecs".)
+  (The built-in `Json` type is seeded in `types::seed_builtin_types` from `types::JSON_CTORS`, the
+  one list lowering reads too: `Lowerer::needs_json` is set where a `Json` constructor is built or
+  matched and by `Decode.value` / `Encode.value`, and decides whether `json_prelude` emits the
+  classes in the file or a project module imports them from `_pyfun_rt` — `DESIGN.md` §6, "JSON as
+  data".)
   It works because the checker, in a `record`-enabled pass (`types::check_collecting`, surfaced via
   `analyze`), accumulates a `(span, ty)` table for every expression node, binding name, function
   parameter, and pattern variable, then resolves each entry against the final substitution and renders

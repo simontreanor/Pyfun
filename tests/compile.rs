@@ -994,6 +994,167 @@ fn e2e_a_helper_between_mutually_recursive_functions() {
 }
 
 #[test]
+fn e2e_decode_dict_and_index() {
+    // Issue #186, the shape Scratch stores a project in: objects keyed by
+    // random ids, and arrays whose positions each mean something else.
+    run_and_check(
+        r#"
+        type Input = { shadow: int, value: str }
+        let input =
+          Decode.map2 (fun shadow value -> Input { shadow = shadow, value = value })
+            (Decode.index 0 Decode.int)
+            (Decode.index 1 (Decode.index 1 Decode.str))
+        let blocks = Decode.dict (Decode.field "inputs" (Decode.dict input))
+        let text = "{\"b2\": {\"inputs\": {\"X\": [1, [4, \"10\"]]}}, \"a1\": {\"inputs\": {}}}"
+        let read = Decode.decode_string blocks text
+        let keys =
+          match read:
+            case Ok m: Map.keys m
+            case Error e: []
+        let short = Decode.decode_string (Decode.index 2 Decode.int) "[1, 2]"
+        let below = Decode.decode_string (Decode.index (0 - 1) Decode.int) "[1, 2]"
+        let no_array = Decode.decode_string (Decode.index 0 Decode.int) "{}"
+        let no_object = Decode.decode_string (Decode.dict Decode.int) "[1]"
+        let bad_value = Decode.decode_string (Decode.dict Decode.int) "{\"a\": \"x\"}"
+        "#,
+        &[
+            (
+                "read",
+                "Ok({'b2': {'X': Input(shadow=1, value='10')}, 'a1': {}})",
+            ),
+            // The object's own order, not a sorted one.
+            ("keys", "['b2', 'a1']"),
+            (
+                "short",
+                "Error(_Exception('ValueError', 'expected an element at index 2, got an array of 2'))",
+            ),
+            (
+                "below",
+                "Error(_Exception('ValueError', 'expected an element at index -1, got an array of 2'))",
+            ),
+            (
+                "no_array",
+                "Error(_Exception('ValueError', 'expected a JSON array'))",
+            ),
+            (
+                "no_object",
+                "Error(_Exception('ValueError', 'expected a JSON object'))",
+            ),
+            (
+                "bad_value",
+                "Error(_Exception('ValueError', 'expected an int, got str'))",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn e2e_json_value_round_trips() {
+    // `Decode.value` reads any JSON, the program matches on it and changes it,
+    // and `Encode.value` writes the same JSON back: ints stay ints, floats
+    // floats, and an object keeps its order.
+    run_and_check(
+        r#"
+        let rec_strip j =
+          match j:
+            case JObject m: m |> Map.remove "id" |> Map.map (fun k v -> rec_strip v) |> JObject
+            case JList xs: xs |> List.map rec_strip |> JList
+            case other: other
+        let kind j =
+          match j:
+            case JNull: "null"
+            case JBool b: "bool"
+            case JInt n: "int"
+            case JFloat x: "float"
+            case JStr s: "str"
+            case JList xs: "list"
+            case JObject m: "object"
+        let text = "{\"id\": 7, \"b\": [1, 2.0, true, null, \"x\", {\"id\": 1, \"k\": []}], \"a\": 1.5}"
+        let read = Decode.decode_string Decode.value text
+        let back =
+          match read:
+            case Ok j: Encode.value j
+            case Error e: e.error_message
+        let same = back == text
+        let stripped =
+          match read:
+            case Ok j: j |> rec_strip |> Encode.value
+            case Error e: e.error_message
+        let kinds =
+          match read:
+            case Ok (JObject m):
+              match Map.find "b" m:
+                case Some (JList xs): List.map kind xs
+                case _: []
+            case _: []
+        let built = JObject {"n": JInt 1, "xs": JList [JNull, JBool False], "o": JObject {}}
+        let built_text = Encode.value built
+        let auto_text = Encode.auto built
+        let one_is_not_one_point_zero = JInt 1 == JFloat 1.0
+        let equal = JList [JInt 1] == JList [JInt 1]
+        "#,
+        &[
+            ("same", "True"),
+            (
+                "stripped",
+                r#"{"b": [1, 2.0, true, null, "x", {"k": []}], "a": 1.5}"#,
+            ),
+            ("kinds", "['int', 'float', 'bool', 'null', 'str', 'object']"),
+            (
+                "built",
+                "JObject({'n': JInt(1), 'xs': JList([JNull, JBool(False)]), 'o': JObject({})})",
+            ),
+            ("built_text", r#"{"n": 1, "xs": [null, false], "o": {}}"#),
+            ("auto_text", r#"{"n": 1, "xs": [null, false], "o": {}}"#),
+            ("one_is_not_one_point_zero", "False"),
+            ("equal", "True"),
+        ],
+    );
+}
+
+#[test]
+fn e2e_a_derived_codec_keeps_a_json_field() {
+    run_and_check(
+        r#"
+        type Doc = { id: int, extra: Json, more: List Json }
+        let text = "{\"id\": 1, \"extra\": {\"k\": [1, null]}, \"more\": [true, 2.5]}"
+        let read = Decode.decode_string Decode.auto text
+        let back =
+          match read:
+            case Ok d: Encode.auto (Doc { id = d.id + 1, extra = d.extra, more = d.more })
+            case Error e: e.error_message
+        "#,
+        &[
+            (
+                "read",
+                "Ok(Doc(id=1, extra=JObject({'k': JList([JInt(1), JNull])}), more=[JBool(True), JFloat(2.5)]))",
+            ),
+            (
+                "back",
+                r#"{"id": 2, "extra": {"k": [1, null]}, "more": [true, 2.5]}"#,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn json_classes_are_emitted_only_where_json_is_used() {
+    // A program that encodes its own types carries none of the `Json` classes;
+    // the derived encoder tells a `Json` value by its class's name.
+    let py = pyfun::compile("type P = { x: int }\nlet s = Encode.auto (P { x = 1 })").unwrap();
+    assert!(!py.contains("class JNull"), "{py}");
+    assert!(!py.contains("_pf_dec_value"), "{py}");
+    let py = pyfun::compile("let j = JList [JNull]").unwrap();
+    assert!(py.contains("class JNull:"), "{py}");
+    assert!(py.contains("_JNull = JNull()"), "{py}");
+    assert!(py.contains("j = JList([_JNull])"), "{py}");
+    // Matching names the classes as building does.
+    let py = pyfun::compile("let is_null j =\n  match j:\n    case JNull: True\n    case _: False")
+        .unwrap();
+    assert!(py.contains("class JObject:"), "{py}");
+}
+
+#[test]
 fn as_pattern_lowers_to_python_as() {
     let py = pyfun::compile("let f o =\n  match o:\n    case Some v as w: w\n    case None: None")
         .unwrap();
@@ -6101,6 +6262,18 @@ fn e2e_example_json_to_adt() {
             "decode failed (KeyError): 'roles'",
             "decode failed (ValueError): expected an int, got str",
             "decode failed (JSONDecodeError): Expecting value: line 1 column 1 (char 0)",
+        ],
+    );
+}
+
+#[test]
+fn e2e_example_json_edit() {
+    run_example(
+        "json_edit.pyfun",
+        &[
+            "k9: cat at (10, -4); a2: ball at (0, 7)",
+            r#"{"version": 4, "sprites": {"k9": ["cat", [10, -4]], "a2": ["ball", [0, 7]]}, "extra": {"tempo": 60.0, "tags": ["demo", null]}}"#,
+            r#"{"version": 1, "sprites": {}, "extra": null}"#,
         ],
     );
 }

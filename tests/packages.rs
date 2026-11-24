@@ -411,6 +411,56 @@ fn run_executes_a_program_spread_over_packages() {
 }
 
 #[test]
+fn json_is_one_type_across_the_files_of_a_project() {
+    // The `Json` classes live in the shared runtime, so a value one module
+    // builds is matched, compared and encoded by another.
+    if !have_python() {
+        return;
+    }
+    let scratch = OnDisk::new(
+        "json",
+        &[
+            (
+                "store/loader.pyfun",
+                "type Doc = { id: int, extra: Json }\n\
+                 let load text = Decode.decode_string Decode.value text\n\
+                 let blank = JNull\n\
+                 let wrap n = JList [JInt n, blank]\n",
+            ),
+            (
+                "main.pyfun",
+                "import Store.Loader\n\
+                 let size j =\n  match j:\n    case JList xs: List.len xs\n    case JObject m: Map.len m\n    case _: 1\n\
+                 match Loader.load \"[1, [2, 3], null]\":\n  case Ok j: print (size j)\n  case Error e: print e.error_message\n\
+                 print (Loader.wrap 3 == JList [JInt 3, JNull])\n\
+                 Loader.wrap 3 |> Encode.value |> print\n\
+                 Loader.Doc { id = 1, extra = Loader.blank } |> Encode.auto |> print\n",
+            ),
+        ],
+    );
+    let (ok, out, err) = scratch.pyfun(&["run", "main.pyfun"]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(
+        out.replace("\r\n", "\n"),
+        "3\nTrue\n[3, null]\n{\"id\": 1, \"extra\": null}\n"
+    );
+    // Each module imports the classes; neither defines them.
+    let (ok, out, err) = scratch.pyfun(&["compile", "main.pyfun", "-o", "out"]);
+    assert!(ok, "{out}{err}");
+    let main = fs::read_to_string(scratch.path("out/main.py")).unwrap();
+    let loader = fs::read_to_string(scratch.path("out/store/loader.py")).unwrap();
+    let runtime = fs::read_to_string(scratch.path("out/_pyfun_rt.py")).unwrap();
+    for module in [&main, &loader] {
+        assert!(
+            module.contains("from _pyfun_rt import JNull, JBool"),
+            "{module}"
+        );
+        assert!(!module.contains("class JNull"), "{module}");
+    }
+    assert!(runtime.contains("class JObject:"), "{runtime}");
+}
+
+#[test]
 fn the_shipped_example_runs() {
     // `examples/packages/` stays working end to end.
     if !have_python() {

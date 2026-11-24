@@ -122,6 +122,69 @@ primitives, so `{"type": "Nope"}` is an `Error` naming the unknown case rather t
 `Decode.auto` reads the type from where it is used: here `describe back` fixes `back` to a `Turn`. If
 nothing fixes it, the compiler says so at the site instead of guessing.
 
+## JSON that does not fit a record
+
+Some files have no fields to name. This one keeps its sprites in an object keyed by id, and stores
+each sprite as a small array: position 0 is the name and position 1 is where it stands.
+
+```pyfun
+type Sprite = { name: str, x: int }
+
+let sprite =
+  Decode.map2 (fun name x -> Sprite { name = name, x = x })
+    (Decode.index 0 Decode.str)
+    (Decode.index 1 Decode.int)
+
+let saved = """{"k9": ["cat", 10], "a2": ["ball", 0]}"""
+
+match Decode.decode_string (Decode.dict sprite) saved:
+  case Ok found: found |> Map.to_list |> print
+  case Error e: print e.error_message
+```
+
+```console
+[('k9', Sprite(name='cat', x=10)), ('a2', Sprite(name='ball', x=0))]
+```
+
+`Decode.dict` reads an object whose keys are data and gives you a `Map`, with the keys in the order
+the file had them. `Decode.index` reads one position of an array, counting from 0, so each position
+can have its own decoder. An array that is too short is an `Error` that says which position was
+missing.
+
+Sometimes you want no shape at all. A program that edits a settings file should change the one
+value it knows about and hand everything else back as it found it. `Decode.value` reads any JSON
+into the built-in `Json` type, and `Encode.value` writes it out again:
+
+```pyfun
+let bump j =
+  match j:
+    case JObject m:
+      match Map.find "version" m:
+        case Some (JInt n): m |> Map.add "version" (JInt (n + 1)) |> JObject
+        case _: j
+    case _: j
+
+let saved = """{"version": 3, "theme": {"dark": true, "scale": 1.0}}"""
+
+match Decode.decode_string Decode.value saved:
+  case Ok j: j |> bump |> Encode.value |> print
+  case Error e: print e.error_message
+```
+
+```console
+{"version": 4, "theme": {"dark": true, "scale": 1.0}}
+```
+
+`Json` is a sum type like the ones you wrote in lesson 5, with seven cases: `JNull`, `JBool`,
+`JInt`, `JFloat`, `JStr`, `JList` and `JObject`. A `JList` holds a `List Json` and a `JObject` holds
+a `Map str Json`, so everything you know about `match`, `List` and `Map` works on it. Look at
+`scale`: it went in as `1.0` and came out as `1.0`, because an int and a float are different cases,
+and the keys kept their order. You build a value with the same cases when you have JSON to write
+and no type for it: `JObject {"version": JInt 1}`.
+
+Reach for a decoder first. A record tells the rest of your program what it holds, and a `Json`
+tells it only that the text was JSON.
+
 ## Handing Python a function
 
 A callback crosses the boundary the other way, and two rules keep it honest. Write a callback of
@@ -159,7 +222,7 @@ whatever the callback performs.
 Complete the decoder by filling both holes with the strict field decoders. `pyfun check` reports each hole's type and suggests the fit. The first report is:
 
 ```console
-note: hole `?title_dec` has type `Decoder str` — try: Decode.str, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.one_of ?, Decode.field ? ?
+note: hole `?title_dec` has type `Decoder str` — try: Decode.str, Decode.auto — or: Decode.succeed ?, Decode.fail ?, Decode.one_of ?, Decode.field ? ?, and 3 more
 ```
 
 ```pyfun

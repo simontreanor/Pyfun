@@ -391,6 +391,7 @@ pub fn lower_in_project_tracing(
     let py = lowerer.lower_module(module)?;
     let uses_runtime = lowerer.needs_result
         || lowerer.needs_option
+        || lowerer.needs_json
         || lowerer.needs_exception
         || lowerer.needs_task_scope;
     Ok(LoweredModule {
@@ -410,6 +411,7 @@ pub fn runtime_module() -> PyModule {
     body.extend(result_prelude(true));
     body.extend(option_prelude(true, true));
     body.extend(exception_prelude());
+    body.extend(json_prelude(true));
     // One `Task.scope` context variable for the whole project, so a function in
     // one module can start a task in a scope another module opened.
     body.push(task_scope_var());
@@ -677,6 +679,9 @@ struct Lowerer {
     /// Whether the built-in `Ok`/`Error` classes must be emitted (the `Result`
     /// prelude), set when a `result {}` block or an `Ok`/`Error` reference is lowered.
     needs_result: bool,
+    /// Whether the built-in `Json` classes must be emitted: a `Json` constructor
+    /// is built or matched, or `Decode.value` / `Encode.value` is used.
+    needs_json: bool,
     /// Whether the built-in `Some`/`None` classes must be emitted (the `Option`
     /// prelude), set when `Some`/`None` or an `Option.*` / `Map.find` member that
     /// constructs them is lowered.
@@ -888,6 +893,10 @@ impl Lowerer {
         // Built-in Option constructors (`Some`/`None`).
         ctor_arity.insert("Some".to_string(), 1);
         ctor_arity.insert("None".to_string(), 0);
+        // The built-in `Json` constructors.
+        for (name, arity) in crate::types::JSON_CTORS {
+            ctor_arity.insert((*name).to_string(), *arity);
+        }
         // Prelude builtins (`print`/`abs`/`min`/`max`): register arities so a
         // *partial* application lowers to `functools.partial`. Pyfun names equal
         // their Python builtin names, so no call-site renaming is needed. User
@@ -975,6 +984,7 @@ impl Lowerer {
             fn_counter: 0,
             needs_functools: false,
             needs_result: false,
+            needs_json: false,
             needs_option: false,
             needs_exception: false,
         }
@@ -1565,6 +1575,26 @@ impl Lowerer {
                 body.extend(exception_prelude());
             }
         }
+        // The built-in `Json` classes, one type across a project's files like
+        // the others.
+        let jnull_singleton = self.nullary_singletons.contains("JNull");
+        if self.needs_json {
+            if self.use_runtime {
+                let mut names: Vec<String> = crate::types::JSON_CTORS
+                    .iter()
+                    .map(|(name, _)| (*name).to_string())
+                    .collect();
+                if jnull_singleton {
+                    names.push("_JNull".to_string());
+                }
+                body.push(PyStmt::ImportFrom {
+                    module: "_pyfun_rt".to_string(),
+                    names,
+                });
+            } else {
+                body.extend(json_prelude(jnull_singleton));
+            }
+        }
         // List-prelude helpers referenced by the program (deterministic order).
         body.extend(list_prelude(&self.needed_list_helpers));
         // Set/Map-prelude helpers referenced by the program.
@@ -1575,7 +1605,7 @@ impl Lowerer {
         // Standard-combinator helpers referenced by the program.
         body.extend(combinator_prelude(&self.needed_combinators));
         // Decode-module helpers referenced by the program.
-        body.extend(decode_prelude(&self.needed_decode_helpers));
+        body.extend(decode_prelude(&self.needed_decode_helpers, jnull_singleton));
         // The context variable `Task.scope` publishes its TaskGroup through.
         if self.needs_task_scope {
             if self.use_runtime {
@@ -3801,6 +3831,9 @@ impl Lowerer {
         if name == "Some" || name == "None" {
             self.needs_option = true;
         }
+        if is_json_ctor(name) {
+            self.needs_json = true;
+        }
         // A bare reference to a sibling member inside a module → its mangled
         // top-level name (`pi` → `Geometry_pi`), unless shadowed by a local.
         if !locals.contains(name)
@@ -3959,6 +3992,13 @@ impl Lowerer {
             Codec::Bool => tup(vec![s("bool")]),
             Codec::Str => tup(vec![s("str")]),
             Codec::Unit => tup(vec![s("unit")]),
+            // The descriptor carries the function that wraps any JSON, so the
+            // interpreter names nothing a module without `Json` lacks.
+            Codec::Json => {
+                self.needs_json = true;
+                let wrap = self.decode_helper("_pf_dec_value");
+                tup(vec![s("json"), wrap])
+            }
             Codec::List(inner) => {
                 let d = self.codec_desc(inner);
                 tup(vec![s("list"), d])
@@ -4611,6 +4651,8 @@ impl Lowerer {
             "Decode.bool" => self.decode_helper("_pf_dec_bool"),
             "Decode.field" => self.decode_helper("_pf_dec_field"),
             "Decode.list" => self.decode_helper("_pf_dec_list"),
+            "Decode.dict" => self.decode_helper("_pf_dec_dict"),
+            "Decode.index" => self.decode_helper("_pf_dec_index"),
             "Decode.nullable" => {
                 self.needs_option = true;
                 self.decode_helper("_pf_dec_nullable")
@@ -4628,6 +4670,16 @@ impl Lowerer {
                 self.needs_exception = true;
                 self.needed_imports.insert("json".to_string());
                 self.decode_helper("_pf_dec_decode_string")
+            }
+            // `Decode.value` builds `Json` values; `Encode.value` reads them.
+            "Decode.value" => {
+                self.needs_json = true;
+                self.decode_helper("_pf_dec_value")
+            }
+            "Encode.value" => {
+                self.needs_json = true;
+                self.needed_imports.insert("json".to_string());
+                self.decode_helper("_pf_enc_json")
             }
             // A user module member (`Geometry.area`). An imported *file* module
             // lowers to Python attribute access on the imported module
@@ -4688,6 +4740,10 @@ impl Lowerer {
     /// geometry` hoisted) so it matches the *same* class the module defines; a bare
     /// constructor is just mangled away from Python keywords.
     fn ctor_class_name(&mut self, name: &str) -> String {
+        // Matching a `Json` constructor names its class, as building one does.
+        if is_json_ctor(name) {
+            self.needs_json = true;
+        }
         if let Some((base, member)) = name.rsplit_once('.')
             && self.imported_modules.contains(base)
         {
@@ -8200,6 +8256,10 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                             ],
                         ),
                         if_(
+                            kind("json"),
+                            vec![ret(call(idx(name("d"), 1), vec![name("v")]))],
+                        ),
+                        if_(
                             kind("option"),
                             vec![
                                 if_(is_none(name("v")), vec![ret(none_value(none_singleton))]),
@@ -8519,6 +8579,25 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
                             vec![ret(calln("_pf_enc_value", vec![attr(name("v"), "_0")]))],
                         ),
                         if_(isinst(name("v"), name("None_")), vec![ret(PyExpr::NoneLit)]),
+                        // A `Json` value travels as the JSON it stands for. Its
+                        // classes are told by name (the names are reserved), so a
+                        // program without `Json` carries none of them.
+                        if_(
+                            cmp(
+                                PyBinOp::In,
+                                attr(calln("type", vec![name("v")]), "__name__"),
+                                PyExpr::Tuple(
+                                    crate::types::JSON_CTORS
+                                        .iter()
+                                        .map(|(ctor, _)| s(ctor))
+                                        .collect(),
+                                ),
+                            ),
+                            vec![ret(calln(
+                                "_pf_enc_value",
+                                vec![calln("getattr", vec![name("v"), s("_0"), PyExpr::NoneLit])],
+                            ))],
+                        ),
                         // A dataclass: a sum-type case has positional `_0`… fields,
                         // a record has named ones (a keyword-mangled `class_`
                         // travels as `class`).
@@ -8620,7 +8699,46 @@ fn codec_prelude(used: &BTreeSet<&'static str>, none_singleton: bool) -> Vec<PyS
         .collect()
 }
 
-fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
+/// Whether `name` is a constructor of the built-in `Json` type.
+fn is_json_ctor(name: &str) -> bool {
+    crate::types::JSON_CTORS
+        .iter()
+        .any(|(ctor, _)| *ctor == name)
+}
+
+/// The classes backing the built-in `Json` type (`DESIGN.md` §6, "JSON as
+/// data"): one per constructor, like a user sum type's. `JNull` has one value,
+/// built once as `_JNull` unless the program claimed that name.
+fn json_prelude(singleton: bool) -> Vec<PyStmt> {
+    let mut out = Vec::new();
+    for (name, arity) in crate::types::JSON_CTORS {
+        let held = match *name {
+            "JBool" => "bool",
+            "JInt" => "int",
+            "JFloat" => "float",
+            "JStr" => "str",
+            "JList" => "list",
+            _ => "dict",
+        };
+        out.push(PyStmt::ClassDef {
+            name: (*name).to_string(),
+            fields: (0..*arity).map(|i| format!("_{i}")).collect(),
+            field_types: vec![held.to_string(); *arity],
+            order: None,
+            record: false,
+            native: false,
+            named: false,
+            type_params: Vec::new(),
+            doc: None,
+        });
+        if *arity == 0 && singleton {
+            out.push(singleton_assign(name));
+        }
+    }
+    out
+}
+
+fn decode_prelude(used: &BTreeSet<&'static str>, jnull_singleton: bool) -> Vec<PyStmt> {
     let name = |n: &str| PyExpr::Name(n.to_string());
     let str_ = |s: &str| PyExpr::Str(s.to_string());
     let int = PyExpr::Int;
@@ -8761,6 +8879,67 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     )),
                 ],
             ),
+            // Decode.dict dec -> go(v) = dict(zip(v.keys(), map(dec, v.values()))),
+            // guarded to a JSON object. A dict keeps its order, so the `Map` has
+            // the object's.
+            "_pf_dec_dict" => factory(
+                "_pf_dec_dict",
+                &["dec"],
+                vec![
+                    if_(
+                        not_(isinst(name("dict"))),
+                        vec![raise_(calln(
+                            "ValueError",
+                            vec![str_("expected a JSON object")],
+                        ))],
+                    ),
+                    ret(calln(
+                        "dict",
+                        vec![calln(
+                            "zip",
+                            vec![
+                                call(attr(name("v"), "keys"), vec![]),
+                                calln(
+                                    "map",
+                                    vec![name("dec"), call(attr(name("v"), "values"), vec![])],
+                                ),
+                            ],
+                        )],
+                    )),
+                ],
+            ),
+            // Decode.index i dec -> go(v) = dec(v[i]), guarded to a JSON array
+            // that reaches `i`. Positions count from 0, as `List.get` counts.
+            "_pf_dec_index" => factory(
+                "_pf_dec_index",
+                &["i", "dec"],
+                vec![
+                    if_(
+                        not_(isinst(name("list"))),
+                        vec![raise_(calln(
+                            "ValueError",
+                            vec![str_("expected a JSON array")],
+                        ))],
+                    ),
+                    if_(
+                        not_(PyExpr::Compare {
+                            left: Box::new(int(0)),
+                            ops: vec![PyBinOp::Le, PyBinOp::Lt],
+                            comparators: vec![name("i"), calln("len", vec![name("v")])],
+                        }),
+                        vec![raise_(calln(
+                            "ValueError",
+                            vec![PyExpr::FStr(vec![
+                                PyFStrPart::Lit("expected an element at index ".to_string()),
+                                PyFStrPart::Expr(name("i")),
+                                PyFStrPart::Lit(", got an array of ".to_string()),
+                                PyFStrPart::Expr(calln("len", vec![name("v")])),
+                            ])],
+                        ))],
+                    ),
+                    ret(call(name("dec"), vec![sub(name("v"), name("i"))])),
+                ],
+            ),
             // Decode.nullable dec -> None_() when JSON null, else Some(dec(v)).
             "_pf_dec_nullable" => factory(
                 "_pf_dec_nullable",
@@ -8873,6 +9052,88 @@ fn decode_prelude(used: &BTreeSet<&'static str>) -> Vec<PyStmt> {
                     ))],
                 }],
             ),
+            // Decode.value: any parsed JSON, as a `Json` value. A bool is tested
+            // before an int, since Python's `bool` is an `int`.
+            "_pf_dec_value" => {
+                let wrap = |class: &str, held: PyExpr| ret(calln(class, vec![held]));
+                let each = |over: PyExpr| calln("map", vec![name("_pf_dec_value"), over]);
+                def(
+                    "_pf_dec_value",
+                    &["v"],
+                    vec![
+                        if_(
+                            binop(PyBinOp::Is, name("v"), PyExpr::NoneLit),
+                            vec![ret(if jnull_singleton {
+                                name("_JNull")
+                            } else {
+                                calln("JNull", vec![])
+                            })],
+                        ),
+                        if_(isinst(name("bool")), vec![wrap("JBool", name("v"))]),
+                        if_(isinst(name("int")), vec![wrap("JInt", name("v"))]),
+                        if_(isinst(name("float")), vec![wrap("JFloat", name("v"))]),
+                        if_(isinst(name("str")), vec![wrap("JStr", name("v"))]),
+                        if_(
+                            isinst(name("list")),
+                            vec![wrap("JList", calln("list", vec![each(name("v"))]))],
+                        ),
+                        wrap(
+                            "JObject",
+                            calln(
+                                "dict",
+                                vec![calln(
+                                    "zip",
+                                    vec![
+                                        call(attr(name("v"), "keys"), vec![]),
+                                        each(call(attr(name("v"), "values"), vec![])),
+                                    ],
+                                )],
+                            ),
+                        ),
+                    ],
+                )
+            }
+            // Encode.value j -> json.dumps of the plain JSON `j` stands for.
+            "_pf_enc_json" => {
+                let is_a = |class: &str| calln("isinstance", vec![name("j"), name(class)]);
+                let held = || attr(name("j"), "_0");
+                let each = |over: PyExpr| calln("map", vec![name("plain"), over]);
+                def(
+                    "_pf_enc_json",
+                    &["j"],
+                    vec![
+                        def(
+                            "plain",
+                            &["j"],
+                            vec![
+                                if_(is_a("JList"), vec![ret(calln("list", vec![each(held())]))]),
+                                if_(
+                                    is_a("JObject"),
+                                    vec![ret(calln(
+                                        "dict",
+                                        vec![calln(
+                                            "zip",
+                                            vec![
+                                                call(attr(held(), "keys"), vec![]),
+                                                each(call(attr(held(), "values"), vec![])),
+                                            ],
+                                        )],
+                                    ))],
+                                ),
+                                ret(PyExpr::IfExp {
+                                    body: Box::new(PyExpr::NoneLit),
+                                    test: Box::new(is_a("JNull")),
+                                    orelse: Box::new(held()),
+                                }),
+                            ],
+                        ),
+                        ret(call(
+                            attr(name("json"), "dumps"),
+                            vec![calln("plain", vec![name("j")])],
+                        )),
+                    ],
+                )
+            }
             other => unreachable!("unknown decode helper {other}"),
         })
         .collect()
