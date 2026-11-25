@@ -2195,3 +2195,42 @@ fn an_import_nothing_uses_is_reported() {
     assert!(main_warnings(&[units, ("Main", "import Units\nlet d = 5.0<m>")]).is_empty());
     assert!(main_warnings(&[units, ("Main", "import Units\nprint 1")]).is_empty());
 }
+
+#[test]
+fn an_attribute_extern_with_arguments_is_called_with_all_of_them_from_another_module() {
+    // `= .with_name` reads an attribute that takes an argument. A module that
+    // imports it calls the binding with the receiver and that argument at
+    // once, so the binding has to take both (#249).
+    let files = compile(
+        "Main",
+        &[
+            (
+                "Paths",
+                "extern type Path\n\
+                 extern pure to_path: str -> Path = pathlib.Path\n\
+                 extern pure with_name: Path -> str -> Path = .with_name\n\
+                 extern pure name_of: Path -> str = .name",
+            ),
+            (
+                "Main",
+                "import Paths\n\
+                 let renamed = Paths.with_name (Paths.to_path \"report.csv\") \"summary.csv\"\n\
+                 print (Paths.name_of renamed)",
+            ),
+        ],
+    );
+    let paths = file(&files, "paths.py");
+    assert!(
+        paths.contains("with_name = lambda _pf_recv, _pf_a1: _pf_recv.with_name(_pf_a1)"),
+        "{paths}"
+    );
+    assert!(
+        paths.contains("name_of = lambda _pf_recv: _pf_recv.name"),
+        "{paths}"
+    );
+    let main = file(&files, "main.py");
+    assert!(
+        main.contains("paths.with_name(paths.to_path(\"report.csv\"), \"summary.csv\")"),
+        "{main}"
+    );
+}

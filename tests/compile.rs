@@ -9763,3 +9763,30 @@ fn e2e_a_record_named_like_a_class_the_emitter_names() {
         ],
     );
 }
+
+#[test]
+fn e2e_an_attribute_extern_with_arguments_under_another_name() {
+    // The function as a value takes every argument at once, like any other;
+    // a direct call and a partial application read as they did (#249).
+    run_and_check(
+        "
+        extern type Path
+        extern pure to_path: str -> Path = pathlib.Path
+        extern pure with_name: Path -> str -> Path = .with_name
+        extern pure name_of: Path -> str = .name
+        let p = to_path \"report.csv\"
+        let rename = with_name
+        let a = name_of (rename p \"summary.csv\")
+        let b = name_of (with_name p \"direct.csv\")
+        let c = List.map name_of (List.map (with_name p) [\"x.csv\", \"y.csv\"])
+        let read = name_of
+        let d = read p
+        ",
+        &[
+            ("a", "summary.csv"),
+            ("b", "direct.csv"),
+            ("c", "['x.csv', 'y.csv']"),
+            ("d", "report.csv"),
+        ],
+    );
+}

@@ -465,8 +465,9 @@ Four steps after the signatures make a typed project clean inside as well as on 
 
 - `annotate_externs` gives each `extern` a project binds at top level its declared type. How the
   binding is called is read off the binding: a lambda of one parameter for each arrow (or any other
-  value) is a `Callable` of all the arguments, and the one-parameter lambda of an attribute read is a
-  `Callable` of the receiver that hands back the rest. A final `unit` is `object`.
+  value) is a `Callable` of all the arguments, which every extern's binding now is
+  (`receiver_lambda` gives an attribute read a parameter for each argument after its receiver). A
+  final `unit` is `object`.
 - `settle_unit_values` runs what computes a top-level `unit` value as a statement and binds the name
   to `None`; a temporary assigned in each branch of a `match` becomes a statement in each branch.
 - `settle_unit_returns` splits `return call(...)` in a `-> None` function into the call and a `return`
