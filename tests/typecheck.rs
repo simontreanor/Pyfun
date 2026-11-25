@@ -302,6 +302,63 @@ fn names_between_a_cycle_still_enter_scope_at_their_own_line() {
 }
 
 #[test]
+fn a_member_of_a_cycle_reads_what_is_written_above_it() {
+    // Scope stays in source order inside a cycle too. The functions of the cycle
+    // see each other; a helper is seen by the members written below it.
+    let first = "let is_even n = if n == 0 then True else helper (is_odd (n - 1))\n\
+                 let helper b = b\n\
+                 let is_odd n = if n == 0 then False else helper (is_even (n - 1))";
+    assert_eq!(errors(first), ["unbound name `helper`"]);
+    let err = &pyfun::check(first).unwrap_err()[0];
+    assert_eq!(err.span.start, first.find("helper").unwrap());
+    // The same program with the helper above its first use.
+    assert!(
+        pyfun::check(
+            "let helper b = b\n\
+             let is_even n = if n == 0 then True else helper (is_odd (n - 1))\n\
+             let is_odd n = if n == 0 then False else helper (is_even (n - 1))"
+        )
+        .is_ok()
+    );
+    // A middle member is held to its own line, not to the cycle's first.
+    assert_eq!(
+        errors(
+            "let a n = if n == 0 then 0 else b (n - 1)\n\
+             let b n = if n == 0 then 0 else c (step n)\n\
+             let step n = n - 1\n\
+             let c n = if n == 0 then 0 else a (step n)"
+        ),
+        ["unbound name `step`"]
+    );
+    // An in-file module below the member reads as it does below any function.
+    let module_below = "let is_even n = if n == 0 then True else is_odd (Steps.down n)\n\
+                        module Steps =\n  let down n = n - 1\n\
+                        let is_odd n = if n == 0 then False else is_even (Steps.down n)";
+    let ordinary = "let f n = Steps.down n\nmodule Steps =\n  let down n = n - 1";
+    assert_eq!(errors(module_below), errors(ordinary));
+    // A cycle written inside another is below the outer one's first member.
+    assert_eq!(
+        errors(
+            "let is_even n = if n == 0 then True else is_odd (String.len (ping n))\n\
+             let ping n = if n == 0 then \"ping\" else pong (n - 1)\n\
+             let pong n = if n == 0 then \"pong\" else ping (n - 1)\n\
+             let is_odd n = if n == 0 then False else is_even (String.len (pong n))"
+        ),
+        ["unbound name `ping`"]
+    );
+    // What is written above the cycle is read by every member, as ever.
+    assert!(
+        pyfun::check(
+            "let size s = String.len s\n\
+             let is_even n = if n == 0 then True else is_odd (size \"ab\" + n - 3)\n\
+             let step n = n - 1\n\
+             let is_odd n = if n == 0 then False else is_even (step n)"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn a_line_between_a_cycle_cannot_run_it() {
     // Python defines each function where it is written, so a cycle cannot run
     // until its last member is defined. A value that would run it there is an
