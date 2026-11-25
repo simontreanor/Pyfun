@@ -3,6 +3,16 @@
 The extension's version tracks the compiler's: every Pyfun release ships a matching extension, so
 `pyfun --version` and the installed client always agree. A release with no client changes says so.
 
+## 0.11.0
+
+- Version aligned to the compiler's 0.11.0 release. The language server it drives adds inlay hints
+  (each binding's inferred type beside it), signature help, quick fixes ("Add the missing cases",
+  rename an unused name to `_name`, remove an unused import), format on save, warnings with unused
+  code faded, and navigation through packages (`import Shapes.Geometry`). Renaming a variable keeps
+  the field where it was written with the shorthand (`Rect { width = w, height }`).
+- The grammar follows the 0.11 language: `True` and `False`, `in` and `not in`, `if cond:` blocks,
+  `from Module import name`, and dotted module paths.
+
 ## 0.10.0
 
 - Version aligned to the compiler's 0.10.0 release. No client changes; the compiler it drives makes
