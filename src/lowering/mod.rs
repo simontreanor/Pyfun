@@ -7118,10 +7118,16 @@ fn attr_path(base: PyExpr, segs: &[String]) -> PyExpr {
 /// A receiver-taking lambda for a bare reference to an instance-access extern of
 /// the given `arity` (counting the receiver). A property reads the attribute
 /// (`lambda r: r.text`); a method calls it (`lambda r: r.read()`, or
-/// `lambda r, a: r.method(a)` when it takes arguments). The method lambda is n-ary
+/// `lambda r, a: r.method(a)` when it takes arguments). The lambda is n-ary
 /// in its trailing parameters, matching Pyfun's collapse of full application to a
 /// direct call. Any pinned `kwargs` are appended to the method call (`lambda r, a:
 /// r.write_text(a, encoding="utf-8")`); a property takes no call, so it has none.
+///
+/// A property declared with arguments after its receiver (`with_name: Path ->
+/// str -> Path = .with_name`) reads an attribute that is itself called, once
+/// for each of them, as a direct application writes it (`p.with_name(s)`). Its
+/// lambda takes them all too (`lambda r, a: r.with_name(a)`): whoever calls a
+/// binding knows it by its arity alone and passes every argument at once.
 fn receiver_lambda(
     member: &[String],
     arity: usize,
@@ -7132,9 +7138,23 @@ fn receiver_lambda(
     let recv = "_pf_recv".to_string();
     let accessed = attr_path(PyExpr::Name(recv.clone()), member);
     if kind == Receiver::Property {
+        let mut params = vec![recv];
+        let mut body = accessed;
+        for i in 1..arity.max(1) {
+            let name = format!("_pf_a{i}");
+            body = PyExpr::Call {
+                func: Box::new(body),
+                args: if units.contains(&i) {
+                    vec![]
+                } else {
+                    vec![PyExpr::Name(name.clone())]
+                },
+            };
+            params.push(name);
+        }
         return PyExpr::Lambda {
-            params: vec![recv],
-            body: Box::new(accessed),
+            params,
+            body: Box::new(body),
         };
     }
     // The lambda takes every argument after the receiver; a `...` slot claims one of

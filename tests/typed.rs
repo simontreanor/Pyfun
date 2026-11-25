@@ -454,9 +454,9 @@ fn a_typed_project_declares_the_externs_it_binds() {
         "to_number: Callable[[str], int] = int\n",
         "flush_out: Callable[[None], object] = lambda *_pf_a: sys.stdout.flush()\n",
         "upper: Callable[[str], str] = lambda _pf_recv: _pf_recv.upper()\n",
-        // An attribute read is bound by its receiver, and hands back what
-        // takes the rest.
-        "with_name: Callable[[Any], Callable[[str], Any]] = lambda _pf_recv: _pf_recv.with_name\n",
+        // An attribute read with arguments after its receiver takes them
+        // all at once too, as every binding is called.
+        "with_name: Callable[[Any, str], Any] = lambda _pf_recv, _pf_a1: _pf_recv.with_name(_pf_a1)\n",
         "tau: float = math.tau\n",
     ] {
         assert!(net.contains(expected), "missing `{expected}` in:\n{net}");

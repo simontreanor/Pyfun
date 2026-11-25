@@ -667,8 +667,8 @@ time:
 - **An `extern` a project binds carries its declared type** (`to_number: Callable[[str], int] = int`):
   a project binds each `extern` at top level so that another module can reach it (§6.1), and the
   declaration is the only statement of its type there is. It is a `Callable` of all its arguments at
-  once, as the binding is called; an attribute read (`= .with_name`) is bound by its receiver and
-  hands back what takes the rest (`Callable[[Any], Callable[[str], Any]]`). A final `unit` is `object`:
+  once, as the binding is called, an attribute read with arguments after its receiver included
+  (`with_name: Callable[[Any, str], Any]`). A final `unit` is `object`:
   the call's result is whatever the Python target hands back, and nothing reads it. A type checker
   then holds the binding to the declaration, so a declaration that disagrees with what Python's own
   stubs say of the target is reported on the binding's line, which is the `extern`'s to answer.
@@ -855,7 +855,11 @@ and `extern execute : Conn -> str -> Cursor = .execute()` lowers `execute conn s
 `conn.execute(sql)`; a **property** `= .scheme` (no `()`) lowers `scheme url` to `url.scheme` — an
 attribute read, no call. For a method, currying falls out of Python's own binding, so the receiver-only
 partial `execute conn` is the bound method `conn.execute` (no `functools.partial`); a bare reference to
-either form is a receiver-taking lambda (`lambda r: r.read()` / `lambda r: r.scheme`). This is the
+either form is a receiver-taking lambda (`lambda r: r.read()` / `lambda r: r.scheme`). A property
+declared with arguments after its receiver (`with_name: Path -> str -> Path = .with_name`) reads an
+attribute that is then called with them, and its lambda takes them all at once
+(`lambda r, a: r.with_name(a)`), since a binding is called with every argument its arity counts,
+from its own file under another name and from any module that imports it. This is the
 idiomatic way to wrap object-oriented libraries: it never names the receiver's *class*, so it needs no
 class-module import and no casing guess, and — unlike the alternative of an unbound `Class.method`
 target — it reaches members that are **inherited or delegated** rather than defined directly on the
