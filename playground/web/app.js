@@ -120,9 +120,9 @@ let describe r =
     case Ok u: f"{u.name} is {u.age}"
     case Error e: f"decode failed: {e.error_message}"
 
-let ok      = """{"name": "ada", "age": 36}"""
+let ok = """{"name": "ada", "age": 36}"""
 let missing = """{"name": "bob"}"""
-let wrong   = """{"name": "cy", "age": "old"}"""
+let wrong = """{"name": "cy", "age": "old"}"""
 
 ok |> Decode.decode_string user_decoder |> describe |> print
 missing |> Decode.decode_string user_decoder |> describe |> print
@@ -134,7 +134,7 @@ wrong |> Decode.decode_string user_decoder |> describe |> print
     source: `# Typed Python FFI: call real libraries with types at the boundary, no runtime library.
 # \`extern pure\` names a Python function, gives it a Pyfun type, and promises it is
 # side-effect-free; \`pyfun compile\` lowers it to a plain \`import statistics\` + call.
-extern pure mean:  List float -> float = statistics.mean
+extern pure mean: List float -> float = statistics.mean
 extern pure stdev: List float -> float = statistics.stdev
 
 type Summary = { n: int, mean: float, stdev: float }
