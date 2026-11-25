@@ -6312,3 +6312,64 @@ fn an_open_decode_auto_beside_another_error_is_not_reported() {
         "cannot tell what `Decode.auto` decodes into here",
     );
 }
+
+#[test]
+fn a_stand_in_for_a_missing_name_brings_no_ambiguity_with_it() {
+    // A missing name stands in for what would have said what `p` and
+    // `words` are, so a field two records share and an `in` are not
+    // reported as open (#260).
+    let errors = all_errors(
+        "type Player = { name: str, score: int }\n\
+         type Team = { name: str, size: int }\n\
+         let label id =\n\
+         \x20 let p = Roster.find_player id\n\
+         \x20 p.name\n\
+         let rename id =\n\
+         \x20 let p = Roster.find_player id\n\
+         \x20 { p with name = \"x\" }\n\
+         let has_word w =\n\
+         \x20 let words = Words.load_set \"words.txt\"\n\
+         \x20 w in words",
+    );
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(
+        errors.iter().all(|e| e.contains("is not a member of")),
+        "{errors:?}"
+    );
+    // What is an error whatever the value turns out to be is still one: a
+    // field no record declares, and a constructor's field read on a whole
+    // value.
+    let errors = all_errors(
+        "type Player = { name: str, score: int }\n\
+         type Shape = Circle { radius: float } | Dot\n\
+         let nick id =\n\
+         \x20 let p = Roster.find_player id\n\
+         \x20 p.nickname\n\
+         let size id =\n\
+         \x20 let s = Shapes.find id\n\
+         \x20 s.radius",
+    );
+    assert_eq!(errors.len(), 4, "{errors:?}");
+    assert!(
+        errors[1].contains("unknown record field `nickname`"),
+        "{errors:?}"
+    );
+    assert!(
+        errors[3].contains("constructor `Circle` declares it"),
+        "{errors:?}"
+    );
+    // A real ambiguity in the same declaration as a missing name is still
+    // reported: the value it reads did not come from the stand-in.
+    let errors = all_errors(
+        "type Player = { name: str, score: int }\n\
+         type Team = { name: str, size: int }\n\
+         let both id q =\n\
+         \x20 let p = Roster.find_player id\n\
+         \x20 q.name",
+    );
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors[1].contains("field `name` is ambiguous here"),
+        "{errors:?}"
+    );
+}

@@ -652,7 +652,11 @@ that is not one, and `infer_field` when `record_of_field_on` sets `missing_field
 `Infer::recovered` and returns a fresh type, so inference goes on. The top-level loop in
 `run_inner` appends those to the item's own errors, sorts the item's errors by position, and drops
 the `Decode.auto` sites the item recorded when it has any error (`auto_sites` is truncated to its
-length before the item). So one broken `let` no longer hides the rest of the file — the items that
+length before the item). The variables `carry_on` returns are kept in `Infer::stand_ins`, and
+`instantiate` adds the fresh copy of a quantified variable that came from one, so a local `let` of a
+stand-in's result stays traced. `left_open_by_stand_in` asks whether an open type is reachable from them;
+`resolve_pending_fields`, `resolve_pending_members` and `infer_record_update` skip such a type
+rather than report it as ambiguous. So one broken `let` no longer hides the rest of the file — the items that
 parse still drive hover and navigation, and only the *syntax* errors are reported until the file is
 clean, at which point the type errors take over. `analyze` returns an
 `Analysis { module, diagnostics, types, parse_ok }` bundle; **lexing errors remain fatal** (no AST) and

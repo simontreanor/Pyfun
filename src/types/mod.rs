@@ -7562,6 +7562,9 @@ struct Infer {
     /// The span of the last field lookup that failed because the field is not
     /// there (as against two records sharing it), for [`Self::infer_field`].
     missing_field: std::cell::Cell<Option<Span>>,
+    /// The type variables [`Self::carry_on`] stood in for names that are not
+    /// there ([`Self::left_open_by_stand_in`]).
+    stand_ins: Vec<u32>,
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
@@ -9384,6 +9387,9 @@ impl Infer {
             {
                 continue;
             }
+            if self.left_open_by_stand_in(&p.container) {
+                continue;
+            }
             if !self.settle_member(&p.elem, &p.container, p.elem_span, p.span)? {
                 return Err(unknown_container(p.span));
             }
@@ -9401,6 +9407,9 @@ impl Infer {
         let pending = std::mem::take(&mut self.pending_fields);
         for p in pending {
             let base = self.apply(&p.base);
+            if self.left_open_by_stand_in(&base) {
+                continue;
+            }
             let owner = if let Ty::Con(record, _) = &base {
                 if self.field_bearer(record).is_none() {
                     return Err(self.ambiguous_field(
@@ -9578,7 +9587,28 @@ impl Infer {
         {
             self.recovered.push(error);
         }
-        self.fresh()
+        let ty = self.fresh();
+        if let Ty::Var(v) = ty {
+            self.stand_ins.push(v);
+        }
+        ty
+    }
+
+    /// Whether `ty` is still open only because it came from a stand-in
+    /// ([`Self::carry_on`]): an unsolved variable reachable from what one of
+    /// them has become (the result of calling a missing function, say). The
+    /// right name would have settled it, so the errors that say nothing tells
+    /// what such a value is (an ambiguous field, an `in` over an unknown
+    /// container) are not reported for it: the missing name is the one error.
+    fn left_open_by_stand_in(&self, ty: &Ty) -> bool {
+        let Ty::Var(open) = self.apply(ty) else {
+            return false;
+        };
+        self.stand_ins.iter().any(|&s| {
+            let mut found = false;
+            free_type_vars(&self.apply(&Ty::Var(s)), &mut |v| found |= v == open);
+            found
+        })
     }
 
     /// `error` says `name` is not there. When the declaration of `name` failed,
@@ -10152,7 +10182,22 @@ impl Infer {
         // name (all paths' first segments must be fields of that same record).
         let bt = self.infer_expr(base, env)?;
         let applied = self.apply(&bt);
-        let owner = self.record_of_field_on(&applied, &fields[0].path[0], span)?;
+        let owner = match self.record_of_field_on(&applied, &fields[0].path[0], span) {
+            Ok(owner) => owner,
+            Err(error) => {
+                let missing = self.missing_field.take() == Some(error.span);
+                // A base whose type a missing name left open could be any of
+                // the records that share the field. The values are still
+                // checked; a field no record has is an error whatever it is.
+                if !missing && self.left_open_by_stand_in(&applied) {
+                    for fu in fields {
+                        self.infer_expr(&fu.value, env)?;
+                    }
+                    return Ok(bt);
+                }
+                return Err(error);
+            }
+        };
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
         self.update_owners.push((span, Vec::new(), owner.clone()));
@@ -12121,6 +12166,19 @@ impl Infer {
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
         let tmap: HashMap<u32, Ty> = scheme.vars.iter().map(|v| (*v, self.fresh())).collect();
+        // A variable a stand-in left open, generalized by a local `let`, is
+        // still one in each use of the name ([`Self::left_open_by_stand_in`]).
+        if !self.stand_ins.is_empty() {
+            let carried: Vec<u32> = tmap
+                .iter()
+                .filter(|(v, _)| self.left_open_by_stand_in(&Ty::Var(**v)))
+                .filter_map(|(_, fresh)| match fresh {
+                    Ty::Var(f) => Some(*f),
+                    _ => None,
+                })
+                .collect();
+            self.stand_ins.extend(carried);
+        }
         let umap: HashMap<u32, Unit> = scheme
             .uvars
             .iter()
