@@ -183,8 +183,12 @@ fn a_failing_test_is_reported_by_pytest_with_both_values() {
     let (ok, stdout, stderr) = pyfun_test(&dir, &["test_lists.pyfun"]);
     assert!(!ok, "a failing test fails the command:\n{stdout}\n{stderr}");
     assert!(stdout.contains("1 failed, 1 passed"), "{stdout}");
-    // pytest's own account of the assertion: the expression, then the values.
-    assert!(stdout.contains("def test_wrong():"), "{stdout}");
+    // The statement as the source has it, then pytest's own account of the
+    // values.
+    assert!(
+        stdout.contains(">   Test.equal [1, 2, 3] (List.map (fun x -> x + 1) [0, 1, 3])"),
+        "{stdout}"
+    );
     assert!(stdout.contains("assert [1, 2, 4] == [1, 2, 3]"), "{stdout}");
 
     // What follows `--` is pytest's: here, pick one test by name.
@@ -217,11 +221,232 @@ fn a_failure_inside_a_helper_is_explained_there() {
     let _ = fs::remove_dir_all(&dir);
     assert!(!ok, "{stdout}\n{stderr}");
     assert!(stdout.contains("1 failed, 2 passed"), "{stdout}");
-    // pytest reads the helper's `assert` as it reads a test's.
-    assert!(stdout.contains("def expect_sorted(xs):"), "{stdout}");
+    // pytest reads the helper's `assert` as it reads a test's, and the
+    // failure is followed from the test's line into the helper's.
+    assert!(stdout.contains("test_sorted.pyfun:9: "), "{stdout}");
+    assert!(
+        stdout.contains(">   let expect_sorted xs = Test.is_true (is_sorted xs)"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("where False = is_sorted([3, 1])"),
         "{stdout}"
+    );
+    assert!(
+        stdout.contains("test_sorted.pyfun:3: AssertionError"),
+        "{stdout}"
+    );
+}
+
+/// The project of issue #238: one module and the tests of it.
+fn shapes_project(tag: &str) -> PathBuf {
+    workdir(
+        tag,
+        &[
+            (
+                "shapes.pyfun",
+                "let area w h = w * h\n\nlet expect_positive n = Test.is_true (n > 0)\n",
+            ),
+            (
+                "test_shapes.pyfun",
+                "import Shapes\n\n\
+                 ## A rectangle is its sides multiplied.\n\
+                 let test_rect _ =\n  Test.equal 7 (Shapes.area 2 3)\n\n\
+                 let test_square _ =\n  Test.equal 4 (Shapes.area 2 2)\n\n\
+                 ## A named parameter and a docstring leave the lines where they are.\n\
+                 let test_named unused =\n  let side = 3\n  Test.equal 10 (Shapes.area side side)\n",
+            ),
+        ],
+    )
+}
+
+#[test]
+fn a_failure_is_reported_at_its_pyfun_line() {
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    let dir = shapes_project("lines");
+    let (ok, stdout, stderr) = pyfun_test(&dir, &[]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("2 failed, 1 passed"), "{stdout}");
+    // The file is listed by its source, and so is each failed test.
+    assert!(stdout.contains("test_shapes.pyfun F.F"), "{stdout}");
+    assert!(
+        stdout.contains("FAILED test_shapes.pyfun::test_rect - assert 6 == 7"),
+        "{stdout}"
+    );
+    // The statement and the line are the source's; the values are pytest's.
+    assert!(
+        stdout.contains(">   Test.equal 7 (Shapes.area 2 3)\nE   assert 6 == 7\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("test_shapes.pyfun:5: AssertionError"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(">   Test.equal 10 (Shapes.area side side)\nE   assert 9 == 10\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("test_shapes.pyfun:13: AssertionError"),
+        "{stdout}"
+    );
+    // Nothing of the staged Python: its directory, its file, its statement.
+    for staged in [
+        "pyfun_test_",
+        "test_shapes.py:",
+        "assert shapes.area",
+        ".ini",
+    ] {
+        assert!(!stdout.contains(staged), "`{staged}` in:\n{stdout}");
+    }
+
+    // A test's id, as the summary line prints it, runs that test again.
+    let (ok, stdout, stderr) = pyfun_test(&dir, &["test_shapes.pyfun::test_rect"]);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("1 failed in"), "{stdout}");
+    let (ok, stdout, stderr) = pyfun_test(&dir, &["test_shapes.pyfun::test_square"]);
+    assert!(ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("1 passed in"), "{stdout}");
+
+    // pytest's shorter styles are placed the same way.
+    let (_, stdout, _) = pyfun_test(&dir, &["--", "--tb=short", "-k", "test_rect"]);
+    assert!(
+        stdout.contains(
+            "test_shapes.pyfun:5: in test_rect\n    Test.equal 7 (Shapes.area 2 3)\nE   assert 6 == 7\n"
+        ),
+        "{stdout}"
+    );
+    let (_, stdout, _) = pyfun_test(&dir, &["--", "--tb=line", "-k", "test_rect"]);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(
+        stdout.contains("test_shapes.pyfun:5: assert 6 == 7"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_failure_in_an_imported_module_is_explained_and_placed_there() {
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    let dir = workdir(
+        "imported",
+        &[
+            (
+                "shapes.pyfun",
+                "let area w h = w * h\n\nlet expect_positive n = Test.is_true (n > 0)\n",
+            ),
+            (
+                "test_checks.pyfun",
+                "import Shapes\n\n\
+                 let test_helper _ =\n  Shapes.expect_positive (0 - 2)\n\n\
+                 let test_as_value _ =\n  [1, 1, 2] |> List.iter (Test.equal 1)\n\n\
+                 let test_lambda _ =\n  [1, 0] |> List.iter (fun x -> Test.is_true (x > 0))\n",
+            ),
+        ],
+    );
+    let (ok, stdout, stderr) = pyfun_test(&dir, &[]);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("3 failed"), "{stdout}");
+    // The helper's module is not a test file, and its `assert` is explained
+    // with the values all the same, at its own source line.
+    assert!(
+        stdout.contains(
+            ">   let expect_positive n = Test.is_true (n > 0)\nE   assert -2 > 0\n\nshapes.pyfun:3: AssertionError"
+        ),
+        "{stdout}"
+    );
+    // An expectation passed as a value fails inside a helper the compiler
+    // wrote: the failure is placed at the line that passed it.
+    assert!(
+        stdout.contains(
+            ">   [1, 1, 2] |> List.iter (Test.equal 1)\nE   assert 2 == 1\n\ntest_checks.pyfun:7: AssertionError"
+        ),
+        "{stdout}"
+    );
+    // A lambda's frame is on its statement's line, which is shown once.
+    assert_eq!(
+        stdout
+            .matches("[1, 0] |> List.iter (fun x -> Test.is_true (x > 0))")
+            .count(),
+        1,
+        "{stdout}"
+    );
+    assert!(!stdout.contains("_pf_"), "{stdout}");
+}
+
+#[test]
+fn an_error_while_a_test_file_loads_is_placed_in_its_source() {
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    let dir = workdir(
+        "loads",
+        &[
+            (
+                "config.pyfun",
+                "extern to_number: str -> int = int\n\nlet limit = to_number \"ten\"\n",
+            ),
+            (
+                "test_config.pyfun",
+                "import Config\n\nlet test_limit _ =\n  Test.equal 10 Config.limit\n",
+            ),
+        ],
+    );
+    let (ok, stdout, stderr) = pyfun_test(&dir, &[]);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains("ERROR collecting test_config.pyfun"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "config.pyfun:3: in <module>\n    let limit = to_number \"ten\"\nE   ValueError"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("pyfun_test_"), "{stdout}");
+}
+
+#[test]
+fn a_python_without_pytest_is_told_both_ways_to_get_it() {
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    // A `pytest` that fails stands ahead of the real one on the path, which
+    // is what an interpreter without pytest looks like to the command.
+    let dir = workdir(
+        "nopytest",
+        &[("test_one.pyfun", "let test_one _ =\n  Test.equal 1 1\n")],
+    );
+    fs::create_dir_all(dir.join("shadow/pytest")).unwrap();
+    fs::write(dir.join("shadow/pytest/__init__.py"), "").unwrap();
+    fs::write(
+        dir.join("shadow/pytest/__main__.py"),
+        "raise SystemExit(1)\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_pyfun"))
+        .arg("test")
+        .current_dir(&dir)
+        .env("PYTHONPATH", dir.join("shadow"))
+        .output()
+        .expect("spawn pyfun test");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!out.status.success());
+    assert!(stderr.contains("-m pip install pytest`"), "{stderr}");
+    assert!(
+        stderr.contains("-m pip install \"pyfun-lang[test]\"`"),
+        "{stderr}"
     );
 }
 

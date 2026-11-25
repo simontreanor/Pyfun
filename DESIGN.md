@@ -3016,7 +3016,8 @@ separate decision from this one.
 is `test_*.pyfun`, and a test is a top-level function in it whose name opens with `test_`. `pyfun test`
 type-checks each test file with the modules it imports, compiles them, and runs pytest over the result;
 `pyfun test path…` names files or directories, and what follows `--` goes to pytest (`pyfun test -- -k
-area`).
+area`). pytest itself comes with the wheel's `test` extra (`pip install "pyfun-lang[test]"`, pytest 8.4
+or newer), and the command says so when the interpreter has none.
 
 ```pyfun
 import Shapes
@@ -3029,14 +3030,34 @@ let test_rect _ =
 A test says what it expects with the `Test` module: `Test.equal expected actual`, `Test.is_true
 condition`, and `Test.fail message` for a branch that must not be reached (it fits a branch of any
 type). Each lowers to a Python `assert` where it stands, the tested value on the left, so a failure is
-explained by pytest in its own way, with the expression and the values in it:
+explained by pytest in its own way, with the values in it, under the statement as the source has it:
 
 ```text
-    def test_wrong():
->       assert _pf_map(lambda x: x + 1, [0, 1, 3]) == [1, 2, 3]
-E       assert [1, 2, 4] == [1, 2, 3]
-E         At index 2 diff: 4 != 3
+_________________________________ test_wrong __________________________________
+
+>   Test.equal [1, 2, 3] (List.map (fun x -> x + 1) [0, 1, 3])
+E   assert [1, 2, 4] == [1, 2, 3]
+E     At index 2 diff: 4 != 3
+
+test_lists.pyfun:5: AssertionError
+=========================== short test summary info ===========================
+FAILED test_lists.pyfun::test_wrong - assert [1, 2, 4] == [1, 2, 3]
 ```
+
+**A failure is reported in `.pyfun` lines**, as an uncaught error of `pyfun run` is. pytest is given the
+test files themselves, and a small plugin staged with the compiled Python tells it that each one is the
+module it compiled to. A test is therefore known by its source: the progress line reads
+`test_lists.pyfun .F`, the id in the summary is `test_lists.pyfun::test_wrong`, and that id is a path
+`pyfun test` takes, so `pyfun test test_lists.pyfun::test_wrong` runs the one test again. The place of a
+failure and the statement shown come from the line tables a traceback is read with: each frame of
+emitted code is given as its source file, line and statement, a frame the compiler wrote is left out
+(an expectation passed as a value fails at the line that passed it), and a library's frame stays as
+pytest shows it. This holds for every style pytest prints (`--tb=short`, `--tb=line`, `--tb=native`) and
+for an error raised while a test file loads. An `assert` in a module the tests import is explained with
+its values like one in a test file. The values themselves are pytest's account of the Python that ran,
+so a function in them is named as Python names it (`shapes.area`). The compiled Python lives in a temp
+directory for the length of the run, which reads no pytest configuration or `conftest.py` from the
+project and leaves no cache in it.
 
 A test is the function of one ignored parameter (`let test_rect _ = …`), since every Pyfun function
 takes one; it is emitted as `def test_rect():`, which is what pytest calls. Its `##` comment is its

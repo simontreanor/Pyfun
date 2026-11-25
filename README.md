@@ -387,6 +387,10 @@ pyfun bundle  hello.pyfun -o site    # a static web page that runs it (Pyodide)
 pyfun repl                           # interactive REPL
 ```
 
+`pyfun test` runs the tests with pytest, which `pip install "pyfun-lang[test]"` installs beside
+Pyfun. A failing test is reported at its `.pyfun` line, with the statement as you wrote it and the
+values pytest found.
+
 Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`,
 `import Shapes.Geometry` one in a folder (`shapes/geometry.pyfun`), and any command drives the whole
 graph. Clone the repo for a runnable tour in [`examples/`](https://github.com/simontreanor/Pyfun/tree/main/examples), including a

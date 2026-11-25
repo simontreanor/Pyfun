@@ -677,10 +677,21 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
         }
     };
     report_notes(&compiled.notes);
-    // Each module's frames name its own source file, spelled the way the entry
-    // was given on the command line.
-    let entry_name = &project.entry().name;
-    let names: Vec<(String, String)> = compiled
+    let names = traced_names(&project, &compiled);
+    let traced = traced_files(&project, &compiled, &names);
+    let entry_py = project::module_py_name(&project.entry().name);
+    stage_and_run(&compiled.files, &entry_py, &traced, prog_args)
+}
+
+/// For each module of `compiled` that has a line map, its emitted file and the
+/// source path a frame shows for it. Each module's frames name its own source
+/// file, spelled the way the entry was given on the command line
+/// (`LoadedModule::file`).
+fn traced_names(
+    project: &project::Project,
+    compiled: &project::CompiledProject,
+) -> Vec<(String, String)> {
+    compiled
         .line_maps
         .iter()
         .map(|(module, _)| {
@@ -692,11 +703,20 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
                 .unwrap_or_else(|| project::module_file_name(module));
             (project::module_py_name(module), path)
         })
-        .collect();
-    let traced: Vec<Traced> = compiled
+        .collect()
+}
+
+/// The traced files of `compiled`, for [`traceback::table`]: each line map
+/// beside its module's source, under the names [`traced_names`] gave.
+fn traced_files<'a>(
+    project: &'a project::Project,
+    compiled: &'a project::CompiledProject,
+    names: &'a [(String, String)],
+) -> Vec<Traced<'a>> {
+    compiled
         .line_maps
         .iter()
-        .zip(&names)
+        .zip(names)
         .filter_map(|((module, map), (py_name, source_path))| {
             let source = &project.modules.iter().find(|m| &m.name == module)?.source;
             Some(Traced {
@@ -706,9 +726,7 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
                 map,
             })
         })
-        .collect();
-    let entry_py = project::module_py_name(entry_name);
-    stage_and_run(&compiled.files, &entry_py, &traced, prog_args)
+        .collect()
 }
 
 /// The Python interpreter to use: `PYFUN_PYTHON` when set (so `run` and `add`

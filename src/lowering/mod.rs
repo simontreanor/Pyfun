@@ -256,8 +256,12 @@ pub fn as_pytest(module: &Module, mut py: PyModule) -> PyModule {
         {
             let param = params.remove(0);
             if param != "_" {
-                // After a docstring, which has to stay first.
-                let at = usize::from(matches!(body.first(), Some(PyStmt::Doc(_))));
+                // After a docstring, which has to stay first, and after the
+                // line markers a traced body opens with.
+                let at = body
+                    .iter()
+                    .position(|stmt| !matches!(stmt, PyStmt::Doc(_) | PyStmt::Line(..)))
+                    .unwrap_or(body.len());
                 body.insert(
                     at,
                     PyStmt::Assign {

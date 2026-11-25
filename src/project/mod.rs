@@ -451,7 +451,8 @@ pub struct CompiledProject {
     pub notes: Vec<String>,
     /// Each module's line map, by module name: where its emitted lines came
     /// from, for a traceback in `.pyfun` lines (`DESIGN.md` §9). Filled only by
-    /// [`compile_traced`], and only for a module whose map could be built.
+    /// [`compile_traced`] and [`compile_tests`], and only for a module whose
+    /// map could be built.
     pub line_maps: Vec<(String, crate::LineMap)>,
 }
 
@@ -491,13 +492,14 @@ pub fn compile_with(
 
 /// [`compile`] for `pyfun test` (`DESIGN.md` §9): in each test module (one
 /// whose file is `test_*.pyfun`), a `let test_name _ = …` is emitted as the
-/// `def test_name():` pytest collects.
+/// `def test_name():` pytest collects. Each module's line map is built as
+/// [`compile_traced`] builds it, so a failure is reported in `.pyfun` lines.
 pub fn compile_tests(project: &Project) -> Result<CompiledProject, crate::lowering::LowerError> {
     compile_project(
         project,
         crate::python_emitter::PyTarget::default(),
         false,
-        false,
+        true,
         false,
         true,
     )
@@ -720,7 +722,15 @@ fn compile_project(
                 )
                 .ok()
             })
-            .flatten();
+            .flatten()
+            .map(|mut traced| {
+                // The traced module takes every step the real one does, or
+                // the two would not compare.
+                if tests && is_test_module(&module.name) {
+                    traced.py = lowering::as_pytest(&module.ast, traced.py);
+                }
+                traced
+            });
         let lowered =
             lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native, binding_types)?;
         needs_runtime |= lowered.uses_runtime;

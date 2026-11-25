@@ -30,6 +30,7 @@ src/
   lint.rs          the warnings the syntax alone shows (DESIGN §3); types/ finds the rest and joins them
   traceback.rs     what `pyfun run` stages for a traceback in .pyfun lines (DESIGN §9): launcher, hook, line table
   traceback_hook.py  the hook itself, a Python module embedded with include_str!
+  pytest_plugin.py   what `pyfun test` runs: pytest with a plugin that reads .pyfun test files, embedded the same way
   project/         module graph: acyclic import resolution, cross-module checking
     manifest.rs      pyfun.toml reader/editor, project root and vendored façades (DESIGN §6.2)
   lsp/             front-end-first language server (stdio JSON-RPC)
@@ -755,10 +756,34 @@ of a `None` value, which is why the assertion shows as a statement wherever the 
 or in a helper; a member passed as a value keeps a `_pf_test_*` helper that holds the same `assert`.
 
 The command is `src/test_cmd.rs`. It resolves each test file's project, checks it, compiles it with
-`project::compile_tests`, and stages every project's files in one temp directory, where pytest is run
-with the user's working directory unchanged. `compile_tests` differs from `compile` in one step:
+`project::compile_tests`, and stages every project's files in one temp directory, with the user's
+working directory unchanged. `compile_tests` differs from `compile` in two steps:
 `lowering::as_pytest` drops the one parameter of each `test_*` function in a test module, binding a
-named one to `None`, because pytest would read a parameter as a fixture to supply.
+named one to `None`, because pytest would read a parameter as a fixture to supply; and each module's
+line map is built as `compile_traced` builds it, the traced lowering taking the `as_pytest` step too so
+that it still compares with the real one.
+
+What runs is `src/pytest_plugin.py`, staged as `_pyfun_pytest.py` beside the compiled files with the
+traceback hook (`_pyfun_trace.py`), the line tables (`_pyfun_lines.json`, the format of `pyfun run`), a
+manifest (`_pyfun_tests.json`: each test file's path with its staged module, and the name of every
+staged module) and an empty pytest configuration. The script calls `pytest.main` with the test files'
+own paths (or a test's id, `file.pyfun::test_name`) and a plugin object:
+
+- `pytest_collect_file` answers a path of the manifest with a `SourceModule`, a `pytest.Module` whose
+  `_getobj` imports the staged module, so the node's path, and with it every test id, is the source's.
+- `pytest_pycollect_makeitem` makes a `SourceFunction` of each `test_*` function the module defines and
+  nothing of anything else (a type named `TestCase` is a class pytest would otherwise try to collect).
+- `SourceFunction.reportinfo` places the test at its source line, and `repr_failure` (on both node
+  classes) takes pytest's own failure representation and rewrites it entry by entry with `_place`: an
+  entry of a staged file gets the source path, line and statement of its table row and keeps its `E`
+  lines; an entry on a row from no source is dropped and its explanation moves to the entry above; an
+  entry of any other file is untouched. `--tb=native` is handed to the hook's `render`.
+- `pytest_configure` registers every staged module for assertion rewriting, and the run is given
+  `--rootdir` (the working directory, or the nearest folder holding it and every test file),
+  `-c` with the staged configuration, `--noconftest` and `-p no:cacheprovider`.
+
+`test_cmd.rs` checks the interpreter's pytest before any of this: none gives the message naming the
+`test` extra, and one older than `OLDEST_PYTEST` (the extra's floor in `pyproject.toml`) is refused.
 
 ## Top-level scope and one name per binding — implements DESIGN §5, §7.1
 
