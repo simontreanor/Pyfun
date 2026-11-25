@@ -21,6 +21,38 @@ pub const TABLE_FILE: &str = "_pyfun_lines.json";
 /// The hook module's source.
 pub const HOOK_SOURCE: &str = include_str!("traceback_hook.py");
 
+/// The script `pyfun test` hands the interpreter: pytest, with the plugin that
+/// reads a `.pyfun` test file as its staged module and reports a failure in
+/// the source's lines.
+pub const PYTEST_FILE: &str = "_pyfun_pytest.py";
+/// That script's source.
+pub const PYTEST_SOURCE: &str = include_str!("pytest_plugin.py");
+/// What the plugin reads to know the staged files ([`test_manifest`]).
+pub const TESTS_FILE: &str = "_pyfun_tests.json";
+/// The pytest configuration of a test run: none, so that a project's own is
+/// not read as if the staged files were its Python tests.
+pub const PYTEST_CONFIG_FILE: &str = "_pyfun_pytest.ini";
+/// That configuration's text.
+pub const PYTEST_CONFIG: &str = "[pytest]\n";
+
+/// The manifest `pyfun test` stages, as JSON: `tests` pairs each test file's
+/// path with the staged module it compiled to, and `modules` names every
+/// staged module.
+pub fn test_manifest(tests: &[(String, String)], modules: &[String]) -> String {
+    let tests = tests
+        .iter()
+        .map(|(source, module)| Json::Array(vec![json::str(source), json::str(module)]))
+        .collect();
+    json::obj(vec![
+        ("tests", Json::Array(tests)),
+        (
+            "modules",
+            Json::Array(modules.iter().map(json::str).collect()),
+        ),
+    ])
+    .to_string()
+}
+
 /// The launcher's source: run the staged `entry_py` as `__main__`.
 pub fn launcher(entry_py: &str) -> String {
     format!("import _pyfun_trace\n\n_pyfun_trace.run({entry_py:?})\n")
@@ -203,6 +235,18 @@ mod tests {
         assert_eq!(
             text,
             r#"{"source":"","rows":[[1,0,[]],[3,2,["f 0"],"<input 4>"]]}"#
+        );
+    }
+
+    #[test]
+    fn a_test_manifest_pairs_each_test_file_with_its_staged_module() {
+        let text = test_manifest(
+            &[("tests/test_shapes.pyfun".into(), "test_shapes".into())],
+            &["shapes.geometry".into(), "test_shapes".into()],
+        );
+        assert_eq!(
+            text,
+            r#"{"tests":[["tests/test_shapes.pyfun","test_shapes"]],"modules":["shapes.geometry","test_shapes"]}"#
         );
     }
 
