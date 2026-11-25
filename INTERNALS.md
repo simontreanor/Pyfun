@@ -528,7 +528,10 @@ stdio. All features reuse the existing front end:
   are renameable — their every occurrence is a precise span; constructors / types / `extern`s are
   refused, because their declaration span covers the whole declaration and their type-annotation uses
   aren't tracked as references, so a rename would be unsound. The new name must be a valid lowercase
-  value identifier. No capture-avoidance check is done (the editor shows the diff for review).
+  value identifier. No capture-avoidance check is done (the editor shows the diff for review). A
+  record field written with the shorthand (`Rect { width, height }`, `case Rect { width }:`) is the
+  field and the variable in one name, so the edit there writes the field back beside the new name
+  (`width = w`); `resolve::punned_fields` finds those places.
 - **Completion** — in-scope module symbols (from whatever the recovering parser produced, so even a
   partially-typed file contributes its symbols) plus the always-available prelude (`PRELUDE` +
   `LIST_PRELUDE`), builtins (`Ok`/`Error`, the builtin/reserved type names), and keywords, each tagged
