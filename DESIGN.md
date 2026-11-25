@@ -1996,7 +1996,12 @@ there is a real one. A declaration with several old names reports them all in on
 they are written. A mismatch between two types is still the one error of its declaration: after it
 the types downstream are in doubt, and one honest error is worth more than several guesses. A
 `Decode.auto` in a declaration that has an error is not resolved, since its type may be open only
-because the error left it unsettled; the error that is there is the one to fix.
+because the error left it unsettled; the error that is there is the one to fix. The same holds for
+the other two things that are an error when nothing says what a value is: a field that two records
+share, read on a value whose type a stand-in left open, and an `in` over such a value. The right
+name would have settled the type, so the missing name is the one error. A field that no record
+declares is still reported there, being wrong whatever the value turns out to be, and so is an
+ambiguity over a value that did not come from a stand-in.
 
 **Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
