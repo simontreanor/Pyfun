@@ -6122,3 +6122,84 @@ fn a_renamed_field_is_answered_where_the_records_type_is_not_yet_known() {
         "unknown record field `widht` (did you mean `width`?)",
     );
 }
+
+// ---------- one spelling of a block `if`, inside brackets too (#230) ----------
+
+#[test]
+fn inside_brackets_an_own_line_branch_opens_with_a_colon_too() {
+    // `then` before a branch on its own lines is the same error inside a
+    // builder's braces as outside them, and names the same fix.
+    assert_error_contains(
+        "let swap xs =\n\
+         \x20 result {\n\
+         \x20   do! if List.len xs == 0 then\n\
+         \x20         Error \"none\"\n\
+         \x20       else Ok ()\n\
+         \x20   return xs\n\
+         \x20 }",
+        "a branch on its own indented lines opens with `:`, as in Python: write `if cond:`, not `then`",
+    );
+    assert_error_contains(
+        "let pick c = (\n  if c then 1\n  else\n    2)",
+        "write `else:`, not `else`",
+    );
+    // And `:` before a branch on the same line still names `then`.
+    assert_error_contains(
+        "let one c = (if c: 1 else 2)",
+        "a branch on the same line is written `if cond then value`",
+    );
+}
+
+#[test]
+fn a_branch_inside_brackets_is_one_expression() {
+    // A builder's items are not expressions, so a branch cannot hold them:
+    // the message says what the position takes, at the line that is not it.
+    let message = "inside brackets and a builder's braces a branch of an `if` is one expression";
+    assert_error_contains(
+        "let work x = async { return x + 1 }\n\
+         let f c =\n\
+         \x20 async {\n\
+         \x20   if c:\n\
+         \x20     print \"yes\"\n\
+         \x20     return! work 1\n\
+         \x20   else:\n\
+         \x20     return 0\n\
+         \x20 }",
+        message,
+    );
+    assert_error_contains(
+        "let f c =\n\
+         \x20 async {\n\
+         \x20   if c:\n\
+         \x20     return 1\n\
+         \x20   else:\n\
+         \x20     return 0\n\
+         \x20 }",
+        message,
+    );
+}
+
+// ---------- a field built from the name in scope (#239) ----------
+
+#[test]
+fn a_punned_field_is_checked_as_the_name_it_reads() {
+    let decls = "type Rect = { width: float, height: float }\n";
+    assert!(
+        pyfun::check(&format!(
+            "{decls}let square width =\n  let height = width\n  Rect {{ width, height }}"
+        ))
+        .is_ok()
+    );
+    assert_error_contains(
+        &format!("{decls}let bad width = Rect {{ width, height }}"),
+        "unbound name `height`",
+    );
+    assert_error_contains(
+        &format!("{decls}let bad width =\n  let height = \"tall\"\n  Rect {{ width, height }}"),
+        "type mismatch",
+    );
+    assert_error_contains(
+        &format!("{decls}let bad depth = Rect {{ depth }}"),
+        "record `Rect` has no field `depth`",
+    );
+}

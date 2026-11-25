@@ -47,7 +47,9 @@ The `_pf_t0` line is the compiler holding on to the record being copied, so a ba
 compute is evaluated once however many fields the update carries over.
 
 Records also match. A `case` may name a subset of the fields, and `{ x }` shorthand binds the field
-to a variable of the same name:
+to a variable of the same name. The shorthand works the other way round as well: when you already
+have an `x` and a `y`, `Point { x, y }` builds the record from them, just as `Point { x = x, y = y }`
+would.
 
 ```pyfun
 type Point = { x: int, y: int }

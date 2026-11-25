@@ -253,7 +253,7 @@ fn lines_hung_at_three_depths_keep_them() {
     let hung = "\
 let swap letters bag =
   result {
-    do! if List.len letters == 0 then
+    do! if List.len letters == 0:
           Error \"Say which tiles.\"
         else Ok ()
     return List.concat bag letters
@@ -265,7 +265,7 @@ let swap letters bag =
     let wide = "\
 let swap letters bag =
     result {
-        do! if List.len letters == 0 then
+        do! if List.len letters == 0:
               Error \"Say which tiles.\"
             else Ok ()
         return List.concat bag letters

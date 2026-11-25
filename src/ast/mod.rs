@@ -553,7 +553,11 @@ pub fn print_expr(expr: &Expr) -> String {
 }
 
 fn print_field_init(field: &FieldInit) -> String {
-    format!("{} = {}", field.name, print_expr(&field.value))
+    match &field.value.kind {
+        // Print the `{ x }` shorthand back as shorthand, as a pattern does.
+        ExprKind::Var(name) if *name == field.name => field.name.clone(),
+        _ => format!("{} = {}", field.name, print_expr(&field.value)),
+    }
 }
 
 /// Print a record-update assignment, joining a dotted field path (`a.b = v`).

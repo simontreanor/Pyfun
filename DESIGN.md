@@ -1935,7 +1935,10 @@ an error at its use.
 **Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
 declaration (joined with newlines, the conventional single space after `##` stripped) and surface
-in LSP hover (§9). Design rationale — the minimal option that can't silently re-purpose existing
+in LSP hover (§9). The block that documents a declaration is the one that touches it: the `##`
+lines that run, one under another, down to the line just above it. A `##` block set apart by a
+blank line is a comment about the file, such as a section banner, and documents nothing (Go's
+rule for the same question), so a banner never opens the next function's docstring. Design rationale — the minimal option that can't silently re-purpose existing
 comments:
 - **`##` doubles the existing comment marker**, the same move as Rust's `///` over `//`; no new
   character class, and a plain `#` comment is never promoted to documentation by accident (the
@@ -2275,11 +2278,33 @@ error in Python too. `then` is not a false friend (Python has no `then`, so nobo
 The opener is chosen per branch, so a chain may mix them (`if c:` + block, then `else 0`), and **there
 is never a second way to write the same branch**: `then` or a bare `else` followed by an indented
 branch is an error naming `if cond:` or `else:`, and a `:` followed by a same-line branch is an error
-naming `then`. Inside brackets the offside rule is off (§7), so there is no block to open and a
-multi-line `if` there keeps `then`, its lines being continuations. The layout rule needed no change:
-`:` at bracket depth 0 was already a block opener for `match`/`case` (§7). The pretty-printer picks
-the opener the same way, from whether the branch needs a block. Before 0.11 a block branch followed
-`then`/`else`; that spelling is the first of the two errors above.
+naming `then`. The layout rule needed no change: `:` at bracket depth 0 was already a block opener
+for `match`/`case` (§7). The pretty-printer picks the opener the same way, from whether the branch
+needs a block. Before 0.11 a block branch followed `then`/`else`; that spelling is the first of the
+two errors above.
+
+**Inside brackets the spelling is the same.** In parentheses and in a builder's braces the offside
+rule is off (§7), so a line break opens no block, and a branch on its own lines is still written
+`if cond:` / `elif cond:` / `else:`. A Python user's first attempt at an `if` inside an `async { }`
+is then the right one, and a program has one spelling of the multi-line `if` whether or not it
+stands in a builder:
+
+```pyfun
+let swap letters bag =
+  result {
+    do! if List.len letters == 0:
+          Error "Say which tiles."
+        else Ok ()
+    return List.concat bag letters
+  }
+```
+
+What the brackets change is what the branch holds: it is one expression, its further lines being
+continuations, where a block outside brackets is a sequence of statements. A second line under the
+branch, or a builder item there (`return! work 1`), is an error that says so and names the two ways
+on: a builder block of the branch's own, or a function. A branch made of builder items (an `if`
+that is itself a builder item, as `for` is) is not part of the language yet. `match` reads the same
+way there, its `case` arms following the `:` without a block.
 
 **`elif`** is pure sugar for `else if`, parsed by `parse_if_rest` into a nested `If` in the else
 branch (no new AST node). The pretty-printer canonicalizes any else-if chain (however written) to an
@@ -2827,7 +2852,14 @@ Decisions:
    - `.field` is a postfix binding tighter than application (`f p.x` is `f (p.x)`).
 **Record patterns** in `match` are correspondingly **tagged**: `case Point { x = 0, y }:` (see §7.2). The
 form is `T { name = pat, … }`, with `{ x }` shorthand binding field `x` to a same-named variable. Tagging
-makes the pattern **mirror construction** and matches the scrutinee's record type explicitly. A pattern
+makes the pattern **mirror construction** and matches the scrutinee's record type explicitly. The
+shorthand mirrors too: in a literal a field name on its own is built from the name in scope, so
+`Rect { width, height }` is `Rect { width = width, height = height }`, for a record and for a
+record-bodied constructor, and it mixes with `field = value` (`Point { x, y = y * 2 }`). The parser
+reads the bare name as the variable, so the checker and the lowering see the long form. Python has
+no such shorthand to mirror (PEP 736's `f(x=)` was rejected); the precedent is Pyfun's own pattern,
+which a reader has usually just written three lines away, and the same form in JavaScript, Rust and
+OCaml. A pattern
 may name a **subset** of fields (omitted fields go unmatched). It lowers to a Python keyword class pattern
 (`case Point(x=0, y=y):`). A record pattern whose named sub-patterns are all irrefutable acts as a
 catch-all for exhaustiveness.

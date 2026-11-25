@@ -19,6 +19,34 @@ let p = Pt { x = 1, y = 2 }
         (integer)))))
 
 ================================================================================
+record literal with field shorthand
+================================================================================
+
+let q = Pt { x, y = 2 }
+let s = Some {x, y}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let_binding
+    (identifier)
+    (record_expression
+      (constructor_identifier)
+      (field_initializer
+        (identifier))
+      (field_initializer
+        (identifier)
+        (integer))))
+  (let_binding
+    (identifier)
+    (record_expression
+      (constructor_identifier)
+      (field_initializer
+        (identifier))
+      (field_initializer
+        (identifier)))))
+
+================================================================================
 record update expression
 ================================================================================
 
