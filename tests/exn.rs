@@ -146,3 +146,19 @@ fn the_label_is_erased_from_the_emitted_python() {
         "{python}"
     );
 }
+
+#[test]
+fn an_expectation_performs_exn() {
+    // `Test.*` is how Pyfun code fails on purpose, and its type says so: a
+    // helper that asserts is `exn` by inference (`DESIGN.md` §9).
+    let source = "let named s = Test.is_true (String.len s > 0)\n\
+                  let same a b = Test.equal a b\n\
+                  let checked xs = try (List.iter named xs)\n";
+    assert_eq!(type_of(source, "named"), "str ->{exn} unit");
+    assert_eq!(type_of(source, "same"), "a -> a ->{exn} unit");
+    // `try` handles a failed expectation like any other raise.
+    assert_eq!(
+        type_of(source, "checked"),
+        "List str -> Result unit Exception"
+    );
+}

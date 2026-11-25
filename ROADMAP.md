@@ -511,8 +511,9 @@ after the release.
     kept formatted by a test. Follow-on, a decision of its own: breaking a line that is too long.
 16. ~~**`pyfun test`**~~ **DONE 2026-11-23**: `test_*` functions in `test_*.pyfun` files run under
     pytest, and a `Test` module (`Test.equal`, `Test.is_true`, `Test.fail`) lowers to `assert`, so
-    pytest reports a failure with its own diff (`DESIGN.md` §9). A `Test` member is an error outside a
-    test. Follow-ons: let a helper assert once the `exn` label (item 19) can say so in its type; report
+    pytest reports a failure with its own diff (`DESIGN.md` §9). A `Test` member performs `exn`, so a
+    helper may assert and its type says so (2026-11-25; the first version kept `Test` inside `test_*`
+    functions by a rule). Follow-ons: report
     a failure in `.pyfun` lines, as `pyfun run` does; a lesson on testing; checked examples in `##` doc
     comments; derived Hypothesis generators.
 17. ~~**Typed default output**~~ **DONE 2026-11-22**: `pyfun compile --typed` annotates every top-level
@@ -531,9 +532,8 @@ after the release.
 19. ~~**An `exn` effect label**~~ **DONE 2026-11-23**: an `extern` whose arrow says `->{exn}` or
     `->{io, exn}` may raise, the label is inferred through its callers, and `try` and `Async.catch`
     discharge it; `let pure` and an unlabelled declared arrow hold a function to not raising. Opt-in:
-    an extern that does not mention it is typed as before (`DESIGN.md` §6). Open: whether `Test.*`
-    should carry `exn` in place of the rule that keeps it inside tests (item 16), and whether the
-    cookbook's externs should be marked.
+    an extern that does not mention it is typed as before (`DESIGN.md` §6). `Test.*` carries it
+    (item 16). Open: whether the cookbook's externs should be marked.
 20. ~~**`from X import y` and nested packages**~~ **DONE 2026-11-24.** `from Geometry import area,
     Circle`, strictly as Python has it: the listed names are written bare, the module is not bound,
     there is no `*`, and the emitted Python keeps `geometry.area(...)`. Packages: `import

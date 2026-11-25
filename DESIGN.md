@@ -2921,11 +2921,15 @@ takes one; it is emitted as `def test_rect():`, which is what pytest calls. Its 
 docstring.
 
 An assertion is the one way Pyfun code fails on purpose (everything else signals failure with `Error`,
-§6), so it is kept to tests: a `Test` member used anywhere but inside a `test_*` function is an error.
-A helper shared by several tests therefore returns a value (`let is_sorted xs = …`) and the test
-asserts on it (`Test.is_true (is_sorted xs)`). This is the strict end of the choice, and it can be
-loosened without breaking a test; the `exn` effect label (`ROADMAP.md`) is the way to let a helper
-assert and have its type say so.
+§6), and its type says so: every `Test` member performs **`exn`** (`Test.equal : a -> a ->{exn} unit`,
+`Test.is_true : bool ->{exn} unit`, `Test.fail : str ->{exn} a`). A `Test` member may therefore be
+used anywhere, and a helper shared by several tests may assert (`let expect_sorted xs = Test.is_true
+(is_sorted xs)` is `List a ->{exn} unit` by inference, and lowers to a `def` holding the `assert`, so
+pytest explains a failure inside it the same way). The effect system keeps the property the first
+version got by a rule: `let pure` rejects a function that asserts, a signature shows which functions
+can fail this way, and `try` turns a failed expectation into an `Error` like any other raise. That
+first version allowed a `Test` member only inside a `test_*` function; it was replaced once `exn`
+existed (§6), since a rule about where a name may be written said less than the type does.
 
 **Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
 infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP
