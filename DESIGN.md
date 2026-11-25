@@ -2979,10 +2979,13 @@ with an element per line, a short `match` arm on one line and a long one on two.
 bargain. What it settles is what is left to taste on a line:
 
 - **Indentation**: two spaces a level, as the lessons and examples are written. A line that continues a
-  statement (inside brackets, or led by an operator) is one level in from where it hung. Lines hung at
-  three depths keep them: an `else` set under its `if` with the branch deeper still, or an argument set
-  under the first one. A line that steps back to a column between two levels marks such a layout, and
-  the lines hung from the same line keep their columns from it and move with it.
+  statement (inside brackets, or led by an operator) is one level in from where it hung. Inside
+  brackets, lines hung at three depths keep them: an `else` set under its `if` with the branch deeper
+  still. A line that steps back to a column between two levels marks such a layout, and the lines
+  hung from the same line keep their columns from it and move with it. This holds only under a line
+  that itself stands inside brackets, where the offside rule is off and the alignment is the only
+  layout there is. Everywhere else an odd column is set on a level: the uneven steps of a pipeline,
+  an argument under the first one, the items of a builder under the line that opens it.
 - **Spaces between tokens**: one around `=`, `==`, `|>`, `->`, `+`, `*`, `/` and their kind; one after
   a comma and none before; none inside `( )` and `[ ]`; a `:` hugs what is before it. Braces are spaced
   by what they hold: `Rect { width = 2.0 }`, `{ p with x = 1 }`, `async { return 1 }` and a record

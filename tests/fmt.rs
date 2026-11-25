@@ -272,21 +272,35 @@ let swap letters bag =
     }
 ";
     assert_eq!(formatted(wide), hung);
-    // The same for an argument set under the first one.
+    // The same inside parentheses, under the line that opens the `if`.
     let hung = "\
-let label =
-  join (prefix
-          |> upper)
-       suffix
+let pick c =
+  let y = (
+    if c:
+        1
+      else:
+        2)
+  y
 ";
     assert_eq!(formatted(hung), hung);
-    let wide = "\
-let label =
-      join (prefix
-              |> upper)
-           suffix
-";
-    assert_eq!(formatted(wide), hung);
+    // Only under a line that itself stands inside brackets. Anywhere else an
+    // odd column is set on a level, as it always was: the uneven steps of a
+    // pipeline, an argument under the first one, and the items of a builder
+    // under the line that opens it.
+    assert_eq!(
+        formatted(
+            "let f xs =\n  xs\n      |> List.map inc\n    |> List.filter big\n  |> List.sum\n"
+        ),
+        "let f xs =\n  xs\n    |> List.map inc\n    |> List.filter big\n  |> List.sum\n"
+    );
+    assert_eq!(
+        formatted("let label =\n  join (prefix\n          |> upper)\n       suffix\n"),
+        "let label =\n  join (prefix\n    |> upper)\n    suffix\n"
+    );
+    assert_eq!(
+        formatted("let g =\n  async {\n      let a = 1\n    let b = 2\n      return a + b\n  }\n"),
+        "let g =\n  async {\n    let a = 1\n    let b = 2\n      return a + b\n  }\n"
+    );
     // Lines that step back onto a level are the ordinary staircase: a step
     // each, however far they hung.
     assert_eq!(
