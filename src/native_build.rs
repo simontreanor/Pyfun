@@ -63,15 +63,7 @@ fn build(path: &Path, out: &Path) -> ExitCode {
             py
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                pyfun::diagnostics::render(
-                    &source,
-                    pyfun::diagnostics::Level::Error,
-                    &e.message(),
-                    e.span()
-                )
-            );
+            crate::report_compile_error(&path.display().to_string(), &source, &e);
             return ExitCode::FAILURE;
         }
     };

@@ -1004,7 +1004,10 @@ Python letter for letter would import its inconsistency (`group_by` beside `grou
 not predict a name without having memorised Python's; the run-together spelling is a short edit from
 the member, so the suggestion bridges it (`String.startswith` is answered with `String.starts_with`). The
 camelCase names of releases before 0.11 are answered the same way, whatever the edit distance
-(`List.sort_by` with `List.sort_by`, `String.lstrip` with `String.lstrip`). The rule reaches every
+(`List.sortBy` with `List.sort_by`, `String.trimStart` with `String.lstrip`), and so is an old name
+carried half way (`Map.try_find`, from applying the snake_case rule alone, with `Map.find`). A field
+read where the record's type is not yet known is answered from the fields of every record in scope
+(`e.errorKind` with `error_kind`). The rule reaches every
 compiler-known value name: a computation-expression builder's `return_from` and `yield_from` (§8.1) and
 the `Exception` record's `error_kind` and `error_message`. Types, constructors and modules stay
 PascalCase, which the grammar relies on, and a measure keeps its author's case because SI symbols need
@@ -1654,7 +1657,8 @@ a multi-file program, and only when some module actually uses `Option`/`Result`.
 
 **CLI.** `pyfun {check,compile,run} entry.pyfun` operate over the whole
 graph: `check` checks all modules (errors rendered rustc-style against each module's own source, grouped
-under a `-- module `Name` (name.pyfun) --` header); `compile -o <dir>` emits the `.py` tree (+
+under a `-- module `Name` (name.pyfun) --` header that names the file the module was read from, each
+error's location line naming it too: `--> name.pyfun:3:9`); `compile -o <dir>` emits the `.py` tree (+
 `_pyfun_rt.py`) into `<dir>` (no `-o` prints each file to stdout under a `# ==== name.py ====` banner);
 `run` materializes the tree to a temp dir and executes `python <dir>/entry.py` (the script's own directory
 leads `sys.path`, so siblings resolve, and the *working* directory is left alone so the program's relative
@@ -1902,6 +1906,8 @@ type (`Decode.str`); the module of text operations stays `String`, a module name
 (``Pyfun spells this type `str`, as Python does``). Reserving it is what keeps old code from
 compiling to something else: a lowercase name the checker does not know is a type *variable* in an
 `extern` signature (§6), so `extern size: string -> int` would otherwise accept every argument type.
+Its meaning is not in doubt, so each `string` is reported where it is written and the declaration is
+then checked as it reads with `str`: it enters scope, and no use of it is an error of its own.
 
 **Booleans are `True` and `False`.** They are spelled as Python spells them, which is also how
 Pyfun's own rule spells them: `bool` is a type with two constructors, and every constructor is
@@ -1912,6 +1918,19 @@ an error that names the fix (``Pyfun spells this `True`, as Python does``). Rese
 a pattern: were `true` an ordinary name, `case true:` would bind a variable and match everything.
 The recovering lexer the editor uses reports the old spelling once and still yields the boolean, so
 the rest of the file is checked as written.
+
+**One run reports every syntax error, and one cause is one error.** The compiler has to refuse a
+program that does not parse, and it says everything it found when it does: `check`, `compile` and
+`run` print every lex and parse error of the file, and of every module of a project, from the
+recovering front end the editor uses. An old spelling whose meaning is not in doubt (`true`, a block
+branch after `then` or a bare `else`) is recorded and read as what it means, so a file's old
+spellings arrive together and nothing follows from any of them. Any other parse error ends its
+top-level item: the rest of the item is skipped, however many blocks deep the error was, and parsing
+goes on at the next one. The checker keeps to the same rule. A declaration that fails is reported
+where it is written; an `extern` whose signature is wrong still enters scope at a type that fits
+every use, and a use of a record, a constructor or a field whose declaration failed is left out of
+the report, in its own module and in the modules that import it. A name nothing declares is still
+an error at its use.
 
 **Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**

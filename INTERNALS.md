@@ -608,7 +608,19 @@ error-recovering entry point (`parser::parse_recover → (Module, Vec<ParseError
 (the compiler keeps the strict `parse`, as it must reject any broken program): on a failed item it
 records the error, guarantees forward progress, then `synchronize`s to the next item boundary (a
 statement separator at block depth 0, tracking `Indent`/`Dedent` so a separator *inside* a broken
-block isn't mistaken for it). So one broken `let` no longer hides the rest of the file — the items that
+block isn't mistaken for it; the depth is counted from the top of the file, since the item may have
+failed several blocks deep). An error the parser can read past (`Parser::recorded`: a block branch
+after `then`) is pushed and parsing carries on with what the spelling means; the strict `parse`
+returns the first of these, and `parse_recover` returns them all. The command line reaches the same
+front end when the strict one fails: `pyfun::syntax_errors` for a single file, and
+`project::build_named`, which keeps walking the import graph past a module that does not parse and
+returns `ProjectError::Syntax` with every module's errors. A module's `LoadedModule::file` is the
+path it was read from, which heads its diagnostics (`diagnostics::render_in`) and names its frames
+in a traceback. The checker's half of "one cause, one error" is `Decls::broken`: the names of the
+declarations that failed, exported in `ModuleExports` so importers have them too. An error site that
+says a name is not there goes through `Infer::absent`, which notes the span when the name is one of
+those, and `run_inner` leaves the noted errors out. `respell_old_str` reports each `string` in type
+position and hands the checker the module as it reads with `str`. So one broken `let` no longer hides the rest of the file — the items that
 parse still drive hover and navigation, and only the *syntax* errors are reported until the file is
 clean, at which point the type errors take over. `analyze` returns an
 `Analysis { module, diagnostics, types, parse_ok }` bundle; **lexing errors remain fatal** (no AST) and

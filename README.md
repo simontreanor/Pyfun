@@ -40,7 +40,7 @@ let area s =
 ```console
 $ pyfun check shapes.pyfun
 error: non-exhaustive match: `Rect _ _` is not matched
- --> 5:3
+ --> shapes.pyfun:5:3
   |
 5 |   match s:
   |   ^^^^^^^^

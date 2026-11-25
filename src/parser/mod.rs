@@ -62,7 +62,14 @@ impl std::fmt::Display for ParseError {
 
 /// Parse a token stream (terminated by [`Tok::Eof`]) into a [`Module`].
 pub fn parse(tokens: Vec<Token>) -> Result<Module, ParseError> {
-    Parser::new(tokens).parse_module()
+    let mut parser = Parser::new(tokens);
+    let parsed = parser.parse_module();
+    // An error the parser read past ([`Parser::recorded`]) stands before any
+    // it stopped at.
+    match parser.recorded.into_iter().next() {
+        Some(first) => Err(first),
+        None => parsed,
+    }
 }
 
 /// Parse a token stream into a [`Module`], **recovering** from errors at item
@@ -82,6 +89,11 @@ struct Parser {
     /// CE's braces; [`Self::ce_item_ends_here`] compares upcoming line-leading
     /// tokens against the innermost frame.
     ce_items: Vec<CeFrame>,
+    /// Errors the parser read past: a spelling whose meaning is not in doubt
+    /// (a block branch after `then`) is recorded here and parsed as what it
+    /// means, so every one in a file is reported in a single pass and nothing
+    /// follows from any of them.
+    recorded: Vec<ParseError>,
 }
 
 /// See [`Parser::ce_items`].
@@ -102,6 +114,7 @@ impl Parser {
             tokens,
             pos: 0,
             ce_items: Vec::new(),
+            recorded: Vec::new(),
         }
     }
 
@@ -156,9 +169,18 @@ impl Parser {
     }
 
     fn error(&self, message: &str) -> ParseError {
+        // A line that stops short is reported where it stops: the layout token
+        // that ends it stands at the start of the next line.
+        let span = match self.peek() {
+            Tok::Sep | Tok::Dedent | Tok::Eof if self.pos > 0 => {
+                let end = self.prev_end();
+                Span::new(end, end)
+            }
+            _ => self.span(),
+        };
         ParseError {
             message: format!("{message}, found {}", describe(self.peek())),
-            span: self.span(),
+            span,
         }
     }
 
@@ -333,15 +355,26 @@ impl Parser {
             }
             self.skip_seps();
         }
+        errors.append(&mut self.recorded);
+        errors.sort_by_key(|e| (e.span.start, e.span.end));
         (Module { items }, errors)
     }
 
     /// Skip tokens after a failed item until the next top-level item boundary: a
     /// statement separator at block depth 0 (left for [`skip_seps`](Self::skip_seps)
     /// to consume) or end of input. `Indent`/`Dedent` are tracked so a separator
-    /// *inside* a broken block is not mistaken for the boundary.
+    /// *inside* a broken block is not mistaken for the boundary. The depth is
+    /// counted from the top of the file: the item may have failed several
+    /// blocks deep, and the rest of each of those blocks is part of it.
     fn synchronize(&mut self) {
         let mut depth = 0i32;
+        for token in &self.tokens[..self.pos] {
+            match token.tok {
+                Tok::Indent => depth += 1,
+                Tok::Dedent => depth -= 1,
+                _ => {}
+            }
+        }
         loop {
             match self.peek() {
                 Tok::Eof => return,
@@ -1587,23 +1620,31 @@ impl Parser {
         } else {
             ("else", "`else:`", "`else value`")
         };
+        // A crossed shape is recorded and the branch is read as what it means,
+        // so a file's old `then`s and `else`s are all reported in one pass.
         match (colon, block) {
             (true, true) => self.parse_block(),
             (false, false) => self.parse_expr(),
-            (true, false) => Err(ParseError {
-                message: format!(
-                    "`:` opens a branch on its own indented lines; \
-                     a branch on the same line is written {line_form}"
-                ),
-                span: Span::new(opener.start, self.prev_end()),
-            }),
-            (false, true) => Err(ParseError {
-                message: format!(
-                    "a branch on its own indented lines opens with `:`, as in Python: \
-                     write {block_form}, not `{written}`"
-                ),
-                span: opener,
-            }),
+            (true, false) => {
+                self.recorded.push(ParseError {
+                    message: format!(
+                        "`:` opens a branch on its own indented lines; \
+                         a branch on the same line is written {line_form}"
+                    ),
+                    span: Span::new(opener.start, self.prev_end()),
+                });
+                self.parse_expr()
+            }
+            (false, true) => {
+                self.recorded.push(ParseError {
+                    message: format!(
+                        "a branch on its own indented lines opens with `:`, as in Python: \
+                         write {block_form}, not `{written}`"
+                    ),
+                    span: opener,
+                });
+                self.parse_block()
+            }
         }
     }
 
@@ -3085,6 +3126,8 @@ fn describe(tok: &Tok) -> String {
         Tok::Int(n) => format!("integer `{n}`"),
         Tok::Float(f) => format!("float `{f}`"),
         Tok::Str(_) => "string literal".to_string(),
+        Tok::FStr(_) => "f-string".to_string(),
+        Tok::Hole(Some(name)) => format!("`?{name}`"),
         Tok::Ident(name) => format!("identifier `{name}`"),
         Tok::Eof => "end of input".to_string(),
         Tok::Doc(_) => "doc comment".to_string(),
@@ -3103,7 +3146,11 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::If => "if",
         Tok::Then => "then",
         Tok::Else => "else",
+        Tok::Elif => "elif",
         Tok::Match => "match",
+        Tok::Case => "case",
+        Tok::Try => "try",
+        Tok::As => "as",
         Tok::With => "with",
         Tok::Fun => "fun",
         Tok::Type => "type",
@@ -3139,6 +3186,8 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Plus => "+",
         Tok::Minus => "-",
         Tok::Star => "*",
+        Tok::StarStar => "**",
+        Tok::Percent => "%",
         Tok::Slash => "/",
         Tok::SlashSlash => "//",
         Tok::PipeOp => "|>",
@@ -3152,7 +3201,19 @@ fn token_symbol(tok: &Tok) -> &'static str {
         Tok::Dot => ".",
         Tok::Ellipsis => "...",
         Tok::Underscore => "_",
-        _ => "token",
+        Tok::Hole(_) => "?",
+        // Each of these has its own wording in `describe`. They are listed, with
+        // no catch-all arm, so a new token has to be given its name here.
+        Tok::Int(_)
+        | Tok::Float(_)
+        | Tok::Str(_)
+        | Tok::FStr(_)
+        | Tok::Ident(_)
+        | Tok::Doc(_)
+        | Tok::Sep
+        | Tok::Indent
+        | Tok::Dedent
+        | Tok::Eof => "token",
     }
 }
 

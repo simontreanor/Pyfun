@@ -406,6 +406,94 @@ fn old_str_type_error(span: Span) -> TypeError {
     }
 }
 
+/// `module` with each `string` in type position read as `str`, and an error
+/// for each one in `errors`. The meaning of the old name is not in doubt, so
+/// the declaration it stands in is still checked and still enters scope, and
+/// the one spelling is the one error. Borrowed when the file has none.
+fn respell_old_str<'m>(
+    module: &'m Module,
+    errors: &mut Vec<TypeError>,
+) -> std::borrow::Cow<'m, Module> {
+    fn walk(ty: &mut TypeExpr, fallback: Span, errors: &mut Vec<TypeError>) {
+        match ty {
+            TypeExpr::Con(name, name_span, args) => {
+                if name == OLD_STR_TYPE && args.is_empty() {
+                    let at = name_span.span();
+                    errors.push(old_str_type_error(if at.start == at.end {
+                        fallback
+                    } else {
+                        at
+                    }));
+                    *name = "str".to_string();
+                }
+                for arg in args {
+                    walk(arg, fallback, errors);
+                }
+            }
+            TypeExpr::Fun(a, b, _) => {
+                walk(a, fallback, errors);
+                walk(b, fallback, errors);
+            }
+            TypeExpr::Tuple(elems) => {
+                for elem in elems {
+                    walk(elem, fallback, errors);
+                }
+            }
+        }
+    }
+    fn mentions(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Con(name, _, args) => name == OLD_STR_TYPE || args.iter().any(mentions),
+            TypeExpr::Fun(a, b, _) => mentions(a) || mentions(b),
+            TypeExpr::Tuple(elems) => elems.iter().any(mentions),
+        }
+    }
+    fn types_of(item: &Item) -> Vec<&TypeExpr> {
+        match item {
+            Item::Extern(decl) => vec![&decl.ty],
+            Item::Type(decl) => match &decl.kind {
+                TypeDeclKind::Sum(variants) => variants.iter().flat_map(|v| &v.fields).collect(),
+                TypeDeclKind::Record(fields) => fields.iter().map(|f| &f.ty).collect(),
+                TypeDeclKind::Newtype(underlying) => vec![underlying],
+                TypeDeclKind::Opaque => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+    if !module
+        .items
+        .iter()
+        .any(|item| types_of(item).into_iter().any(mentions))
+    {
+        return std::borrow::Cow::Borrowed(module);
+    }
+    let mut module = module.clone();
+    for item in &mut module.items {
+        match item {
+            Item::Extern(decl) => walk(&mut decl.ty, decl.span.span(), errors),
+            Item::Type(decl) => {
+                let span = decl.span.span();
+                match &mut decl.kind {
+                    TypeDeclKind::Sum(variants) => {
+                        for field in variants.iter_mut().flat_map(|v| &mut v.fields) {
+                            walk(field, span, errors);
+                        }
+                    }
+                    TypeDeclKind::Record(fields) => {
+                        for field in fields {
+                            walk(&mut field.ty, span, errors);
+                        }
+                    }
+                    TypeDeclKind::Newtype(underlying) => walk(underlying, span, errors),
+                    TypeDeclKind::Opaque => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    std::borrow::Cow::Owned(module)
+}
+
 /// Built-in container / reserved `Con` types that do **not** derive structural
 /// ordering (`DESIGN.md` §7.1). `Option`/`Result` are absent on purpose — they order
 /// structurally (`None < Some`, `Ok < Error`), as do user sum types, records, tuples,
@@ -1825,22 +1913,28 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// so the `try` prefix two of them carried said nothing the type did not; a
 /// name follows Python's word where it has one (`lstrip`, `str`); and every
 /// multi-word name is snake_case, so a camelCase spelling whose snake_case form
-/// is a member is answered with that form (`DESIGN.md` §6).
+/// is a member is answered with that form (`DESIGN.md` §6). An old name is
+/// looked up by its snake_case form, so one already carried half way
+/// (`Map.try_find`, from applying the snake_case rule alone) is answered too.
 fn renamed_member(module: &str, name: &str, env: &Env) -> Option<String> {
-    let fixed = match (module, name) {
-        ("Map", "tryFind") => Some("find"),
-        ("String", "tryIndexOf" | "indexOf") => Some("index_of"),
-        ("String", "trimStart") => Some("lstrip"),
-        ("String", "trimEnd") => Some("rstrip"),
+    let snake = to_snake_case(name);
+    let fixed = match (module, snake.as_str()) {
+        ("String", "trim_start") => Some("lstrip"),
+        ("String", "trim_end") => Some("rstrip"),
         ("Decode", "string") => Some("str"),
         _ => None,
     };
     if let Some(new) = fixed {
         return Some(new.to_string());
     }
-    let snake = to_snake_case(name);
     if snake != name && env.contains_key(&format!("{module}.{snake}")) {
         return Some(snake);
+    }
+    // `Map.tryFind`, `String.tryIndexOf`: the lookup without its `try`.
+    if let Some(plain) = snake.strip_prefix("try_")
+        && env.contains_key(&format!("{module}.{plain}"))
+    {
+        return Some(plain.to_string());
     }
     // A word another language uses for the same operation. Tried in order, so a
     // word that means different things per module (`get`) finds the member the
@@ -2193,6 +2287,11 @@ struct Decls {
     /// "has no field" diagnostics: the field's owner is knowable even though the
     /// record is not visible.
     field_hints: HashMap<String, Vec<(String, String)>>,
+    /// The names of declarations that failed: a constructor, a record type and
+    /// its fields, here or in an imported module (`Net.Hello`). Their errors are
+    /// reported where they are written, so a use of one is left out of the
+    /// report ([`Infer::absent`]).
+    broken: HashSet<String>,
     /// User-declared in-file module names (`module Foo = …`), for the "X is a
     /// module" diagnostic on a bare reference.
     modules: HashSet<String>,
@@ -2320,6 +2419,10 @@ struct ExportedOpaque {
 /// cannot access and whose type it cannot name.
 #[derive(Clone, Default)]
 pub struct ModuleExports {
+    /// The names of this module's declarations that failed (a constructor, a
+    /// record type and its fields), so a module that imports it reports no
+    /// second error at each use of one.
+    broken: HashSet<String>,
     schemes: Env,
     types: Vec<ExportedType>,
     /// **Record** types (`DESIGN.md` §8.3) — own + transitively referenced — so
@@ -2568,13 +2671,24 @@ fn run_inner(
     // name written out as `Module.name` (`DESIGN.md` §6.1).
     let written = module;
     let expanded = crate::imports::expand(module);
-    let module: &Module = &expanded;
+    // The string type's pre-0.11 name is reported at each place it is written,
+    // and the file is then checked as it reads with `str` there.
+    let respelled = respell_old_str(&expanded, &mut errors);
+    let module: &Module = &respelled;
     let (from_errors, from_unused) = from_import_problems(written, imports);
     errors.extend(from_errors);
     // `build_decls` registers imported type *names* mid-way through, so a local
     // `type` declaration can be written in terms of an imported type; it hands back
     // the names it accepted for the body merge below.
     let (mut decls, ctor_env, imported) = build_decls(module, imports, &mut errors);
+    let own_broken = decls.broken.clone();
+    for (module_name, exports) in imports {
+        for name in &exports.broken {
+            decls.broken.insert(format!("{module_name}.{name}"));
+            // A field is read by its bare name.
+            decls.broken.insert(name.clone());
+        }
+    }
     // This module's own public sum types + records + opaque handle types:
     // `collect_exported_*` walk this module's own items, so only what it declares
     // starts here (the transitive closure below may add carried records/opaques).
@@ -2810,6 +2924,16 @@ fn run_inner(
     warnings.extend(crate::lint::lint(module, !holes.is_empty()));
     warnings.sort_by_key(|w| (w.span.start, w.span.end));
 
+    // A use of a declaration that failed says nothing its own error has not.
+    let follow_on = inf.follow_on.take();
+    let broken = &inf.decls.broken;
+    errors.retain(|e| {
+        !follow_on.contains(&e.span)
+            && !broken
+                .iter()
+                .any(|name| e.message == format!("unknown type `{name}`"))
+    });
+
     let ordered = std::mem::take(&mut inf.ordered);
     let (exported_records, exported_opaques) = close_over_references(
         &exports,
@@ -2822,6 +2946,7 @@ fn run_inner(
         errors,
         types,
         ModuleExports {
+            broken: own_broken,
             schemes: exports,
             types: exported_types,
             records: exported_records,
@@ -3474,6 +3599,10 @@ fn build_decls(
                         }
                     }
                     if !ok {
+                        decls.broken.insert(variant.name.clone());
+                        decls
+                            .broken
+                            .extend(variant.field_names.iter().flatten().cloned());
                         continue;
                     }
                     let arity = field_tys.len();
@@ -3566,7 +3695,10 @@ fn build_decls(
                             list.push(decl.name.clone());
                         }
                     }
-                    Err(e) => errors.push(e),
+                    Err(e) => {
+                        decls.broken.insert(decl.name.clone());
+                        errors.push(e);
+                    }
                 }
             }
             TypeDeclKind::Record(fields) => {
@@ -3603,6 +3735,10 @@ fn build_decls(
                             ok = false;
                         }
                     }
+                }
+                if !ok {
+                    decls.broken.insert(decl.name.clone());
+                    decls.broken.extend(fields.iter().map(|f| f.name.clone()));
                 }
                 // Only register a fully-valid record, so the field registry never
                 // points at a record without a `RecordInfo`.
@@ -3769,7 +3905,25 @@ fn build_decls(
                     },
                 );
             }
-            Err(e) => errors.push(e),
+            Err(e) => {
+                errors.push(e);
+                // The name still enters scope, at a type that fits every use,
+                // so the one wrong signature is the one error.
+                env.insert(
+                    decl.name.clone(),
+                    Scheme {
+                        vars: vec![0],
+                        uvars: vec![],
+                        num_vars: vec![],
+                        ord_vars: vec![],
+                        eff_vars: vec![],
+                        mutable: false,
+                        mut_frame: 0,
+                        members: Vec::new(),
+                        ty: Ty::Var(0),
+                    },
+                );
+            }
         }
     }
 
@@ -7345,6 +7499,9 @@ struct Infer {
     /// what tells a name that is written below from one that is not there.
     top: Option<std::rc::Rc<TopScope>>,
     cur_item: usize,
+    /// Where an error was a use of a declaration that failed
+    /// ([`Self::absent`]): left out of the report.
+    follow_on: std::cell::RefCell<Vec<Span>>,
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
@@ -8568,15 +8725,18 @@ impl Infer {
                     needs: name.clone(),
                 }
                 .error(span)),
-                None => Err(TypeError {
-                    message: match python_builtin_spelling(name) {
-                        Some(spelling) => {
-                            format!("unbound name `{name}` (Pyfun spells this {spelling})")
-                        }
-                        None => format!("unbound name `{name}`"),
+                None => Err(self.absent(
+                    name,
+                    TypeError {
+                        message: match python_builtin_spelling(name) {
+                            Some(spelling) => {
+                                format!("unbound name `{name}` (Pyfun spells this {spelling})")
+                            }
+                            None => format!("unbound name `{name}`"),
+                        },
+                        span,
                     },
-                    span,
-                }),
+                )),
             },
 
             ExprKind::Annot { value, unit } => {
@@ -8858,10 +9018,15 @@ impl Infer {
                                 Some(m) => format!(" (did you mean `{module}.{m}`?)"),
                                 None => String::new(),
                             };
-                            Err(TypeError {
-                                message: format!("`{name}` is not a member of `{module}`{hint}"),
-                                span,
-                            })
+                            Err(self.absent(
+                                &q,
+                                TypeError {
+                                    message: format!(
+                                        "`{name}` is not a member of `{module}`{hint}"
+                                    ),
+                                    span,
+                                },
+                            ))
                         }
                     };
                 }
@@ -9291,18 +9456,52 @@ impl Infer {
                         span,
                     });
                 }
-                // Empty `decls.records` means records aren't in use at all.
-                let hint = if self.decls.records.is_empty() {
-                    " (no record types are declared)"
+                // The nearest field of any record in scope: the base's type is
+                // not known here, so every record is a candidate. A camelCase
+                // name whose snake_case form is a field is answered with it
+                // however far apart the two are (`errorKind`, before 0.11).
+                let snake = to_snake_case(field);
+                let near = if self.decls.field_owner.contains_key(&snake) {
+                    Some(&snake)
                 } else {
-                    ""
+                    let mut names: Vec<&String> = self.decls.field_owner.keys().collect();
+                    names.sort();
+                    names
+                        .into_iter()
+                        .map(|n| (levenshtein(field, n), n))
+                        .min_by_key(|&(d, _)| d)
+                        .filter(|&(d, n)| {
+                            d <= (field.chars().count().max(n.chars().count()) / 3).max(2)
+                        })
+                        .map(|(_, n)| n)
                 };
-                Err(TypeError {
-                    message: format!("unknown record field `{field}`{hint}"),
-                    span,
-                })
+                // Empty `decls.records` means records aren't in use at all.
+                let hint = if let Some(near) = near {
+                    format!(" (did you mean `{near}`?)")
+                } else if self.decls.records.is_empty() {
+                    " (no record types are declared)".to_string()
+                } else {
+                    String::new()
+                };
+                Err(self.absent(
+                    field,
+                    TypeError {
+                        message: format!("unknown record field `{field}`{hint}"),
+                        span,
+                    },
+                ))
             }
         }
+    }
+
+    /// `error` says `name` is not there. When the declaration of `name` failed,
+    /// that is reported where it is written, with what to change; this use of
+    /// it is noted so the report leaves it out.
+    fn absent(&self, name: &str, error: TypeError) -> TypeError {
+        if self.decls.broken.contains(name) {
+            self.follow_on.borrow_mut().push(error.span);
+        }
+        error
     }
 
     /// A rendered note when `field` is declared by a record the consumer's
@@ -9334,10 +9533,13 @@ impl Infer {
             if let Some(bare) = self.decls.record_aliases.get(tag) {
                 return Ok(bare.clone());
             }
-            return Err(TypeError {
-                message: format!("`{rec}` is not a member of `{module}`"),
-                span,
-            });
+            return Err(self.absent(
+                tag,
+                TypeError {
+                    message: format!("`{rec}` is not a member of `{module}`"),
+                    span,
+                },
+            ));
         }
         if self.decls.local_records.contains(tag) {
             Ok(tag.to_string())
@@ -9350,10 +9552,13 @@ impl Infer {
                 span,
             })
         } else {
-            Err(TypeError {
-                message: format!("`{tag}` is not a record type"),
-                span,
-            })
+            Err(self.absent(
+                tag,
+                TypeError {
+                    message: format!("`{tag}` is not a record type"),
+                    span,
+                },
+            ))
         }
     }
 
@@ -10629,10 +10834,13 @@ impl Infer {
                     return self.bind_ap_pattern(name, name_span.span(), &ap, args, scrut_ty, env);
                 }
                 let Some(info) = self.decls.ctors.get(name).cloned() else {
-                    return Err(TypeError {
-                        message: format!("unknown constructor `{name}`"),
-                        span,
-                    });
+                    return Err(self.absent(
+                        name,
+                        TypeError {
+                            message: format!("unknown constructor `{name}`"),
+                            span,
+                        },
+                    ));
                 };
                 if info.field_names.is_some() {
                     return Err(TypeError {

@@ -6017,3 +6017,108 @@ fn a_type_quoted_in_a_message_stays_bare() {
     assert_eq!(analysis.holes.len(), 1);
     assert_eq!(analysis.holes[0].ty, "comparison a => a");
 }
+
+// ---------- one cause, one error (#228, #231, #232) ----------
+
+/// The messages of every error in `source`, in the order the checker gives them.
+fn all_errors(source: &str) -> Vec<String> {
+    match pyfun::check(source) {
+        Ok(()) => Vec::new(),
+        Err(errors) => errors.into_iter().map(|e| e.message).collect(),
+    }
+}
+
+#[test]
+fn the_old_string_type_is_reported_once_and_read_as_str() {
+    // The meaning of `string` is not in doubt, so each one is reported where
+    // it is written and the declaration still enters scope: no use of
+    // `connect`, `Hello` or `Line` is an error of its own.
+    let source = "extern connect: string -> int -> int = max\n\
+                  type Hello = { name: string, seed: int }\n\
+                  type Wire = Greeting Hello | Line string\n\
+                  let a = connect \"host\" 7777\n\
+                  let b = Hello { name = \"Ann\", seed = 1 }\n\
+                  let show m =\n\
+                  \x20 match m:\n\
+                  \x20   case Line l: l\n\
+                  \x20   case Greeting h: h.name";
+    let errors = all_errors(source);
+    assert_eq!(
+        errors,
+        vec!["Pyfun spells this type `str`, as Python does"; 3],
+        "{errors:?}"
+    );
+    // The old name is still not a type: read as `str`, it is held to `str`.
+    let errors = all_errors("extern size: string -> int = len\nlet n = size 1");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors[1].contains("type mismatch"), "{errors:?}");
+}
+
+#[test]
+fn a_declaration_that_fails_is_one_error_however_often_it_is_used() {
+    // An extern, a record and a constructor, each with a type that does not
+    // exist. Every use of them below would otherwise be an error that goes
+    // away with the declaration's own.
+    let source = "extern connect: Socket -> int = max\n\
+                  type Hello = { name: Nope, seed: int }\n\
+                  type Wire = Line Missing | Quit\n\
+                  let a = connect 1\n\
+                  let b = Hello { name = 1, seed = 1 }\n\
+                  let c h = h.seed\n\
+                  let show m =\n\
+                  \x20 match m:\n\
+                  \x20   case Line l: l\n\
+                  \x20   case Quit: 0";
+    let errors = all_errors(source);
+    assert_eq!(
+        errors,
+        [
+            "unknown type `Nope`",
+            "unknown type `Missing`",
+            "unknown type `Socket`"
+        ],
+        "{errors:?}"
+    );
+    // A name nothing declares is still reported at its use.
+    assert_error_contains("let a = connect 1", "unbound name `connect`");
+    assert_error_contains(
+        "type P = { x: int }\nlet f p = p.seed",
+        "unknown record field `seed`",
+    );
+}
+
+#[test]
+fn an_old_lookup_name_carried_half_way_is_still_answered() {
+    // Applying the snake_case rule alone to `Map.tryFind` gives `try_find`,
+    // which is as far from `find` as the camelCase spelling was.
+    assert_error_contains(
+        "let r = Map.try_find 1 Map.empty",
+        "`try_find` is not a member of `Map` (did you mean `Map.find`?)",
+    );
+    assert_error_contains(
+        "let r = String.try_index_of \"a\" \"abc\"",
+        "`try_index_of` is not a member of `String` (did you mean `String.index_of`?)",
+    );
+    assert_error_contains(
+        "let r = String.trim_start \" a\"",
+        "(did you mean `String.lstrip`?)",
+    );
+}
+
+#[test]
+fn a_renamed_field_is_answered_where_the_records_type_is_not_yet_known() {
+    // `got` is a parameter, so `e` has no type yet when its field is read:
+    // the field is looked up by name across the records in scope.
+    assert_error_contains(
+        "let show got =\n\
+         \x20 match got:\n\
+         \x20   case Error e: e.errorKind\n\
+         \x20   case Ok text: text",
+        "unknown record field `errorKind` (did you mean `error_kind`?)",
+    );
+    // A near miss is answered the same way.
+    assert_error_contains(
+        "type P = { width: int }\nlet f p = p.widht",
+        "unknown record field `widht` (did you mean `width`?)",
+    );
+}

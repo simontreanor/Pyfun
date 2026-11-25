@@ -175,12 +175,50 @@ fn lsp_server() -> ExitCode {
     }
 }
 
-/// Print `warnings` against `source`, one rendered diagnostic each.
-fn report_warnings(source: &str, warnings: &[pyfun::diagnostics::Warning]) {
+/// Print `warnings` against the `source` of `file`, one rendered diagnostic each.
+fn report_warnings(file: &str, source: &str, warnings: &[pyfun::diagnostics::Warning]) {
     for w in warnings {
         eprintln!(
             "{}\n",
-            diagnostics::render(source, Level::Warning, &w.message, w.span)
+            diagnostics::render_in(file, source, Level::Warning, &w.message, w.span)
+        );
+    }
+}
+
+/// Print the error that stopped a single file from compiling. A lex or parse
+/// error is printed with every other one the file has: the compiler stops at
+/// the first, and the recovering front end the editor uses finds the rest, so a
+/// file is put right in one run and not one run per error.
+pub(crate) fn report_compile_error(file: &str, source: &str, error: &pyfun::CompileError) {
+    let syntax = matches!(
+        error,
+        pyfun::CompileError::Lex(_) | pyfun::CompileError::Parse(_)
+    );
+    let all = if syntax {
+        pyfun::syntax_errors(source).1
+    } else {
+        Vec::new()
+    };
+    if all.len() < 2 {
+        eprintln!(
+            "{}",
+            diagnostics::render_in(file, source, Level::Error, &error.message(), error.span())
+        );
+        return;
+    }
+    report_syntax_errors(file, source, &all);
+    eprintln!("\n{} errors", all.len());
+}
+
+/// Print the lex and parse errors of one file, a blank line between them.
+fn report_syntax_errors(file: &str, source: &str, errors: &[pyfun::CompileError]) {
+    for (i, e) in errors.iter().enumerate() {
+        if i > 0 {
+            eprintln!();
+        }
+        eprintln!(
+            "{}",
+            diagnostics::render_in(file, source, Level::Error, &e.message(), e.span())
         );
     }
 }
@@ -208,10 +246,13 @@ fn check(path: &str, strict: bool) -> ExitCode {
     let module = match pyfun::parse(&source) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!(
-                "{}",
-                diagnostics::render(&source, Level::Error, &e.message(), e.span())
-            );
+            // A file that imports is a project even while it does not parse:
+            // its `import` lines still say so, and the other modules may have
+            // syntax errors of their own to report in the same run.
+            if has_imports(&pyfun::syntax_errors(&source).0) {
+                return check_project(path, strict);
+            }
+            report_compile_error(path, &source, &e);
             return ExitCode::FAILURE;
         }
     };
@@ -219,11 +260,12 @@ fn check(path: &str, strict: bool) -> ExitCode {
     if has_imports(&module) {
         return check_project(path, strict);
     }
-    let (errors, _types, holes, warnings) =
+    let (mut errors, _types, holes, warnings) =
         pyfun::types::check_reporting(&module, &std::collections::HashMap::new());
+    errors.sort_by_key(|e| e.span.start);
     // Warnings come first and never change the outcome: the program below them
     // still compiles, or still has the errors that follow.
-    report_warnings(&source, &warnings);
+    report_warnings(path, &source, &warnings);
     if errors.is_empty() && holes.is_empty() {
         return checked_ok("ok: no type errors", warnings.len(), strict);
     }
@@ -235,7 +277,7 @@ fn check(path: &str, strict: bool) -> ExitCode {
         first = false;
         eprintln!(
             "{}",
-            diagnostics::render(&source, Level::Error, &e.message, e.span)
+            diagnostics::render_in(path, &source, Level::Error, &e.message, e.span)
         );
     }
     // Typed holes are reported informatively (a "note", not an error), but they
@@ -247,7 +289,7 @@ fn check(path: &str, strict: bool) -> ExitCode {
         first = false;
         eprintln!(
             "{}",
-            diagnostics::render(&source, Level::Note, &h.message(), h.span)
+            diagnostics::render_in(path, &source, Level::Note, &h.message(), h.span)
         );
     }
     let n = errors.len();
@@ -266,9 +308,7 @@ fn compile(args: &CompileArgs) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
-    if let Ok(module) = pyfun::parse(&source)
-        && has_imports(&module)
-    {
+    if has_imports(&pyfun::syntax_errors(&source).0) {
         return compile_project(args);
     }
     let compiled = if args.typed {
@@ -278,15 +318,12 @@ fn compile(args: &CompileArgs) -> ExitCode {
     };
     let python = match compiled {
         Ok((py, notes)) => {
-            report_warnings(&source, &pyfun::warnings(&source));
+            report_warnings(path, &source, &pyfun::warnings(&source));
             report_notes(&notes);
             py
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                diagnostics::render(&source, Level::Error, &e.message(), e.span())
-            );
+            report_compile_error(path, &source, &e);
             return ExitCode::FAILURE;
         }
     };
@@ -326,22 +363,17 @@ fn run(path: &str, prog_args: &[String]) -> ExitCode {
     let Some(source) = read(path) else {
         return ExitCode::FAILURE;
     };
-    if let Ok(module) = pyfun::parse(&source)
-        && has_imports(&module)
-    {
+    if has_imports(&pyfun::syntax_errors(&source).0) {
         return run_project(path, prog_args);
     }
     let (python, map) = match pyfun::compile_traced(&source) {
         Ok((py, notes, map)) => {
-            report_warnings(&source, &pyfun::warnings(&source));
+            report_warnings(path, &source, &pyfun::warnings(&source));
             report_notes(&notes);
             (py, map)
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                diagnostics::render(&source, Level::Error, &e.message(), e.span())
-            );
+            report_compile_error(path, &source, &e);
             return ExitCode::FAILURE;
         }
     };
@@ -441,22 +473,20 @@ fn resolve_project(entry: &str) -> Result<project::Project, ExitCode> {
     project::build_from_path(Path::new(entry)).map_err(|e| render_project_error(entry, &e))
 }
 
-/// Render a graph-resolution error. A lex/parse failure is shown rustc-style
-/// against the offending module's source; the rest are one-line messages.
+/// Render a graph-resolution error. The lex and parse errors of every module
+/// are shown rustc-style against that module's source, under the header its
+/// type errors would have; the rest are one-line messages.
 fn render_project_error(entry: &str, error: &ProjectError) -> ExitCode {
     match error {
-        ProjectError::Compile { name, error } => {
-            let root = Path::new(entry).parent().unwrap_or_else(|| Path::new("."));
-            let file = root.join(project::module_file_name(name));
-            match std::fs::read_to_string(&file) {
-                Ok(src) => eprintln!(
-                    "{}",
-                    diagnostics::render(&src, Level::Error, &error.message(), error.span())
-                ),
-                // The module's source could not be re-read, so nothing renders
-                // the span; the error's `Display` keeps the byte offsets as the
-                // only location information this path has.
-                Err(_) => eprintln!("error: in module `{name}`: {error}"),
+        ProjectError::Syntax(modules) => {
+            let mut total = 0;
+            for module in modules {
+                eprintln!("-- module `{}` ({}) --", module.name, module.file);
+                report_syntax_errors(&module.file, &module.source, &module.errors);
+                total += module.errors.len();
+            }
+            if total > 1 {
+                eprintln!("\n{total} errors");
             }
         }
         ProjectError::Missing { name, importer } => {
@@ -491,22 +521,20 @@ fn warning_count(n: usize) -> String {
 /// its own source. `Some(count of warnings)` if it type-checks.
 fn check_project_reporting(project: &project::Project) -> Option<usize> {
     let (groups, warned) = project::check_reporting(project);
-    let source_of = |name: &str| {
+    // The file a module was read from, and its source.
+    let read_from = |name: &str| {
         project
             .modules
             .iter()
             .find(|m| m.name == name)
-            .map(|m| m.source.as_str())
-            .unwrap_or("")
+            .map(|m| (m.file.as_str(), m.source.as_str()))
+            .unwrap_or(("", ""))
     };
     let mut shown = 0;
     for group in &warned {
-        eprintln!(
-            "-- module `{}` ({}) --",
-            group.name,
-            project::module_file_name(&group.name)
-        );
-        report_warnings(source_of(&group.name), &group.warnings);
+        let (file, source) = read_from(&group.name);
+        eprintln!("-- module `{}` ({file}) --", group.name);
+        report_warnings(file, source, &group.warnings);
         shown += group.warnings.len();
     }
     if groups.is_empty() {
@@ -514,21 +542,17 @@ fn check_project_reporting(project: &project::Project) -> Option<usize> {
     }
     let mut total = 0;
     for group in &groups {
-        let source = project
-            .modules
-            .iter()
-            .find(|m| m.name == group.name)
-            .map(|m| m.source.as_str())
-            .unwrap_or("");
-        eprintln!(
-            "-- module `{}` ({}) --",
-            group.name,
-            project::module_file_name(&group.name)
-        );
-        for e in &group.errors {
+        let (file, source) = read_from(&group.name);
+        eprintln!("-- module `{}` ({file}) --", group.name);
+        let mut errors: Vec<_> = group.errors.iter().collect();
+        errors.sort_by_key(|e| e.span.start);
+        for (i, e) in errors.into_iter().enumerate() {
+            if i > 0 {
+                eprintln!();
+            }
             eprintln!(
                 "{}",
-                diagnostics::render(source, Level::Error, &e.message, e.span)
+                diagnostics::render_in(file, source, Level::Error, &e.message, e.span)
             );
             total += 1;
         }
@@ -655,26 +679,17 @@ fn run_project(entry: &str, prog_args: &[String]) -> ExitCode {
     report_notes(&compiled.notes);
     // Each module's frames name its own source file, spelled the way the entry
     // was given on the command line.
-    let root = Path::new(entry).parent().unwrap_or_else(|| Path::new(""));
     let entry_name = &project.entry().name;
     let names: Vec<(String, String)> = compiled
         .line_maps
         .iter()
         .map(|(module, _)| {
-            let path = if module == entry_name {
-                entry.to_string()
-            } else {
-                let file = project::locate_module(root, module)
-                    .unwrap_or_else(|| root.join(project::module_file_name(module)))
-                    .display()
-                    .to_string();
-                // A package module's path is spelled with the entry's slashes.
-                if entry.contains('/') {
-                    file.replace('\\', "/")
-                } else {
-                    file.replace('/', std::path::MAIN_SEPARATOR_STR)
-                }
-            };
+            let path = project
+                .modules
+                .iter()
+                .find(|m| &m.name == module)
+                .map(|m| m.file.clone())
+                .unwrap_or_else(|| project::module_file_name(module));
             (project::module_py_name(module), path)
         })
         .collect();
@@ -728,10 +743,7 @@ fn parse_only(path: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!(
-                "{}",
-                diagnostics::render(&source, Level::Error, &e.message(), e.span())
-            );
+            report_compile_error(path, &source, &e);
             ExitCode::FAILURE
         }
     }

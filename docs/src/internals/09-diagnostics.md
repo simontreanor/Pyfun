@@ -21,8 +21,11 @@ pub fn render(source: &str, level: Level, message: &str, span: Span) -> String {
 ```
 
 `Level` is `Error`, `Warning`, or `Note`. `locate` maps a byte offset to a one-based line and
-column, and the underline length is clamped to the rest of the line. That is the whole rendering
-surface. The intelligence lives upstream: the type checker
+column, and the underline length is clamped to the rest of the line. The command line knows which
+file it is reading, so it calls `render_in`, which puts the file on the location line
+(`--> shapes.pyfun:2:13`), the form a terminal and an editor open; the playground, the REPL and a
+notebook cell have no file and show the line and column alone, as the examples below do. That is the
+whole rendering surface. The intelligence lives upstream: the type checker
 ([src/types/mod.rs](https://github.com/simontreanor/Pyfun/blob/main/src/types/mod.rs)) composes
 the message string, including the "did you mean" member hints and the typed-hole reports, and
 hands `render` a level, that message, and a span. Keeping presentation this thin means every
