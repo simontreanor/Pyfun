@@ -27,6 +27,10 @@ pub struct LoadedModule {
     /// The module's name as an `import` writes it: `Geometry`, or its path
     /// from the project's top folder, `Shapes.Geometry`.
     pub name: String,
+    /// The file the module was read from, as a diagnostic names it: the entry
+    /// as it was given, and an import beside it (`src/shapes/geometry.pyfun`
+    /// for an entry `src/main.pyfun`).
+    pub file: String,
     /// The original source text (kept so diagnostics can be rendered against it).
     pub source: String,
     /// The parsed AST.
@@ -60,8 +64,10 @@ pub enum ProjectError {
         name: String,
         importer: Option<String>,
     },
-    /// A module failed to lex or parse.
-    Compile { name: String, error: CompileError },
+    /// One or more modules failed to lex or parse: every syntax error the
+    /// recovering front end finds in each, in the order the modules were
+    /// reached.
+    Syntax(Vec<SyntaxErrors>),
     /// The import graph has a cycle; `names` lists it in order, the first module
     /// repeated at the end (`A -> B -> A`).
     Cycle { names: Vec<String> },
@@ -80,7 +86,13 @@ impl std::fmt::Display for ProjectError {
                     None => write!(f, "cannot find module `{name}` (expected `{file}`)"),
                 }
             }
-            ProjectError::Compile { name, error } => write!(f, "in module `{name}`: {error}"),
+            ProjectError::Syntax(modules) => match modules.first() {
+                Some(SyntaxErrors { name, errors, .. }) => match errors.first() {
+                    Some(error) => write!(f, "in module `{name}`: {error}"),
+                    None => write!(f, "in module `{name}`: syntax error"),
+                },
+                None => write!(f, "syntax error"),
+            },
             ProjectError::Cycle { names } => {
                 write!(f, "import cycle: {}", names.join(" -> "))
             }
@@ -89,6 +101,19 @@ impl std::fmt::Display for ProjectError {
 }
 
 impl std::error::Error for ProjectError {}
+
+/// The lex and parse errors of one module of a project.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SyntaxErrors {
+    /// The module the errors were found in.
+    pub name: String,
+    /// The file it was read from ([`LoadedModule::file`]).
+    pub file: String,
+    /// Its source text, which the errors' spans point into.
+    pub source: String,
+    /// The errors, in source order.
+    pub errors: Vec<CompileError>,
+}
 
 /// The Python name of a module: each part of its path in snake_case, as PEP 8
 /// names a module and a package (`Geometry` → `geometry`, `TrainTimes` →
@@ -271,14 +296,35 @@ pub fn build<F>(entry: &str, load: F) -> Result<Project, ProjectError>
 where
     F: Fn(&str) -> Option<String>,
 {
+    build_named(entry, |name| {
+        load(name).map(|source| (module_file_name(name), source))
+    })
+}
+
+/// [`build`], with a loader that also says which file each source came from
+/// ([`LoadedModule::file`]).
+///
+/// A module that does not lex or parse does not stop the walk: its errors are
+/// kept, its imports are read off the items that did parse, and the rest of the
+/// graph is loaded, so one run reports the syntax errors of every module
+/// ([`ProjectError::Syntax`]).
+pub fn build_named<F>(entry: &str, load: F) -> Result<Project, ProjectError>
+where
+    F: Fn(&str) -> Option<(String, String)>,
+{
     let mut ctx = Builder {
         load,
         loaded: HashMap::new(),
         state: HashMap::new(),
         order: Vec::new(),
         stack: Vec::new(),
+        broken: Vec::new(),
     };
-    ctx.visit(entry, None)?;
+    let walked = ctx.visit(entry, None);
+    if !ctx.broken.is_empty() {
+        return Err(ProjectError::Syntax(ctx.broken));
+    }
+    walked?;
     let mut loaded = ctx.loaded;
     let modules = ctx
         .order
@@ -315,11 +361,20 @@ pub fn build_from_path(entry: &Path) -> Result<Project, ProjectError> {
         importer: None,
     })?;
     let root = entry.parent().map(Path::to_path_buf).unwrap_or_default();
-    build(&entry_name, |name| {
+    let typed = entry.display().to_string();
+    build_named(&entry_name, |name| {
         if name == entry_name {
-            return std::fs::read_to_string(entry).ok();
+            return Some((typed.clone(), std::fs::read_to_string(entry).ok()?));
         }
-        std::fs::read_to_string(locate_module(&root, name)?).ok()
+        let path = locate_module(&root, name)?;
+        let file = path.display().to_string();
+        // A module's path is spelled with the entry's slashes.
+        let file = if typed.contains('/') {
+            file.replace('\\', "/")
+        } else {
+            file.replace('/', std::path::MAIN_SEPARATOR_STR)
+        };
+        Some((file, std::fs::read_to_string(path).ok()?))
     })
 }
 
@@ -921,11 +976,13 @@ struct Builder<F> {
     state: HashMap<String, Visit>,
     order: Vec<String>,
     stack: Vec<String>,
+    /// The modules that did not lex or parse, with every error of each.
+    broken: Vec<SyntaxErrors>,
 }
 
 impl<F> Builder<F>
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Option<(String, String)>,
 {
     fn visit(&mut self, name: &str, importer: Option<&str>) -> Result<(), ProjectError> {
         match self.state.get(name) {
@@ -941,21 +998,38 @@ where
             None => {}
         }
 
-        let source = (self.load)(name).ok_or_else(|| ProjectError::Missing {
+        let (file, source) = (self.load)(name).ok_or_else(|| ProjectError::Missing {
             name: name.to_string(),
             importer: importer.map(str::to_string),
         })?;
-        let ast = crate::parse(&source).map_err(|error| ProjectError::Compile {
-            name: name.to_string(),
-            error,
-        })?;
+        let mut broken = None;
+        let ast = match crate::parse(&source) {
+            Ok(ast) => ast,
+            Err(first) => {
+                let (partial, mut errors) = crate::syntax_errors(&source);
+                if errors.is_empty() {
+                    errors.push(first);
+                }
+                broken = Some(SyntaxErrors {
+                    name: name.to_string(),
+                    file: file.clone(),
+                    source: source.clone(),
+                    errors,
+                });
+                partial
+            }
+        };
         let imports = collect_imports(&ast);
 
         self.state.insert(name.to_string(), Visit::Visiting);
         self.stack.push(name.to_string());
-        for import in &imports {
-            self.visit(import, Some(name))?;
-        }
+        let walked = imports
+            .iter()
+            .try_for_each(|import| self.visit(import, Some(name)));
+        // After its imports, so the modules are listed in the order their type
+        // errors would be: each below what it imports.
+        self.broken.extend(broken);
+        walked?;
         self.stack.pop();
         self.state.insert(name.to_string(), Visit::Done);
         self.order.push(name.to_string());
@@ -963,6 +1037,7 @@ where
             name.to_string(),
             LoadedModule {
                 name: name.to_string(),
+                file,
                 source,
                 ast,
                 imports,
@@ -1112,10 +1187,39 @@ mod tests {
             loader(&[("Main", "import Broken\nlet x = 1"), ("Broken", "let = ")]),
         )
         .unwrap_err();
-        let ProjectError::Compile { name, .. } = err else {
-            panic!("expected a compile error, got {err:?}");
+        let ProjectError::Syntax(modules) = err else {
+            panic!("expected syntax errors, got {err:?}");
         };
-        assert_eq!(name, "Broken");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].name, "Broken");
+        assert_eq!(modules[0].file, "broken.pyfun");
+    }
+
+    #[test]
+    fn every_module_with_syntax_errors_is_reported_with_all_of_them() {
+        // One walk of the graph: the entry does not parse, and neither does
+        // one of the two modules it imports. Each is listed below what it
+        // imports, with every error it has.
+        let err = build(
+            "Main",
+            loader(&[
+                (
+                    "Main",
+                    "import Left\nimport Right\nlet a = true\nlet b = false",
+                ),
+                ("Left", "let l = 1"),
+                ("Right", "let r = true"),
+            ]),
+        )
+        .unwrap_err();
+        let ProjectError::Syntax(modules) = err else {
+            panic!("expected syntax errors, got {err:?}");
+        };
+        let found: Vec<(&str, usize)> = modules
+            .iter()
+            .map(|m| (m.name.as_str(), m.errors.len()))
+            .collect();
+        assert_eq!(found, [("Right", 1), ("Main", 2)]);
     }
 
     #[test]

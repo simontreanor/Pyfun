@@ -468,8 +468,11 @@ fn check_reports_each_modules_warnings_in_a_project() {
         stderr.contains("warning: `import Geometry` is never used"),
         "{stderr}"
     );
+    // The module is headed with the file it was read from: beside the entry,
+    // spelled the way the entry was given.
+    let extra = project.path("extra.pyfun").display().to_string();
     assert!(
-        stderr.contains("-- module `Extra` (extra.pyfun) --"),
+        stderr.contains(&format!("-- module `Extra` ({extra}) --")),
         "{stderr}"
     );
     assert!(
@@ -516,4 +519,194 @@ fn run_and_compile_print_warnings_beside_the_program() {
         stderr.contains("warning: this `case` can never match"),
         "{stderr}"
     );
+}
+
+// ---------- every error names its file, and a run reports them all ----------
+
+/// `pyfun check <file>` run inside the project's folder, so the paths it
+/// prints are the short ones a user sees.
+fn check_in(proj: &Project, file: &str) -> (bool, String) {
+    let out = Command::new(pyfun_bin())
+        .current_dir(&proj.0)
+        .arg("check")
+        .arg(file)
+        .output()
+        .unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).replace("\r\n", "\n"),
+    )
+}
+
+#[test]
+fn check_reports_every_old_spelling_of_a_file_in_one_run() {
+    // What moving a 0.10 file to 0.11 meets: each of these used to stop the
+    // compiler, one run per fix, and an `else` was hidden behind its `then`.
+    let proj = Project::new(
+        "all_syntax",
+        &[(
+            "old.pyfun",
+            "let a = true\n\
+             let b = false\n\
+             let f x =\n\
+             \x20 if x then\n\
+             \x20   if a then\n\
+             \x20     1\n\
+             \x20   else\n\
+             \x20     3\n\
+             \x20 else\n\
+             \x20   2\n\
+             let g = f b\n",
+        )],
+    );
+    let (ok, stderr) = check_in(&proj, "old.pyfun");
+    assert!(!ok);
+    for at in ["1:9", "2:9", "4:8", "5:10", "7:5", "9:3"] {
+        assert!(
+            stderr.contains(&format!(" --> old.pyfun:{at}\n")),
+            "{stderr}"
+        );
+    }
+    assert!(stderr.ends_with("\n6 errors\n"), "{stderr}");
+    // `compile` and `run` say the same.
+    for command in ["compile", "run"] {
+        let out = Command::new(pyfun_bin())
+            .current_dir(&proj.0)
+            .arg(command)
+            .arg("old.pyfun")
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success());
+        assert!(stderr.contains("6 errors"), "{command}: {stderr}");
+    }
+}
+
+#[test]
+fn a_parse_error_inside_a_block_is_one_error() {
+    // The broken line is two blocks deep. What is left of the function is
+    // skipped with it, so nothing follows from it, and the next function's
+    // own error is still found.
+    let proj = Project::new(
+        "resync",
+        &[(
+            "deep.pyfun",
+            "let f x =\n\
+             \x20 let y =\n\
+             \x20   let z = x +\n\
+             \x20   z\n\
+             \x20 y + 1\n\
+             let g = )\n",
+        )],
+    );
+    let (ok, stderr) = check_in(&proj, "deep.pyfun");
+    assert!(!ok);
+    // The line that stops short is reported where it stops.
+    assert!(stderr.contains(" --> deep.pyfun:3:16\n"), "{stderr}");
+    assert!(stderr.contains(" --> deep.pyfun:6:9\n"), "{stderr}");
+    assert!(stderr.ends_with("\n2 errors\n"), "{stderr}");
+}
+
+#[test]
+fn a_syntax_error_in_an_imported_module_names_its_file() {
+    // The entry and a module it imports both fail to parse. Each is headed
+    // with its file, each error line names it, and one run has them all.
+    let proj = Project::new(
+        "syntax_files",
+        &[
+            ("helper.pyfun", "let a = true\nlet b = 1\n"),
+            (
+                "main.pyfun",
+                "import Helper\nprint Helper.a\nlet z = false\n",
+            ),
+        ],
+    );
+    let (ok, stderr) = check_in(&proj, "main.pyfun");
+    assert!(!ok);
+    let helper = stderr
+        .find("-- module `Helper` (helper.pyfun) --")
+        .expect(&stderr);
+    let main = stderr
+        .find("-- module `Main` (main.pyfun) --")
+        .expect(&stderr);
+    assert!(helper < main, "{stderr}");
+    assert!(stderr.contains(" --> helper.pyfun:1:9\n"), "{stderr}");
+    assert!(stderr.contains(" --> main.pyfun:3:9\n"), "{stderr}");
+    assert!(stderr.ends_with("\n2 errors\n"), "{stderr}");
+}
+
+#[test]
+fn a_module_is_headed_with_the_file_it_was_read_from() {
+    // `_tool.pyfun` is the module `Tool`, and the module's name does not say
+    // where the leading underscore went.
+    let proj = Project::new(
+        "real_file",
+        &[
+            ("helper.pyfun", "let one = 1\n"),
+            (
+                "_tool.pyfun",
+                "import Helper\nlet unused = 1\nlet total = Helper.one + \"x\"\n",
+            ),
+        ],
+    );
+    let (ok, stderr) = check_in(&proj, "_tool.pyfun");
+    assert!(!ok);
+    assert!(
+        stderr.contains("-- module `Tool` (_tool.pyfun) --"),
+        "{stderr}"
+    );
+    assert!(stderr.contains(" --> _tool.pyfun:3:26\n"), "{stderr}");
+    assert!(!stderr.contains("(tool.pyfun)"), "{stderr}");
+}
+
+#[test]
+fn a_failed_declaration_is_not_reported_again_by_the_modules_that_use_it() {
+    let proj = Project::new(
+        "one_cause",
+        &[
+            (
+                "net.pyfun",
+                "extern connect: string -> int -> int = max\n\
+                 type Hello = { name: string, seed: int }\n\
+                 type Wire = Greeting Hello | Line Nope\n\
+                 let version = 2\n",
+            ),
+            (
+                "main.pyfun",
+                "import Net\n\
+                 let a = Net.connect \"host\" 7777\n\
+                 let b = Net.Hello { name = \"Ann\", seed = 1 }\n\
+                 let show m =\n\
+                 \x20 match m:\n\
+                 \x20   case Net.Line l: l\n\
+                 \x20   case Net.Greeting h: h.name\n\
+                 print Net.version\n",
+            ),
+        ],
+    );
+    let (ok, stderr) = check_in(&proj, "main.pyfun");
+    assert!(!ok);
+    assert!(
+        stderr.contains("-- module `Net` (net.pyfun) --"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("module `Main`"), "{stderr}");
+    assert!(stderr.ends_with("\n3 errors\n"), "{stderr}");
+}
+
+#[test]
+fn a_parse_error_names_the_token_it_met() {
+    for (source, found) in [
+        ("let f x =\n  let y = x\n  elif y\n", "found `elif`"),
+        ("let g x = x ** case\n", "found `case`"),
+        ("let k x = [x, as]\n", "found `as`"),
+        ("let m x = (% 2)\n", "found `%`"),
+        ("let p x = x +\nlet q = 1\n", "found end of statement"),
+    ] {
+        let proj = Project::new("token_names", &[("t.pyfun", source)]);
+        let (ok, stderr) = check_in(&proj, "t.pyfun");
+        assert!(!ok);
+        assert!(stderr.contains(found), "{source}: {stderr}");
+        assert!(!stderr.contains("`token`"), "{source}: {stderr}");
+    }
 }

@@ -39,6 +39,22 @@ pub fn parse(source: &str) -> Result<syntax::Module, CompileError> {
     parser::parse(tokens).map_err(CompileError::Parse)
 }
 
+/// Every lex and parse error in `source`, in source order, beside the module
+/// of the items that did parse. [`parse`] stops at the first; this is the
+/// recovering front end the editor uses, for a command line that reports them
+/// all in one run.
+pub fn syntax_errors(source: &str) -> (syntax::Module, Vec<CompileError>) {
+    let (tokens, lex_errors) = lexer::lex_recover(source);
+    let (module, parse_errors) = parser::parse_recover(tokens);
+    let mut errors: Vec<CompileError> = lex_errors
+        .into_iter()
+        .map(CompileError::Lex)
+        .chain(parse_errors.into_iter().map(CompileError::Parse))
+        .collect();
+    errors.sort_by_key(|e| (e.span().start, e.span().end));
+    (module, errors)
+}
+
 /// Lex, parse, then pretty-print `source` back to canonical Pyfun text.
 ///
 /// The printer fully parenthesizes compound expressions, so its output is

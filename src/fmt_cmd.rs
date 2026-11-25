@@ -119,7 +119,7 @@ fn report(name: &str, source: &str, error: &FormatError) {
             eprintln!("-- {name} --");
             eprintln!(
                 "{}",
-                diagnostics::render(source, Level::Error, &e.message(), e.span())
+                diagnostics::render_in(name, source, Level::Error, &e.message(), e.span())
             );
         }
         FormatError::Unsafe => eprintln!("error: {name}: {error}"),

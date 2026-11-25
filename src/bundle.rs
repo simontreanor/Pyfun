@@ -89,15 +89,7 @@ pub fn run(args: Args<'_>) -> ExitCode {
                 (vec![("main.py".to_string(), py)], "main.py".to_string())
             }
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    pyfun::diagnostics::render(
-                        &source,
-                        pyfun::diagnostics::Level::Error,
-                        &e.message(),
-                        e.span()
-                    )
-                );
+                crate::report_compile_error(args.entry, &source, &e);
                 return ExitCode::FAILURE;
             }
         },

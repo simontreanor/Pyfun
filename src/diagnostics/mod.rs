@@ -82,7 +82,18 @@ impl Level {
 ///    |                  ^^^^
 /// ```
 pub fn render(source: &str, level: Level, message: &str, span: Span) -> String {
+    render_at(None, source, level, message, span)
+}
+
+/// [`render`] for a diagnostic in a file: the location line names the file
+/// (`--> shapes.pyfun:1:18`), the form a terminal and an editor open.
+pub fn render_in(file: &str, source: &str, level: Level, message: &str, span: Span) -> String {
+    render_at(Some(file), source, level, message, span)
+}
+
+fn render_at(file: Option<&str>, source: &str, level: Level, message: &str, span: Span) -> String {
     let (line_no, col_no, line_start) = locate(source, span.start);
+    let file = file.map(|f| format!("{f}:")).unwrap_or_default();
     let line_text = source[line_start..]
         .split('\n')
         .next()
@@ -100,7 +111,7 @@ pub fn render(source: &str, level: Level, message: &str, span: Span) -> String {
 
     format!(
         "{level}: {message}\n\
-         {pad}--> {line_no}:{col_no}\n\
+         {pad}--> {file}{line_no}:{col_no}\n\
          {pad} |\n\
          {gutter} | {line_text}\n\
          {pad} | {indent}{caret}",
