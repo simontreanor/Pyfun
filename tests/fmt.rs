@@ -309,6 +309,75 @@ let pick c =
     );
 }
 
+#[test]
+fn a_leading_comma_list_keeps_its_columns_wherever_its_bracket_stands() {
+    // An item's argument one step in from the item, a comma under the brace
+    // of `Cell {`, and a comma set so that the fields after `with` line up.
+    let source = "\
+type Entry = { keys: List str, blurb: str }
+type Cmd = Help Entry | Quit Entry
+type Cell = { row: int, col: int, letter: str }
+
+let table =
+  [ Help
+      { keys = [\"HELP\", \"\"]
+      , blurb = \"this message\" }
+  , Quit
+      { keys = [\"QUIT\"]
+      , blurb = \"end the game now\" } ]
+
+let cell r c ch =
+  let up = String.upper ch
+  Cell { row = r, col = c
+       , letter = up }
+
+let moved cell =
+  { cell with row = cell.row + 1
+            , col = cell.col + 1 }
+";
+    assert_eq!(formatted(source), source);
+    // Indented again, the lines move with what they hang from.
+    let wide = "\
+type Entry = { keys: List str, blurb: str }
+type Cmd = Help Entry | Quit Entry
+type Cell = { row: int, col: int, letter: str }
+
+let table =
+    [ Help
+            { keys = [\"HELP\", \"\"]
+            , blurb = \"this message\" }
+    , Quit
+            { keys = [\"QUIT\"]
+            , blurb = \"end the game now\" } ]
+
+let cell r c ch =
+    let up = String.upper ch
+    Cell { row = r, col = c
+         , letter = up }
+
+let moved cell =
+    { cell with row = cell.row + 1
+              , col = cell.col + 1 }
+";
+    assert_eq!(formatted(wide), source);
+    // A comma under its brace, where the brace is two columns in.
+    let source = "let play g =\n  ({ g with x = 1\n   , y = 2 }, 3)\ntype G = { x: int, y: int }\n";
+    assert_eq!(formatted(source), source);
+    // A comma the author set under neither is set on a level, as before.
+    assert_eq!(
+        formatted(
+            "let cell r =\n  Cell { row = r\n      , col = r }\ntype Cell = { row: int, col: int }\n"
+        ),
+        "let cell r =\n  Cell { row = r\n    , col = r }\ntype Cell = { row: int, col: int }\n"
+    );
+    // A line deeper than an item goes on with the item only inside its list:
+    // after the list closes, a pipeline step takes its level.
+    assert_eq!(
+        formatted("let xs =\n  [ 1\n      + 2\n  , 3 ]\n      |> List.sum\n"),
+        "let xs =\n  [ 1\n      + 2\n  , 3 ]\n    |> List.sum\n"
+    );
+}
+
 // ---- the command ----
 
 fn pyfun_bin() -> &'static str {

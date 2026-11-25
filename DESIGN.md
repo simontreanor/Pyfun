@@ -3050,7 +3050,12 @@ bargain. What it settles is what is left to taste on a line:
   unit `5.0<m/s>` or a comparison), `|` and `.`.
 - **A leading-comma list** keeps the space that lines it up. When a line inside a bracket starts with
   a comma, the space after the opening bracket and the one before the closing bracket are the
-  author's, so `[ a` over `, b` stays in one column.
+  author's, so `[ a` over `, b` stays in one column. The columns are kept too, wherever the bracket
+  stands on its line: a comma set under its bracket stays under it (`Cell { row = r` over
+  `, letter = up }`), and in a record update a comma set so that the fields after `with` line up
+  keeps them lined up. A comma set under neither takes its level. A line deeper than an item of the
+  list goes on with that item, so it is one step in from the item (`[ Help` over its record) and not
+  from the `[` or `,` before it; once the list closes, the lines after it take their levels as before.
 - **Comments** are kept, each at the level of the code it goes with. A comment after code on a line has
   two spaces before it at least, and keeps more when the author lined a column of them up.
 - **Blank lines and the end**: one blank line at most between lines, none at the head of the file, no

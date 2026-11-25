@@ -99,6 +99,9 @@ struct Marks {
     /// Gaps closed whatever the tokens are: after the `*` of a `*rest`
     /// pattern.
     tight: Vec<bool>,
+    /// For each opening bracket, whether its list goes on with a leading
+    /// comma on a later line (`[ a` over `, b`).
+    leading_comma: Vec<bool>,
 }
 
 fn is_layout(tok: &Tok) -> bool {
@@ -143,6 +146,7 @@ impl Marks {
             braces: vec![None; real.len()],
             as_written: vec![false; real.len()],
             tight: vec![false; real.len() + 1],
+            leading_comma: vec![false; real.len()],
         };
         // Every bracket still open: its opener, and whether a line inside it
         // has started with a comma.
@@ -175,6 +179,7 @@ impl Marks {
                 Tok::RBrace | Tok::RParen | Tok::RBracket => {
                     if let Some((opener, leading_comma)) = open.pop() {
                         marks.braces[i] = marks.braces[opener];
+                        marks.leading_comma[opener] = leading_comma;
                         // `[ a` over `, b` lines the elements up, and the
                         // space after the bracket is what does it: the layout
                         // is the author's, like the line breaks. Spaced braces
@@ -331,14 +336,15 @@ impl Columns {
     }
 
     /// The column the next line, which starts at `col` in the source, is
-    /// written at.
-    fn place(&mut self, col: usize) -> usize {
+    /// written at, and whether the line opened a level of its own (the last
+    /// of `levels`, which [`Writer::indent_line`] may set elsewhere).
+    fn place(&mut self, col: usize) -> (usize, bool) {
         let line = self.placed;
         self.placed += 1;
         if self.hanging > 0 {
             self.hanging -= 1;
             let &(from, to) = self.levels.last().expect("the margin is always a level");
-            return to + col.saturating_sub(from);
+            return (to + col.saturating_sub(from), false);
         }
         while self.levels.len() > 1 && self.levels.last().is_some_and(|&(from, _)| from > col) {
             self.levels.pop();
@@ -350,7 +356,7 @@ impl Columns {
             if let Some(last) = self.bracketed.last_mut() {
                 *last = inside;
             }
-            return to;
+            return (to, false);
         }
         let under_bracketed = self.bracketed.last().copied().unwrap_or(false);
         let hanging = if under_bracketed {
@@ -360,11 +366,18 @@ impl Columns {
         };
         if hanging > 0 {
             self.hanging = hanging - 1;
-            return to + (col - from);
+            return (to + (col - from), false);
         }
         self.levels.push((col, to + INDENT));
         self.bracketed.push(inside);
-        to + INDENT
+        (to + INDENT, true)
+    }
+
+    /// Set the level the last line opened at written column `to`.
+    fn reopen(&mut self, to: usize) {
+        if let Some(last) = self.levels.last_mut() {
+            last.1 = to;
+        }
     }
 
     /// How many lines, from `line` on, hang from the level at source column
@@ -422,6 +435,18 @@ struct Writer<'a> {
     reindent: bool,
     columns: Columns,
     out: String,
+    /// The column each token written so far was written at.
+    written: Vec<usize>,
+    /// The brackets open after the last token written, innermost last.
+    open: Vec<usize>,
+    /// When the line just written is an item of a leading-comma list (it
+    /// starts `[ Help` or `, Quit`): the list's bracket and the item's first
+    /// token. A line under it that goes deeper continues the item.
+    item: Option<(usize, usize)>,
+    /// The levels opened under an item of a list that is still open: the
+    /// level's source column, the list's bracket, and the column
+    /// [`Columns::place`] gave it, which it goes back to when the list closes.
+    items: Vec<(usize, usize, usize)>,
 }
 
 impl<'a> Writer<'a> {
@@ -474,11 +499,15 @@ impl<'a> Writer<'a> {
         let marks = Marks::of(&real, &places);
         Writer {
             source,
-            real,
             marks,
             reindent,
             columns: Columns::new(lines, inside),
             out: String::with_capacity(source.len()),
+            written: Vec::with_capacity(real.len()),
+            open: Vec::new(),
+            item: None,
+            items: Vec::new(),
+            real,
         }
     }
 
@@ -490,7 +519,7 @@ impl<'a> Writer<'a> {
             let token = self.real[i];
             let gap = &self.source[end..token.span.start];
             if i == 0 || gap.contains('\n') {
-                self.between_lines(gap, i == 0, Some(token.span.start))?;
+                self.between_lines(gap, i == 0, Some(i))?;
             } else {
                 if !gap.bytes().all(|b| b == b' ' || b == b'\t') {
                     return None;
@@ -511,6 +540,15 @@ impl<'a> Writer<'a> {
                 if space {
                     self.out.push(' ');
                 }
+            }
+            let line_start = self.out.rfind('\n').map_or(0, |nl| nl + 1);
+            self.written.push(self.out.len() - line_start);
+            match token.tok {
+                Tok::LParen | Tok::LBracket | Tok::LBrace => self.open.push(i),
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    self.open.pop();
+                }
+                _ => {}
             }
             let text = &self.source[token.span.start..token.span.end];
             // A doc comment's token runs to the end of its line, spaces and all.
@@ -538,9 +576,138 @@ impl<'a> Writer<'a> {
         at - self.source[..at].rfind('\n').map_or(0, |nl| nl + 1)
     }
 
+    /// Whether nothing but spaces stands between tokens `a` and `b`.
+    fn same_line(&self, a: usize, b: usize) -> bool {
+        !self.source[self.real[a].span.end..self.real[b].span.start].contains('\n')
+    }
+
+    /// The column the line that starts with token `i` (at source column
+    /// `col`) is written at. The level it takes is [`Columns::place`]'s, with
+    /// two exceptions for a leading-comma list, whose layout is the author's
+    /// alignment:
+    ///
+    /// - a line that starts with a comma the author set under its bracket
+    ///   stays under it, wherever the bracket stands on its line
+    ///   ([`Self::comma_column`]);
+    /// - a line deeper than an item of the list (`[ Help`, `, Quit`), still
+    ///   inside the list, goes on with that item, so its level is one step in
+    ///   from the item's first token and not from the `[` or `,` before it.
+    ///   The level is set back where [`Columns::place`] put it once the list
+    ///   closes, so nothing after the list moves.
+    fn indent_line(&mut self, i: usize, col: usize) -> usize {
+        self.settle_items();
+        let (mut indent, opened) = self.columns.place(col);
+        let levels = &self.columns.levels;
+        self.items
+            .retain(|&(from, ..)| !(opened && from == col) && levels.iter().any(|l| l.0 == from));
+        let above = self.item.take();
+        if let Some(target) = self.comma_column(i) {
+            indent = target;
+        } else if opened
+            && self.real[i].tok != Tok::Comma
+            && let Some((bracket, item)) = above
+            && self.open.contains(&bracket)
+        {
+            self.items.push((col, bracket, indent));
+            indent = self.written[item] + INDENT;
+            self.columns.reopen(indent);
+        }
+        self.item = self.item_of_line(i);
+        indent
+    }
+
+    /// Set each level opened under an item of a list that has since closed
+    /// back where [`Columns::place`] put it.
+    fn settle_items(&mut self) {
+        let open = &self.open;
+        let levels = &mut self.columns.levels;
+        self.items.retain(|&(from, bracket, natural)| {
+            if open.contains(&bracket) {
+                return true;
+            }
+            if let Some(level) = levels.iter_mut().find(|l| l.0 == from) {
+                level.1 = natural;
+            }
+            false
+        });
+    }
+
+    /// Where a line that starts with the comma at token `i` is written, when
+    /// the author lined it up: under its bracket, whose list starts on the
+    /// bracket's own line (`Cell { row = r` over `, letter = up }`), or, in a
+    /// record update, with the field after the comma under the first field
+    /// after `with` (`{ cell with row = …` over `, col = …`). This is the
+    /// rule that keeps `[ a` over `, b` in one column, carried to a bracket
+    /// that stands anywhere on its line. `None` for any other line, which
+    /// takes its level.
+    fn comma_column(&self, i: usize) -> Option<usize> {
+        if self.real[i].tok != Tok::Comma {
+            return None;
+        }
+        let &bracket = self.open.last()?;
+        let first = bracket + 1;
+        if first >= i || !self.same_line(bracket, first) {
+            return None;
+        }
+        let at = |t: usize| self.column(self.real[t].span.start);
+        if at(i) == at(bracket) {
+            return Some(self.written[bracket]);
+        }
+        if let Some(field) = self.field_after_with(bracket)
+            && i + 1 < self.real.len()
+            && self.same_line(i, i + 1)
+            && at(i + 1) == at(field)
+        {
+            // What follows a comma is one space on.
+            return Some(self.written[field].saturating_sub(2));
+        }
+        None
+    }
+
+    /// The first token after the `with` of the record update opened by the
+    /// brace at `bracket`, when both are on the brace's line.
+    fn field_after_with(&self, bracket: usize) -> Option<usize> {
+        if self.real[bracket].tok != Tok::LBrace {
+            return None;
+        }
+        let mut depth = 0usize;
+        let mut j = bracket + 1;
+        while j < self.real.len() && self.same_line(j - 1, j) {
+            match self.real[j].tok {
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace if depth == 0 => return None,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
+                Tok::With if depth == 0 => {
+                    let field = j + 1;
+                    return (field < self.real.len() && self.same_line(j, field)).then_some(field);
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        None
+    }
+
+    /// When the line that starts with token `i` is an item of a leading-comma
+    /// list, the list's bracket and the item's first token: the line starts
+    /// with the comma, or with the bracket itself, and the item follows on it.
+    fn item_of_line(&self, i: usize) -> Option<(usize, usize)> {
+        let item = i + 1;
+        if item >= self.real.len() || !self.same_line(i, item) {
+            return None;
+        }
+        match self.real[i].tok {
+            Tok::Comma => self.open.last().map(|&bracket| (bracket, item)),
+            Tok::LParen | Tok::LBracket | Tok::LBrace if self.marks.leading_comma[i] => {
+                Some((i, item))
+            }
+            _ => None,
+        }
+    }
+
     /// Write what lies between two tokens on different lines: the comment that
     /// closes the first one's line, the comment lines and blank lines between,
-    /// and the indentation of the second one's line (`next`, the offset of its
+    /// and the indentation of the second one's line (`next`, the index of its
     /// first token; `None` at the end of the file). `opening` is the stretch
     /// before the first token, which starts on a line of its own.
     fn between_lines(&mut self, gap: &str, opening: bool, next: Option<usize>) -> Option<()> {
@@ -575,14 +742,11 @@ impl<'a> Writer<'a> {
         // that follows, so place that one first.
         let before = self.columns.levels.clone();
         let above = before.last().map_or(0, |&(from, _)| from);
-        let next_col = next.map(|at| self.column(at));
-        let next_indent = next_col.map(|col| {
-            if self.reindent {
-                self.columns.place(col)
-            } else {
-                col
-            }
-        });
+        let next_col = next.map(|i| self.column(self.real[i].span.start));
+        let next_indent = match (next, next_col) {
+            (Some(i), Some(col)) if self.reindent => Some(self.indent_line(i, col)),
+            _ => next_col,
+        };
         let mut blank = false;
         for line in lines {
             let text = line.trim();
