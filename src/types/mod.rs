@@ -4843,7 +4843,8 @@ fn plan_items(module: &Module) -> ItemPlan {
 
 /// The top-level bindings of a module while they are inferred. A cycle of
 /// functions is inferred at its first member together with what it reads from
-/// between its members; each item's names still enter scope at its own line.
+/// between its members; each item's names still enter scope at its own line,
+/// for the cycle's members too.
 struct TopItems<'a> {
     module: &'a Module,
     plan: ItemPlan,
@@ -4879,17 +4880,38 @@ impl<'a> TopItems<'a> {
         }
         let module = self.module;
         if let Some(members) = self.plan.groups.get(&idx).cloned() {
-            // The cycle sees what is in scope at its first member, and what it
-            // reads from between its members. Those items do not read the cycle,
-            // so they can be inferred first, in the order they are written.
+            // The cycle is inferred against what is in scope at its first member
+            // and what it reads from between its members. Those items do not read
+            // the cycle, so they can be inferred first, in the order they are written.
             let mut group_env = env.clone();
-            for item in self.plan.ahead.get(&idx).cloned().unwrap_or_default() {
-                let item = self.plan.leader_of.get(&item).copied().unwrap_or(item);
+            // The names each of those items binds, with the line it is written on.
+            let mut between: Vec<(usize, Vec<String>)> = Vec::new();
+            for at in self.plan.ahead.get(&idx).cloned().unwrap_or_default() {
+                let item = self.plan.leader_of.get(&at).copied().unwrap_or(at);
                 self.infer(item, &group_env, inf, errors, top_effects);
                 for (name, scheme) in self.bound.get(&item).into_iter().flatten() {
                     group_env.insert(name.clone(), scheme.clone());
                 }
+                let names = match &module.items[at] {
+                    Item::Let(b) => b.bound_names(),
+                    _ => (self.bound.get(&item).into_iter().flatten())
+                        .map(|(name, _)| name.clone())
+                        .collect(),
+                };
+                between.push((at, names));
             }
+            // Scope stays in source order: a member reads what is written above
+            // it, so a name from below its own line means what it meant before
+            // the cycle began (nothing, as a rule).
+            let below: Vec<Vec<(String, Option<Scheme>)>> = members
+                .iter()
+                .map(|&mi| {
+                    (between.iter().filter(|(at, _)| *at > mi))
+                        .flat_map(|(_, names)| names)
+                        .map(|name| (name.clone(), env.get(name).cloned()))
+                        .collect()
+                })
+                .collect();
             let group: Vec<&LetBinding> = members
                 .iter()
                 .map(|&mi| match &module.items[mi] {
@@ -4898,7 +4920,7 @@ impl<'a> TopItems<'a> {
                 })
                 .collect();
             let mut bound = Vec::new();
-            for (name, res) in inf.infer_mutual_group(&group, &group_env) {
+            for (name, res) in inf.infer_mutual_group(&group, &group_env, &below) {
                 match res {
                     Ok(scheme) => bound.push((name, scheme)),
                     Err(e) => {
@@ -8046,10 +8068,15 @@ impl Infer {
     /// to the rest of the module. Extends `infer_binding`'s single-binding
     /// self-recursion across the group. Returns one `(name, scheme-or-error)` per
     /// member, in the given order. Callers pass only all-function groups.
+    ///
+    /// `below` holds, per member, the names of `outer_env` that are written below
+    /// that member's own line, each with what it meant above the group (if
+    /// anything). The member's body sees that older meaning.
     fn infer_mutual_group(
         &mut self,
         group: &[&LetBinding],
         outer_env: &Env,
+        below: &[Vec<(String, Option<Scheme>)>],
     ) -> Vec<(String, Result<Scheme, TypeError>)> {
         // Pre-bind each member's name at a fresh monomorphic type.
         let mut body_env = outer_env.clone();
@@ -8064,9 +8091,15 @@ impl Infer {
         }
         // Infer each body against the group env plus its own params; tie the knot.
         let mut inferred: Vec<Result<(Ty, Effect), TypeError>> = Vec::with_capacity(group.len());
-        for (b, self_ty) in group.iter().zip(&self_tys) {
+        for ((b, self_ty), below) in group.iter().zip(&self_tys).zip(below) {
             let outer_eff = std::mem::replace(&mut self.cur_eff, Effect::pure());
             let mut fn_env = body_env.clone();
+            for (name, before) in below {
+                match before {
+                    Some(scheme) => fn_env.insert(name.clone(), scheme.clone()),
+                    None => fn_env.remove(name),
+                };
+            }
             let mut param_tys = Vec::with_capacity(b.params.len());
             let mut bind_err = None;
             for p in &b.params {

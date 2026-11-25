@@ -1489,11 +1489,16 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   (which would clash with the boolean `and`). A value cycle (`let a = b\nlet b = a`) is not a function
   group, so it stays rejected; and a one-way forward reference between *independent* (non-cyclic) bindings
   still requires declare-before-use. Lowering is unchanged (Python module-level `def`s resolve names at
-  call time). **Lines between a cycle's members.** A cycle cannot run until its last member is defined,
-  so everything written above that line is ready for it: a function, a value or an in-file module
-  between the members is in scope for the whole cycle (`plan_items` finds what the cycle reads there, and
-  `TopItems` infers it ahead of the cycle). Such a name still enters scope for every *other* line at the
-  place it is written. The cycle's own names are in scope from its first member on, but Python defines
+  call time). **Lines between a cycle's members.** A function, a value or an in-file module written
+  between the members is in scope for the members below it, as it is for any other line below it. The
+  cycle is inferred as one, at its first member, so `plan_items` finds what the cycle reads from between
+  its members and `TopItems` infers that ahead of the cycle. Scope stays in source order all the same:
+  such a name enters scope at the place it is written, for the cycle's members as for every other line,
+  so a member written above the helper that uses it gets the ordinary `unbound name`. The one forward
+  reference Pyfun has is between the functions of a cycle themselves. (A cycle cannot run until its last
+  member is defined, so letting every member read the helper would be safe when the program ran. It is
+  left out because the same line in a function outside a cycle is an error, and one rule for where a name
+  may be used is easier to hold than two.) The cycle's own names are in scope from its first member on, but Python defines
   each function where it is written, so a top-level value or expression between the members that uses one
   of them is an error (`is_even` cannot be used yet: it needs `is_odd`, which is defined below this
   line); it would be a `NameError` when the program ran. A function written between the members may call
