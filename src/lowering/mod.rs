@@ -1373,7 +1373,7 @@ impl Lowerer {
                     // Records lower to a single class (ordering rank 0).
                     TypeDeclKind::Record(fields) => {
                         classes.push(PyStmt::ClassDef {
-                            name: decl.name.clone(),
+                            name: py_record_class(&decl.name),
                             fields: fields.iter().map(|f| py_field_name(&f.name)).collect(),
                             field_types: fields.iter().map(|f| py_annotation(&f.ty)).collect(),
                             order: ordered.then_some(0),
