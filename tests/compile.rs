@@ -2838,8 +2838,8 @@ fn e2e_set_traversals() {
             ("halved", "[0, 1]"),
             ("kept", "[3, 4, 5]"),
             ("total", "13"),
-            ("any", "True"),
-            ("all", "True"),
+            ("any_", "True"),
+            ("all_", "True"),
             ("sub", "True"),
             ("sup", "True"),
             ("biggest", "Some(5)"),
@@ -2874,8 +2874,8 @@ fn e2e_map_traversals() {
             ("shouted", "[(1, 'one!'), (2, 'two!'), (3, 'three!')]"),
             ("kept", "[(2, 'two'), (3, 'three')]"),
             ("key_sum", "6"),
-            ("any", "True"),
-            ("all", "True"),
+            ("any_", "True"),
+            ("all_", "True"),
             (
                 "joined",
                 "[(1, 'one'), (2, 'two'), (3, 'THREE'), (4, 'four')]",
@@ -3184,8 +3184,8 @@ fn e2e_seq_consuming_members() {
             ("empty", "True"),
             ("full", "False"),
             ("n", "3"),
-            ("any", "True"),
-            ("all", "True"),
+            ("any_", "True"),
+            ("all_", "True"),
             ("has", "True"),
             ("total", "6"),
             ("found", "Some(2)"),
@@ -3278,8 +3278,8 @@ fn e2e_list_transform_query_and_order() {
         &[
             ("summed", "[11, 22]"),
             ("ix", "[(0, 'a'), (1, 'b')]"),
-            ("any", "True"),
-            ("all", "True"),
+            ("any_", "True"),
+            ("all_", "True"),
             ("at", "Some(2)"),
             ("missing", "None_"),
             ("desc", "[5, 4, 3, 1, 1]"),
@@ -8826,10 +8826,24 @@ fn e2e_a_built_in_used_above_a_binding_of_its_name() {
         let y = max 1 2
         ";
     let py = pyfun::compile(src).unwrap();
-    assert!(py.contains("import builtins\n"), "{py}");
-    assert!(py.contains("return builtins.max(a, b)"), "{py}");
-    assert!(py.contains("def max(a, b):"), "{py}");
+    // The emitter calls `max` itself (`List.max`), so the file's own is
+    // `max_` and the builtin keeps its name.
+    assert!(py.contains("return max(a, b)"), "{py}");
+    assert!(py.contains("def max_(a, b):"), "{py}");
     run_and_check(src, &[("x", "2"), ("y", "3")]);
+    // `round` is a name the emitter never calls, so the file's own keeps it
+    // and the built-in above it is read from where Python keeps it.
+    let src = "
+        let near x = round x
+        let round x = x + 0.5
+        let x = near 1.2
+        let y = round 1.0
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("import builtins\n"), "{py}");
+    assert!(py.contains("return builtins.round(x)"), "{py}");
+    assert!(py.contains("def round(x):"), "{py}");
+    run_and_check(src, &[("x", "1"), ("y", "1.5")]);
     run_and_check(
         "
         let root = sqrt 4.0
@@ -9585,4 +9599,109 @@ fn only_the_doc_block_that_touches_a_declaration_documents_it() {
         "{python}"
     );
     assert!(python.contains("def other(x):\n    return x"), "{python}");
+}
+
+// ---------- a program's name never takes one the emitted Python calls (#225) ----------
+
+#[test]
+fn e2e_a_binding_named_like_a_builtin_the_emitter_calls() {
+    // Each of these names is one a standard-library member is lowered to a
+    // call of. The program's own binding is written with a trailing
+    // underscore, so the call still finds the builtin.
+    let src = "
+        let min a b = a
+        let max = 10
+        let any = 1
+        let all = 2
+        let enumerate = 3
+        let getattr = 4
+        let format = 5
+        type P = { x: int }
+        let a = List.min [3, 1, 2]
+        let b = List.max [3, 1, 2]
+        let c = List.exists (fun x -> x > 2) [1, 3]
+        let d = List.forall (fun x -> x > 0) [1, 3]
+        let e = List.indexed [\"a\"]
+        let f = Encode.auto (P { x = getattr })
+        let g = min 9 8 + max + any + all + enumerate + format
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("def min_(a, b):"), "{py}");
+    assert!(py.contains("max_ = 10"), "{py}");
+    run_and_check(
+        src,
+        &[
+            ("a", "Some(1)"),
+            ("b", "Some(3)"),
+            ("c", "True"),
+            ("d", "True"),
+            ("e", "[(0, 'a')]"),
+            ("f", "{\"x\": 4}"),
+            ("g", "30"),
+        ],
+    );
+    // A local of such a name is renamed the same way, and the prelude's own
+    // `max` and `min` keep the builtin's name wherever the file binds none.
+    run_and_check(
+        "
+        let widest xs =
+          let max = Option.with_default 0 (List.max xs)
+          max + 1
+        let a = widest [1, 5]
+        let b = max 3 4
+        let c = min 3 4
+        ",
+        &[("a", "6"), ("b", "4"), ("c", "3")],
+    );
+}
+
+#[test]
+fn e2e_a_binding_named_like_a_module_the_emitter_imports() {
+    // `functools.partial` is how a partial application is emitted, and
+    // `json.loads` is under every decoder. A binding of the module's name
+    // would take its place at module scope.
+    run_and_check(
+        "
+        let functools = 1
+        let itertools = 2
+        let json = 3
+        let add a b = a + b
+        let inc = add 1
+        let a = inc functools
+        let b = Seq.to_list (Seq.take itertools (Seq.of_list [7, 8, 9]))
+        let c = Decode.decode_string Decode.int \"5\"
+        let d = json
+        ",
+        &[("a", "2"), ("b", "[7, 8]"), ("c", "Ok(5)"), ("d", "3")],
+    );
+}
+
+#[test]
+fn e2e_a_constructor_named_like_an_exception_the_emitter_raises() {
+    // A decoder raises `ValueError`, and a `match` nothing took raises
+    // `RuntimeError`. A constructor of either name is its own class.
+    let src = "
+        type E = ValueError | RuntimeError int | Other
+        let show e =
+          match e:
+            case ValueError: \"value\"
+            case RuntimeError n: f\"runtime {n}\"
+            case Other: \"other\"
+        let a = Decode.decode_string Decode.int \"\\\"x\\\"\"
+        let b = show ValueError
+        let c = show (RuntimeError 7)
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("class ValueError_:"), "{py}");
+    run_and_check(
+        src,
+        &[
+            (
+                "a",
+                "Error(_Exception('ValueError', 'expected an int, got str'))",
+            ),
+            ("b", "value"),
+            ("c", "runtime 7"),
+        ],
+    );
 }

@@ -6203,3 +6203,21 @@ fn a_punned_field_is_checked_as_the_name_it_reads() {
         "record `Rect` has no field `depth`",
     );
 }
+
+// ---------- the compiler's own names (#225) ----------
+
+#[test]
+fn a_name_beginning_pf_is_the_compilers() {
+    // Every helper, temporary and import alias the compiler writes into the
+    // emitted Python begins `_pf_`, so a program cannot bind or read one.
+    for source in [
+        "let _pf_map = 1",
+        "let f _pf_x = _pf_x",
+        "let g x =\n  let _pf_t0 = x\n  _pf_t0",
+        "type P = { _pf_field: int }",
+    ] {
+        assert_error_contains(source, "is a name of the compiler's");
+    }
+    // An underscore, or `_p`, begins an ordinary name.
+    assert!(pyfun::check("let _pfx = 1\nlet _p = _pfx\nlet pf_map = _p").is_ok());
+}

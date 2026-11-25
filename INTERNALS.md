@@ -836,14 +836,24 @@ Two mechanisms, both in `src/lowering/mod.rs`, for the two shapes of collision b
 and the namespace the emitter shares with them.
 
 **Mangling** (`py_value_name`, and `py_field_name` for record attributes) is a pure function over
-three fixed lists — `PY_KEYWORDS`, `PY_EMITTED_BUILTINS` (the non-type builtins the emitter calls:
-`len`, `map`, `filter`, `isinstance`, …) and `PY_BUILTIN_TYPES` (also the legal roots of a dotted
-`extern` target) — appending `_` to any name they claim. Being a pure function is what lets a
-definition and a cross-module reference agree without coordination, so it must stay one. Two names
-are deliberately absent: `print`/`abs`/`min`/`max`/`round` lower name-for-name from identically
-spelled *Pyfun* prelude bindings, so a user binding shadows the Pyfun name too and the checker settles
-it; and `id` never reaches the output (Pyfun's `id` is `_pf_id`), so mangling `let id x = x` would be
-a tax with no collision behind it.
+four fixed lists — `PY_KEYWORDS`, `PY_EMITTED_BUILTINS` (the non-type builtins the emitter calls:
+`len`, `map`, `any`, `max`, `getattr`, …), `PY_EMITTED_MODULES` (the modules it imports for itself
+and names directly: `functools`, `json`, `itertools`, …) and `PY_BUILTIN_TYPES` (also the legal
+roots of a dotted `extern` target) — appending `_` to any name they claim. Being a pure function is
+what lets a definition and a cross-module reference agree without coordination, so it must stay
+one. `py_ctor_name` and `py_record_class` do the same for a class named like one the emitter names
+(`PY_EMITTED_CLASSES`: the exceptions it raises and the names typed output imports). Two unit tests
+in `lowering/mod.rs` keep the lists complete: they read the lowering's own source for the builtins
+it names as string literals and the modules it imports, and fail with the name of one no list has.
+
+`min` and `max` are on the builtin list and are prelude names too, so `lower_var` returns the plain
+name for a use that means the prelude's (the file's own `max` being `max_`). `print`, `abs` and
+`round` stay off it, since the emitter calls none of them itself: they lower name-for-name from the
+identically spelled Pyfun binding, and a use of the prelude's above the file's own binding is read
+from `builtins` (`scope::settle` marks it). `id` never reaches the output (Pyfun's `id` is
+`_pf_id`), so mangling `let id x = x` would be a tax with no collision behind it. A name beginning
+`_pf_` is refused by the lexer, which is what keeps the compiler's helpers, temporaries and import
+aliases apart from a program's names.
 
 It is applied **only where a name is written into the Python IR** — parameters (`py_param_names`),
 `lower_binding_as`, `lower_var`, pattern captures, `<-` targets, `nonlocal`/`global` lists, CE
