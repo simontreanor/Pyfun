@@ -9705,3 +9705,42 @@ fn e2e_a_constructor_named_like_an_exception_the_emitter_raises() {
         ],
     );
 }
+
+#[test]
+fn e2e_a_record_named_like_a_class_the_emitter_names() {
+    // A record is one class, defined and built under one name. Named like an
+    // exception the emitter raises, or like a name typed output imports, that
+    // name has the trailing underscore everywhere: the class, a literal, a
+    // pattern and an update.
+    let src = "
+        type ValueError = { why: str }
+        type Iterable = { items: List int }
+        type Callable = { name: str, arity: int }
+        let v = ValueError { why = \"bad\" }
+        let show e =
+          match e:
+            case ValueError { why }: why
+        let one = Iterable { items = [1] }
+        let c = Callable { name = \"f\", arity = 1 }
+        let c2 = { c with arity = 2 }
+        let a = show v
+        let b = one.items
+        let d = Decode.decode_string Decode.int \"\\\"x\\\"\"
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("class ValueError_:"), "{py}");
+    assert!(py.contains("class Iterable_:"), "{py}");
+    assert!(!py.contains("class Iterable:"), "{py}");
+    run_and_check(
+        src,
+        &[
+            ("a", "bad"),
+            ("b", "[1]"),
+            ("c2", "Callable_(name='f', arity=2)"),
+            (
+                "d",
+                "Error(_Exception('ValueError', 'expected an int, got str'))",
+            ),
+        ],
+    );
+}
