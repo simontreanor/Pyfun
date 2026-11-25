@@ -32,6 +32,10 @@
 - [Opaque types](learn/22-opaque-types.md)
 - [Keyword arguments at the boundary](learn/23-keyword-arguments.md)
 
+# Upgrading
+
+- [From 0.10 to 0.11](upgrading/0.10-to-0.11.md)
+
 # For educators
 
 - [The module at a glance](educators/README.md)
