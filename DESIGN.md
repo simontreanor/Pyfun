@@ -2928,13 +2928,20 @@ with an element per line, a short `match` arm on one line and a long one on two.
 bargain. What it settles is what is left to taste on a line:
 
 - **Indentation**: two spaces a level, as the lessons and examples are written. A line that continues a
-  statement (inside brackets, or led by an operator) is one level in from where it hung.
+  statement (inside brackets, or led by an operator) is one level in from where it hung. Lines hung at
+  three depths keep them: an `else` set under its `if` with the branch deeper still, or an argument set
+  under the first one. A line that steps back to a column between two levels marks such a layout, and
+  the lines hung from the same line keep their columns from it and move with it.
 - **Spaces between tokens**: one around `=`, `==`, `|>`, `->`, `+`, `*`, `/` and their kind; one after
   a comma and none before; none inside `( )` and `[ ]`; a `:` hugs what is before it. Braces are spaced
   by what they hold: `Rect { width = 2.0 }`, `{ p with x = 1 }`, `async { return 1 }` and a record
-  type's `{ x: int }` are spaced, a map `{"a": 1}`, a set `{1, 2}` and an arrow's effects `->{io}` are
-  tight. What reads two ways is left as written, a space kept as one space and none kept as none: `-`
-  (a negative number or a subtraction), `<` and `>` (a unit `5.0<m/s>` or a comparison), `|` and `.`.
+  type's `{ x: int }` (on the `type` line or the one after) are spaced, a map `{"a": 1}`, a set
+  `{1, 2}` and an arrow's effects `->{io}` are tight. What reads two ways is left as written, a space
+  kept as one space and none kept as none: `-` (a negative number or a subtraction), `<` and `>` (a
+  unit `5.0<m/s>` or a comparison), `|` and `.`.
+- **A leading-comma list** keeps the space that lines it up. When a line inside a bracket starts with
+  a comma, the space after the opening bracket and the one before the closing bracket are the
+  author's, so `[ a` over `, b` stays in one column.
 - **Comments** are kept, each at the level of the code it goes with. A comment after code on a line has
   two spaces before it at least, and keeps more when the author lined a column of them up.
 - **Blank lines and the end**: one blank line at most between lines, none at the head of the file, no

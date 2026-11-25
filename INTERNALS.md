@@ -711,15 +711,21 @@ engine falls back to `eval` and Python's own traceback.
 the source by its span, and what is written again is the text between tokens. A gap on one line becomes
 one space or none (`wants_space`, a table over the pair of tokens, with three marks worked out
 beforehand in `Marks::of`: how each pair of braces is spaced (`brace_kind`), the gaps left as written
-inside a unit or a `measure`, and the gap closed after the `*` of a `*rest` pattern). A gap that
-crosses a line (`Writer::between_lines`) carries the comment that closes the first line, the comment
-and blank lines between, and the indentation of the next line.
+inside a unit or a `measure` and just inside a bracket that has a line starting with a comma, and the
+gap closed after the `*` of a `*rest` pattern). `Writer::new` records a `Place` for each token: whether
+it opens a statement, whether it starts its line, and whether it stands in a `type` declaration, which
+runs from a `type` that opens a statement to the next statement at its depth. A gap that crosses a line
+(`Writer::between_lines`) carries the comment that closes the first line, the comment and blank lines
+between, and the indentation of the next line.
 
 Indentation is a mapping of columns (`Columns`): a stack of `(column in the source, column written)`,
 where a line deeper than the top opens a level one step in and a shallower line pops to its level. The
 offside rule reads columns, so equal columns staying equal and deeper ones staying deeper keeps the
-blocks. A comment line takes the level of the code after it, or of the block above when it is deeper
-than that code.
+blocks. `Columns` holds the column of every line, so before it opens a level it reads ahead over the
+lines deeper than the level in hand (`hanging_from`). When one of them steps back to a column between
+that level and one opened since, a stack of one-step levels would write two source columns at one, so
+those lines are placed by their distance from the level in hand and open no levels. A comment line
+takes the level of the code after it, or of the block above when it is deeper than that code.
 
 `fmt::format` parses the source, writes the text, and parses that: the two modules must be equal (a
 `NodeSpan` compares equal to any other, so positions do not count). A mismatch retries with the
