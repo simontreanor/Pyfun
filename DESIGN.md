@@ -297,13 +297,60 @@ the moment anything in the `def` assigns it: such a `let` is renamed only when s
 name in that function means a binding *outside* it (an enclosing function's, a module-level one, a
 builtin) and sits before the `let` or in its own value or in a closure made before it, where Python
 would raise `UnboundLocalError` or read the wrong slot. Rebinding a parameter or an earlier `let` of
-the same function in sequence is exactly what Python does too, so that is emitted as itself, and a
-top-level `let` is a global and never renames. A computation expression's body is its own Python
+the same function in sequence is exactly what Python does too, so that is emitted as itself. A
+top-level `let` is a global and is outside this rule (the next paragraph is about those). A computation expression's body is its own Python
 function, and its `let`/`let!` targets are root-level binders of it under the same rule: a
 `let! n = …` in an `option { }` that had already read an outer `n` is emitted as `_n`. A nested `let x = x + 1` reads the outer `x` in its
 value and binds the fresh name, as `_x = x + 1`. A renamed nested function is defined under its fresh name and recurses under
 it, and a renamed `let mut` is assigned under it, including from a closure's `nonlocal`. Mechanics
 in `INTERNALS.md`.
+
+**A top-level name bound more than once.** A file may bind one name at its top level again, and a
+`let` may take the name of a built-in (`max`, `print`, `sqrt`) or of an `extern`. Each use means the
+nearest binding above it (§7.1), so a function written between two bindings of `helper` means the
+first. Python has one module global per name and looks it up when the function runs, by which time the
+name is the second's, so a program the checker accepted would run the wrong function. The compiler
+therefore gives every binding a global of its own. The **last** binding keeps the name as written,
+since that is the one the rest of the program, another module and a Python caller mean by it, and each
+earlier one is emitted as `_helper` (`_helper2`, … while that is taken) together with every use that
+means it:
+
+```pyfun
+let helper s = String.len s
+let f n = helper "ab" + n
+let helper n = n + 1
+```
+
+```python
+def _helper(s):
+    return len(s)
+def f(n):
+    return _helper("ab") + n
+def helper(n):
+    return n + 1
+```
+
+An `extern` under a later `let` of its name is renamed the same way. A built-in cannot be renamed, so a
+use of one above the file's own binding of its name is emitted where the module cannot reach it:
+`builtins.max(a, b)` for the ones that are Python builtins, and the usual `math.sqrt` or `_pf_id` for
+the rest. The members of an in-file module follow the rule among themselves (`M__a`, then `M_a`), and a
+member written above a sibling of some name still means the outer binding of that name. Since no two
+bindings share a name after this, what the lowering knows about a name (its arity, that it is a
+function, a `mut`, a named decoder) is known per binding, and typed output annotates each one with its
+own type. A file that binds each name once, which is nearly every file, is emitted exactly as before.
+The rewrite is `scope::settle`, driven by the `TopScope` the checker resolves names with, so the two
+cannot read a name differently. (Rejected: making a second top-level binding an error. A session binds
+names again as a matter of course, and a script that refines a value a step at a time, `let total =
+total + tax`, is ordinary code. The warning of §3 still says that a second top-level `let` of a name is
+rarely meant.)
+
+**In a session** the rule is turned round. The REPL and the notebook kernel compile a source that grows
+an entry at a time and send Python only what has not run yet, so a binding's name must not depend on
+what is entered after it. There the *first* binding keeps the name (a built-in counts as the first) and
+each later one is `name·2`, `name·3`, …: a middle dot, which no Pyfun source can write and Python accepts
+in a name. Nothing that already ran is emitted differently, so nothing runs twice. A `let` entered again
+word for word and meaning the same things shares the earlier binding's name, so running a notebook cell
+a second time sends nothing new. A traceback shows the name as written.
 
 ### 5.1 In-place linear accumulation (`Seq.fold`/`List.fold`)
 
@@ -1494,17 +1541,29 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   cycle is inferred as one, at its first member, so `plan_items` finds what the cycle reads from between
   its members and `TopItems` infers that ahead of the cycle. Scope stays in source order all the same:
   such a name enters scope at the place it is written, for the cycle's members as for every other line,
-  so a member written above the helper that uses it gets the ordinary `unbound name`. The one forward
-  reference Pyfun has is between the functions of a cycle themselves. (A cycle cannot run until its last
-  member is defined, so letting every member read the helper would be safe when the program ran. It is
-  left out because the same line in a function outside a cycle is an error, and one rule for where a name
-  may be used is easier to hold than two.) The cycle's own names are in scope from its first member on, but Python defines
-  each function where it is written, so a top-level value or expression between the members that uses one
-  of them is an error (`is_even` cannot be used yet: it needs `is_odd`, which is defined below this
-  line); it would be a `NameError` when the program ran. A function written between the members may call
-  the cycle, and then waits with it: a value that uses that function before the cycle is whole gets the
-  same error. The check reads names, not calls, so a line that only hands the function on (`let table =
-  [is_even]`) is rejected too and has to move below the cycle. **Tail-call optimization is a non-goal** (below) — CPython does no TCO and caps recursion
+  so a member written above the helper that uses it is told what any line would be (`helper` cannot be
+  used yet: it is defined below this line). The one forward reference Pyfun has is between the functions
+  of a cycle themselves. (A cycle cannot run until its last member is defined, so letting every member
+  read the helper would be safe when the program ran. It is left out because the same line in a function
+  outside a cycle is an error, and one rule for where a name may be used is easier to hold than two.)
+  Each of the cycle's own names enters scope at its own line too, so a function written between the
+  members, which is no part of the cycle, reads the members above it and not the ones below. Python
+  defines each function where it is written, so a top-level value or expression between the members that
+  uses a member written above it is an error (`is_even` cannot be used yet: it needs `is_odd`, which is
+  defined below this line); it would be a `NameError` when the program ran. A function written between
+  the members may call the members above it, and then waits with them: a value that uses that function
+  before the cycle is whole gets the same error. The check reads names, not calls, so a line that only
+  hands the function on (`let table = [is_even]`) is rejected too and has to move below the cycle.
+  **Source order, stated once.** `scope::TopScope` is the rule, and the checker and the lowering both
+  read names through it: a name means the nearest binding above the line that uses it; a function that
+  takes parameters is in scope in its own body, and a value is not (`let x = x + 1` reads the `x` before
+  it); an `extern` is in scope from the top of the file, like the types and constructors a file declares;
+  and a name with no binding above the line means a function of the same cycle written below, or else a
+  built-in. A name the file binds again is therefore read in source order like any other: in `let f x =
+  x`, `let g x = f x`, `let f n = g n + 1`, `g` means the first `f`, and the three lines are no cycle. How
+  the emitted Python keeps two bindings of one name apart is §5. A use of a name written further down
+  says so in every form the use takes (a call, a value, a `<-`, a `Module.member`), with the one message.
+  **Tail-call optimization is a non-goal** (below) — CPython does no TCO and caps recursion
   (~1000 frames), so deep recursion can `RecursionError` exactly like hand-written Python; the
   **stack-safe path is the `List`/`Seq` combinators** (they lower to Python's iterative `reduce`/`map`).
 

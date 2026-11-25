@@ -19,6 +19,7 @@ pub mod lsp;
 pub mod parser;
 pub mod project;
 pub mod python_emitter;
+pub mod scope;
 pub mod traceback;
 pub mod types;
 
@@ -213,7 +214,8 @@ pub fn compile_with(
     target: python_emitter::PyTarget,
     native: bool,
 ) -> Result<(String, Vec<String>), CompileError> {
-    compile_mapped(source, target, native, false, false).map(|(py, notes, _)| (py, notes))
+    compile_mapped(source, target, native, false, false, scope::Naming::File)
+        .map(|(py, notes, _)| (py, notes))
 }
 
 /// [`compile_collecting`] with **typed output** (`--typed`, `DESIGN.md` §5.7):
@@ -227,6 +229,7 @@ pub fn compile_typed(source: &str) -> Result<(String, Vec<String>), CompileError
         false,
         false,
         true,
+        scope::Naming::File,
     )
     .map(|(py, notes, _)| (py, notes))
 }
@@ -261,6 +264,24 @@ pub fn compile_traced(
         false,
         true,
         false,
+        scope::Naming::File,
+    )
+}
+
+/// [`compile_traced`] for a REPL or notebook session, whose source grows an
+/// entry at a time. A name bound again keeps its earlier bindings under the
+/// names they already run by, and the new one takes a name of its own
+/// ([`scope::Naming::Session`]), so nothing that ran is emitted differently.
+pub fn compile_session(
+    source: &str,
+) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
+    compile_mapped(
+        source,
+        python_emitter::PyTarget::default(),
+        false,
+        true,
+        false,
+        scope::Naming::Session,
     )
 }
 
@@ -270,6 +291,7 @@ fn compile_mapped(
     native: bool,
     want_map: bool,
     typed: bool,
+    naming: scope::Naming,
 ) -> Result<(String, Vec<String>, Option<LineMap>), CompileError> {
     let module = parse(source)?;
     // One inference pass gives both the gate (errors) and the resolved types, from
@@ -296,13 +318,17 @@ fn compile_mapped(
     } else {
         std::collections::HashMap::new()
     };
-    let (py, notes) = lowering::lower_native_typed(
+    let (py, notes) = lowering::lower_shaped(
         &module,
         &floats,
         lowering::OrderPolicy::OnDemand(ordered.clone()),
         &codecs,
         native,
         binding_types.clone(),
+        lowering::Shape {
+            trace: false,
+            naming,
+        },
     )
     .map_err(CompileError::Lower)?;
     let py = if typed {
@@ -313,14 +339,17 @@ fn compile_mapped(
     };
     let python = python_emitter::emit_for(&py, target);
     let map = if want_map {
-        lowering::lower_native_typed_tracing(
+        lowering::lower_shaped(
             &module,
             &floats,
             lowering::OrderPolicy::OnDemand(ordered),
             &codecs,
             native,
             binding_types,
-            true,
+            lowering::Shape {
+                trace: true,
+                naming,
+            },
         )
         .ok()
         .and_then(|(traced, _)| line_map_of(&python_emitter::emit_for(&traced, target), &python))

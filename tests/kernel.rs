@@ -90,6 +90,20 @@ fn a_definition_echoes_its_type_and_compiles_once() {
 }
 
 #[test]
+fn a_changed_definition_leaves_what_already_ran_alone() {
+    let mut engine = Engine::spawn();
+    assert_eq!(engine.eval("let n = 1\nlet f u = n").status, "ok");
+    // `n` entered again as something else: only the new binding is sent. The
+    // first `n` and the `f` that reads it are in the worker as they were.
+    let reply = engine.eval("let n = \"two\"");
+    assert_eq!(reply.status, "ok");
+    assert_eq!(reply.message, "n : str\n");
+    assert!(reply.blob.contains("= \"two\""), "{}", reply.blob);
+    assert!(!reply.blob.contains("= 1"), "{}", reply.blob);
+    assert!(!reply.blob.contains("def f"), "{}", reply.blob);
+}
+
+#[test]
 fn an_expression_is_wrapped_in_print_and_reruns() {
     let mut engine = Engine::spawn();
     assert_eq!(engine.eval("let n = 41").status, "ok");

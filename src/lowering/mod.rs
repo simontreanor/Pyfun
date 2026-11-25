@@ -34,6 +34,7 @@ mod self_tail_call;
 mod typed;
 
 use crate::lexer::Span;
+pub use crate::scope::Naming;
 
 use crate::parser::ast::{
     ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, CollectionForm, Expr, ExprKind,
@@ -159,9 +160,47 @@ pub fn lower_native_typed_tracing(
     binding_types: HashMap<Span, crate::types::Ty>,
     trace: bool,
 ) -> Result<(PyModule, Vec<String>), LowerError> {
+    let shape = Shape {
+        trace,
+        naming: Naming::File,
+    };
+    lower_shaped(
+        module,
+        float_literals,
+        order,
+        codecs,
+        native,
+        binding_types,
+        shape,
+    )
+}
+
+/// How one lowering of a single file is to come out, beside what it lowers.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Shape {
+    /// Carry line markers (see [`lower_native_typed_tracing`]).
+    pub trace: bool,
+    /// Which binding of a name bound more than once keeps the name: a
+    /// file's rule, or a session's (`DESIGN.md` §5).
+    pub naming: Naming,
+}
+
+/// [`lower_native_typed_tracing`], for a file or for a session ([`Shape`]).
+pub fn lower_shaped(
+    module: &Module,
+    float_literals: &HashSet<Span>,
+    order: OrderPolicy,
+    codecs: &crate::types::Codecs,
+    native: bool,
+    binding_types: HashMap<Span, crate::types::Ty>,
+    shape: Shape,
+) -> Result<(PyModule, Vec<String>), LowerError> {
+    let Shape { trace, naming } = shape;
     // Newtype patterns in binding positions erase first, so every pass below
     // sees `let raw (UserId s) = s` as the `let raw s = s` it is at run time.
     let module = &newtype_patterns::erase(module, &local_newtypes(module));
+    // Then every top-level binding gets a name of its own (`DESIGN.md` §5).
+    let module = &crate::scope::settle(module, naming);
     let mut lowerer = Lowerer::new(module);
     lowerer.trace_lines = trace;
     lowerer.native = native;
@@ -186,6 +225,8 @@ pub fn annotate_typed(
     binding_types: &HashMap<Span, crate::types::Ty>,
     imported: &[(String, &Module)],
 ) -> PyModule {
+    // The names the lowering gave the file's bindings.
+    let module = &crate::scope::settle(module, Naming::File);
     typed::annotate(module, py, binding_types, imported)
 }
 
@@ -347,6 +388,7 @@ pub fn lower_in_project_tracing(
     let mut newtypes = local_newtypes(module);
     newtypes.extend(ctx.newtype_ctors.iter().cloned());
     let module = &newtype_patterns::erase(module, &newtypes);
+    let module = &crate::scope::settle(module, Naming::File);
     let mut lowerer = Lowerer::new(module);
     lowerer.trace_lines = trace;
     lowerer.native = native;
@@ -903,6 +945,8 @@ impl Lowerer {
         // definitions take precedence (`or_insert`), letting a program shadow one.
         for (name, arity) in crate::types::PRELUDE {
             arities.entry((*name).to_string()).or_insert(*arity);
+            // The same built-in where the file binds the name too (`scope::settle`).
+            arities.insert(format!("{}{name}", crate::scope::BUILTIN_MARK), *arity);
         }
         // Module members (`List.map`, `Set.add`, `Map.find_or`, `Option.map`, …):
         // register their arity under the dotted name so partial application lowers
@@ -1482,9 +1526,17 @@ impl Lowerer {
                 // references rewrite to the same names via `cur_module` (set in
                 // `lower_var`/`lower_call`).
                 Item::Module { name, items, .. } => {
-                    let members = items.iter().flat_map(|m| m.bound_names()).collect();
-                    self.cur_module = Some((name.clone(), members));
+                    // A member reads the siblings written above it by their bare
+                    // names (and itself, if it takes parameters); a name of one
+                    // written below still means what it means outside the module.
+                    self.cur_module = Some((name.clone(), HashSet::new()));
                     for member in items {
+                        let own = member.bound_names();
+                        if !member.params.is_empty()
+                            && let Some((_, members)) = &mut self.cur_module
+                        {
+                            members.extend(own.iter().cloned());
+                        }
                         match &member.target {
                             Pattern::Var {
                                 name: member_name, ..
@@ -1509,6 +1561,9 @@ impl Lowerer {
                                 &mut code,
                                 &HashMap::new(),
                             )?,
+                        }
+                        if let Some((_, members)) = &mut self.cur_module {
+                            members.extend(own);
                         }
                     }
                     self.cur_module = None;
@@ -3834,9 +3889,17 @@ impl Lowerer {
         if is_json_ctor(name) {
             self.needs_json = true;
         }
+        // A use of a built-in in a file that binds the name itself, above that
+        // binding (`scope::settle` marks it): the built-in, whatever the file
+        // goes on to bind.
+        let (name, builtin) = match name.strip_prefix(crate::scope::BUILTIN_MARK) {
+            Some(base) => (base, true),
+            None => (name, false),
+        };
         // A bare reference to a sibling member inside a module → its mangled
         // top-level name (`pi` → `Geometry_pi`), unless shadowed by a local.
-        if !locals.contains(name)
+        if !builtin
+            && !locals.contains(name)
             && let Some((m, members)) = &self.cur_module
             && members.contains(name)
         {
@@ -3845,7 +3908,7 @@ impl Lowerer {
         // A local parameter or a user top-level binding shadows a seeded name
         // (extern routing), so skip rerouting in that case. Module members
         // (`List.map`, …) are field-access nodes, routed in `lower_value`, not here.
-        if !locals.contains(name) && !self.user_defs.contains(name) {
+        if builtin || (!locals.contains(name) && !self.user_defs.contains(name)) {
             // A bare reference to an instance-access extern becomes a
             // receiver-taking lambda (`read` → `lambda r: r.read()`, `text` →
             // `lambda r: r.text`); applied references are handled in
@@ -3904,11 +3967,8 @@ impl Lowerer {
                 _ => None,
             };
             if let Some(py) = math_fn {
-                self.needed_imports.insert("math".to_string());
-                return PyExpr::Attribute {
-                    value: Box::new(PyExpr::Name("math".to_string())),
-                    attr: py.to_string(),
-                };
+                let path = self.extern_path(&["math".to_string(), py.to_string()]);
+                return dotted_path(&path);
             }
             // Standard combinators route to emitted `_pf_*` helpers — Python's
             // `id` is taken (returns a memory address) and the rest have no
@@ -3927,6 +3987,13 @@ impl Lowerer {
             if let Some(helper) = combinator {
                 self.needed_combinators.insert(helper);
                 return PyExpr::Name(helper.to_string());
+            }
+            // The rest of the prelude is a Python builtin of the same name. Where
+            // the file binds that name too, the module's global is the file's,
+            // so the builtin is read from where Python keeps it.
+            if builtin {
+                let path = self.extern_path(&["builtins".to_string(), name.to_string()]);
+                return dotted_path(&path);
             }
         }
         // A total active-pattern case constructed inside its recognizer's body
