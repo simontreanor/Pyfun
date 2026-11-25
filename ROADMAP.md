@@ -716,14 +716,14 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
   (scriptable, no moderation).
 - **JetBrains Marketplace** — DONE, **accepted**: plugin `com.github.simontreanor.pyfun` (id
   32915) is live (`editors/jetbrains/`, thin: file type + TextMate grammar + LSP4IJ wiring, free
-  mode + legacy CE, 2024.2+). **0.11.0** uploaded 2026-11-25 and waiting on moderation; the plugins
-  API lists **0.10.0** (approved 2026-10-18) until it clears (check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
+  mode + legacy CE, 2024.2+). At **0.11.0**, uploaded and approved 2026-11-25 (verified against the
+  plugins API; check the API, not this line). `editors/jetbrains/` has a **committed Gradle wrapper**: `./gradlew publishPlugin`
   (JDK 21 + `JETBRAINS_PERMANENT_TOKEN`) needs nothing installed, because Gradle is *not* on this
   machine and two releases running lost time rediscovering that before reaching for a bare `gradle`.
   Approval is not instant: the plugins API lists approved versions only, so it reads the previous
   one until moderation clears.
-- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.10.0** (verified against the
-  gallery API 2026-11-25; the 0.11.0 vsix is built and waits for its upload through the web UI). The **only surface that cannot
+- **VS Code Marketplace** — accepted and live as `pyfun.pyfun`, at **0.11.0** (vsix uploaded through
+  the publisher web UI, verified against the gallery API 2026-11-25). The **only surface that cannot
   be scripted**: the vsix is uploaded by hand through the publisher web UI at
   `https://marketplace.visualstudio.com/manage/publishers/pyfun` (the CLI auth path is broken — see
   `editors/vscode/DEVELOPMENT.md` and RELEASING.md). It is therefore the one that silently falls

@@ -69,6 +69,7 @@ fn corpus() -> Vec<(String, String)> {
         }
     }
     programs.extend(blocks(&repo().join("docs/src")));
+    programs.extend(playground_examples());
     programs.retain(|(_, source)| pyfun::parse(source).is_ok());
     programs
 }
@@ -142,6 +143,7 @@ fn the_lessons_and_examples_are_formatted() {
         })
         .collect();
     programs.extend(blocks(&repo().join("docs/src/learn")));
+    programs.extend(playground_examples());
     for (name, source) in programs {
         if let Ok(formatted) = pyfun::fmt::format(&source)
             && formatted != source
@@ -150,6 +152,47 @@ fn the_lessons_and_examples_are_formatted() {
         }
     }
     assert!(unformatted.is_empty(), "run `pyfun fmt`: {unformatted:#?}");
+}
+
+/// The examples in the playground's picker, read from the template literals
+/// in `playground/web/app.js` (`source: \`...\``), each named by its label.
+fn playground_examples() -> Vec<(String, String)> {
+    let path = repo().join("playground/web/app.js");
+    let js = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    let start = js.find("const EXAMPLES = [").expect("the EXAMPLES list");
+    let end = start + js[start..].find("\n];").expect("the end of EXAMPLES");
+    let mut examples = Vec::new();
+    for entry in js[start..end].split("label: \"").skip(1) {
+        let label = &entry[..entry.find('"').unwrap()];
+        let open = entry.find("source: `").expect("a source") + "source: `".len();
+        let mut source = String::new();
+        let mut chars = entry[open..].chars();
+        loop {
+            match chars.next().expect("the closing backtick") {
+                '`' => break,
+                '\\' => match chars.next() {
+                    Some(c @ ('`' | '\\' | '$')) => source.push(c),
+                    other => panic!("{label}: read the escape `\\{other:?}` here too"),
+                },
+                c => source.push(c),
+            }
+        }
+        examples.push((format!("playground example {label:?}"), source));
+    }
+    examples
+}
+
+#[test]
+fn every_playground_example_checks() {
+    // The picker promises each example compiles, and the playground runs
+    // whatever compiler `main` holds, so a language change reaches them here.
+    let examples = playground_examples();
+    assert!(examples.len() >= 7, "only {} examples", examples.len());
+    for (name, source) in examples {
+        if let Err(errors) = pyfun::check(&source) {
+            panic!("{name}: {errors:?}");
+        }
+    }
 }
 
 // ---- a layout the author chose ----
