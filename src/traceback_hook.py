@@ -80,7 +80,9 @@ def _translate(frame, lookup, source_frame):
         return None
     statement = row[2]
     source = row[3] if len(row) > 3 else table["source"]
-    name = "<fun>" if frame.name.startswith("_pf_") else frame.name
+    # A name bound again in a session runs as the name, a middle dot and a
+    # number: show the name as written.
+    name = "<fun>" if frame.name.startswith("_pf_") else frame.name.split("·")[0]
     shown = source_frame(source, row[1], name, lookup_line=False, line=statement[0].strip())
     shown.rest = _rest(statement)
     return shown

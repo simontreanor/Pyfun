@@ -555,7 +555,7 @@ impl Program {
         source: &str,
         lines: Vec<SourceLine>,
     ) -> Result<Program, pyfun::CompileError> {
-        let (python, _notes, map) = pyfun::compile_traced(source)?;
+        let (python, _notes, map) = pyfun::compile_session(source)?;
         Ok(Program {
             chunks: chunk_python(&python),
             map,

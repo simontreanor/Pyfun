@@ -24,6 +24,7 @@ src/
     decode_spec.rs   statically-known decoders deforest (DESIGN §5.3)
     self_tail_call.rs a saturated self tail call becomes `while True` (DESIGN §5.4)
     newtype_patterns.rs newtype patterns in binding positions erase first (DESIGN §7.3)
+  scope.rs         which top-level binding a name means on each line, and one name per binding (DESIGN §5, §7.1)
   python_emitter/  Python-AST IR → readable source (py311.rs = the --target 3.11 rewrite)
   diagnostics/     rustc-style errors: codes (E001…), levels, spans, notes; the Warning type
   lint.rs          the warnings the syntax alone shows (DESIGN §3); types/ finds the rest and joins them
@@ -740,6 +741,51 @@ The command is `src/test_cmd.rs`. It resolves each test file's project, checks i
 with the user's working directory unchanged. `compile_tests` differs from `compile` in one step:
 `lowering::as_pytest` drops the one parameter of each `test_*` function in a test module, binding a
 named one to `None`, because pytest would read a parameter as a fixture to supply.
+
+## Top-level scope and one name per binding — implements DESIGN §5, §7.1
+
+`src/scope.rs` holds the rule for what a name written at the top level of a file means, and both phases
+that need it read it from there.
+
+`TopScope::of(module)` records which items bind each name (`let`s and in-file modules in source order,
+`extern`s apart, since an `extern` is in scope from the top), what each item reads from outside itself,
+and the cycles of mutually recursive functions. `resolve(at, name)` is the rule: the nearest `let`
+above item `at` (the item itself when it takes parameters), else the `extern`, else the item itself
+when it is a lambda-bound function inside a cycle, else the first binding below when that one is in the
+same cycle, else `Outside` (a built-in, or nothing). The cycles are found in the graph the same rule
+gives with the cycle condition dropped, so a forward reference is an edge there and a cycle is what
+makes it legal.
+
+What an item reads comes from `Refs`, a scope-aware walk over a clone of the item that hands each
+*free* name to a callback and may rewrite it. It knows two things the older `collect_free` does not: a
+`<-` target is a read of that name, and the leading arguments of a parameterized active pattern (`case
+DivisibleBy n:`) are read and not bound. A local function is in scope in its own body, a local value is
+not, as in the checker.
+
+**The checker** (`types::TopItems`) plans from the scope: `plan_items` takes its cycles and its
+between-the-members items from `groups` and `succ`. A cycle is inferred at its first member with one
+environment per member, built by asking `resolve` what each name means on that member's line: a
+cycle-mate at its monomorphic type, an item hoisted from between the members at its scheme, or what
+the environment already had. Every item's names, a cycle member's included, enter the environment at
+the item's own line (`reveal`). `Infer::cur_item` is the item being inferred, so a name that is not in
+scope can be told from one that is written below (`defined_below`), which gets the `EarlyUse` message.
+
+**The lowering** calls `scope::settle(module, naming)` at each entry (`lower_native_typed_tracing`,
+`lower_in_project_tracing`, `annotate_typed`), after the newtype erasure. It returns the module
+borrowed when no name is bound twice. Otherwise it clones it and, per item, rewrites each free name
+whose `resolve` target was renamed, then the item's own binders; an `extern` is renamed at its
+declaration; the members of an in-file module are walked one at a time with their own sibling map. A
+use of a built-in in a file that also binds the name is rewritten to `_pf_builtin_<name>`
+(`BUILTIN_MARK`), which `lower_var` reads as the built-in wherever it stands: the `math` and `_pf_*`
+routes as usual, `builtins.<name>` for the rest, and its prelude arity under the marked name. Because
+the rewrite is on the AST, every registry the lowering keys by name (`arities`, `user_defs`,
+`top_fn_defs`, `top_val_defs`, the census of `captures.rs`) is right per binding with no change of its
+own. Fresh names come from `Fresh`, which avoids every name the file binds or reads and the `_pf_`
+space. `Naming::Session` (`pyfun::compile_session`, used by the REPL and the kernel) names bindings in
+source order instead, so a name never depends on later entries (`session_spellings`).
+
+One lowering change goes with it: while an in-file module's members are lowered, `cur_module` holds the
+members written so far, so a bare name means a sibling only below that sibling's line.
 
 ## Names Python already owns — implements DESIGN §5
 

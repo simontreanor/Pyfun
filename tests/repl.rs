@@ -109,6 +109,47 @@ fn repl_definition_effect_runs_once_at_entry() {
 }
 
 #[test]
+fn repl_a_function_keeps_the_binding_it_was_entered_under() {
+    if !have_python() {
+        eprintln!("skipping repl persistent test: no python interpreter");
+        return;
+    }
+    // `f` was checked against the `x` of its day, an `int`, and goes on
+    // reading that one after `x` is entered again as something else.
+    let out = repl("let x = 41\nlet f u = x + 1\nlet x = \"text\"\nf ()\nx\n:quit\n");
+    assert!(out.contains("42"), "f reads the first x:\n{out}");
+    assert!(out.contains("text"), "x is the second:\n{out}");
+    assert!(!out.contains("Traceback"), "{out}");
+    // A function entered again with another arity leaves a value made from
+    // the first one as it was.
+    let out = repl("let g a = a + 1\nlet y = g 1\nlet g a b = a + b\ny\ng 20 30\n:quit\n");
+    assert!(out.contains("pyfun> 2\n"), "y is still 2:\n{out}");
+    assert!(out.contains("50"), "the new g:\n{out}");
+    // A built-in used before the session binds its name.
+    let out = repl("let big a b = max a b\nlet max a b = a + b\nbig 1 2\nmax 10 20\n:quit\n");
+    assert!(out.contains("pyfun> 2\n"), "big uses the built-in:\n{out}");
+    assert!(out.contains("30"), "the session's own max:\n{out}");
+}
+
+#[test]
+fn repl_binding_a_name_again_runs_nothing_twice() {
+    if !have_python() {
+        eprintln!("skipping repl persistent test: no python interpreter");
+        return;
+    }
+    // The first `a` is still what `show` reads, and is not run again to stay so.
+    let out = repl(
+        "let a = print \"once\"\nlet show u = a\nlet a = 2\nshow ()\na\nlet a = 3\na\n:quit\n",
+    );
+    assert_eq!(out.matches("once").count(), 1, "{out}");
+    assert!(out.contains("pyfun> 3\n"), "{out}");
+    // A traceback names the function as it was written.
+    let out = repl("let boom u = 1 // 0\nlet boom u = 2 // 0\nboom ()\n:quit\n");
+    assert!(out.contains("in boom\n"), "{out}");
+    assert!(out.contains("let boom u = 2 // 0"), "{out}");
+}
+
+#[test]
 fn repl_top_level_mut_state_persists_across_entries() {
     if !have_python() {
         eprintln!("skipping repl persistent test: no python interpreter");

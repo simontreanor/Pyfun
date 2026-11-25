@@ -34,6 +34,7 @@ use crate::parser::ast::{
     ActivePatternDecl, BinOp, BlockStmt, CeBuilder, CeItem, Expr, ExprKind, InterpPart, Item,
     LetBinding, MatchArm, Module, Pattern, TypeDeclKind, TypeExpr, UnOp, UnitExpr,
 };
+use crate::scope::{Target, TopScope, binds_function};
 
 /// A factor in a unit term: a base measure or a unit variable.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -2630,6 +2631,7 @@ fn run_inner(
     // Cycles of mutually recursive functions are inferred together, with what
     // they read from between their members (`plan_items`).
     let mut tops = TopItems::new(module);
+    inf.top = Some(tops.scope.clone());
 
     // What each top-level evaluation performs, checked for an unhandled `spawn`
     // once inference is done (a later item can still resolve an effect variable).
@@ -2648,20 +2650,11 @@ fn run_inner(
             Item::Import { .. } => {}
             Item::Let(_) | Item::Module { .. } => {
                 tops.infer(idx, &env, &mut inf, &mut errors, &mut top_effects);
-                // A cycle's functions enter scope together, at its first member.
                 if let Item::Let(binding) = item {
-                    match tops.plan.groups.get(&idx) {
-                        Some(members) => {
-                            for &member in members {
-                                if let Item::Let(b) = &module.items[member] {
-                                    exported.extend(b.bound_names());
-                                }
-                            }
-                        }
-                        None if tops.plan.leader_of.contains_key(&idx) => {}
-                        None => exported.extend(binding.bound_names()),
-                    }
+                    exported.extend(binding.bound_names());
                 }
+                // Each name enters scope at its own line, a cycle's functions
+                // included: only the cycle itself reads one from above it.
                 for (name, scheme) in tops.reveal(idx) {
                     env.insert(name, scheme);
                 }
@@ -4626,13 +4619,6 @@ struct ItemPlan {
     early_members: HashMap<(usize, usize), EarlyUse>,
 }
 
-/// A binding is a "function" (safe to pre-bind in a cycle, and not run where it
-/// is written) if it takes parameters or its value is a lambda, the same test
-/// the lowerer uses for arity.
-fn binds_function(b: &LetBinding) -> bool {
-    !b.params.is_empty() || matches!(b.value.kind, ExprKind::Fn { .. })
-}
-
 /// The names a binding reads from outside itself; `hidden` are names that mean
 /// something nearer (the earlier members of its in-file module).
 fn binding_reads(b: &LetBinding, hidden: &HashSet<String>) -> HashSet<String> {
@@ -4645,93 +4631,28 @@ fn binding_reads(b: &LetBinding, hidden: &HashSet<String>) -> HashSet<String> {
     refs
 }
 
-/// What an in-file module reads from outside itself.
-fn module_reads(members: &[LetBinding]) -> HashSet<String> {
-    let mut own = HashSet::new();
-    let mut refs = HashSet::new();
-    for member in members {
-        refs.extend(binding_reads(member, &own));
-        own.extend(member.bound_names());
-    }
-    refs
-}
-
-fn plan_items(module: &Module) -> ItemPlan {
+fn plan_items(module: &Module, scope: &TopScope) -> ItemPlan {
     let mut plan = ItemPlan::default();
-    // The items that bind names: each `let`, and each in-file module (read
-    // through its name, `Shapes.area`).
-    let binders: Vec<usize> = module
-        .items
-        .iter()
-        .enumerate()
-        .filter(|(_, it)| matches!(it, Item::Let(_) | Item::Module { .. }))
-        .map(|(i, _)| i)
-        .collect();
-    let mut name_to_local: HashMap<String, usize> = HashMap::new();
-    for (local, &idx) in binders.iter().enumerate() {
-        match &module.items[idx] {
-            Item::Let(b) => {
-                for name in b.bound_names() {
-                    name_to_local.insert(name, local);
-                }
-            }
-            Item::Module { name, .. } => {
-                name_to_local.insert(name.clone(), local);
-            }
-            _ => {}
-        }
-    }
-    let reads: Vec<HashSet<String>> = binders
-        .iter()
-        .map(|&idx| match &module.items[idx] {
-            Item::Let(b) => binding_reads(b, &HashSet::new()),
-            Item::Module { items, .. } => module_reads(items),
-            _ => HashSet::new(),
-        })
-        .collect();
-    let succ: Vec<Vec<usize>> = reads
-        .iter()
-        .map(|refs| {
-            let mut out: Vec<usize> = refs
-                .iter()
-                .filter_map(|n| name_to_local.get(n.as_str()).copied())
-                .collect();
-            out.sort_unstable();
-            out.dedup();
-            out
-        })
-        .collect();
-    let is_fn =
-        |local: usize| matches!(&module.items[binders[local]], Item::Let(b) if binds_function(b));
     // A member of a cycle, by item index: the cycle's last member (item index
     // and name). Until that line the member cannot run.
     let mut whole_at: HashMap<usize, (usize, String)> = HashMap::new();
-    for comp in strongly_connected(&succ) {
-        // Only group genuine multi-member cycles whose members are all functions.
-        // A value cycle (`let a = b\nlet b = a`) is not grouped, so it stays
-        // declare-before-use and errors as before.
-        if comp.len() < 2 || !comp.iter().all(|&l| is_fn(l)) {
-            continue;
-        }
-        let mut member_items: Vec<usize> = comp.iter().map(|&l| binders[l]).collect();
-        member_items.sort_unstable();
+    for member_items in &scope.groups {
         let first = member_items[0];
         let last = member_items[member_items.len() - 1];
         // What the cycle reads, directly or through another item, that is
         // written between its first and last members. No such item reads the
         // cycle back, or it would be a member.
-        let members: HashSet<usize> = comp.iter().copied().collect();
+        let members: HashSet<usize> = member_items.iter().copied().collect();
         let mut seen: HashSet<usize> = HashSet::new();
-        let mut stack: Vec<usize> = comp.clone();
+        let mut stack: Vec<usize> = member_items.clone();
         let mut ahead = Vec::new();
-        while let Some(local) = stack.pop() {
-            for &next in &succ[local] {
-                let at = binders[next];
-                if members.contains(&next) || at <= first || at >= last || !seen.insert(next) {
+        while let Some(item) = stack.pop() {
+            for &at in scope.succ.get(&item).into_iter().flatten() {
+                if members.contains(&at) || at <= first || at >= last || !seen.insert(at) {
                     continue;
                 }
                 ahead.push(at);
-                stack.push(next);
+                stack.push(at);
             }
         }
         ahead.sort_unstable();
@@ -4740,13 +4661,13 @@ fn plan_items(module: &Module) -> ItemPlan {
             Item::Let(b) => b.name().unwrap_or_default().to_string(),
             _ => String::new(),
         };
-        for &item_idx in &member_items {
+        for &item_idx in member_items {
             whole_at.insert(item_idx, (last, last_name.clone()));
             if item_idx != first {
                 plan.leader_of.insert(item_idx, first);
             }
         }
-        plan.groups.insert(first, member_items);
+        plan.groups.insert(first, member_items.clone());
     }
 
     // A cycle's functions are in scope from its first member on, but Python
@@ -4775,19 +4696,16 @@ fn plan_items(module: &Module) -> ItemPlan {
             })
     };
     for (idx, item) in module.items.iter().enumerate() {
-        if let Some(members) = plan.groups.get(&idx) {
-            for &m in members {
-                if let (Item::Let(b), Some(whole)) = (&module.items[m], whole_at.get(&m)) {
-                    for name in b.bound_names() {
-                        unready.insert(name, whole.clone());
-                    }
+        match item {
+            // A member of a cycle is in scope from its own line, and cannot
+            // run until the cycle's last line.
+            Item::Let(b) if whole_at.contains_key(&idx) => {
+                for name in b.bound_names() {
+                    unready.insert(name, whole_at[&idx].clone());
                 }
             }
-        }
-        match item {
-            Item::Let(_) if whole_at.contains_key(&idx) => {}
             Item::Let(b) => {
-                let found = early_use(&binding_reads(b, &HashSet::new()), idx, &unready);
+                let found = early_use(scope.reads(idx), idx, &unready);
                 for name in b.bound_names() {
                     unready.remove(&name);
                 }
@@ -4828,10 +4746,8 @@ fn plan_items(module: &Module) -> ItemPlan {
                     unready.insert(name.clone(), waits);
                 }
             }
-            Item::Expr(expr) => {
-                let mut refs = HashSet::new();
-                collect_free(expr, &HashSet::new(), &mut refs);
-                if let Some((_, early)) = early_use(&refs, idx, &unready) {
+            Item::Expr(_) => {
+                if let Some((_, early)) = early_use(scope.reads(idx), idx, &unready) {
                     plan.early.insert(idx, early);
                 }
             }
@@ -4847,6 +4763,7 @@ fn plan_items(module: &Module) -> ItemPlan {
 /// for the cycle's members too.
 struct TopItems<'a> {
     module: &'a Module,
+    scope: std::rc::Rc<TopScope>,
     plan: ItemPlan,
     done: HashSet<usize>,
     /// What an inferred item binds, held until its own line is reached.
@@ -4855,9 +4772,11 @@ struct TopItems<'a> {
 
 impl<'a> TopItems<'a> {
     fn new(module: &'a Module) -> Self {
+        let scope = std::rc::Rc::new(TopScope::of(module));
         TopItems {
             module,
-            plan: plan_items(module),
+            plan: plan_items(module, &scope),
+            scope,
             done: HashSet::new(),
             bound: HashMap::new(),
         }
@@ -4879,39 +4798,21 @@ impl<'a> TopItems<'a> {
             return;
         }
         let module = self.module;
+        // What a name that is not in scope yet may be waiting for.
+        let outer_item = std::mem::replace(&mut inf.cur_item, idx);
         if let Some(members) = self.plan.groups.get(&idx).cloned() {
-            // The cycle is inferred against what is in scope at its first member
-            // and what it reads from between its members. Those items do not read
-            // the cycle, so they can be inferred first, in the order they are written.
+            // The cycle is inferred as one, so what it reads from between its
+            // members is inferred first, in the order it is written. Those
+            // items do not read the cycle, or they would be members.
             let mut group_env = env.clone();
-            // The names each of those items binds, with the line it is written on.
-            let mut between: Vec<(usize, Vec<String>)> = Vec::new();
-            for at in self.plan.ahead.get(&idx).cloned().unwrap_or_default() {
+            let ahead = self.plan.ahead.get(&idx).cloned().unwrap_or_default();
+            for &at in &ahead {
                 let item = self.plan.leader_of.get(&at).copied().unwrap_or(at);
                 self.infer(item, &group_env, inf, errors, top_effects);
-                for (name, scheme) in self.bound.get(&item).into_iter().flatten() {
+                for (name, scheme) in self.bound.get(&at).into_iter().flatten() {
                     group_env.insert(name.clone(), scheme.clone());
                 }
-                let names = match &module.items[at] {
-                    Item::Let(b) => b.bound_names(),
-                    _ => (self.bound.get(&item).into_iter().flatten())
-                        .map(|(name, _)| name.clone())
-                        .collect(),
-                };
-                between.push((at, names));
             }
-            // Scope stays in source order: a member reads what is written above
-            // it, so a name from below its own line means what it meant before
-            // the cycle began (nothing, as a rule).
-            let below: Vec<Vec<(String, Option<Scheme>)>> = members
-                .iter()
-                .map(|&mi| {
-                    (between.iter().filter(|(at, _)| *at > mi))
-                        .flat_map(|(_, names)| names)
-                        .map(|name| (name.clone(), env.get(name).cloned()))
-                        .collect()
-                })
-                .collect();
             let group: Vec<&LetBinding> = members
                 .iter()
                 .map(|&mi| match &module.items[mi] {
@@ -4919,17 +4820,48 @@ impl<'a> TopItems<'a> {
                     _ => unreachable!("group members are `let` items"),
                 })
                 .collect();
-            let mut bound = Vec::new();
-            for (name, res) in inf.infer_mutual_group(&group, &group_env, &below) {
-                match res {
-                    Ok(scheme) => bound.push((name, scheme)),
+            // Scope stays in source order (`TopScope`): each member reads what
+            // is written above its own line, and the cycle's other functions.
+            let self_tys: Vec<Ty> = members.iter().map(|_| inf.fresh()).collect();
+            let envs: Vec<Env> = members
+                .iter()
+                .map(|&m| {
+                    let mut member_env = env.clone();
+                    for &at in &ahead {
+                        // An in-file module is read through its own name.
+                        let key = |name: &str| match &module.items[at] {
+                            Item::Module {
+                                name: module_name, ..
+                            } => module_name.clone(),
+                            _ => name.to_string(),
+                        };
+                        for (name, scheme) in self.bound.get(&at).into_iter().flatten() {
+                            if self.scope.resolve(m, &key(name)) == Target::Let(at) {
+                                member_env.insert(name.clone(), scheme.clone());
+                            }
+                        }
+                    }
+                    for ((&mate, b), ty) in members.iter().zip(&group).zip(&self_tys) {
+                        let name = b.name().unwrap_or_default();
+                        if self.scope.resolve(m, name) == Target::Let(mate) {
+                            member_env.insert(name.to_string(), Scheme::mono(ty.clone()));
+                        }
+                    }
+                    member_env
+                })
+                .collect();
+            let inferred = inf.infer_mutual_group(&group, &members, &envs, &self_tys, &group_env);
+            for ((name, res), &m) in inferred.into_iter().zip(&members) {
+                let scheme = match res {
+                    Ok(scheme) => scheme,
                     Err(e) => {
                         errors.push(e);
-                        bound.push((name, Scheme::mono(inf.fresh())));
+                        Scheme::mono(inf.fresh())
                     }
-                }
+                };
+                self.bound.insert(m, vec![(name, scheme)]);
             }
-            self.bound.insert(idx, bound);
+            inf.cur_item = outer_item;
             return;
         }
         match &module.items[idx] {
@@ -5004,6 +4936,7 @@ impl<'a> TopItems<'a> {
             }
             _ => {}
         }
+        inf.cur_item = outer_item;
     }
 
     /// The names the item at `idx` brings into scope at its own line.
@@ -5012,7 +4945,7 @@ impl<'a> TopItems<'a> {
     }
 }
 
-fn strongly_connected(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
+pub(crate) fn strongly_connected(succ: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let n = succ.len();
     let reach: Vec<HashSet<usize>> = (0..n)
         .map(|i| {
@@ -7408,6 +7341,10 @@ struct Infer {
     /// A name to look out for while one top-level line is inferred, and where
     /// the line first reads it: the place an [`EarlyUse`] error points at.
     watch: Option<(String, Option<Span>)>,
+    /// How the file's top-level names resolve, and the item being inferred:
+    /// what tells a name that is written below from one that is not there.
+    top: Option<std::rc::Rc<TopScope>>,
+    cur_item: usize,
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
@@ -8069,37 +8006,22 @@ impl Infer {
     /// self-recursion across the group. Returns one `(name, scheme-or-error)` per
     /// member, in the given order. Callers pass only all-function groups.
     ///
-    /// `below` holds, per member, the names of `outer_env` that are written below
-    /// that member's own line, each with what it meant above the group (if
-    /// anything). The member's body sees that older meaning.
+    /// `envs` is what each member reads (the others' names at `self_tys`, where
+    /// its line may read them) and `at` the item each one is.
     fn infer_mutual_group(
         &mut self,
         group: &[&LetBinding],
+        at: &[usize],
+        envs: &[Env],
+        self_tys: &[Ty],
         outer_env: &Env,
-        below: &[Vec<(String, Option<Scheme>)>],
     ) -> Vec<(String, Result<Scheme, TypeError>)> {
-        // Pre-bind each member's name at a fresh monomorphic type.
-        let mut body_env = outer_env.clone();
-        let mut self_tys = Vec::with_capacity(group.len());
-        for b in group {
-            let t = self.fresh();
-            body_env.insert(
-                b.name().unwrap_or_default().to_string(),
-                Scheme::mono(t.clone()),
-            );
-            self_tys.push(t);
-        }
-        // Infer each body against the group env plus its own params; tie the knot.
+        // Infer each body against its own scope plus its params; tie the knot.
         let mut inferred: Vec<Result<(Ty, Effect), TypeError>> = Vec::with_capacity(group.len());
-        for ((b, self_ty), below) in group.iter().zip(&self_tys).zip(below) {
+        for (((b, self_ty), body_env), &item) in group.iter().zip(self_tys).zip(envs).zip(at) {
             let outer_eff = std::mem::replace(&mut self.cur_eff, Effect::pure());
+            self.cur_item = item;
             let mut fn_env = body_env.clone();
-            for (name, before) in below {
-                match before {
-                    Some(scheme) => fn_env.insert(name.clone(), scheme.clone()),
-                    None => fn_env.remove(name),
-                };
-            }
             let mut param_tys = Vec::with_capacity(b.params.len());
             let mut bind_err = None;
             for p in &b.params {
@@ -8641,6 +8563,11 @@ impl Infer {
                         span,
                     })
                 }
+                None if self.defined_below(name) => Err(EarlyUse {
+                    name: name.clone(),
+                    needs: name.clone(),
+                }
+                .error(span)),
                 None => Err(TypeError {
                     message: match python_builtin_spelling(name) {
                         Some(spelling) => {
@@ -8916,6 +8843,17 @@ impl Infer {
                         }
                         None => {
                             let module = q.rsplit_once('.').map_or("", |(m, _)| m);
+                            // An in-file module written further down the file.
+                            let prefix = format!("{module}.");
+                            if self.defined_below(module)
+                                && !env.keys().any(|key| key.starts_with(&prefix))
+                            {
+                                return Err(EarlyUse {
+                                    name: module.to_string(),
+                                    needs: module.to_string(),
+                                }
+                                .error(span));
+                            }
                             let hint = match closest_member(module, name, env) {
                                 Some(m) => format!(" (did you mean `{module}.{m}`?)"),
                                 None => String::new(),
@@ -8976,6 +8914,14 @@ impl Infer {
         Ok(result)
     }
 
+    /// Whether `name`, which is not in scope here, is bound by a top-level `let`
+    /// further down the file.
+    fn defined_below(&self, name: &str) -> bool {
+        self.top
+            .as_ref()
+            .is_some_and(|scope| scope.defined_below(self.cur_item, name))
+    }
+
     /// `target <- value` — reassignment, valid only for a `let mut` binding.
     fn infer_assign(
         &mut self,
@@ -8985,6 +8931,13 @@ impl Infer {
         env: &Env,
     ) -> Result<Ty, TypeError> {
         let Some(scheme) = env.get(target).cloned() else {
+            if self.defined_below(target) {
+                return Err(EarlyUse {
+                    name: target.to_string(),
+                    needs: target.to_string(),
+                }
+                .error(span));
+            }
             return Err(TypeError {
                 message: format!("unbound name `{target}`"),
                 span,

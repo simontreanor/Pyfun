@@ -283,14 +283,14 @@ fn names_between_a_cycle_still_enter_scope_at_their_own_line() {
          let early = helper 1\n\
          let helper n = n + 1\n\
          let is_odd n = if n == 0 then False else is_even (helper n - 2)",
-        "unbound name `helper`",
+        "`helper` cannot be used yet: it is defined below this line",
     );
     assert_error_contains(
         "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
          let other n = helper n\n\
          let helper n = n + 1\n\
          let is_odd n = if n == 0 then False else is_even (helper n - 2)",
-        "unbound name `helper`",
+        "`helper` cannot be used yet: it is defined below this line",
     );
     // A helper with a mistake in it reports the mistake once.
     let msgs = errors(
@@ -308,7 +308,12 @@ fn a_member_of_a_cycle_reads_what_is_written_above_it() {
     let first = "let is_even n = if n == 0 then True else helper (is_odd (n - 1))\n\
                  let helper b = b\n\
                  let is_odd n = if n == 0 then False else helper (is_even (n - 1))";
-    assert_eq!(errors(first), ["unbound name `helper`"]);
+    assert_eq!(
+        errors(first),
+        [
+            "`helper` cannot be used yet: it is defined below this line (move this line below `helper`)"
+        ]
+    );
     let err = &pyfun::check(first).unwrap_err()[0];
     assert_eq!(err.span.start, first.find("helper").unwrap());
     // The same program with the helper above its first use.
@@ -328,7 +333,7 @@ fn a_member_of_a_cycle_reads_what_is_written_above_it() {
              let step n = n - 1\n\
              let c n = if n == 0 then 0 else a (step n)"
         ),
-        ["unbound name `step`"]
+        ["`step` cannot be used yet: it is defined below this line (move this line below `step`)"]
     );
     // An in-file module below the member reads as it does below any function.
     let module_below = "let is_even n = if n == 0 then True else is_odd (Steps.down n)\n\
@@ -344,7 +349,7 @@ fn a_member_of_a_cycle_reads_what_is_written_above_it() {
              let pong n = if n == 0 then \"pong\" else ping (n - 1)\n\
              let is_odd n = if n == 0 then False else is_even (String.len (pong n))"
         ),
-        ["unbound name `ping`"]
+        ["`ping` cannot be used yet: it is defined below this line (move this line below `ping`)"]
     );
     // What is written above the cycle is read by every member, as ever.
     assert!(
@@ -355,6 +360,88 @@ fn a_member_of_a_cycle_reads_what_is_written_above_it() {
              let is_odd n = if n == 0 then False else is_even (step n)"
         )
         .is_ok()
+    );
+}
+
+#[test]
+fn a_name_is_used_below_where_it_is_written() {
+    // The one forward reference is between the functions of a cycle. Every
+    // other use of a name written further down says so, in whatever form the
+    // use takes.
+    let below = |name: &str| {
+        format!(
+            "`{name}` cannot be used yet: it is defined below this line (move this line below `{name}`)"
+        )
+    };
+    for source in [
+        "let f n = later + n\nlet later = 1",
+        "let x = later\nlet later = 1",
+        "print later\nlet later = 1",
+        "let f u = fun x -> x + later\nlet later = 1",
+        "let f u = seq { yield later }\nlet later = 1",
+        "let f u = f\"{later}\"\nlet later = 1",
+        "let f o =\n  match o:\n    case Some v if v > later: v\n    case _: 0\nlet later = 1",
+        "module M =\n  let f u = later\nlet later = 1",
+        "let bump u = later <- 1\nlet mut later = 0",
+    ] {
+        assert_eq!(errors(source), [below("later")], "{source}");
+    }
+    // An in-file module written below.
+    assert_eq!(
+        errors("let f u = M.g u\nmodule M =\n  let g u = 1"),
+        [below("M")]
+    );
+    // A function written between two mutually recursive functions is no part
+    // of their cycle: it reads the one above it, and not the one below.
+    assert!(
+        pyfun::check(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let twice n = is_even (n * 2)\n\
+             let is_odd n = if n == 0 then False else is_even (n - 1)\n\
+             let r = twice 2"
+        )
+        .is_ok()
+    );
+    assert_eq!(
+        errors(
+            "let is_even n = if n == 0 then True else is_odd (n - 1)\n\
+             let twice n = is_odd (n * 2)\n\
+             let is_odd n = if n == 0 then False else is_even (n - 1)"
+        ),
+        [below("is_odd")]
+    );
+    // A name that is written nowhere keeps its own message.
+    assert_eq!(errors("let f n = nowhere + n"), ["unbound name `nowhere`"]);
+}
+
+#[test]
+fn a_name_bound_again_is_read_in_source_order() {
+    // Each use means the nearest binding above it, so `g` here reads the first
+    // `f` and the three lines are no cycle: `g` keeps its own polymorphic type.
+    assert!(
+        pyfun::check(
+            "let f x = x\n\
+             let g x = f x\n\
+             let f n = g n + 1\n\
+             let a = g \"text\"\n\
+             let b = f 1"
+        )
+        .is_ok()
+    );
+    // A cycle's function reads the binding above it over a cycle-mate of the
+    // same name below it.
+    assert!(
+        pyfun::check(
+            "let size s = String.len s\n\
+             let ping n = if n == 0 then size \"ab\" else pong (n - 1)\n\
+             let size n = n + 1\n\
+             let pong n = if n == 0 then size 1 else ping (n - 1)"
+        )
+        .is_ok()
+    );
+    // A built-in used above a binding of its name is still the built-in.
+    assert!(
+        pyfun::check("let big a b = max a b\nlet max s = String.len s\nlet r = big 1 2").is_ok()
     );
 }
 

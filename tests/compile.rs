@@ -8675,9 +8675,10 @@ fn a_root_let_referenced_only_after_it_is_not_renamed() {
 }
 
 #[test]
-fn a_top_level_let_is_never_renamed() {
-    // Module-level bindings are globals; a later top-level `let` of the same name
-    // is a plain reassignment.
+fn a_top_level_name_bound_again_gives_each_binding_its_own_global() {
+    // A module has one global per name, so the last binding keeps the name
+    // (it is the one a Python caller means) and each earlier one is renamed
+    // with the uses that mean it.
     let src = "
         let n = 5
         let m = n + 1
@@ -8685,9 +8686,234 @@ fn a_top_level_let_is_never_renamed() {
         let r = n + m
         ";
     let py = pyfun::compile(src).unwrap();
-    assert!(py.contains("n = 5\nm = n + 1\nn = 7\n"), "{py}");
-    assert!(!py.contains("_n"), "{py}");
-    run_and_check(src, &[("r", "13")]);
+    assert!(py.contains("_n = 5\nm = _n + 1\nn = 7\n"), "{py}");
+    run_and_check(src, &[("r", "13"), ("n", "7")]);
+    // A file that binds each name once is emitted as before.
+    let once = pyfun::compile("let n = 5\nlet m = n + 1").unwrap();
+    assert_eq!(once, "n = 5\nm = n + 1\n");
+}
+
+#[test]
+fn e2e_a_function_keeps_the_binding_it_was_written_under() {
+    // Issue #223: `f` means the first `helper`. Python looks a global up when
+    // `f` runs, by which time the name would mean the second.
+    let src = "
+        let helper s = String.len s
+        let f n = helper \"ab\" + n
+        let helper n = n + 1
+        let a = f 4
+        let b = helper 1
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("def _helper(s):"), "{py}");
+    assert!(py.contains("return _helper(\"ab\") + n"), "{py}");
+    assert!(py.contains("def helper(n):"), "{py}");
+    run_and_check(src, &[("a", "6"), ("b", "2")]);
+    // Three bindings, each read by the function under it, and a value that
+    // reads its own earlier self.
+    run_and_check(
+        "
+        let x = 1
+        let one u = x
+        let x = x + 1
+        let two u = x
+        let x = x + 1
+        let seen = (one (), two (), x)
+        ",
+        &[("seen", "(1, 2, 3)"), ("x", "3")],
+    );
+    // A fresh name never takes one the file already uses.
+    let py = pyfun::compile("let _n = 0\nlet n = 1\nlet f u = n + _n\nlet n = 2").unwrap();
+    assert!(py.contains("_n = 0\n_n2 = 1\n"), "{py}");
+    assert!(py.contains("return _n2 + _n\n"), "{py}");
+}
+
+#[test]
+fn e2e_each_binding_of_a_name_keeps_its_own_shape() {
+    // What the lowering knows of a name (its arity, that it is a function, that
+    // it is `mut`) is known per binding.
+    run_and_check(
+        "
+        let f a = a + 1
+        let x = f 1
+        let f a b = a + b
+        let y = f 1 2
+        ",
+        &[("x", "2"), ("y", "3")],
+    );
+    run_and_check(
+        "
+        let f a b = a + b
+        let g = f 1
+        let f s = String.len s
+        let x = g 2
+        let y = f \"abc\"
+        ",
+        &[("x", "3"), ("y", "3")],
+    );
+    // A `mut` assigned from a function, bound again as something else.
+    run_and_check(
+        "
+        let mut n = 0
+        let bump u = n <- n + 1
+        let read u = n
+        let mut n = \"s\"
+        bump ()
+        bump ()
+        let seen = read ()
+        ",
+        &[("seen", "2"), ("n", "s")],
+    );
+    // A lambda bound to a name it reads: the name it reads is the one above.
+    run_and_check(
+        "
+        let f n = n + 1
+        let f = fun n -> f n * 10
+        let x = f 1
+        ",
+        &[("x", "20")],
+    );
+}
+
+#[test]
+fn e2e_a_name_bound_again_inside_a_cycle_of_functions() {
+    // `g` is written between two functions named `f` and reads the first, so
+    // there is no cycle here; and a real cycle whose function is bound again
+    // afterwards keeps calling its own.
+    run_and_check(
+        "
+        let f n = n
+        let g n = f n
+        let f n = g n + 1
+        let x = f 1
+        ",
+        &[("x", "2")],
+    );
+    run_and_check(
+        "
+        let is_even n = if n == 0 then True else is_odd (n - 1)
+        let is_odd n = if n == 0 then False else is_even (n - 1)
+        let is_odd n = n
+        let a = is_even 4
+        let b = is_odd 4
+        ",
+        &[("a", "True"), ("b", "4")],
+    );
+    // A cycle's first function reads the `size` above it, and its second the
+    // `size` written between them.
+    run_and_check(
+        "
+        let size s = String.len s
+        let ping n = if n == 0 then size \"abc\" else pong (n - 1)
+        let size n = n + 1
+        let pong n = if n == 0 then size 1 else ping (n - 1)
+        let a = ping 0
+        let b = pong 0
+        let c = ping 1
+        ",
+        &[("a", "3"), ("b", "2"), ("c", "2")],
+    );
+}
+
+#[test]
+fn e2e_a_built_in_used_above_a_binding_of_its_name() {
+    // The prelude's `max`, `print`, `sqrt` and `id` are what a line means
+    // until the file binds the name, whatever Python would look up later.
+    let src = "
+        let big a b = max a b
+        let max a b = a + b
+        let x = big 1 2
+        let y = max 1 2
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("import builtins\n"), "{py}");
+    assert!(py.contains("return builtins.max(a, b)"), "{py}");
+    assert!(py.contains("def max(a, b):"), "{py}");
+    run_and_check(src, &[("x", "2"), ("y", "3")]);
+    run_and_check(
+        "
+        let root = sqrt 4.0
+        let same x = id x
+        let sqrt x = x + 1.0
+        let id x = 5
+        let a = same 1
+        let b = sqrt 4.0
+        let c = id 1
+        ",
+        &[("root", "2.0"), ("a", "1"), ("b", "5.0"), ("c", "5")],
+    );
+    // A file that binds the name and only uses its own is emitted as before.
+    let own = pyfun::compile("let max a b = a + b\nlet x = max 1 2").unwrap();
+    assert!(!own.contains("builtins"), "{own}");
+    // A binding named `math` beside a built-in that lives there.
+    run_and_check(
+        "let math = 3\nlet x = floor 2.5",
+        &[("x", "2"), ("math", "3")],
+    );
+}
+
+#[test]
+fn e2e_an_extern_and_a_let_of_one_name() {
+    // An `extern` is in scope from the top of the file, and a `let` of the
+    // same name takes over below its own line.
+    let src = "
+        extern floor2: float -> int = math.floor
+        let f x = floor2 x
+        let floor2 x = 7
+        let a = f 1.5
+        let b = floor2 1.5
+        ";
+    run_and_check(src, &[("a", "1"), ("b", "7")]);
+}
+
+#[test]
+fn e2e_a_module_member_reads_the_siblings_above_it() {
+    // Inside an in-file module the same holds a member at a time: a name
+    // bound again keeps both bindings, and a member written above a sibling
+    // of some name still means the outer one.
+    let src = "
+        module M =
+          let a = 1
+          let f u = a
+          let a = \"s\"
+        let x = M.f ()
+        let y = M.a
+        ";
+    let py = pyfun::compile(src).unwrap();
+    assert!(py.contains("M__a = 1\n"), "{py}");
+    assert!(py.contains("M_a = \"s\"\n"), "{py}");
+    run_and_check(src, &[("x", "1"), ("y", "s")]);
+    run_and_check(
+        "
+        let x = 10
+        module M =
+          let f u = x
+          let x = \"inner\"
+          let g u = x
+        let a = M.f ()
+        let b = M.g ()
+        ",
+        &[("a", "10"), ("b", "inner")],
+    );
+}
+
+#[test]
+fn e2e_an_active_pattern_argument_reads_the_binding_above_it() {
+    // The `k` in `case DivisibleBy k _:` is read, not bound.
+    run_and_check(
+        "
+        let (|DivisibleBy|_|) d n = if n % d == 0 then Some () else None
+        let k = 3
+        let f n =
+          match n:
+            case DivisibleBy k _: \"yes\"
+            case _: \"no\"
+        let k = 5
+        let a = f 9
+        let b = f 10
+        ",
+        &[("a", "yes"), ("b", "no"), ("k", "5")],
+    );
 }
 
 #[test]

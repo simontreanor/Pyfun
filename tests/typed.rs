@@ -172,6 +172,22 @@ fn the_members_of_an_in_file_module_are_annotated() {
 }
 
 #[test]
+fn each_binding_of_a_name_carries_its_own_type() {
+    // A name bound twice is two Python names, so a type checker reads two
+    // definitions where it would have refused a redefinition.
+    let python = typed(
+        "let helper s = String.len s\nlet f n = helper \"ab\" + n\nlet helper n = n + 1\nlet count = 1\nlet count = \"one\"",
+    );
+    assert!(python.contains("def _helper(s: str) -> int:"), "{python}");
+    assert!(
+        python.contains("def helper[A: (int, float)](n: A) -> A:"),
+        "{python}"
+    );
+    assert!(python.contains("_count: int = 1"), "{python}");
+    assert!(python.contains("count: str = \"one\""), "{python}");
+}
+
+#[test]
 fn typed_output_changes_nothing_but_annotations() {
     // Take the annotations away again and the plain output is left.
     let source = "type Point = { x: int, y: int }\nlet shift dx p = { p with x = p.x + dx }\nlet origin = Point { x = 0, y = 0 }\nprint (shift 2 origin)";
