@@ -2770,6 +2770,8 @@ fn run_inner(
     // once inference is done (a later item can still resolve an effect variable).
     let mut top_effects: Vec<(Span, Effect)> = Vec::new();
     for (idx, item) in module.items.iter().enumerate() {
+        let errors_before = errors.len();
+        let autos_before = inf.auto_sites.len();
         match item {
             // Measures and types are handled by the pre-pass and bind no value.
             // `extern import` is purely a lowering concern (`DESIGN.md` §6).
@@ -2827,6 +2829,16 @@ fn run_inner(
                     errors.push(early.error(seen.unwrap_or(expr.span())));
                 }
             }
+        }
+        // What inference carried on past joins the item's own errors, all of
+        // them in the order they are written.
+        errors.append(&mut inf.recovered);
+        errors[errors_before..].sort_by_key(|e| e.span.start);
+        // A `Decode.auto` in an item with an error may be open only because
+        // the error left its type unsettled, so it is not resolved: the error
+        // that is there is the one to fix.
+        if errors.len() > errors_before {
+            inf.auto_sites.truncate(autos_before);
         }
     }
 
@@ -2922,6 +2934,9 @@ fn run_inner(
             }
         })
         .collect();
+
+    // Nothing inference carried past is left unreported, wherever it was met.
+    errors.append(&mut inf.recovered);
 
     // Derived codecs (`Decode.auto`): each site's `Decoder a` is resolved now, and
     // an `a` that is still open is an error at the site, since there is nothing
@@ -7540,6 +7555,13 @@ struct Infer {
     /// Where an error was a use of a declaration that failed
     /// ([`Self::absent`]): left out of the report.
     follow_on: std::cell::RefCell<Vec<Span>>,
+    /// Errors inference has carried on past ([`Self::carry_on`]): a name, a
+    /// module member or a record field that is not there. The top-level loop
+    /// files them with the declaration they were found in.
+    recovered: Vec<TypeError>,
+    /// The span of the last field lookup that failed because the field is not
+    /// there (as against two records sharing it), for [`Self::infer_field`].
+    missing_field: std::cell::Cell<Option<Span>>,
     subst: HashMap<u32, Ty>,
     unit_subst: HashMap<u32, Unit>,
     /// Resolution of `num` (numeric base) variables — a small union-find: a var
@@ -8763,18 +8785,21 @@ impl Infer {
                     needs: name.clone(),
                 }
                 .error(span)),
-                None => Err(self.absent(
-                    name,
-                    TypeError {
-                        message: match python_builtin_spelling(name) {
-                            Some(spelling) => {
-                                format!("unbound name `{name}` (Pyfun spells this {spelling})")
-                            }
-                            None => format!("unbound name `{name}`"),
+                None => {
+                    let error = self.absent(
+                        name,
+                        TypeError {
+                            message: match python_builtin_spelling(name) {
+                                Some(spelling) => {
+                                    format!("unbound name `{name}` (Pyfun spells this {spelling})")
+                                }
+                                None => format!("unbound name `{name}`"),
+                            },
+                            span,
                         },
-                        span,
-                    },
-                )),
+                    );
+                    Ok(self.carry_on(error))
+                }
             },
 
             ExprKind::Annot { value, unit } => {
@@ -9056,7 +9081,7 @@ impl Infer {
                                 Some(m) => format!(" (did you mean `{module}.{m}`?)"),
                                 None => String::new(),
                             };
-                            Err(self.absent(
+                            let error = self.absent(
                                 &q,
                                 TypeError {
                                     message: format!(
@@ -9064,7 +9089,8 @@ impl Infer {
                                     ),
                                     span,
                                 },
-                            ))
+                            );
+                            Ok(self.carry_on(error))
                         }
                     };
                 }
@@ -9440,6 +9466,7 @@ impl Infer {
                 .map(|(_, n)| format!(" (did you mean `{n}`?)"))
                 .unwrap_or_default();
             let hidden = self.hidden_field_hint(field);
+            self.missing_field.set(Some(span));
             return Err(TypeError {
                 message: format!("record `{rec}` has no field `{field}`{near}{hidden}"),
                 span,
@@ -9459,6 +9486,8 @@ impl Infer {
             [only] => Ok(only.clone()),
             owners if owners.len() >= 2 => Err(self.ambiguous_field(field, owners, span)),
             _ => {
+                // No record in scope can be read for it.
+                self.missing_field.set(Some(span));
                 // A record carried transitively but shadowed by a same-named type
                 // is out of scope, yet its interface data still says where the
                 // field lives — say so instead of a dead-end "unknown".
@@ -9530,6 +9559,26 @@ impl Infer {
                 ))
             }
         }
+    }
+
+    /// Record `error`, about a name that is not there, and stand a fresh type
+    /// in for what it named, so the rest of the declaration is checked as if
+    /// the name were right. A fresh variable unifies with whatever the
+    /// expression around it asks, so an error still found there is a real one,
+    /// and a declaration with several old names reports them all at once. A
+    /// mismatch between two types is not carried past: after one, the types
+    /// downstream are in doubt.
+    fn carry_on(&mut self, error: TypeError) -> Ty {
+        // An expression inferred a second time (to word a hint) meets the same
+        // name again.
+        if !self
+            .recovered
+            .iter()
+            .any(|e| e.span == error.span && e.message == error.message)
+        {
+            self.recovered.push(error);
+        }
+        self.fresh()
     }
 
     /// `error` says `name` is not there. When the declaration of `name` failed,
@@ -10212,7 +10261,15 @@ impl Infer {
         if let Some(hint) = self.method_hint(&applied, name, span, env) {
             return Err(hint);
         }
-        let owner = self.record_of_field_on(&applied, name, span)?;
+        let owner = match self.record_of_field_on(&applied, name, span) {
+            Ok(owner) => owner,
+            // A field that is not there is carried past like a name that is
+            // not; the base keeps what it was found to be.
+            Err(error) if self.missing_field.take() == Some(error.span) => {
+                return Ok(self.carry_on(error));
+            }
+            Err(error) => return Err(error),
+        };
         let (record_ty, field_tys) = self.instantiate_record(&owner);
         self.unify(&record_ty, &bt, base.span())?;
         let fty = field_tys

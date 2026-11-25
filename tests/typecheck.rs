@@ -6221,3 +6221,94 @@ fn a_name_beginning_pf_is_the_compilers() {
     // An underscore, or `_p`, begins an ordinary name.
     assert!(pyfun::check("let _pfx = 1\nlet _p = _pfx\nlet pf_map = _p").is_ok());
 }
+
+// ---------- every name that is not there, in one run (#255, #256) ----------
+
+#[test]
+fn a_declaration_reports_every_name_that_is_not_there() {
+    // Two old names and a real mismatch in one `let`: inference carries on
+    // past a name that is not there, so all three arrive in one run, in the
+    // order they are written.
+    let errors = all_errors(
+        "let total xs =\n\
+         \x20 let n = String.toInt \"4\" |> Option.withDefault 0\n\
+         \x20 List.sum xs + n + \"x\"",
+    );
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(
+        errors[0].contains("did you mean `String.to_int`?"),
+        "{errors:?}"
+    );
+    assert!(
+        errors[1].contains("did you mean `Option.with_default`?"),
+        "{errors:?}"
+    );
+    assert!(
+        errors[2].contains("does not concatenate strings"),
+        "{errors:?}"
+    );
+    // A name nothing declares and a field no record has are carried past the
+    // same way.
+    let errors = all_errors(
+        "type P = { width: int }\n\
+         let f p =\n\
+         \x20 let a = p.widht\n\
+         \x20 let b = nope\n\
+         \x20 a + b + p.width",
+    );
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors[0].contains("did you mean `width`?"), "{errors:?}");
+    assert!(errors[1].contains("unbound name `nope`"), "{errors:?}");
+}
+
+#[test]
+fn a_mismatch_is_still_one_error_per_declaration() {
+    // After a real mismatch the types downstream are in doubt, so the
+    // declaration says that one thing.
+    let errors = all_errors("let g = (1 + \"a\", 2 + \"b\")");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    // The name that stood in is checked as if it were right: what it meets
+    // around it decides its type, so a later use that disagrees is a real
+    // error, reported with the name.
+    let errors = all_errors("let h =\n  let n = nope + 1\n  n + \"x\"");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(errors[0].contains("unbound name `nope`"), "{errors:?}");
+    assert!(
+        errors[1].contains("does not concatenate strings"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn an_open_decode_auto_beside_another_error_is_not_reported() {
+    // The field error ends nothing now, and the `case Line l` three lines
+    // down settles what the decoder reads.
+    let errors = all_errors(
+        "type Wire = Line str | Hello int\n\
+         let decode_line s =\n\
+         \x20 match Decode.decode_string Decode.auto s:\n\
+         \x20   case Error e: f\"unreadable ({e.errorKind})\"\n\
+         \x20   case Ok m:\n\
+         \x20     match m:\n\
+         \x20       case Line l: l\n\
+         \x20       case _: \"a handshake mid-game\"",
+    );
+    assert_eq!(
+        errors,
+        ["record `Exception` has no field `errorKind` (did you mean `error_kind`?)"],
+        "{errors:?}"
+    );
+    // Where an error does leave it open, the error is the one to fix.
+    let errors = all_errors(
+        "let read s =\n\
+         \x20 let d = Decode.decode_string Decode.auto s\n\
+         \x20 (1 + \"a\", d)",
+    );
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(!errors[0].contains("Decode.auto"), "{errors:?}");
+    // A declaration that leaves it open, and has no other error, is told so.
+    assert_error_contains(
+        "let read s = Decode.decode_string Decode.auto s",
+        "cannot tell what `Decode.auto` decodes into here",
+    );
+}
