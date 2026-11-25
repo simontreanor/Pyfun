@@ -819,7 +819,22 @@ impl<'a> Lexer<'a> {
             self.errors.push(error);
             kw
         } else {
-            Tok::Ident(text.to_string())
+            // The names the compiler writes into the Python it emits (helpers,
+            // temporaries, import aliases) all begin `_pf_`, and nothing keeps
+            // one apart from a program's own name of the same spelling.
+            let name = text.to_string();
+            if name.starts_with("_pf_") {
+                let error = self.err(
+                    start,
+                    &format!(
+                        "`{name}` is a name of the compiler's: it writes names beginning `_pf_` \
+                         into the Python it emits, so a program cannot use one (choose another \
+                         name)"
+                    ),
+                );
+                self.errors.push(error);
+            }
+            Tok::Ident(name)
         };
         self.push(tok, start);
     }

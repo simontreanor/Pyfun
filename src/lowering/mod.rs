@@ -3988,9 +3988,16 @@ impl Lowerer {
                 self.needed_combinators.insert(helper);
                 return PyExpr::Name(helper.to_string());
             }
-            // The rest of the prelude is a Python builtin of the same name. Where
-            // the file binds that name too, the module's global is the file's,
-            // so the builtin is read from where Python keeps it.
+            // The rest of the prelude is a Python builtin of the same name. A
+            // program's own binding of a name the emitter calls is written with
+            // a trailing underscore (`max_`), so the builtin keeps the name.
+            if py_value_name(name) != name && crate::types::PRELUDE.iter().any(|(n, _)| *n == name)
+            {
+                return PyExpr::Name(name.to_string());
+            }
+            // Where the file binds any other of those names, the module's
+            // global is the file's, so the builtin is read from where Python
+            // keeps it.
             if builtin {
                 let path = self.extern_path(&["builtins".to_string(), name.to_string()]);
                 return dotted_path(&path);
@@ -7397,14 +7404,34 @@ fn ap_case_class(case: &str) -> String {
     format!("_{case}")
 }
 
-/// Mangle a constructor name to a valid, non-keyword Python identifier.
+/// Mangle a constructor name to a valid, non-keyword Python identifier that
+/// leaves the emitter's own class names alone ([`PY_EMITTED_CLASSES`]).
 fn py_ctor_name(name: &str) -> String {
-    if matches!(name, "None" | "True" | "False") {
+    if matches!(name, "None" | "True" | "False") || PY_EMITTED_CLASSES.contains(&name) {
         format!("{name}_")
     } else {
         name.to_string()
     }
 }
+
+/// Python classes **this emitter names** in code that runs, or is read by a type
+/// checker, after a program's classes are defined: the exceptions it raises and
+/// catches (a decoder's `ValueError`, the `RuntimeError` of a match nothing
+/// took, `Async.timeout`'s `TimeoutError`) and the names typed output imports
+/// for its annotations. A constructor or a record of one of these names is a
+/// class of that name at module scope, which would replace the one the emitted
+/// code means, so it gains a trailing underscore, as `None` does. `Exception`
+/// is absent because it is reserved in Pyfun (the built-in record).
+const PY_EMITTED_CLASSES: &[&str] = &[
+    "Any",
+    "Awaitable",
+    "Callable",
+    "Container",
+    "Iterable",
+    "RuntimeError",
+    "TimeoutError",
+    "ValueError",
+];
 
 /// Python's reserved words (plus the soft keywords that are reserved in the
 /// positions Pyfun emits into). A user binding named after one of these cannot be
@@ -7423,24 +7450,50 @@ const PY_KEYWORDS: &[&str] = &[
 /// value instead of the builtin — `'int' object is not callable`, far from the
 /// binding that caused it.
 ///
-/// Deliberately *only* the names that are emitted with no Pyfun name of their own.
-/// `print`/`abs`/`min`/`max`/`round` are absent on purpose: those lower name-for-
-/// name from an identically spelled Pyfun prelude binding, so a user binding of
-/// that name shadows the Pyfun name too and the checker settles it. `id` is absent
-/// because Pyfun's `id` lowers to `_pf_id` (Python's `id` returns an address), and
-/// `let id x = x` is common enough that mangling it would be a visible tax for no
-/// collision.
+/// Every builtin the emitter writes by name is here, and a test holds the list
+/// to that (`every_builtin_the_emitter_names_is_guarded`). `min` and `max` are
+/// Pyfun prelude names too: a program's own `max` is `max_` in Python, and a
+/// use of the prelude's keeps the builtin's name ([`Lowerer::lower_var`]), so
+/// `List.max`, which calls it, still finds it. `print`/`abs`/`round` are absent
+/// because the emitter calls none of them itself: they lower name-for-name from
+/// the Pyfun prelude binding, and a use of the prelude's above a program's own
+/// binding of the name is read from `builtins`. `id` is absent because Pyfun's
+/// `id` lowers to `_pf_id` (Python's `id` returns an address), and `let id x = x`
+/// is common enough that mangling it would be a visible tax for no collision.
 const PY_EMITTED_BUILTINS: &[&str] = &[
+    "all",
+    "any",
+    "enumerate",
     "filter",
+    "format",
+    "getattr",
     "isinstance",
     "iter",
     "len",
     "map",
+    "max",
+    "min",
     "next",
     "reversed",
     "sorted",
     "sum",
     "zip",
+];
+
+/// Python modules **this emitter imports for itself** and names directly
+/// (`functools.partial`, `json.loads`, `itertools.islice`). A binding of one of
+/// these names at module scope would replace the module the emitted code
+/// reads, so it gains a trailing underscore like a builtin. `math` and
+/// `builtins` are absent: every reference the emitter makes to them goes
+/// through [`Lowerer::extern_path`], which aliases the import instead.
+const PY_EMITTED_MODULES: &[&str] = &[
+    "asyncio",
+    "contextvars",
+    "dataclasses",
+    "functools",
+    "itertools",
+    "json",
+    "keyword",
 ];
 
 /// The emitted Python name for a user **value** binding or reference: the name as
@@ -7458,6 +7511,7 @@ fn py_value_name(name: &str) -> String {
     // of them directly (`set([…])`, `dict(…)`, `list(…)`).
     if PY_KEYWORDS.contains(&name)
         || PY_EMITTED_BUILTINS.contains(&name)
+        || PY_EMITTED_MODULES.contains(&name)
         || crate::types::PY_BUILTIN_TYPES.contains(&name)
     {
         format!("{name}_")
@@ -7483,6 +7537,8 @@ fn py_field_name(name: &str) -> String {
 fn py_record_class(name: &str) -> String {
     if name == "Exception" {
         "_Exception".to_string()
+    } else if PY_EMITTED_CLASSES.contains(&name) {
+        format!("{name}_")
     } else {
         name.to_string()
     }
@@ -12660,4 +12716,256 @@ fn with_assign(mut stmts: Vec<PyStmt>, target: &str, value: PyExpr) -> Vec<PyStm
         value,
     });
     stmts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The names Python's `builtins` module holds (3.14), bar the constants.
+    const PY_BUILTINS: &[&str] = &[
+        "ArithmeticError",
+        "AssertionError",
+        "AttributeError",
+        "BaseException",
+        "BaseExceptionGroup",
+        "BlockingIOError",
+        "BrokenPipeError",
+        "BufferError",
+        "BytesWarning",
+        "ChildProcessError",
+        "ConnectionAbortedError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "DeprecationWarning",
+        "EOFError",
+        "Ellipsis",
+        "EncodingWarning",
+        "EnvironmentError",
+        "Exception",
+        "ExceptionGroup",
+        "FileExistsError",
+        "FileNotFoundError",
+        "FloatingPointError",
+        "FutureWarning",
+        "GeneratorExit",
+        "IOError",
+        "ImportError",
+        "ImportWarning",
+        "IndentationError",
+        "IndexError",
+        "InterruptedError",
+        "IsADirectoryError",
+        "KeyError",
+        "KeyboardInterrupt",
+        "LookupError",
+        "MemoryError",
+        "ModuleNotFoundError",
+        "NameError",
+        "NotADirectoryError",
+        "NotImplemented",
+        "NotImplementedError",
+        "OSError",
+        "OverflowError",
+        "PendingDeprecationWarning",
+        "PermissionError",
+        "ProcessLookupError",
+        "PythonFinalizationError",
+        "RecursionError",
+        "ReferenceError",
+        "ResourceWarning",
+        "RuntimeError",
+        "RuntimeWarning",
+        "StopAsyncIteration",
+        "StopIteration",
+        "SyntaxError",
+        "SyntaxWarning",
+        "SystemError",
+        "SystemExit",
+        "TabError",
+        "TimeoutError",
+        "TypeError",
+        "UnboundLocalError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "UnicodeError",
+        "UnicodeTranslateError",
+        "UnicodeWarning",
+        "UserWarning",
+        "ValueError",
+        "Warning",
+        "WindowsError",
+        "ZeroDivisionError",
+        "abs",
+        "aiter",
+        "all",
+        "anext",
+        "any",
+        "ascii",
+        "bin",
+        "bool",
+        "breakpoint",
+        "bytearray",
+        "bytes",
+        "callable",
+        "chr",
+        "classmethod",
+        "compile",
+        "complex",
+        "delattr",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "eval",
+        "exec",
+        "filter",
+        "float",
+        "format",
+        "frozenset",
+        "getattr",
+        "globals",
+        "hasattr",
+        "hash",
+        "help",
+        "hex",
+        "id",
+        "input",
+        "int",
+        "isinstance",
+        "issubclass",
+        "iter",
+        "len",
+        "list",
+        "locals",
+        "map",
+        "max",
+        "memoryview",
+        "min",
+        "next",
+        "object",
+        "oct",
+        "open",
+        "ord",
+        "pow",
+        "print",
+        "property",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "staticmethod",
+        "str",
+        "sum",
+        "super",
+        "tuple",
+        "type",
+        "vars",
+        "zip",
+    ];
+
+    /// Where the lowering is written: a Python name it emits is a string
+    /// literal in one of these.
+    const SOURCES: &[(&str, &str)] = &[
+        ("mod.rs", include_str!("mod.rs")),
+        ("captures.rs", include_str!("captures.rs")),
+        ("decode_spec.rs", include_str!("decode_spec.rs")),
+        ("fold_loop.rs", include_str!("fold_loop.rs")),
+        ("newtype_patterns.rs", include_str!("newtype_patterns.rs")),
+        ("self_tail_call.rs", include_str!("self_tail_call.rs")),
+        ("typed.rs", include_str!("typed.rs")),
+    ];
+
+    /// The string literals of a line of Rust that are one identifier each,
+    /// leaving out what follows a `//`.
+    fn identifier_literals(line: &str) -> Vec<&str> {
+        let mut found = Vec::new();
+        for (i, part) in line.split('"').enumerate() {
+            if i % 2 == 0 {
+                if part.contains("//") {
+                    break;
+                }
+            } else if !part.is_empty()
+                && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                found.push(part);
+            }
+        }
+        found
+    }
+
+    /// A helper the lowering writes names Python's builtins as plain strings
+    /// (`call("len", …)`), and a program's own binding of such a name would
+    /// take the builtin's place at module scope. So each builtin the lowering
+    /// names has to be one a program's binding is kept off: a keyword, or on
+    /// one of the lists [`py_value_name`] and [`py_ctor_name`] read. A new
+    /// helper that calls a builtin no list has fails here, with the name.
+    #[test]
+    fn every_builtin_the_emitter_names_is_guarded() {
+        // Named for a reason that is not an emitted call of the builtin.
+        let exempt = [
+            // Pyfun's `id` is the helper `_pf_id`; the literal is the Pyfun name.
+            "id",
+            // A keyword of Pyfun: no program binds it.
+            "type",
+            // Reserved in Pyfun (the built-in record), emitted as `_Exception`.
+            "Exception",
+        ];
+        let mut unguarded = Vec::new();
+        for (file, source) in SOURCES {
+            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+            for (number, line) in code.lines().enumerate() {
+                for name in identifier_literals(line) {
+                    let guarded = PY_KEYWORDS.contains(&name)
+                        || PY_EMITTED_BUILTINS.contains(&name)
+                        || PY_EMITTED_CLASSES.contains(&name)
+                        || crate::types::PY_BUILTIN_TYPES.contains(&name)
+                        || exempt.contains(&name);
+                    if PY_BUILTINS.contains(&name) && !guarded {
+                        unguarded.push(format!("{file}:{}: {name}", number + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            unguarded.is_empty(),
+            "the lowering names Python builtins that a program's own binding could replace; \
+             add each to `PY_EMITTED_BUILTINS` (a function) or `PY_EMITTED_CLASSES` (a class):\n{}",
+            unguarded.join("\n")
+        );
+    }
+
+    /// The same for the modules the lowering imports for itself: each is
+    /// either on [`PY_EMITTED_MODULES`], or reached only through
+    /// [`Lowerer::extern_path`], which aliases the import.
+    #[test]
+    fn every_module_the_emitter_imports_is_guarded() {
+        let aliased = ["math", "builtins"];
+        let mut unguarded = Vec::new();
+        for (file, source) in SOURCES {
+            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+            for (number, line) in code.lines().enumerate() {
+                let imports = line.contains("PyStmt::Import(") || line.contains("needed_imports");
+                if !imports {
+                    continue;
+                }
+                for name in identifier_literals(line) {
+                    if !PY_EMITTED_MODULES.contains(&name) && !aliased.contains(&name) {
+                        unguarded.push(format!("{file}:{}: {name}", number + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            unguarded.is_empty(),
+            "the lowering imports modules that a program's own binding could replace; add \
+             each to `PY_EMITTED_MODULES`:\n{}",
+            unguarded.join("\n")
+        );
+    }
 }

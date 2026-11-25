@@ -273,6 +273,21 @@ rather than a fixed list, so an `import` shadowed by a binding is **aliased** in
 (`import math as _pf_math`), leaving the user's `math` binding untouched. Programs that claim none of
 these names — nearly all of them — emit byte-identical output either way.
 
+The lists behind the rule are held to what the emitter writes. *Builtins*: every Python builtin a
+helper or an inline expansion calls (`len`, `map`, `any`, `all`, `enumerate`, `getattr`, `format`,
+`min`, `max` and the rest), and a test reads the lowering's own source and fails, naming the
+builtin, when a new helper calls one that is not listed. `min` and `max` are prelude names as well:
+a program's own `max` is `max_` in Python, and the prelude's keeps the builtin's name, so
+`List.max` still finds it. *Modules the emitter imports for itself* (`functools`, `itertools`,
+`json`, `asyncio`, `dataclasses`, `contextvars`, `keyword`) are named directly in the code it
+writes, so a binding of one gains the underscore too (`let json = 1` is `json_`), and the same test
+holds that list. *Classes*: a constructor or a record named like an exception the emitter raises or
+catches (`ValueError`, `RuntimeError`, `TimeoutError`), or like a name typed output imports for an
+annotation (`Any`, `Callable`), is its own class with the underscore (`ValueError_`), and prints
+under that name. And the compiler's own namespace is closed: every helper, temporary and import
+alias it writes begins `_pf_`, so **a name beginning `_pf_` in source is an error** that says whose
+it is, where it used to be accepted and could replace a helper.
+
 **Arm-scoped captures and nested-block `let`s.** A match arm's capture (`case Some pair: …`) is
 scoped to its arm, and a `let` inside a nested block (an `if` branch, an arm body) is scoped to that
 block. The Python either lowers to (`case Some(pair):`, `pair = o._0` in an `isinstance` ladder, or
