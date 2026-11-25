@@ -737,7 +737,10 @@ offside rule reads columns, so equal columns staying equal and deeper ones stayi
 blocks. `Columns` holds the column of every line, so before it opens a level it reads ahead over the
 lines deeper than the level in hand (`hanging_from`). When one of them steps back to a column between
 that level and one opened since, a stack of one-step levels would write two source columns at one, so
-those lines are placed by their distance from the level in hand and open no levels. A comment line
+those lines are placed by their distance from the level in hand and open no levels. It reads ahead
+only when the line last set on the level in hand starts inside brackets (`Columns::bracketed`), so
+the layout is kept where the offside rule is off and an odd column anywhere else is still set on a
+level. A comment line
 takes the level of the code after it, or of the block above when it is deeper than that code.
 
 `fmt::format` parses the source, writes the text, and parses that: the two modules must be equal (a

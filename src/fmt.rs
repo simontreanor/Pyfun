@@ -295,15 +295,23 @@ fn wants_space(a: &Token, b: &Token, had: bool, braces: (Option<Braces>, Option<
 /// rule reads columns, so a mapping that keeps equal columns equal and deeper
 /// ones deeper keeps the blocks.
 ///
-/// Lines that step back to a column between two levels are a hanging layout:
-/// an `else` set under its `if`, with the branch between them deeper still.
-/// Levels one step apart cannot keep three such columns apart, so those lines
-/// keep the columns they have from the line they hang from.
+/// Inside brackets, lines that step back to a column between two levels are a
+/// hanging layout: an `else` set under its `if`, with the branch between them
+/// deeper still. Levels one step apart cannot keep three such columns apart,
+/// so those lines keep the columns they have from the line they hang from.
+/// This holds only under a line that itself stands inside brackets, where the
+/// offside rule is off and the author's alignment is the only layout there
+/// is. Anywhere else an odd column is untidiness, and is set on a level: the
+/// steps of a pipeline, the items of a builder under the line that opens it.
 struct Columns {
     /// `(column in the source, column written)`, shallowest first.
     levels: Vec<(usize, usize)>,
+    /// For each level, whether the line last set on it starts inside brackets.
+    bracketed: Vec<bool>,
     /// The source column of every line, first to last.
     lines: Vec<usize>,
+    /// For each line, whether it starts inside brackets.
+    inside: Vec<bool>,
     /// How many of `lines` have been placed.
     placed: usize,
     /// How many of the lines to come hang from the level in hand.
@@ -311,10 +319,12 @@ struct Columns {
 }
 
 impl Columns {
-    fn new(lines: Vec<usize>) -> Columns {
+    fn new(lines: Vec<usize>, inside: Vec<bool>) -> Columns {
         Columns {
             levels: vec![(0, 0)],
+            bracketed: vec![false],
             lines,
+            inside,
             placed: 0,
             hanging: 0,
         }
@@ -332,17 +342,28 @@ impl Columns {
         }
         while self.levels.len() > 1 && self.levels.last().is_some_and(|&(from, _)| from > col) {
             self.levels.pop();
+            self.bracketed.pop();
         }
+        let inside = self.inside.get(line).copied().unwrap_or(false);
         let &(from, to) = self.levels.last().expect("the margin is always a level");
         if from >= col {
+            if let Some(last) = self.bracketed.last_mut() {
+                *last = inside;
+            }
             return to;
         }
-        let hanging = self.hanging_from(from, line);
+        let under_bracketed = self.bracketed.last().copied().unwrap_or(false);
+        let hanging = if under_bracketed {
+            self.hanging_from(from, line)
+        } else {
+            0
+        };
         if hanging > 0 {
             self.hanging = hanging - 1;
             return to + (col - from);
         }
         self.levels.push((col, to + INDENT));
+        self.bracketed.push(inside);
         to + INDENT
     }
 
@@ -408,6 +429,7 @@ impl<'a> Writer<'a> {
         let mut real: Vec<&Token> = Vec::new();
         let mut places = Vec::new();
         let mut lines = Vec::new();
+        let mut inside = Vec::new();
         let mut at_head = true;
         // How many blocks are open, and the count a `type` declaration began
         // at: it runs to the next statement at that depth or a shallower one.
@@ -439,6 +461,7 @@ impl<'a> Writer<'a> {
                     .rfind('\n')
                     .map_or(0, |nl| nl + 1);
                 lines.push(token.span.start - line);
+                inside.push(token.depth > 0);
             }
             places.push(Place {
                 head: at_head,
@@ -454,7 +477,7 @@ impl<'a> Writer<'a> {
             real,
             marks,
             reindent,
-            columns: Columns::new(lines),
+            columns: Columns::new(lines, inside),
             out: String::with_capacity(source.len()),
         }
     }
