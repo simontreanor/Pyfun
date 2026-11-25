@@ -152,6 +152,149 @@ fn the_lessons_and_examples_are_formatted() {
     assert!(unformatted.is_empty(), "run `pyfun fmt`: {unformatted:#?}");
 }
 
+// ---- a layout the author chose ----
+
+/// `source` formatted, which formatting again leaves alone.
+fn formatted(source: &str) -> String {
+    let once = pyfun::fmt::format(source).unwrap_or_else(|e| panic!("{e}\n{source}"));
+    let twice = pyfun::fmt::format(&once).unwrap_or_else(|e| panic!("{e}\n{once}"));
+    assert_eq!(once, twice, "formatting it again changed it");
+    once
+}
+
+#[test]
+fn a_leading_comma_list_keeps_the_space_that_lines_it_up() {
+    // `[ a` over `, b` sets the elements in one column, and the space after
+    // the bracket is what does it. The spaces between the elements of a line
+    // are settled as everywhere else.
+    let source = "\
+let quadrant =
+  [ (0, 0, \"QW\")
+  , (0, 7, \"TW\"),   (3, 3, \"TW\"),   (3, 10, \"TW\")
+  , (1, 1, \"DW\"),   (1, 8, \"DW\"),   (2, 2, \"DW\") ]
+";
+    assert_eq!(
+        formatted(source),
+        "\
+let quadrant =
+  [ (0, 0, \"QW\")
+  , (0, 7, \"TW\"), (3, 3, \"TW\"), (3, 10, \"TW\")
+  , (1, 1, \"DW\"), (1, 8, \"DW\"), (2, 2, \"DW\") ]
+"
+    );
+    // The same for a tuple and a map, and for a closing bracket on its own line.
+    let source = "\
+let pair =
+  ( 1
+  , 2 )
+let table =
+  { \"a\": 1
+  , \"b\": 2 }
+let names =
+  [ \"ada\"
+  , \"grace\"
+  ]
+";
+    assert_eq!(formatted(source), source);
+    // The space is the author's to leave out, too.
+    let source = "let tight =\n  [(0, 0)\n  , (1, 1)]\n";
+    assert_eq!(formatted(source), source);
+    // A list with its commas at the ends of the lines, or on one line, has no
+    // column to keep.
+    assert_eq!(
+        formatted("let xs = [ 1,\n  2 ]\nlet ys = [ 1, 2 ]\n"),
+        "let xs = [1,\n  2]\nlet ys = [1, 2]\n"
+    );
+    // Only the bracket with the leading comma keeps its spaces: one inside it
+    // is spaced by rule.
+    assert_eq!(
+        formatted("let rows =\n  [ [ 1, 2 ]\n  , [ 3, 4 ] ]\n"),
+        "let rows =\n  [ [1, 2]\n  , [3, 4] ]\n"
+    );
+}
+
+#[test]
+fn a_record_types_braces_are_spaced_on_whichever_line_they_open() {
+    let spaced = "\
+type Hello =
+  { version: int, name: str
+  , moves: List str }
+
+type Point = { x: int, y: int }
+";
+    assert_eq!(formatted(spaced), spaced);
+    assert_eq!(
+        formatted(
+            "type Hello =\n  {version: int, name: str\n  , moves: List str}\n\ntype Point = {x: int, y: int}\n"
+        ),
+        spaced
+    );
+    // A field per line.
+    assert_eq!(
+        formatted("type Hello =\n    {\n        version: int,\n        name: str\n    }\n"),
+        "type Hello =\n  {\n    version: int,\n    name: str\n  }\n"
+    );
+    assert_eq!(
+        formatted("type Hello =\n  {version: int,\n   name: str}\n"),
+        "type Hello =\n  { version: int,\n    name: str }\n"
+    );
+    // The declaration ends where the next statement begins: a map there is
+    // still a map.
+    assert_eq!(
+        formatted("type Hello =\n  {name: str}\nlet ages = { \"ada\": 36 }\n"),
+        "type Hello =\n  { name: str }\nlet ages = {\"ada\": 36}\n"
+    );
+}
+
+#[test]
+fn lines_hung_at_three_depths_keep_them() {
+    // The `else` stands under its `if` and the branch deeper still: three
+    // columns, where one step of indentation has room for two.
+    let hung = "\
+let swap letters bag =
+  result {
+    do! if List.len letters == 0 then
+          Error \"Say which tiles.\"
+        else Ok ()
+    return List.concat bag letters
+  }
+";
+    assert_eq!(formatted(hung), hung);
+    // The block around them is indented again, and they move with the line
+    // they hang from.
+    let wide = "\
+let swap letters bag =
+    result {
+        do! if List.len letters == 0 then
+              Error \"Say which tiles.\"
+            else Ok ()
+        return List.concat bag letters
+    }
+";
+    assert_eq!(formatted(wide), hung);
+    // The same for an argument set under the first one.
+    let hung = "\
+let label =
+  join (prefix
+          |> upper)
+       suffix
+";
+    assert_eq!(formatted(hung), hung);
+    let wide = "\
+let label =
+      join (prefix
+              |> upper)
+           suffix
+";
+    assert_eq!(formatted(wide), hung);
+    // Lines that step back onto a level are the ordinary staircase: a step
+    // each, however far they hung.
+    assert_eq!(
+        formatted("let total =\n    add (one\n            |> double)\n    |> print\n"),
+        "let total =\n  add (one\n    |> double)\n  |> print\n"
+    );
+}
+
 // ---- the command ----
 
 fn pyfun_bin() -> &'static str {

@@ -93,7 +93,8 @@ struct Marks {
     /// For each `{` and `}`, how the pair is spaced.
     braces: Vec<Option<Braces>>,
     /// Gaps left as written (a space stays a space, none stays none): inside
-    /// a unit `<m/s^2>`, and through a `measure` declaration.
+    /// a unit `<m/s^2>`, through a `measure` declaration, and just inside a
+    /// bracket whose list goes on with a leading comma.
     as_written: Vec<bool>,
     /// Gaps closed whatever the tokens are: after the `*` of a `*rest`
     /// pattern.
@@ -135,18 +136,20 @@ fn always_spaced(tok: &Tok) -> bool {
 }
 
 impl Marks {
-    /// `real` is the token stream without layout tokens; `heads[i]` says token
-    /// `i` opens a statement.
-    fn of(real: &[&Token], heads: &[bool]) -> Marks {
+    /// `real` is the token stream without layout tokens, and `places` says
+    /// where each of them stands.
+    fn of(real: &[&Token], places: &[Place]) -> Marks {
         let mut marks = Marks {
             braces: vec![None; real.len()],
             as_written: vec![false; real.len()],
             tight: vec![false; real.len() + 1],
         };
-        let mut open: Vec<usize> = Vec::new();
+        // Every bracket still open: its opener, and whether a line inside it
+        // has started with a comma.
+        let mut open: Vec<(usize, bool)> = Vec::new();
         let mut head: Option<&Tok> = None;
         for (i, token) in real.iter().enumerate() {
-            if heads[i] {
+            if places[i].head {
                 head = Some(&token.tok);
             }
             match &token.tok {
@@ -160,12 +163,26 @@ impl Marks {
             }
             match &token.tok {
                 Tok::LBrace => {
-                    marks.braces[i] = Some(brace_kind(real, i, head));
-                    open.push(i);
+                    marks.braces[i] = Some(brace_kind(real, i, places[i].in_type));
+                    open.push((i, false));
                 }
-                Tok::RBrace => {
-                    if let Some(opener) = open.pop() {
+                Tok::LParen | Tok::LBracket => open.push((i, false)),
+                Tok::Comma if places[i].starts_line => {
+                    if let Some((_, leading_comma)) = open.last_mut() {
+                        *leading_comma = true;
+                    }
+                }
+                Tok::RBrace | Tok::RParen | Tok::RBracket => {
+                    if let Some((opener, leading_comma)) = open.pop() {
                         marks.braces[i] = marks.braces[opener];
+                        // `[ a` over `, b` lines the elements up, and the
+                        // space after the bracket is what does it: the layout
+                        // is the author's, like the line breaks. Spaced braces
+                        // have their spaces by rule.
+                        if leading_comma && marks.braces[opener] != Some(Braces::Spaced) {
+                            marks.as_written[opener + 1] = true;
+                            marks.as_written[i] = true;
+                        }
                     }
                 }
                 // A unit: `<` hard against what it measures, then names,
@@ -199,8 +216,9 @@ impl Marks {
     }
 }
 
-/// How the braces opened by `real[i]` are spaced.
-fn brace_kind(real: &[&Token], i: usize, head: Option<&Tok>) -> Braces {
+/// How the braces opened by `real[i]` are spaced. `in_type` says they stand
+/// in a `type` declaration, on its first line or a later one.
+fn brace_kind(real: &[&Token], i: usize, in_type: bool) -> Braces {
     let next = real.get(i + 1).map(|t| &t.tok);
     if next == Some(&Tok::RBrace) {
         return Braces::Tight;
@@ -228,7 +246,7 @@ fn brace_kind(real: &[&Token], i: usize, head: Option<&Tok>) -> Braces {
             }
         }
     }
-    if matches!(head, Some(Tok::Type)) {
+    if in_type {
         return Braces::Spaced;
     }
     // A record update or a block says so inside; a map or a set does not.
@@ -276,20 +294,42 @@ fn wants_space(a: &Token, b: &Token, had: bool, braces: (Option<Braces>, Option<
 /// written at: each level one step deeper than the one it sits in. The offside
 /// rule reads columns, so a mapping that keeps equal columns equal and deeper
 /// ones deeper keeps the blocks.
+///
+/// Lines that step back to a column between two levels are a hanging layout:
+/// an `else` set under its `if`, with the branch between them deeper still.
+/// Levels one step apart cannot keep three such columns apart, so those lines
+/// keep the columns they have from the line they hang from.
 struct Columns {
     /// `(column in the source, column written)`, shallowest first.
     levels: Vec<(usize, usize)>,
+    /// The source column of every line, first to last.
+    lines: Vec<usize>,
+    /// How many of `lines` have been placed.
+    placed: usize,
+    /// How many of the lines to come hang from the level in hand.
+    hanging: usize,
 }
 
 impl Columns {
-    fn new() -> Columns {
+    fn new(lines: Vec<usize>) -> Columns {
         Columns {
             levels: vec![(0, 0)],
+            lines,
+            placed: 0,
+            hanging: 0,
         }
     }
 
-    /// The column a line that starts at `col` in the source is written at.
+    /// The column the next line, which starts at `col` in the source, is
+    /// written at.
     fn place(&mut self, col: usize) -> usize {
+        let line = self.placed;
+        self.placed += 1;
+        if self.hanging > 0 {
+            self.hanging -= 1;
+            let &(from, to) = self.levels.last().expect("the margin is always a level");
+            return to + col.saturating_sub(from);
+        }
         while self.levels.len() > 1 && self.levels.last().is_some_and(|&(from, _)| from > col) {
             self.levels.pop();
         }
@@ -297,19 +337,61 @@ impl Columns {
         if from >= col {
             return to;
         }
+        let hanging = self.hanging_from(from, line);
+        if hanging > 0 {
+            self.hanging = hanging - 1;
+            return to + (col - from);
+        }
         self.levels.push((col, to + INDENT));
         to + INDENT
     }
 
-    /// The column of the level a comment at `col` belongs to, without opening
-    /// one: the deepest level that starts at or before it.
-    fn nearest(&self, col: usize) -> usize {
-        self.levels
-            .iter()
-            .rev()
-            .find(|&&(from, _)| from <= col)
-            .map_or(0, |&(_, to)| to)
+    /// How many lines, from `line` on, hang from the level at source column
+    /// `base`: every line deeper than it, when one of them steps back to a
+    /// column between `base` and a level opened since. None when each step
+    /// back lands on a level, which is the ordinary staircase.
+    fn hanging_from(&self, base: usize, line: usize) -> usize {
+        let lines = self.lines.get(line..).unwrap_or(&[]);
+        let deeper = lines.iter().take_while(|&&col| col > base).count();
+        let mut opened: Vec<usize> = Vec::new();
+        for &col in &lines[..deeper] {
+            let mut closed = false;
+            while opened.last().is_some_and(|&from| from > col) {
+                opened.pop();
+                closed = true;
+            }
+            match opened.last() {
+                Some(&from) if from == col => {}
+                // A step back to between two levels opened under `base` is
+                // settled when the shallower of them is the level in hand.
+                Some(_) => opened.push(col),
+                None if closed => return deeper,
+                None => opened.push(col),
+            }
+        }
+        0
     }
+}
+
+/// The column of the level a comment at `col` belongs to, without opening
+/// one: the deepest level that starts at or before it.
+fn nearest(levels: &[(usize, usize)], col: usize) -> usize {
+    levels
+        .iter()
+        .rev()
+        .find(|&&(from, _)| from <= col)
+        .map_or(0, |&(_, to)| to)
+}
+
+/// Where a token stands, worked out from the layout tokens and the lines.
+#[derive(Clone, Copy)]
+struct Place {
+    /// It opens a statement.
+    head: bool,
+    /// It is the first token on its line.
+    starts_line: bool,
+    /// It is part of a `type` declaration, on any of its lines.
+    in_type: bool,
 }
 
 struct Writer<'a> {
@@ -323,25 +405,56 @@ struct Writer<'a> {
 
 impl<'a> Writer<'a> {
     fn new(source: &'a str, tokens: &'a [Token], reindent: bool) -> Writer<'a> {
-        let mut real = Vec::new();
-        let mut heads = Vec::new();
+        let mut real: Vec<&Token> = Vec::new();
+        let mut places = Vec::new();
+        let mut lines = Vec::new();
         let mut at_head = true;
+        // How many blocks are open, and the count a `type` declaration began
+        // at: it runs to the next statement at that depth or a shallower one.
+        let mut blocks = 0usize;
+        let mut type_at: Option<usize> = None;
         for token in tokens {
+            match token.tok {
+                Tok::Indent => blocks += 1,
+                Tok::Dedent => blocks = blocks.saturating_sub(1),
+                _ => {}
+            }
             if is_layout(&token.tok) {
                 at_head = true;
-            } else {
-                real.push(token);
-                heads.push(at_head);
-                at_head = false;
+                continue;
             }
+            if at_head {
+                if type_at.is_some_and(|depth| blocks <= depth) {
+                    type_at = None;
+                }
+                if token.tok == Tok::Type {
+                    type_at = Some(blocks);
+                }
+            }
+            let starts_line = real
+                .last()
+                .is_none_or(|prev| source[prev.span.end..token.span.start].contains('\n'));
+            if starts_line {
+                let line = source[..token.span.start]
+                    .rfind('\n')
+                    .map_or(0, |nl| nl + 1);
+                lines.push(token.span.start - line);
+            }
+            places.push(Place {
+                head: at_head,
+                starts_line,
+                in_type: type_at.is_some(),
+            });
+            real.push(token);
+            at_head = false;
         }
-        let marks = Marks::of(&real, &heads);
+        let marks = Marks::of(&real, &places);
         Writer {
             source,
             real,
             marks,
             reindent,
-            columns: Columns::new(),
+            columns: Columns::new(lines),
             out: String::with_capacity(source.len()),
         }
     }
@@ -437,10 +550,8 @@ impl<'a> Writer<'a> {
         }
         // The level each comment line sits at is decided against the line
         // that follows, so place that one first.
-        let before = Columns {
-            levels: self.columns.levels.clone(),
-        };
-        let above = before.levels.last().map_or(0, |&(from, _)| from);
+        let before = self.columns.levels.clone();
+        let above = before.last().map_or(0, |&(from, _)| from);
         let next_col = next.map(|at| self.column(at));
         let next_indent = next_col.map(|col| {
             if self.reindent {
@@ -473,7 +584,7 @@ impl<'a> Writer<'a> {
                     next_indent
                 }
                 // A deeper one closes the block above.
-                _ => before.nearest(col),
+                _ => nearest(&before, col),
             };
             self.out.push_str(&" ".repeat(indent));
             self.out.push_str(text);
