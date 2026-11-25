@@ -157,6 +157,27 @@ pub fn references(module: &Module) -> Vec<Reference> {
     walk(module).refs
 }
 
+/// The record fields written with the shorthand, in a literal
+/// (`Rect { width, height }`) and in a pattern (`case Rect { width }:`): the
+/// span of each bare name. Such a name is the field and the variable at once,
+/// so a rename of the variable has to write the field back beside it
+/// (`Rect { width = w, height }`). `source` is the text the module was parsed
+/// from: in a literal a field written out with a value of its own name
+/// (`width = width`) has the same tree, and only the text tells them apart.
+pub fn punned_fields(module: &Module, source: &str) -> Vec<Span> {
+    let walked = walk(module);
+    let mut spans = walked.punned_patterns;
+    spans.extend(walked.field_values.into_iter().filter(|span| {
+        // A value of the shorthand opens its field: it follows `{` or `,`,
+        // where a written-out value follows `=`.
+        source
+            .get(..span.start)
+            .and_then(|before| before.trim_end().chars().next_back())
+            .is_some_and(|c| c == '{' || c == ',')
+    }));
+    spans
+}
+
 /// The narrowest qualified `Module.member` reference (expression position) whose
 /// occurrence covers `offset`, for cross-file go-to-definition (`DESIGN.md` §6.1).
 /// Pattern-position qualified constructors are not included (patterns carry no
@@ -395,6 +416,13 @@ struct Resolver {
     /// Modules a computation expression uses as its builder (`Maybe { … }`),
     /// which is a use of the module with no `Module.member` to show for it.
     builder_modules: Vec<String>,
+    /// Pattern fields written with the shorthand (`case Rect { width }:`): the
+    /// span of the name, which is the field and the binder at once.
+    punned_patterns: Vec<Span>,
+    /// In a record literal, the span of each field value that is a bare
+    /// variable of the field's own name: the shorthand, or `width = width`
+    /// ([`punned_fields`] tells them apart).
+    field_values: Vec<Span>,
     /// The module's record-bodied constructor names, so a record-shaped tag can be told apart:
     /// a record type's is a type-name occurrence, a constructor's is a reference
     /// to that constructor.
@@ -512,6 +540,10 @@ impl Resolver {
                     }),
                 }
                 for f in fields {
+                    if matches!(&f.pattern, Pattern::Var { span, .. } if span.span() == f.name_span.span())
+                    {
+                        self.punned_patterns.push(f.name_span.span());
+                    }
                     self.walk_pattern(&f.pattern);
                 }
             }
@@ -762,6 +794,9 @@ impl Resolver {
                     }),
                 }
                 for f in fields {
+                    if matches!(&f.value.kind, ExprKind::Var(name) if *name == f.name) {
+                        self.field_values.push(f.value.span());
+                    }
                     self.walk_expr(&f.value);
                 }
             }

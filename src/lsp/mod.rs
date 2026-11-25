@@ -1254,7 +1254,31 @@ impl Server {
             let Some(occ) = self.symbol_occurrences(uri, &tmod, &member, true, true) else {
                 return Json::Null;
             };
-            return workspace_edit(occ, new_name);
+            // Where the value is a record field written with the shorthand,
+            // the field keeps its name beside the new one.
+            let mut punned: Vec<(String, Json)> = Vec::new();
+            let mut seen: Vec<&String> = Vec::new();
+            for (file_uri, _) in &occ {
+                if seen.contains(&file_uri) {
+                    continue;
+                }
+                seen.push(file_uri);
+                if let Some(source) = self.module_source(file_uri)
+                    && let Ok(m) = crate::parse(&source)
+                {
+                    for span in resolve::punned_fields(&m, &source) {
+                        punned.push((file_uri.clone(), span_range(&source, span)));
+                    }
+                }
+            }
+            let spelled = format!("{member} = {new_name}");
+            return workspace_edit_with(occ, |file_uri, range| {
+                if punned.iter().any(|(u, r)| u == file_uri && r == range) {
+                    spelled.clone()
+                } else {
+                    new_name.to_string()
+                }
+            });
         }
         let Some((_, target)) = resolve::symbol_at(module, offset) else {
             return Json::Null;
@@ -1262,12 +1286,21 @@ impl Server {
         if !is_renameable(module, &target) || !is_value_identifier(new_name) {
             return Json::Null;
         }
+        // A record field written with the shorthand (`Rect { width, height }`,
+        // `case Rect { width }:`) is the field and the variable in one name:
+        // the field keeps its name and the variable takes the new one.
+        let punned = resolve::punned_fields(module, text);
         let edits: Vec<Json> = resolve::find_references(module, &target, true)
             .into_iter()
             .map(|span| {
+                let new_text = if punned.contains(&span) {
+                    format!("{} = {new_name}", &text[span.start..span.end])
+                } else {
+                    new_name.to_string()
+                };
                 obj(vec![
                     ("range", span_range(text, span)),
-                    ("newText", str(new_name)),
+                    ("newText", str(&new_text)),
                 ])
             })
             .collect();
@@ -1719,9 +1752,19 @@ fn item_doc(module: &crate::syntax::Module, name: &str) -> Option<String> {
 /// A multi-file `WorkspaceEdit` replacing every `(uri, range)` occurrence with
 /// `new_name`, edits grouped per document.
 fn workspace_edit(occurrences: Vec<(String, Json)>, new_name: &str) -> Json {
+    workspace_edit_with(occurrences, |_, _| new_name.to_string())
+}
+
+/// [`workspace_edit`], with the text each occurrence is replaced by worked out
+/// from its document and range.
+fn workspace_edit_with(
+    occurrences: Vec<(String, Json)>,
+    new_text: impl Fn(&String, &Json) -> String,
+) -> Json {
     let mut by_uri: Vec<(String, Vec<Json>)> = Vec::new();
     for (u, range) in occurrences {
-        let edit = obj(vec![("range", range), ("newText", str(new_name))]);
+        let text = new_text(&u, &range);
+        let edit = obj(vec![("range", range), ("newText", str(&text))]);
         match by_uri.iter_mut().find(|(k, _)| *k == u) {
             Some((_, edits)) => edits.push(edit),
             None => by_uri.push((u, vec![edit])),
@@ -2985,6 +3028,73 @@ let n = max 1",
                 .iter()
                 .all(|e| e.get("newText").unwrap().as_str() == Some("uno"))
         );
+    }
+
+    /// The new texts of a rename, in the order of their places in the file.
+    fn rename_texts(source: &str, line: i64, character: i64, new_name: &str) -> Vec<String> {
+        let mut server = Server::default();
+        let uri = "file:///pun.pyfun";
+        server.handle(&json::parse(&open_msg(uri, source)).unwrap());
+        let out = server.handle(&json::parse(&rename_msg(uri, line, character, new_name)).unwrap());
+        let mut edits: Vec<(i64, i64, String)> = out[0]
+            .get("result")
+            .unwrap()
+            .get("changes")
+            .unwrap()
+            .get(uri)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let start = e.get("range").unwrap().get("start").unwrap();
+                (
+                    start.get("line").unwrap().as_i64().unwrap(),
+                    start.get("character").unwrap().as_i64().unwrap(),
+                    e.get("newText").unwrap().as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        edits.sort();
+        edits.into_iter().map(|(_, _, text)| text).collect()
+    }
+
+    #[test]
+    fn rename_writes_the_field_back_where_it_was_punned() {
+        // `Rect { width, height }` names the field and the variable in one
+        // word. Renaming the variable leaves the field its name.
+        let source = "type Rect = { width: float, height: float }\n\
+                      let square width =\n\
+                      "
+        .to_string()
+            + "  let height = width\n  Rect { width, height }\n";
+        // The parameter `width` (line 1, character 11).
+        assert_eq!(
+            rename_texts(&source, 1, 11, "w"),
+            ["w", "w", "width = w"],
+            "the literal keeps the field `width`"
+        );
+        // A field written out with a value of its own name is an ordinary use.
+        let source = "type Rect = { width: float, height: float }\n\
+                      let square width = Rect { width = width, height = width }\n";
+        assert_eq!(rename_texts(source, 1, 11, "w"), ["w", "w", "w"]);
+        // The pattern has the same shorthand: the binder `width` (line 3).
+        let source = "type Rect = { width: float, height: float }\n\
+                      let area r =\n\
+                      "
+        .to_string()
+            + "  match r:\n    case Rect { width, height }: width * height\n";
+        assert_eq!(
+            rename_texts(&source, 3, 16, "w"),
+            ["width = w", "w"],
+            "the pattern keeps the field `width`"
+        );
+        // A top-level value used in a literal's shorthand.
+        let source = "type Rect = { width: float, height: float }\n\
+                      let width = 2.0\n\
+                      let height = 3.0\n\
+                      let r = Rect { width, height }\n";
+        assert_eq!(rename_texts(source, 1, 4, "w"), ["w", "width = w"]);
     }
 
     #[test]
