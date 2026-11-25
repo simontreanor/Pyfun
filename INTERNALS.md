@@ -771,7 +771,14 @@ that level and one opened since, a stack of one-step levels would write two sour
 those lines are placed by their distance from the level in hand and open no levels. It reads ahead
 only when the line last set on the level in hand starts inside brackets (`Columns::bracketed`), so
 the layout is kept where the offside rule is off and an odd column anywhere else is still set on a
-level. A comment line
+level. A leading-comma list adds two cases, in `Writer::indent_line`, which knows the column each
+token was written at (`Writer::written`) and the brackets open (`Writer::open`).
+`Writer::comma_column` keeps a line that starts with a comma under its bracket when the author set it
+there, or, in a record update, with its field under the first field after `with`; any other comma
+line takes its level. A line that opens a level under an item of a list still open (`Writer::item`:
+the line above starts with the list's `[` or a leading comma) has that level set one step in from
+the item's first token, and `Writer::settle_items` sets it back to the column `Columns::place` gave
+it once the list closes. `Marks::leading_comma` says which brackets hold such a list. A comment line
 takes the level of the code after it, or of the block above when it is deeper than that code.
 
 `fmt::format` parses the source, writes the text, and parses that: the two modules must be equal (a
