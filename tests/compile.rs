@@ -9459,3 +9459,130 @@ fn a_newtype_pattern_in_a_binding_costs_nothing() {
         assert_eq!(lines.join("\n").trim(), expected);
     }
 }
+
+// ---------- one spelling of a block `if`, inside brackets too (#230) ----------
+
+#[test]
+fn e2e_an_if_on_its_own_lines_opens_with_a_colon_inside_brackets() {
+    // Inside parentheses and a builder's braces the offside rule is off, and
+    // a branch on its own lines is still written `if cond:`, as it is
+    // everywhere else. The branch is one expression there.
+    run_and_check(
+        "
+        let pick c =
+          let y = (
+            if c == 1:
+              \"one\"
+            elif c == 2:
+              \"two\"
+            else:
+              \"many\")
+          y
+        let swap letters bag =
+          result {
+            do! if List.len letters == 0:
+                  Error \"Say which tiles.\"
+                else Ok ()
+            return List.concat bag letters
+          }
+        let a = pick 1
+        let b = pick 2
+        let c = pick 3
+        let d = swap [] [1]
+        let e = swap [2] [1]
+        ",
+        &[
+            ("a", "one"),
+            ("b", "two"),
+            ("c", "many"),
+            ("d", "Error('Say which tiles.')"),
+            ("e", "Ok([1, 2])"),
+        ],
+    );
+}
+
+// ---------- a field built from the name in scope (#239) ----------
+
+#[test]
+fn e2e_a_field_name_alone_builds_the_field_from_the_name_in_scope() {
+    // Construction mirrors the pattern: `Rect { width, height }` binds the two
+    // names in a `case`, and builds from them in an expression. A record
+    // takes the shorthand too, and it mixes with `field = value`.
+    run_and_check(
+        "
+        type Shape = Circle { radius: float } | Rect { width: float, height: float }
+        type Point = { x: int, y: int }
+        let area s =
+          match s:
+            case Circle { radius }: 3.0 * radius * radius
+            case Rect { width, height }: width * height
+        let square width =
+          let height = width
+          Rect { width, height }
+        let at x =
+          let y = x + 1
+          Point { x, y = y * 2 }
+        let a = area (square 2.0)
+        let b = at 1
+        let radius = 1.0
+        let c = area (Circle { radius })
+        ",
+        &[("a", "4.0"), ("b", "Point(x=1, y=4)"), ("c", "3.0")],
+    );
+    assert_eq!(
+        pyfun::compile(
+            "type Point = { x: int, y: int }\n\
+             let at x y = Point { x, y }"
+        )
+        .unwrap(),
+        pyfun::compile(
+            "type Point = { x: int, y: int }\n\
+             let at x y = Point { x = x, y = y }"
+        )
+        .unwrap()
+    );
+}
+
+// ---------- the doc comment that touches a declaration (#233) ----------
+
+#[test]
+fn only_the_doc_block_that_touches_a_declaration_documents_it() {
+    let python = pyfun::compile(
+        "let non_empty s = String.len s > 0\n\
+         \n\
+         ## -----------------\n\
+         ## Parsing a move\n\
+         ## -----------------\n\
+         \n\
+         ## Whether `ch` is a column letter.\n\
+         ## One of the first three.\n\
+         let is_col_char ch = ch in \"ABC\"\n\
+         \n\
+         ## -----------------\n\
+         ## The deal\n\
+         ## -----------------\n\
+         \n\
+         let deal seed = seed + 1\n\
+         \n\
+         ## Set apart by an ordinary comment.\n\
+         # a note\n\
+         let other x = x\n",
+    )
+    .unwrap();
+    // The block right above the function is its docstring, whole.
+    assert!(
+        python.contains(
+            "def is_col_char(ch):\n    \"\"\"Whether `ch` is a column letter.\n    One of the first three.\n    \"\"\"\n"
+        ),
+        "{python}"
+    );
+    // A section banner is a comment about the file: it is no part of the
+    // next function's docstring, and a function under one has none.
+    assert!(!python.contains("Parsing a move"), "{python}");
+    assert!(!python.contains("The deal"), "{python}");
+    assert!(
+        python.contains("def deal(seed):\n    return seed + 1"),
+        "{python}"
+    );
+    assert!(python.contains("def other(x):\n    return x"), "{python}");
+}

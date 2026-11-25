@@ -310,12 +310,27 @@ impl Parser {
     /// Consume a run of doc-comment lines (`Tok::Doc`, separated by the offside
     /// `Sep`s) preceding a top-level item, joining them with `\n`. `None` when the
     /// next token is not a doc comment.
+    ///
+    /// The block that documents the item is the one that touches it: the lines
+    /// that run, one under another, down to the line just above the item. A
+    /// `##` block set apart by a blank line is a comment about the file (a
+    /// section banner), not about the declaration after it, and documents
+    /// nothing.
     fn collect_docs(&mut self) -> Option<String> {
         let mut lines: Vec<String> = Vec::new();
+        let mut last_line = 0;
         while let Tok::Doc(text) = self.peek() {
+            let (line, _) = self.token_pos(self.pos);
+            if line != last_line + 1 {
+                lines.clear();
+            }
             lines.push(text.clone());
+            last_line = line;
             self.bump();
             self.skip_seps();
+        }
+        if !lines.is_empty() && self.token_pos(self.pos).0 != last_line + 1 {
+            lines.clear();
         }
         if lines.is_empty() {
             None
@@ -1572,6 +1587,10 @@ impl Parser {
             Box::new(self.parse_if_rest(elif_start)?)
         } else {
             if !matches!(self.peek(), Tok::Else) {
+                // Inside brackets, a second line under the branch.
+                if self.opens_bracket_line() {
+                    return Err(self.one_expression_branch());
+                }
                 // Python's `if` with no `else`. Here an `if` is an expression, so
                 // it has a value on both paths; the branch that does nothing is
                 // written out as `()`.
@@ -1614,7 +1633,10 @@ impl Parser {
         if after_cond || colon {
             self.bump();
         }
-        let block = matches!(self.peek(), Tok::Indent);
+        // On its own lines: an indented block, or inside brackets, where the
+        // offside rule is off, a branch that starts on the next line.
+        let indented = matches!(self.peek(), Tok::Indent);
+        let block = indented || self.opens_bracket_line();
         let (written, block_form, line_form) = if after_cond {
             ("then", "`if cond:`", "`if cond then value`")
         } else {
@@ -1623,7 +1645,7 @@ impl Parser {
         // A crossed shape is recorded and the branch is read as what it means,
         // so a file's old `then`s and `else`s are all reported in one pass.
         match (colon, block) {
-            (true, true) => self.parse_block(),
+            (true, true) => self.parse_own_line_branch(indented),
             (false, false) => self.parse_expr(),
             (true, false) => {
                 self.recorded.push(ParseError {
@@ -1643,8 +1665,42 @@ impl Parser {
                     ),
                     span: opener,
                 });
-                self.parse_block()
+                self.parse_own_line_branch(indented)
             }
+        }
+    }
+
+    /// Whether the next token starts a source line inside brackets or a
+    /// builder's braces, where line breaks make no layout tokens.
+    fn opens_bracket_line(&self) -> bool {
+        let t = &self.tokens[self.pos];
+        t.depth > 0 && t.line_start.is_some() && !matches!(t.tok, Tok::Eof)
+    }
+
+    /// A branch on its own lines: a block where the offside rule is on, and
+    /// one expression inside brackets, whose lines are continuations.
+    fn parse_own_line_branch(&mut self, indented: bool) -> Result<Expr, ParseError> {
+        if indented {
+            return self.parse_block();
+        }
+        // A builder item (`return! work 1`) is not an expression.
+        if matches!(self.peek(), Tok::Let | Tok::Return | Tok::Yield | Tok::Do) {
+            return Err(self.one_expression_branch());
+        }
+        self.parse_expr()
+    }
+
+    /// The error for a branch inside brackets that takes more than one
+    /// expression, at the line that starts the second (or at a builder item,
+    /// which is not an expression at all).
+    fn one_expression_branch(&self) -> ParseError {
+        ParseError {
+            message: "inside brackets and a builder's braces a branch of an `if` is one \
+                      expression, and this line is not part of it: give a branch that takes \
+                      several steps a block of its own (an `async { … }` inside an `async` \
+                      builder) or move the steps into a function"
+                .to_string(),
+            span: self.span(),
         }
     }
 
@@ -2416,12 +2472,20 @@ impl Parser {
     }
 
     /// Parse `ident = expr (, ident = expr)*` field initializers up to `}`.
+    /// A field name on its own is the field built from the name in scope
+    /// (`Rect { width, height }` is `Rect { width = width, height = height }`),
+    /// the shorthand a record pattern has (`DESIGN.md` §8.3).
     fn parse_field_inits(&mut self) -> Result<Vec<FieldInit>, ParseError> {
         let mut fields = Vec::new();
         while !matches!(self.peek(), Tok::RBrace) {
+            let start = self.cur_start();
             let name = self.parse_ident("field name")?;
-            self.expect(&Tok::Eq, "`=`")?;
-            let value = self.parse_expr()?;
+            let value = if matches!(self.peek(), Tok::Comma | Tok::RBrace) {
+                self.mk(start, ExprKind::Var(name.clone()))
+            } else {
+                self.expect(&Tok::Eq, "`=`")?;
+                self.parse_expr()?
+            };
             fields.push(FieldInit { name, value });
             if !self.eat(&Tok::Comma) {
                 break;

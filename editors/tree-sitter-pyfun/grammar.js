@@ -519,10 +519,11 @@ module.exports = grammar({
       seq($._module_identifier, '.', $.constructor_identifier),
     ),
 
+    // A field name on its own is built from the name in scope
+    // (`Rect { width, height }`), the shorthand a record pattern has.
     field_initializer: $ => seq(
       field('name', $.identifier),
-      '=',
-      field('value', $._expression),
+      optional(seq('=', field('value', $._expression))),
     ),
 
     record_update_expression: $ => seq(

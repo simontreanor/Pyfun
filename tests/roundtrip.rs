@@ -204,6 +204,10 @@ const PROGRAMS: &[&str] = &[
     "type Tree a = Leaf | Node { left: Tree a, value: a, right: Tree a }",
     "type Slot = Empty | Filled { at: Geometry.Point, by: str }",
     "let r = Rect { width = 2.0, height = 3.0 }",
+    "let square width =\n  let height = width\n  Rect { width, height }",
+    "let at x y = Point { x, y = y * 2 }",
+    "let pick c =\n  let y = (\n    if c:\n      1\n    elif not c:\n      3\n    else:\n      2)\n  y",
+    "let swap xs =\n  result {\n    do! if List.len xs == 0:\n          Error \"none\"\n        else Ok ()\n    return xs\n  }",
     "let f s =\n  match s:\n    case Circle { radius }: radius\n    case Rect { width, height = h }: width * h\n    case Dot {}: 0.0",
     "let g s =\n  match s:\n    case Shapes.Rect {}: 1\n    case _: 0",
     "type Option a = None | Some a\nlet unwrap o =\n  match o:\n    case Some v: v\n    case None: 0",
@@ -1165,9 +1169,18 @@ fn a_crossed_if_branch_names_the_other_opener() {
             "let f x =\n  if x > 0 then 1\n  else: 2",
             "a branch on the same line is written `else value`",
         ),
-        // Inside brackets the offside rule is off, so there is no block to open.
+        // Inside brackets the offside rule is off, and a branch on its own lines
+        // still opens with `:`.
         (
-            "let f x = (if x > 0:\n  1\n  else 2)",
+            "let f x = (if x > 0 then\n  1\n  else 2)",
+            "write `if cond:`, not `then`",
+        ),
+        (
+            "let f x = (if x > 0:\n  1\n  else\n  2)",
+            "write `else:`, not `else`",
+        ),
+        (
+            "let f x = (if x > 0: 1\n  else 2)",
             "a branch on the same line is written `if cond then value`",
         ),
         ("let f x = if x > 0 1 else 2", "expected `then` or `:`"),
@@ -1179,8 +1192,10 @@ fn a_crossed_if_branch_names_the_other_opener() {
             err.message()
         );
     }
-    // Inside brackets a multi-line `if` keeps `then`, its lines being continuations.
-    assert!(parse("let f x = (if x > 0 then\n  1\n  else\n  2)").is_ok());
+    // Inside brackets the branch on its own lines is one expression, opened the
+    // same way, and its lines are continuations.
+    assert!(parse("let f x = (if x > 0:\n  1\n  else:\n  2)").is_ok());
+    assert!(parse("let f x = (if x > 0:\n  g\n    x\n  else 2)").is_ok());
 }
 
 #[test]
