@@ -617,7 +617,8 @@ generic field is `object`. A Python program that imports it learns nothing from 
 compile --typed` writes the types the checker inferred into the same output, as annotations Python's
 own type checkers read, and for a project puts the `py.typed` marker (PEP 561) beside the modules so
 that the directory is a typed package. The code that runs is the plain output's: take the annotations
-away and the two files are the same.
+away and the two files are the same, but for a `unit` value, which typed output writes as Python
+writes a `None` (below).
 
 ```python
 type Shape = Circle | Rect
@@ -626,7 +627,9 @@ def area(shape: Shape) -> float: ...
 def pair[A, B](x: A, y: B) -> tuple[A, B]: ...
 def double[A: (int, float)](x: A) -> A: ...
 def first[A](xs: list[A]) -> Some[A] | None_: ...
+def occupied[A, B](board: Container[tuple[A, B]] | Iterable[tuple[A, B]], r: A, c: B) -> bool: ...
 origin: Point = Point(0, 0)
+to_number: Callable[[str], int] = int
 ```
 
 Every top-level function has each parameter and its result annotated, every top-level value its type,
@@ -653,18 +656,51 @@ time:
   knows nothing, is `Any`.
 - **A type declared in another module of the project** is reached through that module (`geo.Shape`),
   which the file imports if the code had not already.
+- **What `in` searches is a `Container` or an `Iterable` of what it is searched for.** A function that
+  uses `in` is polymorphic in what it searches, and the checker holds that to a `List`, `Set`, `Seq`,
+  `Map` or `str` (§7.1). Python's `in` takes a `Container`, and an `Iterable` covers the `Seq`, which
+  is an iterator, so `let occupied board r c = (r, c) in board` takes `board: Container[tuple[A, B]] |
+  Iterable[tuple[A, B]]`, and a caller's `occupied(5, 1, 2)` is refused as it is in Pyfun. A function
+  that hands back what it searched keeps the variable as a type parameter so that the two agree
+  (`def keep[A, B: Iterable[Any]](x: A, xs: B) -> B`), held to `Iterable`, which each of the five is; a
+  bound cannot name another type parameter, so the element goes unsaid there.
+- **An `extern` a project binds carries its declared type** (`to_number: Callable[[str], int] = int`):
+  a project binds each `extern` at top level so that another module can reach it (§6.1), and the
+  declaration is the only statement of its type there is. It is a `Callable` of all its arguments at
+  once, as the binding is called; an attribute read (`= .with_name`) is bound by its receiver and
+  hands back what takes the rest (`Callable[[Any], Callable[[str], Any]]`). A final `unit` is `object`:
+  the call's result is whatever the Python target hands back, and nothing reads it. A type checker
+  then holds the binding to the declaration, so a declaration that disagrees with what Python's own
+  stubs say of the target is reported on the binding's line, which is the `extern`'s to answer.
 
 A typed file opens with `from __future__ import annotations`, so an annotation may name a class or an
 alias defined further down, and a recursive type can name itself. The type parameter syntax is Python
 3.12's, so `--typed` does not combine with `--target 3.11`; nor with `--native`, which annotates for
 mypyc's needs instead.
 
-What is promised is the surface a caller sees. `tests/typed_output.py` holds it to that with mypy: a
-consumer's correct uses pass and its wrong ones are rejected at their lines, a typed project has
-nothing reported at all, and no annotation in any lesson or example is malformed. The *bodies* of
-emitted functions are not annotated, and a type checker pointed at them finds idioms it would write
-differently (a temporary assigned an `Ok` in one branch and an `Error` in the other); a caller of the
-package never sees those.
+**A `unit` value is written as Python writes a `None`.** These are the two places where typed output
+changes a statement, and each does what the plain statement does:
+
+- A function that returns `unit` ends in a statement. `return sys.stdout.flush()` becomes the call
+  alone, and inside a branch the call and then `return None`: an `extern` declared `unit` may hand
+  back anything, which a type checker refuses as the result of a `-> None` function. A call of one of
+  the file's own `-> None` functions, or of `print`, is returned as the plain output returns it.
+- A top-level value of type `unit` is `None`, after what computes it has run: `say(1)` and then
+  `start: None = None`. A type checker refuses the result of a function that returns nothing, as the
+  plain `start = say(1)` asks for it.
+
+**What a type checker is promised.** The surface a caller sees, first: `tests/typed_output.py` holds
+it to that with mypy, where a consumer's correct uses pass and its wrong ones are rejected at their
+lines, and no annotation in any lesson or example is malformed. A typed project is also held to
+having nothing reported inside it, and for that the pass declares two locals a type checker cannot
+work out for itself: the temporary of a `try e`, which is an `Ok` on one path and an `Error` on the
+other (`_pf_t0: Ok[Any] | Error[_Exception]`), and a collection that starts empty and is read before
+anything is put in it, as the accumulator of a fold is (`m: dict[A, int] = dict()` where the function
+returns it, and the bare `dict[Any, Any]` elsewhere). The rest of a function's body is not annotated.
+Two idioms there are still the compiler's own and a type checker would write them differently: a
+temporary that an `if` or a `match` assigns a different constructor on each path (`_pf_t0 =
+Circle(1.0)`, then `_pf_t0 = Square(2.0)`), and the result of a `unit` call bound to a name inside a
+function (`let _ = say x`). A caller of the package never sees either.
 
 ## 6. Python interop — the hard boundary
 

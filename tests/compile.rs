@@ -8881,6 +8881,25 @@ fn e2e_an_extern_and_a_let_of_one_name() {
 }
 
 #[test]
+fn e2e_a_decode_that_fails_leaves_a_binding_named_e_alone() {
+    // A decode written out in place catches its exception under a temporary.
+    // Python unbinds the name an `except` binds when the clause ends, so
+    // catching as `e` took the program's own `e` with it.
+    let src = "
+        let e = 5
+        let r = Decode.decode_string Decode.int \"x\"
+        let kept = e
+        let failed = Result.is_error r
+        ";
+    run_and_check(src, &[("kept", "5"), ("failed", "True")]);
+    let python = pyfun::compile(src).expect("compiles");
+    assert!(
+        python.contains("except Exception as _pf_t"),
+        "the exception is caught under a temporary:\n{python}"
+    );
+}
+
+#[test]
 fn e2e_a_module_member_reads_the_siblings_above_it() {
     // Inside an in-file module the same holds a member at a time: a name
     // bound again keeps both bindings, and a member written above a sibling

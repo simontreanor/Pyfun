@@ -609,6 +609,9 @@ fn compile_project(
     // Native mode annotates functions from their types (`DESIGN.md` §5.6).
     let mut types_by_module: HashMap<String, HashMap<crate::lexer::Span, crate::types::Ty>> =
         HashMap::new();
+    // Typed output spells a searched variable as what `in` takes (§5.7).
+    let mut searched_by_module: HashMap<String, HashMap<u32, Vec<crate::types::Ty>>> =
+        HashMap::new();
     let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
         let mut spans = HashMap::new();
         for module in &project.modules {
@@ -620,6 +623,9 @@ fn compile_project(
             let (_errors, types, module_exports, codecs) =
                 crate::types::check_module_collecting(&module.ast, &imports);
             spans.insert(module.name.clone(), crate::float_literal_spans(&types));
+            if typed {
+                searched_by_module.insert(module.name.clone(), crate::types::searched_vars(&types));
+            }
             if native || typed {
                 types_by_module.insert(
                     module.name.clone(),
@@ -758,7 +764,14 @@ fn compile_project(
                 .iter()
                 .map(|m| (module_stem(&m.name), &m.ast))
                 .collect();
-            lowering::annotate_typed(&module.ast, lowered.py, &recorded_types, &imported)
+            let searched = searched_by_module.remove(&module.name).unwrap_or_default();
+            lowering::annotate_typed(
+                &module.ast,
+                lowered.py,
+                &recorded_types,
+                &searched,
+                &imported,
+            )
         } else {
             lowered.py
         };

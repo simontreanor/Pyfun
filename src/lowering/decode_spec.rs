@@ -209,7 +209,11 @@ impl Lowerer {
             target: result.clone(),
             value: call("Ok", vec![decoded]),
         });
-        // except Exception as e: r = Error(_Exception(type(e).__name__, str(e)))
+        // except Exception as exc: r = Error(_Exception(type(exc).__name__, str(exc))).
+        // The binding is a temporary: Python unbinds the name an `except` binds
+        // when the clause ends, which would take a `let e` of the program's own
+        // in this scope with it.
+        let exc = self.fresh_tmp();
         let handler = vec![PyStmt::Assign {
             target: result.clone(),
             value: call(
@@ -218,10 +222,10 @@ impl Lowerer {
                     "_Exception",
                     vec![
                         PyExpr::Attribute {
-                            value: Box::new(call("type", vec![PyExpr::Name("e".to_string())])),
+                            value: Box::new(call("type", vec![PyExpr::Name(exc.clone())])),
                             attr: "__name__".to_string(),
                         },
-                        call("str", vec![PyExpr::Name("e".to_string())]),
+                        call("str", vec![PyExpr::Name(exc.clone())]),
                     ],
                 )],
             ),
@@ -229,7 +233,7 @@ impl Lowerer {
         stmts.push(PyStmt::Try {
             body,
             exc_type: Some("Exception".to_string()),
-            binding: Some("e".to_string()),
+            binding: Some(exc),
             handler,
         });
         Ok((stmts, PyExpr::Name(result)))

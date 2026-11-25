@@ -441,7 +441,8 @@ A `Lowerer.native` flag, set by `lowering::lower_native_typed` (single file, cal
 ### Typed output (`--typed`) — implements DESIGN §5.7
 
 A pass over the finished Python module, in `lowering/typed.rs`, run by `pyfun::compile_typed` and
-`project::compile_typed` after an ordinary (non-native) lowering. It changes no statement that runs.
+`project::compile_typed` after an ordinary (non-native) lowering. It adds annotations, and respells
+two shapes of a `unit` value (below); every other statement is the plain output's.
 `Speller` turns a checker `Ty` (for a function or a value, from the type recorded at the binding's
 target span) or a declared `TypeExpr` (for a class field) into annotation text, collecting type
 variables into a parameter list as it meets them. A function becomes a `PyStmt::TypedFuncDef` with
@@ -453,6 +454,26 @@ imports, because type names are one flat namespace and a signature can mention a
 imports away; such a type is spelled `module.Name` and the module imported. The shared runtime gets
 `annotate_typed_runtime`. The emitter writes a leading `from __future__` import ahead of the imports it
 adds itself.
+
+A type's membership tests reach the pass beside it: each `TypeSpan` carries `searched`, the variables
+of its type that an `in` searches with what each is searched for, and `types::searched_vars` folds a
+module's into one table (variables are numbered once for a module). `Speller::searched_var` spells
+such a variable in place as `Container[T] | Iterable[T]` when the function's type names it once, and
+as a type parameter bound to `Iterable[Any]` when it names it again.
+
+Four steps after the signatures make a typed project clean inside as well as on its surface:
+
+- `annotate_externs` gives each `extern` a project binds at top level its declared type. How the
+  binding is called is read off the binding: a lambda of one parameter for each arrow (or any other
+  value) is a `Callable` of all the arguments, and the one-parameter lambda of an attribute read is a
+  `Callable` of the receiver that hands back the rest. A final `unit` is `object`.
+- `settle_unit_values` runs what computes a top-level `unit` value as a statement and binds the name
+  to `None`; a temporary assigned in each branch of a `match` becomes a statement in each branch.
+- `settle_unit_returns` splits `return call(...)` in a `-> None` function into the call and a `return`
+  wherever the call is not one of the file's own `-> None` functions or `print`.
+- `annotate_locals` reads the module's own statements and each annotated function top to bottom
+  (`Scope`), declaring an empty collection at its first binding and the temporary of a `try e`. A name
+  the scope declares `global` or `nonlocal`, a parameter, and a name bound earlier are left alone.
 
 Docstrings are a second small pass in the same file, `typed::docstrings`, run at the end of
 `Lowerer::lower_module` for every mode: a `PyStmt::Doc` at the head of a documented function's body,
