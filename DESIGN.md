@@ -1987,6 +1987,17 @@ every use, and a use of a record, a constructor or a field whose declaration fai
 the report, in its own module and in the modules that import it. A name nothing declares is still
 an error at its use.
 
+Inside a declaration, a name that is not there does not end its checking. An unbound name, a
+module member that does not exist (`Option.withDefault`) and a record field no record in scope has
+(`e.errorKind`) are each reported, with their "did you mean", and inference goes on with a fresh
+type variable in the name's place. That variable unifies with whatever the expression around it
+asks, so the rest of the declaration is checked as if the name were right, and an error still found
+there is a real one. A declaration with several old names reports them all in one run, in the order
+they are written. A mismatch between two types is still the one error of its declaration: after it
+the types downstream are in doubt, and one honest error is worth more than several guesses. A
+`Decode.auto` in a declaration that has an error is not resolved, since its type may be open only
+because the error left it unsettled; the error that is there is the one to fix.
+
 **Doc comments.** A line starting with `##` at **column 0** is a *doc comment*: one
 or more consecutive `##` lines attach to the **following top-level `let` / `type` / `extern`**
 declaration (joined with newlines, the conventional single space after `##` stripped) and surface

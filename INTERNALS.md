@@ -646,7 +646,13 @@ in a traceback. The checker's half of "one cause, one error" is `Decls::broken`:
 declarations that failed, exported in `ModuleExports` so importers have them too. An error site that
 says a name is not there goes through `Infer::absent`, which notes the span when the name is one of
 those, and `run_inner` leaves the noted errors out. `respell_old_str` reports each `string` in type
-position and hands the checker the module as it reads with `str`. So one broken `let` no longer hides the rest of the file — the items that
+position and hands the checker the module as it reads with `str`. Inside a declaration,
+`Infer::carry_on` records the error for a name that is not there (the `Var` arm, a `Module.member`
+that is not one, and `infer_field` when `record_of_field_on` sets `missing_field`) in
+`Infer::recovered` and returns a fresh type, so inference goes on. The top-level loop in
+`run_inner` appends those to the item's own errors, sorts the item's errors by position, and drops
+the `Decode.auto` sites the item recorded when it has any error (`auto_sites` is truncated to its
+length before the item). So one broken `let` no longer hides the rest of the file — the items that
 parse still drive hover and navigation, and only the *syntax* errors are reported until the file is
 clean, at which point the type errors take over. `analyze` returns an
 `Analysis { module, diagnostics, types, parse_ok }` bundle; **lexing errors remain fatal** (no AST) and
