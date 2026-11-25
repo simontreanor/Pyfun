@@ -349,7 +349,8 @@ fn compile_mapped(
     .map_err(CompileError::Lower)?;
     let py = if typed {
         let all_types = types.iter().map(|t| (t.span, t.raw.clone())).collect();
-        lowering::annotate_typed(&module, py, &all_types, &[])
+        let searched = types::searched_vars(&types);
+        lowering::annotate_typed(&module, py, &all_types, &searched, &[])
     } else {
         py
     };

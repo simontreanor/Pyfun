@@ -223,11 +223,12 @@ pub fn annotate_typed(
     module: &Module,
     py: PyModule,
     binding_types: &HashMap<Span, crate::types::Ty>,
+    searched: &HashMap<u32, Vec<crate::types::Ty>>,
     imported: &[(String, &Module)],
 ) -> PyModule {
     // The names the lowering gave the file's bindings.
     let module = &crate::scope::settle(module, Naming::File);
-    typed::annotate(module, py, binding_types, imported)
+    typed::annotate(module, py, binding_types, searched, imported)
 }
 
 /// The pytest shape of a test file (`pyfun test`, `DESIGN.md` §9): each
@@ -12919,6 +12920,11 @@ mod tests {
             "type",
             // Reserved in Pyfun (the built-in record), emitted as `_Exception`.
             "Exception",
+            // Typed output reads a call of `print` as one that hands back
+            // `None` (`typed::settle_unit_returns`); it writes none. Where the
+            // name is a program's own, the `return` it leaves is the plain
+            // output's.
+            "print",
         ];
         let mut unguarded = Vec::new();
         for (file, source) in SOURCES {

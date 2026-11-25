@@ -188,6 +188,97 @@ fn each_binding_of_a_name_carries_its_own_type() {
 }
 
 #[test]
+fn what_in_searches_is_a_container_or_an_iterable_of_what_is_sought() {
+    // The checker holds the searched parameter to a `List`, `Set`, `Seq`,
+    // `Map` or `str`. Python says as much with `Container` (and `Iterable`,
+    // for a `Seq`), so a caller's `occupied(5, 1, 2)` is refused.
+    let python = typed(
+        "let occupied board r c = (r, c) in board\nlet both x y xs = x in xs and y in xs\nlet keep x xs = if x in xs then xs else xs",
+    );
+    let decls = declarations(&python);
+    for expected in [
+        "from collections.abc import Container, Iterable",
+        "def occupied[A, B](board: Container[tuple[A, B]] | Iterable[tuple[A, B]], r: A, c: B) -> bool:",
+        "def both[A, B](x: A, y: B, xs: Container[A | B] | Iterable[A | B]) -> bool:",
+        // Handed back as it came, so it stays a type parameter, held to what
+        // every searched type is.
+        "def keep[A, B: Iterable[Any]](x: A, xs: B) -> B:",
+    ] {
+        assert!(
+            decls.contains(&expected),
+            "missing `{expected}` in:\n{python}"
+        );
+    }
+    // A parameter that is searched and pinned to a type is that type.
+    let python = typed("let known x xs = x in xs and List.len xs > 0");
+    assert!(
+        python.contains("def known[A](x: A, xs: list[A]) -> bool:"),
+        "{python}"
+    );
+}
+
+#[test]
+fn a_unit_function_ends_in_a_statement_where_the_call_may_hand_something_back() {
+    let python = typed(
+        "extern import sys\nextern write_out: str -> unit = sys.stdout.write\nlet say s =\n  print s\n  write_out \"\\n\"\nlet shout s = say (String.upper s)\nlet pick loud s =\n  if loud:\n    write_out s\n  else:\n    print s",
+    );
+    // An `extern` declared `unit` may hand back anything: it runs as a statement.
+    assert!(
+        python.contains(
+            "def say[A](s: A) -> None:\n    print(s)\n    sys.stdout.write(\"\\n\")\ndef shout"
+        ),
+        "{python}"
+    );
+    // One of the file's own `-> None` functions, and `print`, are returned as
+    // the plain output returns them.
+    assert!(
+        python.contains("def shout(s: str) -> None:\n    return say(_pf_str_upper(s))\n"),
+        "{python}"
+    );
+    assert!(
+        python.contains(
+            "    if loud:\n        sys.stdout.write(s)\n        return None\n    else:\n        return print(s)\n"
+        ),
+        "{python}"
+    );
+}
+
+#[test]
+fn a_top_level_unit_value_is_none_after_what_computes_it() {
+    let python = typed(
+        "let say s = print s\nlet once = say 1\nlet start =\n  match 1 > 0:\n    case True: say 2\n    case False: say 3",
+    );
+    assert!(python.contains("say(1)\nonce: None = None\n"), "{python}");
+    assert!(
+        python.contains("    case True:\n        say(2)\n    case False:\n        say(3)\n"),
+        "{python}"
+    );
+    assert!(python.contains("\nstart: None = None\n"), "{python}");
+}
+
+#[test]
+fn the_locals_a_type_checker_cannot_work_out_are_declared() {
+    let python = typed(
+        "extern to_number: str -> int = int\nlet parse text =\n  match try (to_number text):\n    case Ok n: n\n    case Error _: 0\nlet tally words =\n  let add m w =\n    let had = Map.find_or w 0 m\n    Map.add w (had + 1) m\n  List.fold add Map.empty words\nlet sizes words =\n  let add m w = Map.add w (String.len w) m\n  let found = List.fold add Map.empty words\n  Map.len found",
+    );
+    // `try e`: an `Ok` on one path and an `Error` on the other.
+    assert!(
+        python.contains("        _pf_t0: Ok[Any] | Error[_Exception] = Ok(int(text))\n"),
+        "{python}"
+    );
+    // A fold's accumulator, read before anything is put in it: the result
+    // type where the function returns it, and the bare collection elsewhere.
+    assert!(
+        python.contains("    m: dict[A, int] = dict()\n"),
+        "{python}"
+    );
+    assert!(
+        python.contains("    m: dict[Any, Any] = dict()\n"),
+        "{python}"
+    );
+}
+
+#[test]
 fn typed_output_changes_nothing_but_annotations() {
     // Take the annotations away again and the plain output is left.
     let source = "type Point = { x: int, y: int }\nlet shift dx p = { p with x = p.x + dx }\nlet origin = Point { x = 0, y = 0 }\nprint (shift 2 origin)";
@@ -332,6 +423,44 @@ fn a_typed_project_names_other_modules_types_and_ships_the_marker() {
         Some(""),
         "py.typed is an empty marker"
     );
+}
+
+#[test]
+fn a_typed_project_declares_the_externs_it_binds() {
+    // A project binds each `extern` at top level, where another module reaches
+    // it: the binding carries the declared type. A `unit` result is whatever
+    // the Python target hands back, which is `object`.
+    let dir = workdir(
+        "externs",
+        &[
+            (
+                "net.pyfun",
+                "extern import asyncio\nextern import sys\nextern type Queue\nextern new_queue: unit -> Queue = asyncio.Queue\nextern to_number: str -> int = int\nextern flush_out: unit -> unit = sys.stdout.flush\nextern upper: str -> str = .upper()\nextern type Path\nextern with_name: Path -> str -> Path = .with_name\nextern pure tau: float = math.tau\nextern import math\n",
+            ),
+            (
+                "use.pyfun",
+                "import Net\n\nlet pending = Net.new_queue ()\n",
+            ),
+        ],
+    );
+    let (ok, _, stderr) = pyfun(&["compile", "--typed", "use.pyfun", "-o", "out"], &dir);
+    assert!(ok, "{stderr}");
+    let net = fs::read_to_string(dir.join("out").join("net.py"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let _ = fs::remove_dir_all(&dir);
+    for expected in [
+        "new_queue: Callable[[None], Any] = lambda *_pf_a: asyncio.Queue()\n",
+        "to_number: Callable[[str], int] = int\n",
+        "flush_out: Callable[[None], object] = lambda *_pf_a: sys.stdout.flush()\n",
+        "upper: Callable[[str], str] = lambda _pf_recv: _pf_recv.upper()\n",
+        // An attribute read is bound by its receiver, and hands back what
+        // takes the rest.
+        "with_name: Callable[[Any], Callable[[str], Any]] = lambda _pf_recv: _pf_recv.with_name\n",
+        "tau: float = math.tau\n",
+    ] {
+        assert!(net.contains(expected), "missing `{expected}` in:\n{net}");
+    }
 }
 
 #[test]

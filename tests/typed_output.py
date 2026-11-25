@@ -9,7 +9,11 @@ Three things are checked, with mypy:
    project with a package) are compiled with `--typed -o`; each directory must
    hold `py.typed`, pass mypy with nothing to report, and print what the
    untyped project prints.
-3. No annotation is malformed. Every lesson program and single-file example
+3. A typed project is clean inside too, where it has the shapes a type checker
+   reads closely: an `extern` bound at top level, a `try`, a fold over an
+   empty map, a `unit` function ending in an `extern` call, and a top-level
+   `unit` value built by a `match`.
+4. No annotation is malformed. Every lesson program and single-file example
    is compiled with `--typed`; each must parse as Python, and mypy must find
    nothing wrong with an annotation itself (a name it cannot resolve, a type
    that is not one, a wrong number of type arguments). What mypy says about
@@ -100,11 +104,16 @@ let origin = Point { x = 0, y = 0 }
 let first xs = List.head xs
 
 let lookup key table = Map.find key table
+
+let occupied board r c = (r, c) in board
+
+let keep x xs = if x in xs then xs else xs
 '''
 
 # Each line marked `# E` must draw an error from mypy, and no other line may.
 CONSUMER = '''\
 from shapes import Box, Circle, Point, Rect, Shape, Some, apply, area, double, first, lookup, origin, pair
+from shapes import keep, occupied
 
 a: float = area(Circle(1.0))
 b: float = area(Rect(width=2.0, height=3.0))
@@ -119,8 +128,17 @@ if isinstance(f, Some):
 k = lookup("a", {"a": 1.5})
 bx: Box[int] = Box(3)
 s: Shape = Circle(2.0)
+occupied({(1, 2): "x"}, 1, 2)
+occupied([(1, 2)], 1, 2)
+occupied({(1, 2)}, 1, 2)
+occupied(iter([(1, 2)]), 1, 2)
+kept: list[int] = keep(1, [1, 2])
+word: str = keep("a", "abc")
 
 area("circle")  # E
+occupied(5, 1, 2)  # E
+occupied([1, 2], "a", "b")  # E
+keep(1, 5)  # E
 bad: str = double(2)  # E
 pair(1)  # E
 w: Box[str] = Box(3)  # E
@@ -165,6 +183,70 @@ def typed_project_is_clean(work: Path):
             typed_out.returncode == 0 and typed_out.stdout == plain_out.stdout,
             typed_out.stderr,
         )
+
+
+NET = '''\
+extern import asyncio
+extern type Queue
+extern new_queue: unit -> Queue = asyncio.Queue
+let pending = new_queue ()
+'''
+
+INSIDE = '''\
+import Net
+extern import sys
+extern to_number: str -> int = int
+extern flush_out: unit -> unit = sys.stdout.flush
+extern write_out: str -> unit = sys.stdout.write
+
+let parse text =
+  match try (to_number text):
+    case Ok n: n
+    case Error _: 0
+
+let decoded = Decode.decode_string Decode.int "7"
+
+let tally words =
+  let add m w =
+    let had = Map.find_or w 0 m
+    Map.add w (had + 1) m
+  List.fold add Map.empty words
+
+let say s =
+  print s
+  flush_out ()
+
+let shout s =
+  write_out s
+  write_out "\\n"
+
+let start =
+  match parse "7" > 0:
+    case True: say (parse "7")
+    case False: say (tally ["a", "a"], Net.pending)
+
+shout "done"
+print decoded
+'''
+
+
+def typed_project_is_clean_inside(work: Path):
+    project = work / "inside"
+    project.mkdir()
+    (project / "net.pyfun").write_text(NET, encoding="utf-8")
+    (project / "main.pyfun").write_text(INSIDE, encoding="utf-8")
+    done = run([str(PYFUN), "compile", "--typed", "main.pyfun", "-o", "typed"], cwd=project)
+    check("a project of the closely read shapes compiles", done.returncode == 0, done.stderr)
+    errors = mypy(project / "typed", ".")
+    check("mypy finds nothing inside it", not errors, "\n".join(errors))
+    run([str(PYFUN), "compile", "main.pyfun", "-o", "plain"], cwd=project)
+    typed_out = run([sys.executable, "main.py"], cwd=project / "typed")
+    plain_out = run([sys.executable, "main.py"], cwd=project / "plain")
+    check(
+        "it prints what the untyped project prints",
+        typed_out.returncode == 0 and typed_out.stdout == plain_out.stdout,
+        typed_out.stderr,
+    )
 
 
 def corpus():
@@ -217,6 +299,7 @@ def main():
         work = Path(tmp)
         consumer_is_held_to_the_types(work)
         typed_project_is_clean(work)
+        typed_project_is_clean_inside(work)
         no_annotation_is_malformed(work)
     if failures:
         print(f"=== {len(failures)} FAILED ===")

@@ -2163,6 +2163,25 @@ pub struct TypeSpan {
     /// The resolved type itself, for lowering that needs more than the text
     /// (native mode's annotations, `DESIGN.md` §5.6).
     pub raw: Ty,
+    /// The membership tests this type is generalized over, as the variable
+    /// searched and what is sought in it: `[(b, a)]` for `a in b => a -> b ->
+    /// bool`. Typed output spells such a variable as what Python's `in` takes
+    /// (`DESIGN.md` §5.7).
+    pub searched: Vec<(u32, Ty)>,
+}
+
+/// Every variable the recorded types search with `in`, with what each is
+/// searched for. Variables are numbered once for a whole module, so one table
+/// serves all of its bindings.
+pub fn searched_vars(types: &[TypeSpan]) -> HashMap<u32, Vec<Ty>> {
+    let mut out: HashMap<u32, Vec<Ty>> = HashMap::new();
+    for (var, elem) in types.iter().flat_map(|t| &t.searched) {
+        let sought = out.entry(*var).or_default();
+        if !sought.contains(elem) {
+            sought.push(elem.clone());
+        }
+    }
+    out
 }
 
 /// The concrete latent effect a value of type `ty` performs when **fully applied**:
@@ -2815,15 +2834,34 @@ fn run_inner(
     // (effects included). Done here, after inference, because a node's type may
     // still hold unbound vars at the moment it was recorded.
     let types = if record {
+        // The membership tests some binding was generalized over, resolved.
+        let mut members: Vec<(u32, Ty)> = Vec::new();
+        for (elem, container) in &inf.generalized_members {
+            if let Ty::Var(v) = inf.apply(container) {
+                let test = (v, inf.apply(elem));
+                if !members.contains(&test) {
+                    members.push(test);
+                }
+            }
+        }
         inf.recorded
             .iter()
             .map(|(span, ty)| {
                 let applied = inf.apply(ty);
+                let mut searched = Vec::new();
+                if !members.is_empty() {
+                    let mut vars: HashSet<u32> = HashSet::new();
+                    free_type_vars(&applied, &mut |v| {
+                        vars.insert(v);
+                    });
+                    searched.extend(members.iter().filter(|(v, _)| vars.contains(v)).cloned());
+                }
                 TypeSpan {
                     span: *span,
                     ty: inf.show_whole(&applied, true),
                     effect: effect_summary(&applied),
                     raw: applied,
+                    searched,
                 }
             })
             .collect()
