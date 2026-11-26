@@ -3138,9 +3138,10 @@ so a function in them is named as Python names it (`shapes.area`). The compiled 
 directory for the length of the run, which reads no pytest configuration or `conftest.py` from the
 project and leaves no cache in it.
 
-A test is the function of one ignored parameter (`let test_rect _ = …`), since every Pyfun function
-takes one; it is emitted as `def test_rect():`, which is what pytest calls. Its `##` comment is its
-docstring.
+A test that is run once, an *example*, is the function of one ignored parameter (`let test_rect _ =
+…`), since every Pyfun function takes one; it is emitted as `def test_rect():`, which is what pytest
+calls. A test that reads its parameters is a *property*, run on generated values of them (below).
+Either one's `##` comment is its docstring.
 
 An assertion is the one way Pyfun code fails on purpose (everything else signals failure with `Error`,
 §6), and its type says so: every `Test` member performs **`exn`** (`Test.equal : a -> a ->{exn} unit`,
@@ -3152,6 +3153,142 @@ version got by a rule: `let pure` rejects a function that asserts, a signature s
 can fail this way, and `try` turns a failed expectation into an `Error` like any other raise. That
 first version allowed a `Test` member only inside a `test_*` function; it was replaced once `exn`
 existed (§6), since a rule about where a name may be written said less than the type does.
+
+**Property tests.** A test that reads its parameters is a property: it says something that holds for
+every value of them, and Hypothesis runs it on generated ones, shrinking a failure to a small example
+that it names. There is no new syntax. The parameters are what the property ranges over, their types
+are inferred from the body as every type in Pyfun is, and the compiler derives a Hypothesis strategy
+for each from its type and writes the `@given` a Python programmer would have written:
+
+```pyfun
+import Shapes
+
+let test_reverse xs =
+  Test.equal xs (List.rev (List.rev xs))
+
+let test_area shape =
+  Test.is_true (Shapes.area shape >= 0.0)
+```
+
+```python
+from hypothesis import given, strategies as st
+import shapes
+def _pf_rev(xs):
+    return list(reversed(xs))
+@given(xs=st.lists(st.integers()))
+def test_reverse(xs):
+    assert _pf_rev(_pf_rev(xs)) == xs
+    return None
+@given(shape=st.one_of(st.builds(shapes.Circle, st.floats(allow_nan=False, allow_infinity=False)), st.builds(shapes.Rect, width=st.floats(allow_nan=False, allow_infinity=False), height=st.floats(allow_nan=False, allow_infinity=False))))
+def test_area(shape):
+    assert shapes.area(shape) >= 0.0
+    return None
+```
+
+A failure is reported like any other, at its `.pyfun` line, under the property's own line with the
+example Hypothesis shrank it to:
+
+```text
+>   let test_area shape =
+
+test_shapes.pyfun:6:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+shape = Rect(width=1.0, height=-1.0)
+
+>   Test.is_true (Shapes.area shape >= 0.0)
+E   assert -1.0 >= 0.0
+E    +  where -1.0 = <function area at 0x...>(Rect(width=1.0, height=-1.0))
+E   Failing test case: test_area(
+E       shape=Rect(width=1.0, height=-1.0),
+E   )
+
+test_shapes.pyfun:7: AssertionError
+```
+
+*Which tests are properties.* A test that reads none of its parameters is an example and takes one,
+as before; a test that reads any of them is a property, and every parameter is generated, each named
+in `@given` by its own name. The line is drawn at what the body reads rather than at how the
+parameter is written, so `let test_circle unused = …`, written before properties existed, is still
+run once and still needs nothing but pytest. A test that reads none of several parameters is an error
+at its name, which says to write `_` for a test run once or to read the parameters for a property.
+
+*The strategies.* Each is the one the type's Python form calls for, written out in full, so that the
+emitted test reads as a person would have written it:
+
+| Pyfun type | Strategy |
+| --- | --- |
+| `int` | `st.integers()` (unbounded, as a Python `int` is) |
+| `float` | `st.floats(allow_nan=False, allow_infinity=False)` |
+| `bool`, `str`, `unit` | `st.booleans()`, `st.text()`, `st.none()` |
+| `List a`, `Set a`, `Seq a` | `st.lists(a)`, `st.sets(a)`, `st.iterables(a)` |
+| `Map k v` | `st.dictionaries(k, v)` |
+| `(a, b)` | `st.tuples(a, b)` |
+| `Option a` | `st.one_of(st.just(None_()), st.builds(Some, a))` |
+| `Result a e` | `st.one_of(st.builds(Ok, a), st.builds(Error, e))` |
+| a record | `st.builds(Point, x=…, y=…)` |
+| a sum type | `st.one_of(…)` over its constructors in declared order: `st.just(Dot())` for a field-less one, `st.builds(Circle, …)` for a positional one, `st.builds(Rect, width=…, height=…)` for a named one |
+| `Json` | its seven constructors, as a sum type that holds itself |
+| a newtype (`opaque type UserId = str`) | the underlying type's: it is that value at run time (§7.3) |
+| `float<m>` | `float`'s: a unit of measure is erased (§8.2) |
+
+A float is finite because a NaN is not equal to itself, so `Test.equal x x` would fail on one, and
+a property about infinities is clearer building them in its body than receiving them unasked. A type
+from another module is built through that module (`shapes.Rect`), as the code that uses it is. A
+sum type's constructors come in the order they are declared, and Hypothesis shrinks towards the
+first, so the simplest constructor written first is the one a failure is shrunk to.
+
+*A type that holds itself* is generated with `st.recursive`, whose base is the type with every way
+back into it taken away, so that every value is finite and Hypothesis bounds its size:
+
+```python
+@given(tree=st.recursive(st.just(Leaf()), lambda tree: st.one_of(st.just(Leaf()), st.builds(Node, tree, st.integers(), tree))))
+```
+
+The name inside the `lambda` is the type's in snake case. A way back through a collection leaves the
+collection empty in the base (`type Rose = Rose int (List Rose)` starts from `Rose(n, [])`), and types
+that hold each other nest one `st.recursive` in the other. A type every value of which holds another
+(`type Stream = Cons int Stream`) has no base, and is an error naming the fix: give it a constructor
+that holds no `Stream`. A type that holds itself at a different type argument has no finite
+strategy of this shape and is an error too.
+
+*A type left open.* A parameter whose type is still a variable after inference (`let test_id x =
+Test.equal x (identity x)` gives `x` the type `a`) is generated as `int`. A body polymorphic in `x`
+can do nothing with it but pass it on, and compare it where its type says so, so distinct ordered
+values (which `int` gives) find whatever another type would. This is how QuickCheck runs a
+polymorphic property. Reporting it as an error instead would leave the author no way to choose a
+type, since Pyfun writes none. A variable constrained to `num` is an `int`
+as it is when it runs, and a variable that an `in` searches is a `List` of what it is searched for.
+
+*What cannot be generated* is an error at the parameter, before pytest is started: a function (take
+what it is applied to as the parameter, or try each function in the body), an extern type, whose
+values come from Python, an `Async`, which is work rather than a value, and a caught `Exception`.
+The error names the part of the type that is the trouble:
+
+```text
+error: a property cannot generate `f`: `num a => a -> a` is a function. Take what the function is applied to as the parameter instead, or try each function you mean in the body (`[double, negate] |> List.iter (fun f -> …)`)
+ --> test_fns.pyfun:3:16
+  |
+3 | let test_twice f =
+  |                ^
+```
+
+*Constraining the values* is left out. A property that holds only for some inputs says so in its
+body (`if n > 0 then … else ()`), or takes a type whose values are the ones it means. Hypothesis's
+`assume` would discard the others rather than count them as passes, and a `Test.assume` lowering to
+it is the natural spelling if real tests ask for it; a syntax for strategies is not, since a
+strategy is chosen by a type here and Pyfun writes no types.
+
+*Hypothesis* is a third-party package, and only a test file that has a property imports it (`from
+hypothesis import given, strategies as st`, or `_pf_given` and `_pf_st` where the file binds those
+names). It comes with the `test` extra (`hypothesis>=6.100`, the oldest it has been run against).
+`pyfun test` checks for it before pytest starts, when a test file has a property: an interpreter
+without it is told to install it, with the extra named beside it, where it would otherwise fail with
+an `ImportError` while collecting; one older than the floor is told to upgrade. A test run with no
+property does not need it. Hypothesis runs with no example database and no deadline, and keeps what
+it stores (a `.hypothesis` folder in the working directory, by default) in the temp directory with
+the compiled files, so the run still leaves nothing in the project; its options go after `--`
+(`pyfun test -- --hypothesis-seed=0`, `--hypothesis-profile`, `--hypothesis-show-statistics`).
 
 **Typed holes.** A hole `?` (anonymous) or `?name` in expression position is a typed blank: the checker
 infers its type from context and reports it as a note (`` hole `?body` has type `int` ``), which the LSP

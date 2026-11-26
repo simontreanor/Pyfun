@@ -30,8 +30,11 @@ mod captures;
 mod decode_spec;
 mod fold_loop;
 mod newtype_patterns;
+mod properties;
 mod self_tail_call;
 mod typed;
+
+pub use properties::{PropertyTypes, TestKind, test_kinds};
 
 use crate::lexer::Span;
 pub use crate::scope::Naming;
@@ -47,6 +50,11 @@ use crate::python_emitter::{PyBinOp, PyCase, PyExpr, PyFStrPart, PyModule, PyPat
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LowerError {
     pub message: String,
+    /// Where in the source the error is, as a module name and a span, when it
+    /// has a place: a property whose parameter cannot be generated (`pyfun
+    /// test`, `DESIGN.md` §9). `None` for the rest, which a checked program
+    /// does not reach.
+    pub at: Option<(String, Span)>,
 }
 
 impl std::fmt::Display for LowerError {
@@ -231,19 +239,35 @@ pub fn annotate_typed(
     typed::annotate(module, py, binding_types, searched, imported)
 }
 
-/// The pytest shape of a test file (`pyfun test`, `DESIGN.md` §9): each
-/// top-level `let test_name _ = …` becomes `def test_name():`. pytest calls a
-/// test with no arguments (a parameter would be read as a fixture to supply),
-/// and the one parameter a Pyfun function must have carries nothing. A
-/// parameter that was given a name is bound to `None` in its place.
-pub fn as_pytest(module: &Module, mut py: PyModule) -> PyModule {
-    let tests: HashSet<String> = module
+/// The pytest shape of a test file (`pyfun test`, `DESIGN.md` §9).
+///
+/// An example test (`let test_rect _ = …`) becomes `def test_rect():`. pytest
+/// calls a test with no arguments (a parameter would be read as a fixture to
+/// supply), and the one parameter a Pyfun function must have carries nothing.
+/// A parameter that was given a name is bound to `None` in its place.
+///
+/// A property test (one that reads its parameters) keeps them, and is given
+/// `@given(…)` with a strategy for each, derived from its type
+/// ([`properties`]). `module_name` is the module's name, which an error about
+/// a parameter is placed in.
+pub fn as_pytest(
+    module: &Module,
+    module_name: &str,
+    mut py: PyModule,
+    types: &PropertyTypes,
+) -> Result<Pytest, LowerError> {
+    let kinds = test_kinds(module).unwrap_or_default();
+    let examples: HashSet<String> = module
         .items
         .iter()
         .filter_map(|item| match item {
             crate::parser::ast::Item::Let(binding) if binding.params.len() == 1 => binding
                 .name()
-                .filter(|name| crate::types::is_test_name(name))
+                .filter(|name| {
+                    kinds
+                        .iter()
+                        .any(|(test, kind)| test == name && *kind == TestKind::Example)
+                })
                 .map(py_value_name),
             _ => None,
         })
@@ -252,7 +276,7 @@ pub fn as_pytest(module: &Module, mut py: PyModule) -> PyModule {
         if let PyStmt::FuncDef {
             name, params, body, ..
         } = stmt
-            && tests.contains(name.as_str())
+            && examples.contains(name.as_str())
             && params.len() == 1
         {
             let param = params.remove(0);
@@ -273,7 +297,55 @@ pub fn as_pytest(module: &Module, mut py: PyModule) -> PyModule {
             }
         }
     }
-    py
+    let (properties, runtime) = properties::add_given(module, module_name, &mut py, &kinds, types)?;
+    if !runtime.is_empty() {
+        // The strategies build values of the shared runtime's classes, which
+        // the module may not otherwise import.
+        let existing = py.body.iter_mut().find_map(|stmt| match stmt {
+            PyStmt::ImportFrom { module, names } if module == "_pyfun_rt" => Some(names),
+            _ => None,
+        });
+        match existing {
+            Some(names) => {
+                for class in &runtime {
+                    if !names.iter().any(|n| n == class) {
+                        names.push(class.to_string());
+                    }
+                }
+            }
+            None => {
+                let at = py
+                    .body
+                    .iter()
+                    .position(
+                        |s| matches!(s, PyStmt::ImportFrom { module, .. } if module == "hypothesis"),
+                    )
+                    .map_or(0, |i| i + 1);
+                py.body.insert(
+                    at,
+                    PyStmt::ImportFrom {
+                        module: "_pyfun_rt".to_string(),
+                        names: runtime.iter().map(|c| c.to_string()).collect(),
+                    },
+                );
+            }
+        }
+    }
+    Ok(Pytest {
+        py,
+        properties,
+        uses_runtime: !runtime.is_empty(),
+    })
+}
+
+/// What [`as_pytest`] made of a test module.
+pub struct Pytest {
+    pub py: PyModule,
+    /// Whether a test of it is a property, which Hypothesis runs.
+    pub properties: bool,
+    /// Whether its strategies name a class of the shared runtime
+    /// (`_pyfun_rt.py`), which then has to be there.
+    pub uses_runtime: bool,
 }
 
 /// Typed output for a project's shared runtime module (`_pyfun_rt.py`).
@@ -2476,6 +2548,7 @@ impl Lowerer {
                     Some(n) => format!("cannot compile: unfilled hole `?{n}`"),
                     None => "cannot compile: unfilled hole `?`".to_string(),
                 },
+                at: None,
             }),
             ExprKind::Int(n) => {
                 // An integer literal that inference resolved to `float` is emitted
@@ -4961,6 +5034,7 @@ impl Lowerer {
                 if !stmts.is_empty() {
                     return Err(LowerError {
                         message: "a `case` guard must be a simple expression".to_string(),
+                        at: None,
                     });
                 }
                 Ok(Some(val))
@@ -5340,6 +5414,7 @@ impl Lowerer {
                         message: "an or-pattern alternative in an active-pattern match \
                                   must be a testable case"
                             .to_string(),
+                        at: None,
                     })?;
                     debug_assert!(binds.is_empty(), "or-alternatives are binder-free");
                     cond = Some(match cond {
@@ -5355,6 +5430,7 @@ impl Lowerer {
             }
             _ => Err(LowerError {
                 message: "unsupported pattern in a match using active patterns".to_string(),
+                at: None,
             }),
         }
     }
@@ -5374,6 +5450,7 @@ impl Lowerer {
             _ => Err(LowerError {
                 message: "an active-pattern parameter argument must be a literal or a variable"
                     .to_string(),
+                at: None,
             }),
         }
     }
@@ -5437,7 +5514,7 @@ impl Lowerer {
             // (Any structural error was already reported during type-checking.)
             CeBuilder::User(name) => {
                 let expr = crate::desugar::desugar_ce(name, items, span)
-                    .map_err(|(message, _)| LowerError { message })?;
+                    .map_err(|(message, _)| LowerError { message, at: None })?;
                 self.lower_value(&expr, locals)
             }
         }
@@ -11885,6 +11962,7 @@ fn ce_item_span(item: &CeItem) -> Span {
 fn ce_item_error(builder: &str) -> LowerError {
     LowerError {
         message: format!("unexpected item in a `{builder}` computation expression"),
+        at: None,
     }
 }
 

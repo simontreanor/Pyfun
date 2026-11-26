@@ -389,7 +389,9 @@ pyfun repl                           # interactive REPL
 
 `pyfun test` runs the tests with pytest, which `pip install "pyfun-lang[test]"` installs beside
 Pyfun. A failing test is reported at its `.pyfun` line, with the statement as you wrote it and the
-values pytest found.
+values pytest found. A test that reads its parameters is a property, run by Hypothesis on values
+generated from the parameters' inferred types (`let test_reverse xs = Test.equal xs (List.rev
+(List.rev xs))`).
 
 Multi-file projects just work: `import Geometry` pulls in a sibling `geometry.pyfun`,
 `import Shapes.Geometry` one in a folder (`shapes/geometry.pyfun`), and any command drives the whole

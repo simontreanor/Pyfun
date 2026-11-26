@@ -803,10 +803,29 @@ or in a helper; a member passed as a value keeps a `_pf_test_*` helper that hold
 The command is `src/test_cmd.rs`. It resolves each test file's project, checks it, compiles it with
 `project::compile_tests`, and stages every project's files in one temp directory, with the user's
 working directory unchanged. `compile_tests` differs from `compile` in two steps:
-`lowering::as_pytest` drops the one parameter of each `test_*` function in a test module, binding a
-named one to `None`, because pytest would read a parameter as a fixture to supply; and each module's
-line map is built as `compile_traced` builds it, the traced lowering taking the `as_pytest` step too so
-that it still compares with the real one.
+`lowering::as_pytest` drops the one parameter of each example test in a test module, binding a
+named one to `None`, because pytest would read a parameter as a fixture to supply, and puts
+`@given(…)` above each property test; and each module's line map is built as `compile_traced` builds
+it, the traced lowering taking the `as_pytest` step too so that it still compares with the real one.
+
+Which test is which is `lowering::test_kinds` (`src/lowering/properties.rs`): a test is a property
+when a reference the language server's resolver finds (`lsp::resolve::references`) lands on a name
+one of its parameters binds, and an example otherwise; an example with more than one parameter is
+the error `test_cmd.rs` reports at its name before compiling. For a property, `properties::add_given`
+reads the test's type from the checker's recorded types (`compile_project` collects them for a test
+module as it does for typed output, with the displayed type of each span for a message) and walks
+the argument types with a `Deriver`, which builds each strategy as a `PyExpr`. Declared types are
+found through `typed::Decls`, the table typed output spells types with, so a type of another module
+is reached through that module's import as an annotation is. A sum type, a record and `Json` go
+through `Deriver::recursive`: it pushes a `Frame` for the type, derives every constructor, and if a
+constructor reached the type again (the frame was `used`) derives them a second time with the frame
+standing for nothing, which leaves out what needs the type and empties a collection of it; the two
+become `st.recursive(base, lambda name: extended)`. A failure is a `Why`, turned into a `LowerError`
+whose new `at` field holds the module and the parameter's span, which `test_cmd.rs` renders against
+the module's source. The result says whether the module has a property (`CompiledProject::
+has_properties`) and which shared runtime classes the strategies name (`Some`, `None_`, `JList`, …),
+which `as_pytest` adds to the module's `from _pyfun_rt import` and which make the runtime module
+needed. The decorator is `PyStmt::Decorated`, which wraps the `def`.
 
 What runs is `src/pytest_plugin.py`, staged as `_pyfun_pytest.py` beside the compiled files with the
 traceback hook (`_pyfun_trace.py`), the line tables (`_pyfun_lines.json`, the format of `pyfun run`), a
@@ -823,12 +842,16 @@ own paths (or a test's id, `file.pyfun::test_name`) and a plugin object:
   entry of a staged file gets the source path, line and statement of its table row and keeps its `E`
   lines; an entry on a row from no source is dropped and its explanation moves to the entry above; an
   entry of any other file is untouched. `--tb=native` is handed to the hook's `render`.
-- `pytest_configure` registers every staged module for assertion rewriting, and the run is given
+- `pytest_configure` (ahead of Hypothesis's own plugin) registers every staged module for assertion
+  rewriting and, where Hypothesis is installed, loads a `pyfun` profile (no example database, no
+  deadline) with Hypothesis's storage in the staged directory; and the run is given
   `--rootdir` (the working directory, or the nearest folder holding it and every test file),
   `-c` with the staged configuration, `--noconftest` and `-p no:cacheprovider`.
 
 `test_cmd.rs` checks the interpreter's pytest before any of this: none gives the message naming the
 `test` extra, and one older than `OLDEST_PYTEST` (the extra's floor in `pyproject.toml`) is refused.
+When a compiled test module has a property, `hypothesis_is_there` asks the interpreter for
+Hypothesis's version the same way, against `OLDEST_HYPOTHESIS`.
 
 ## Top-level scope and one name per binding — implements DESIGN §5, §7.1
 

@@ -527,6 +527,7 @@ impl Lowerer {
     ) -> Result<Vec<PyStmt>, LowerError> {
         let plans = classify_leaf(leaf, slots, acc_param, single).ok_or_else(|| LowerError {
             message: "internal error: fold tail leaf unclassifiable after validation".to_string(),
+            at: None,
         })?;
 
         enum LoweredMut {

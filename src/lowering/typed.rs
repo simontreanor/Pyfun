@@ -130,25 +130,29 @@ fn add_json_alias(py: &mut PyModule) {
 }
 
 /// What the module declares, as the speller needs it.
-struct Decls<'a> {
+pub(super) struct Decls<'a> {
     /// The module's own type declarations, by name.
-    types: HashMap<&'a str, &'a TypeDecl>,
+    pub(super) types: HashMap<&'a str, &'a TypeDecl>,
     /// The type declarations of the modules this one imports, by name (type
     /// names are one flat namespace across a project), each with the Python
     /// module that defines its classes.
-    imported: HashMap<&'a str, (&'a str, &'a TypeDecl)>,
+    pub(super) imported: HashMap<&'a str, (&'a str, &'a TypeDecl)>,
     /// Every name the emitted module binds at top level, which a type
     /// parameter must not shadow.
-    taken: HashSet<String>,
+    pub(super) taken: HashSet<String>,
     /// How this file reaches each imported Python module: the name to spell a
     /// type through, and the `import` that binds it. That is the module's own
     /// name, or the alias it goes by when a binding of the file took the name
     /// (`import shapes.geometry as _pf_shapes_geometry` beside a `shapes`).
-    reached: HashMap<&'a str, (String, String)>,
+    pub(super) reached: HashMap<&'a str, (String, String)>,
 }
 
 impl<'a> Decls<'a> {
-    fn of(module: &'a Module, py: &PyModule, others: &'a [(String, &'a Module)]) -> Decls<'a> {
+    pub(super) fn of(
+        module: &'a Module,
+        py: &PyModule,
+        others: &'a [(String, &'a Module)],
+    ) -> Decls<'a> {
         let types: HashMap<&str, &TypeDecl> = module
             .items
             .iter()

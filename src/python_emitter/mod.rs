@@ -149,6 +149,9 @@ pub enum PyStmt {
         body: Vec<PyStmt>,
         is_async: bool,
     },
+    /// `@decorator` above the definition it decorates: a property test's
+    /// `@given(…)` (`pyfun test`, `DESIGN.md` §9).
+    Decorated { decorator: PyExpr, def: Box<PyStmt> },
     /// A docstring: the first statement of a function's body, from the `##`
     /// comment above its `let` (`DESIGN.md` §9).
     Doc(String),
@@ -652,6 +655,10 @@ fn emit_stmt(stmt: &PyStmt, depth: usize, out: &mut String) {
         PyStmt::Class { name, body } => {
             line(out, depth, &format!("class {name}:"));
             emit_block(body, depth + 1, out);
+        }
+        PyStmt::Decorated { decorator, def } => {
+            line(out, depth, &format!("@{}", expr(decorator)));
+            emit_stmt(def, depth, out);
         }
         PyStmt::Doc(doc) => docstring(doc, depth, out),
         PyStmt::TypedFuncDef {

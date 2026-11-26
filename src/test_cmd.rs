@@ -12,8 +12,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use pyfun::diagnostics::{self, Level};
+use pyfun::lexer::Span;
 use pyfun::project;
-use pyfun::syntax::Item;
 use pyfun::traceback::{self, Traced};
 
 use crate::{
@@ -65,6 +66,8 @@ pub fn run(args: &[String]) -> ExitCode {
     // Each test file beside the staged module it compiled to.
     let mut tests: Vec<(String, String)> = Vec::new();
     let mut files: Vec<&str> = Vec::new();
+    // Whether a test is a property, which Hypothesis runs.
+    let mut properties = false;
     for target in &targets {
         if !files.contains(&target.file.as_str()) {
             files.push(&target.file);
@@ -78,14 +81,21 @@ pub fn run(args: &[String]) -> ExitCode {
         if !check_project_ok(&project) {
             return ExitCode::FAILURE;
         }
-        if let Err(message) = tests_take_one_parameter(&project) {
-            return fail(&message);
+        if !tests_have_a_shape(&project) {
+            return ExitCode::FAILURE;
         }
         let compiled = match project::compile_tests(&project) {
             Ok(compiled) => compiled,
-            Err(e) => return fail(&format!("lowering failed: {}", e.message)),
+            Err(e) => match &e.at {
+                Some((name, span)) => {
+                    report_at(&project, name, &e.message, *span);
+                    return ExitCode::FAILURE;
+                }
+                None => return fail(&format!("lowering failed: {}", e.message)),
+            },
         };
         report_notes(&compiled.notes);
+        properties |= compiled.has_properties;
         for (name, python) in &compiled.files {
             match staged.iter().find(|(staged_name, _)| staged_name == name) {
                 None => staged.push((name.clone(), python.clone())),
@@ -106,6 +116,10 @@ pub fn run(args: &[String]) -> ExitCode {
         ));
         let names = traced_names(&project, &compiled);
         built.push((project, compiled, names));
+    }
+
+    if properties && let Err(message) = hypothesis_is_there(&interp) {
+        return fail(&message);
     }
 
     // Where each emitted line came from, for a failure in `.pyfun` lines.
@@ -179,16 +193,55 @@ pub fn run(args: &[String]) -> ExitCode {
 /// wheel's `test` extra (`pyproject.toml`).
 const OLDEST_PYTEST: (u32, u32) = (8, 4);
 
+/// The oldest Hypothesis a property test is run against: the floor of the
+/// wheel's `test` extra (`pyproject.toml`).
+const OLDEST_HYPOTHESIS: (u32, u32) = (6, 100);
+
+/// A property test is run by Hypothesis, which `interp` has to have: said
+/// before pytest is started, where a missing one would be an `ImportError` in
+/// the middle of collecting the tests.
+fn hypothesis_is_there(interp: &str) -> Result<(), String> {
+    let found = Command::new(interp)
+        .args(["-c", "import hypothesis; print(hypothesis.__version__)"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success());
+    let Some(found) = found else {
+        return Err(format!(
+            "a property test (a `test_*` function that reads its parameters) is run by \
+             Hypothesis, which `{interp}` does not have: install it with `{interp} -m pip \
+             install hypothesis`, or beside Pyfun with `{interp} -m pip install \
+             \"pyfun-lang[test]\"`"
+        ));
+    };
+    let said = String::from_utf8_lossy(&found.stdout);
+    if let Some(version) = dotted_version(said.trim())
+        && version < OLDEST_HYPOTHESIS
+    {
+        return Err(format!(
+            "`pyfun test` runs a property test with Hypothesis {}.{} or newer, and `{interp}` \
+             has {}.{}: upgrade it with `{interp} -m pip install -U hypothesis`",
+            OLDEST_HYPOTHESIS.0, OLDEST_HYPOTHESIS.1, version.0, version.1
+        ));
+    }
+    Ok(())
+}
+
+/// The `(major, minor)` of a version (`6.170.17`).
+fn dotted_version(version: &str) -> Option<(u32, u32)> {
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 /// The `(major, minor)` in what `pytest --version` printed (`pytest 9.2.0`).
 fn pytest_version(said: &str) -> Option<(u32, u32)> {
     let version = said
         .split_whitespace()
         .skip_while(|word| *word != "pytest")
         .find(|word| word.starts_with(|c: char| c.is_ascii_digit()))?;
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    Some((major, minor))
+    dotted_version(version)
 }
 
 /// One thing to run: a test file, or one test of it.
@@ -277,28 +330,34 @@ fn is_test_file(path: &Path) -> bool {
             .is_some_and(|stem| stem.to_string_lossy().starts_with("test_"))
 }
 
-/// A test is called with nothing, so it is the function of one ignored
-/// parameter: `let test_name _ = …`.
-fn tests_take_one_parameter(project: &project::Project) -> Result<(), String> {
+/// Each test has a shape `pyfun test` can run: an example takes the one
+/// parameter it ignores (`let test_name _ = …`), and a property reads its
+/// parameters, which are generated (`DESIGN.md` §9). A test of neither shape
+/// is reported at its name, and the result is whether there was none.
+fn tests_have_a_shape(project: &project::Project) -> bool {
+    let mut ok = true;
     for module in &project.modules {
         if !project::is_test_module(&module.name) {
             continue;
         }
-        for item in &module.ast.items {
-            if let Item::Let(binding) = item
-                && let Some(name) = binding.name()
-                && pyfun::types::is_test_name(name)
-                && binding.params.len() != 1
-            {
-                return Err(format!(
-                    "in `{}`: `{name}` is named as a test, and a test takes one parameter that \
-                     it ignores: write `let {name} _ = …`",
-                    module.file
-                ));
-            }
+        if let Err((span, message)) = pyfun::lowering::test_kinds(&module.ast) {
+            report_at(project, &module.name, &message, span);
+            ok = false;
         }
     }
-    Ok(())
+    ok
+}
+
+/// An error at `span` of the module `name`, rendered against its source as
+/// `check` renders one.
+fn report_at(project: &project::Project, name: &str, message: &str, span: Span) {
+    match project.modules.iter().find(|m| m.name == name) {
+        Some(module) => eprintln!(
+            "{}",
+            diagnostics::render_in(&module.file, &module.source, Level::Error, message, span)
+        ),
+        None => eprintln!("error: {message}"),
+    }
 }
 
 #[cfg(test)]
@@ -316,5 +375,13 @@ mod tests {
         assert_eq!(pytest_version("no such module"), None);
         assert!(pytest_version("pytest 8.3.5").unwrap() < OLDEST_PYTEST);
         assert!(pytest_version("pytest 10.0.1").unwrap() >= OLDEST_PYTEST);
+    }
+
+    #[test]
+    fn the_version_hypothesis_says_is_read() {
+        assert_eq!(dotted_version("6.170.17"), Some((6, 170)));
+        assert!(dotted_version("6.99.0").unwrap() < OLDEST_HYPOTHESIS);
+        assert!(dotted_version("7.0.0").unwrap() >= OLDEST_HYPOTHESIS);
+        assert_eq!(dotted_version("unknown"), None);
     }
 }
