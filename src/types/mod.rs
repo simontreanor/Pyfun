@@ -7917,7 +7917,11 @@ impl Infer {
             // float%float=float).
             BinOp::Add | BinOp::Sub | BinOp::Mod => {
                 if !self.unify_unit(&lu, &ru) {
-                    return Err(base_clash(self));
+                    return Err(self.unit_mismatch(
+                        &self.num_ty(lb, lu.clone()),
+                        &self.num_ty(rb, ru.clone()),
+                        span,
+                    ));
                 }
                 Ok(self.num_ty(lb, self.apply_unit(&lu)))
             }
@@ -10700,6 +10704,9 @@ impl Infer {
             if let Some(hint) = self.call_syntax_hint(func, arg, &func_ty) {
                 return Err(hint);
             }
+            if e.message.starts_with(UNIT_MISMATCH) {
+                return Err(self.unit_argument_hint(arg, &func_ty, e));
+            }
             return Err(self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e));
         }
         let latent = self.apply_eff(&latent);
@@ -10747,6 +10754,33 @@ impl Infer {
             ),
             span: Span::new(indexed.span().start, arg.span().end),
         })
+    }
+
+    /// A unit mismatch in an application is about the argument, so it is shown
+    /// there rather than across the whole call; and a bare number given where a
+    /// unit is wanted is shown with the unit written on (`8<px>`).
+    fn unit_argument_hint(&self, arg: &Expr, func_ty: &Ty, mut e: TypeError) -> TypeError {
+        e.span = arg.span();
+        if !matches!(arg.kind, ExprKind::Int(_) | ExprKind::Float(_)) {
+            return e;
+        }
+        let Ty::Fun(param, _, _) = self.apply(func_ty) else {
+            return e;
+        };
+        let (Ty::Int(u) | Ty::Float(u)) = self.apply(&param) else {
+            return e;
+        };
+        let u = self.apply_unit(&u);
+        if !u.is_dimensionless() && u.var_ids().is_empty() {
+            let shown = show(&Ty::Float(u));
+            let unit = shown.trim_start_matches("float");
+            e.message = format!(
+                "{}: write `{}{unit}`",
+                e.message,
+                crate::ast::print_expr(arg)
+            );
+        }
+        e
     }
 
     /// Python's `f(a, b)`, which Pyfun reads as `f` applied to the tuple `(a, b)`.
@@ -11863,33 +11897,43 @@ impl Infer {
         let b = self.apply(b);
         match (&a, &b) {
             (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::Unit, Ty::Unit) => Ok(()),
+            // Two numerics: the base first, then the unit. A failure of the
+            // unit alone is told in its own words (#269): reported as a base
+            // mismatch, `8` against `float<px>` read `int` against `float`,
+            // and the fix it pointed to (`8.0`) failed next.
             (Ty::Int(u1), Ty::Int(u2)) | (Ty::Float(u1), Ty::Float(u2)) => {
                 if self.unify_unit(u1, u2) {
                     Ok(())
                 } else {
-                    Err(mismatch(&a, &b, span))
+                    Err(self.unit_mismatch(&a, &b, span))
                 }
             }
             // A `num` variable meets another numeric: resolve its base, unify units.
             (Ty::Num(x, ux), Ty::Num(y, uy)) => {
-                if self.unify_num(NumRef::Var(*x), NumRef::Var(*y)) && self.unify_unit(ux, uy) {
+                if !self.unify_num(NumRef::Var(*x), NumRef::Var(*y)) {
+                    Err(mismatch(&a, &b, span))
+                } else if self.unify_unit(ux, uy) {
                     Ok(())
                 } else {
-                    Err(mismatch(&a, &b, span))
+                    Err(self.unit_mismatch(&a, &b, span))
                 }
             }
             (Ty::Num(v, un), Ty::Int(ui)) | (Ty::Int(ui), Ty::Num(v, un)) => {
-                if self.unify_num(NumRef::Var(*v), NumRef::Int) && self.unify_unit(un, ui) {
+                if !self.unify_num(NumRef::Var(*v), NumRef::Int) {
+                    Err(mismatch(&a, &b, span))
+                } else if self.unify_unit(un, ui) {
                     Ok(())
                 } else {
-                    Err(mismatch(&a, &b, span))
+                    Err(self.unit_mismatch(&a, &b, span))
                 }
             }
             (Ty::Num(v, un), Ty::Float(uf)) | (Ty::Float(uf), Ty::Num(v, un)) => {
-                if self.unify_num(NumRef::Var(*v), NumRef::Float) && self.unify_unit(un, uf) {
+                if !self.unify_num(NumRef::Var(*v), NumRef::Float) {
+                    Err(mismatch(&a, &b, span))
+                } else if self.unify_unit(un, uf) {
                     Ok(())
                 } else {
-                    Err(mismatch(&a, &b, span))
+                    Err(self.unit_mismatch(&a, &b, span))
                 }
             }
             (Ty::Var(x), Ty::Var(y)) if x == y => Ok(()),
@@ -11941,6 +11985,36 @@ impl Infer {
             }
             _ => Err(mismatch(&a, &b, span)),
         }
+    }
+
+    /// Two numerics whose bases agree and whose units do not. The types are
+    /// shown as they stand once the base is solved, so a literal that has just
+    /// become a `float` no longer shows as its `int` default, and a side with
+    /// no unit is said to have none (#269).
+    fn unit_mismatch(&self, a: &Ty, b: &Ty, span: Span) -> TypeError {
+        let (a, b) = (self.apply(a), self.apply(b));
+        let unitless = |t: &Ty| match t {
+            Ty::Int(u) | Ty::Float(u) | Ty::Num(_, u) => self.apply_unit(u).is_dimensionless(),
+            _ => false,
+        };
+        let message = if unitless(&b) {
+            format!(
+                "{UNIT_MISMATCH}: expected `{}`, found a number with no unit",
+                show(&a)
+            )
+        } else if unitless(&a) {
+            format!(
+                "{UNIT_MISMATCH}: expected a number with no unit, found `{}`",
+                show(&b)
+            )
+        } else {
+            format!(
+                "{UNIT_MISMATCH}: expected `{}`, found `{}`",
+                show(&a),
+                show(&b)
+            )
+        };
+        TypeError { message, span }
     }
 
     /// Unify two units in the free abelian group. Returns false on a genuine
@@ -12463,6 +12537,10 @@ impl Infer {
         (tys, units, nums, effs)
     }
 }
+
+/// How a unit mismatch begins, so an application can tell one from another
+/// failure and move it onto the argument (#269).
+const UNIT_MISMATCH: &str = "unit mismatch";
 
 fn mismatch(a: &Ty, b: &Ty, span: Span) -> TypeError {
     TypeError {
