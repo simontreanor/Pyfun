@@ -1,0 +1,52 @@
+# The high-score table, each test on a fresh in-memory database.
+import Scores
+import Sqlite
+
+let fresh _ =
+  let db = Sqlite.open ":memory:"
+  Sqlite.script db Scores.schema
+  db
+
+let ada = Scores.Score { player = "ada", points = 420, note = Some "first try" }
+let grace = Scores.Score { player = "grace", points = 380, note = None }
+let alan = Scores.Score { player = "alan", points = 450, note = None }
+
+let test_the_top_scores_come_best_first _ =
+  let db = fresh ()
+  [ada, grace, alan] |> List.iter (fun s -> Scores.record db s |> ignore)
+  Test.equal (Ok [alan, ada]) (Scores.top db 2)
+
+let test_a_note_survives_the_round_trip_and_null_is_none _ =
+  let db = fresh ()
+  [ada, grace] |> List.iter (fun s -> Scores.record db s |> ignore)
+  Test.equal (Ok (Some ada)) (Scores.best_of db "ada")
+  Test.equal (Ok (Some grace)) (Scores.best_of db "grace")
+  Test.equal (Ok None) (Scores.best_of db "nobody")
+
+let test_a_batch_is_stored_whole _ =
+  let db = fresh ()
+  Test.is_true (Result.is_ok (Scores.record_all db [ada, grace]))
+  Test.equal (Ok 2) (Scores.count db)
+
+let test_a_batch_breaking_a_rule_is_not_stored_at_all _ =
+  let db = fresh ()
+  let nameless = Scores.Score { player = "", points = 1, note = None }
+  Test.equal (Error (Sqlite.Abandoned "a score needs a player")) (Scores.record_all db [ada, nameless])
+  Test.equal (Ok 0) (Scores.count db)
+
+let test_a_batch_the_schema_refuses_is_not_stored_at_all _ =
+  let db = fresh ()
+  let negative = Scores.Score { player = "tony", points = -5, note = None }
+  match Scores.record_all db [ada, negative]:
+    case Error (Sqlite.Raised e): Test.equal "IntegrityError" e.error_kind
+    case _: Test.fail "a negative score was stored"
+  Test.equal (Ok 0) (Scores.count db)
+
+let test_a_name_full_of_sql_is_only_a_name _ =
+  let db = fresh ()
+  let odd = Scores.Score { player = "x'); drop table scores; --", points = 1, note = None }
+  Scores.record db odd |> ignore
+  Test.equal (Ok (Some odd)) (Scores.best_of db odd.player)
+
+let test_the_leaderboard_is_numbered_and_aligned _ =
+  Test.equal ["1. alan       450", "2. ada        420"] (Scores.leaderboard [alan, ada])

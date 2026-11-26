@@ -1794,7 +1794,10 @@ The friction §6 leaves is distribution: a set of typed `extern` declarations fo
 cheap to write (five to ten lines a library) but was copied between projects by hand. A **façade**
 is those declarations published once as an **ordinary pip distribution** whose package data
 includes `.pyfun` files, so the Python ecosystem's own tools (pip, uv, PyPI, private indexes)
-carry them and Pyfun adds no registry of its own. `examples/facades/pyfun-textwrap/` is one.
+carry them and Pyfun adds no registry of its own. `examples/facades/pyfun-textwrap/` is the smallest
+one; `examples/facades/pyfun-sqlite/` is a full one (typed `sqlite3`: bound parameters as a closed
+sum, `Decode`-style row decoders, savepoint transactions), with a `demo/` project that consumes it
+through `pyfun add` and carries its tests.
 
 A project is marked by a **manifest**, `pyfun.toml`, at its root:
 

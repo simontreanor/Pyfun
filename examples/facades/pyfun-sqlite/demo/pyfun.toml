@@ -1,0 +1,5 @@
+[project]
+name = "sqlite-demo"
+
+[dependencies]
+pyfun-sqlite = "0.1.0"

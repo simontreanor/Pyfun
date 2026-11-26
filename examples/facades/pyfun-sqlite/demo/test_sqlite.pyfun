@@ -1,0 +1,156 @@
+# The façade's own behaviour, each test on a fresh in-memory database.
+import Sqlite
+from Sqlite import Integer, Real, Text, Blob, Null
+
+let fresh _ =
+  let db = Sqlite.open ":memory:"
+  Sqlite.script db "create table t (id integer primary key, n integer, x real, s text, b blob)"
+  db
+
+let one_value db sql params =
+  Sqlite.query_one db sql params (Sqlite.at 0 Sqlite.value)
+
+## Every storage class goes in as a parameter and comes back as itself.
+let test_values_round_trip _ =
+  let db = fresh ()
+  let blob = Sqlite.bytes_of_list [0, 1, 255]
+  [Integer 42, Real 2.5, Text "ada", Blob blob, Null]
+  |> List.iter (fun v -> Test.equal (Ok (Some v)) (one_value db "select ?" [v]))
+
+## A parameter is bound, never spliced: SQL in a value stays a value.
+let test_a_parameter_is_never_sql _ =
+  let db = fresh ()
+  let name = "x'); drop table t; --"
+  Sqlite.execute db "insert into t (s) values (?)" [Text name] |> ignore
+  Test.equal (Ok [name]) (Sqlite.query db "select s from t" [] (Sqlite.field "s" Sqlite.str))
+
+let test_execute_counts_rows_and_insert_answers_the_rowid _ =
+  let db = fresh ()
+  Test.equal 1 (Sqlite.insert db "insert into t (n) values (?)" [Integer 1])
+  Test.equal 2 (Sqlite.insert db "insert into t (n) values (?)" [Integer 2])
+  Test.equal 2 (Sqlite.execute db "update t set n = n + 1" [])
+
+type Pair = { n: int, s: str }
+
+let pair = Sqlite.map2 (fun n s -> Pair { n = n, s = s }) (Sqlite.field "n" Sqlite.int) (Sqlite.field "s" Sqlite.str)
+
+let test_rows_decode_into_records _ =
+  let db = fresh ()
+  Sqlite.execute db "insert into t (n, s) values (?, ?), (?, ?)" [Integer 1, Text "one", Integer 2, Text "two"] |> ignore
+  Test.equal (Ok [Pair { n = 1, s = "one" }, Pair { n = 2, s = "two" }]) (Sqlite.query db "select n, s from t order by n" [] pair)
+
+## A wrong type names the row, the column, what was wanted and what was there.
+let test_a_wrong_type_is_a_value_naming_the_column _ =
+  let db = fresh ()
+  Sqlite.execute db "insert into t (n, s) values (1, 'one'), (2, 'two')" [] |> ignore
+  let outcome = Sqlite.query db "select s as n, s from t order by id" [] pair
+  let expected = Sqlite.RowError { row = 0, column = "n", problem = Sqlite.WrongType "int" (Text "one") }
+  Test.equal (Error expected) outcome
+  match outcome:
+    case Error e: Test.equal "row 0, column \"n\": expected int, found TEXT \"one\"" (Sqlite.explain e)
+    case Ok _: Test.fail "decoded a TEXT as an int"
+
+let test_a_missing_column_lists_the_columns_there_are _ =
+  let outcome = Sqlite.decode pair [("n", Integer 1), ("name", Text "one")]
+  Test.equal (Error (Sqlite.RowError { row = 0, column = "s", problem = Sqlite.NoSuchColumn ["n", "name"] })) outcome
+
+## Decoding runs with no database at all, and is pure.
+let pure decode_pair columns = Sqlite.decode pair columns
+
+let test_decoding_is_pure_and_needs_no_database _ =
+  Test.equal (Ok (Pair { n = 7, s = "seven" })) (decode_pair [("s", Text "seven"), ("n", Integer 7)])
+
+let test_cells_are_strict_where_sqlite_is_loose _ =
+  let read cell v = Sqlite.decode (Sqlite.field "c" cell) [("c", v)]
+  Test.equal (Ok 3.0) (read Sqlite.float (Integer 3))
+  Test.is_true (Result.is_error (read Sqlite.int (Real 3.0)))
+  Test.is_true (Result.is_error (read Sqlite.int Null))
+  Test.equal (Ok True) (read Sqlite.bool (Integer 1))
+  Test.is_true (Result.is_error (read Sqlite.bool (Integer 2)))
+  Test.equal (Ok None) (read (Sqlite.nullable Sqlite.str) Null)
+  Test.equal (Ok (Some "a")) (read (Sqlite.nullable Sqlite.str) (Text "a"))
+  Test.is_true (Result.is_error (read (Sqlite.nullable Sqlite.str) (Integer 1)))
+
+let positive n = if n > 0 then Ok n else Error "not positive"
+
+let test_check_reports_its_own_message_at_the_column _ =
+  let cell = Sqlite.check positive Sqlite.int
+  let outcome = Sqlite.decode (Sqlite.field "n" cell) [("n", Integer (-1))]
+  Test.equal (Error (Sqlite.RowError { row = 0, column = "n", problem = Sqlite.Invalid "not positive" })) outcome
+
+let test_and_then_chooses_the_next_decoder _ =
+  let shape kind =
+    match kind:
+      case "circle": Sqlite.field "r" Sqlite.float |> Sqlite.map (fun r -> f"circle {r}")
+      case _: Sqlite.field "w" Sqlite.float |> Sqlite.map (fun w -> f"square {w}")
+  let row = Sqlite.field "kind" Sqlite.str |> Sqlite.and_then shape
+  Test.equal (Ok "circle 1.5") (Sqlite.decode row [("kind", Text "circle"), ("r", Real 1.5)])
+
+let count db = Sqlite.query_one db "select count(*) from t" [] (Sqlite.at 0 Sqlite.int)
+
+let insert_n db n = Sqlite.insert db "insert into t (n) values (?)" [Integer n]
+
+let test_a_transaction_commits_what_its_body_did _ =
+  let db = fresh ()
+  let outcome = Sqlite.transaction db (fun tx -> Ok (insert_n tx 1 + insert_n tx 2))
+  Test.equal (Ok 3) outcome
+  Test.equal (Ok (Some 2)) (count db)
+
+let test_an_error_from_the_body_rolls_back _ =
+  let db = fresh ()
+  let body tx =
+    insert_n tx 1 |> ignore
+    Error "changed my mind"
+  let outcome = Sqlite.transaction db body
+  Test.equal (Error (Sqlite.Abandoned "changed my mind")) outcome
+  Test.equal (Ok (Some 0)) (count db)
+
+let test_a_raise_in_the_body_rolls_back_and_is_the_error _ =
+  let db = fresh ()
+  let body tx =
+    insert_n tx 1 |> ignore
+    Ok (Sqlite.execute tx "insert into nowhere values (1)" [])
+  let outcome = Sqlite.transaction db body
+  match outcome:
+    case Error (Sqlite.Raised e): Test.equal "OperationalError" e.error_kind
+    case _: Test.fail "expected the missing table to raise"
+  Test.equal (Ok (Some 0)) (count db)
+
+let test_transactions_nest _ =
+  let db = fresh ()
+  let inner tx =
+    insert_n tx 2 |> ignore
+    Error "inner only"
+  let outer tx =
+    insert_n tx 1 |> ignore
+    Ok (Sqlite.transaction tx inner)
+  Test.equal (Ok (Error (Sqlite.Abandoned "inner only"))) (Sqlite.transaction db outer)
+  Test.equal (Ok [1]) (Sqlite.query db "select n from t" [] (Sqlite.field "n" Sqlite.int))
+
+## A commit SQLite refuses (a deferred constraint) rolls back too.
+let test_a_failed_commit_rolls_back _ =
+  let db = Sqlite.open ":memory:"
+  Sqlite.script db "pragma foreign_keys = on; create table p (id integer primary key); create table c (p integer references p (id) deferrable initially deferred)"
+  let body tx = Ok (Sqlite.execute tx "insert into c values (7)" [])
+  match Sqlite.transaction db body:
+    case Error (Sqlite.Raised e): Test.equal "IntegrityError" e.error_kind
+    case _: Test.fail "a dangling reference was committed"
+  Test.equal (Ok (Some 0)) (Sqlite.query_one db "select count(*) from c" [] (Sqlite.at 0 Sqlite.int))
+  # And the connection is usable again, outside any transaction.
+  Test.equal 1 (Sqlite.execute db "insert into p values (1)" [])
+
+## SQLite raising is `exn`, and `try` turns it into a value.
+let test_bad_sql_raises_for_try_to_catch _ =
+  let db = fresh ()
+  match try (Sqlite.query db "selec n from t" [] (Sqlite.field "n" Sqlite.int)):
+    case Error e: Test.equal "OperationalError" e.error_kind
+    case Ok _: Test.fail "a syntax error ran"
+
+let test_with_open_closes_the_connection _ =
+  match Sqlite.with_open ":memory:" id:
+    case Ok db: Test.is_true (Result.is_error (try (Sqlite.execute db "select 1" [])))
+    case Error e: Test.fail e.error_message
+
+let test_with_open_catches_what_its_body_raises _ =
+  let outcome = Sqlite.with_open ":memory:" (fun db -> Sqlite.execute db "drop table nowhere" [])
+  Test.is_true (Result.is_error outcome)

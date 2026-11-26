@@ -20,7 +20,9 @@ def tokens(src):
 
 
 def sources():
-    yield from sorted((REPO / "examples").rglob("*.pyfun"))
+    # A project's vendored façades live in a `.pyfun/` folder, which the glob
+    # also matches.
+    yield from sorted(p for p in (REPO / "examples").rglob("*.pyfun") if p.is_file())
     yield from sorted((REPO / "editors" / "tree-sitter-pyfun" / "test").glob("*.pyfun"))
 
 
