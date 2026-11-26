@@ -10700,6 +10700,9 @@ impl Infer {
             if let Some(hint) = self.call_syntax_hint(func, arg, &func_ty) {
                 return Err(hint);
             }
+            if let Some(hint) = self.over_application_hint(func, arg, &func_ty) {
+                return Err(hint);
+            }
             return Err(self.closed_callback_hint(func, arg, &func_ty, &arg_ty, e));
         }
         let latent = self.apply_eff(&latent);
@@ -10782,6 +10785,63 @@ impl Infer {
                 }
             ),
             span: Span::new(func.span().start, arg.span().end),
+        })
+    }
+
+    /// One argument too many: `f 1 2` with `f` taking one, or `n 3` with `n` an
+    /// `int`. The generic message puts the value's type as "expected" and the
+    /// arrow the program asked of it as "found", and says nothing of the count,
+    /// which is the whole of the fix (issue #270). When the value applied is
+    /// known not to be a function, count the arguments its head was given and
+    /// report at the extra one.
+    fn over_application_hint(
+        &mut self,
+        func: &Expr,
+        arg: &Expr,
+        func_ty: &Ty,
+    ) -> Option<TypeError> {
+        let ty = self.apply(func_ty);
+        if matches!(ty, Ty::Fun(..) | Ty::Var(_)) {
+            return None;
+        }
+        let shown = show(&ty);
+        let mut head = func;
+        let mut args = Vec::new();
+        while let ExprKind::App { func: inner, arg } = &head.kind {
+            head = inner;
+            args.push(crate::ast::print_expr(arg));
+        }
+        let given = args.len();
+        let name = match &head.kind {
+            ExprKind::Var(name) => name.clone(),
+            _ => qualified_name(head)?,
+        };
+        let message = if given == 0 {
+            format!(
+                "`{name}` is {} `{shown}`, not a function, so it cannot be applied to an argument",
+                article(&shown)
+            )
+        } else {
+            // Written out as the head and its arguments, since the printer
+            // would parenthesize each partial application (`(add 1) 2`).
+            args.reverse();
+            let applied = format!("{} {}", crate::ast::print_expr(head), args.join(" "));
+            let already = if applied.len() <= 40 {
+                format!("`{applied}`")
+            } else {
+                "the call before it".to_string()
+            };
+            format!(
+                "`{name}` takes {given} argument{}, and this gives it {}: {already} is already \
+                 {} `{shown}`, so this one has nothing to apply to",
+                if given == 1 { "" } else { "s" },
+                given + 1,
+                article(&shown)
+            )
+        };
+        Some(TypeError {
+            message,
+            span: arg.span(),
         })
     }
 
