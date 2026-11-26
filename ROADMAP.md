@@ -513,9 +513,16 @@ after the release.
     pytest, and a `Test` module (`Test.equal`, `Test.is_true`, `Test.fail`) lowers to `assert`, so
     pytest reports a failure with its own diff (`DESIGN.md` §9). A `Test` member performs `exn`, so a
     helper may assert and its type says so (2026-11-25; the first version kept `Test` inside `test_*`
-    functions by a rule). Follow-ons: report
-    a failure in `.pyfun` lines, as `pyfun run` does; a lesson on testing; checked examples in `##` doc
-    comments; derived Hypothesis generators.
+    functions by a rule). ~~Derived Hypothesis generators~~ **DONE 2026-11-26**: a test that reads
+    its parameters is a property, run by Hypothesis under a `@given` whose strategies the compiler
+    derives from the parameters' inferred types (records, sum types with positional or named
+    constructors, `Option`, `Result`, collections, tuples and `Json`; a newtype and a unit erased; a
+    type that holds itself through `st.recursive`; a type variable as `int`). No new syntax. A
+    parameter that cannot be generated (a function, an extern type, an `Async`) is an error at it
+    that names the fix, and Hypothesis comes with the `test` extra and is checked for before pytest
+    starts (`DESIGN.md` §9). Not yet: a way to constrain the values (`Test.assume`), and that error
+    in `check` and the editor as well as in `pyfun test`. Follow-ons: report a failure in `.pyfun`
+    lines, as `pyfun run` does; a lesson on testing; checked examples in `##` doc comments.
 17. ~~**Typed default output**~~ **DONE 2026-11-22**: `pyfun compile --typed` annotates every top-level
     function, value and class with its inferred type (type variables as Python 3.12 type parameters, a
     sum type as an alias over its classes), a typed project carries `py.typed`, and a `##` comment is

@@ -485,7 +485,7 @@ fn what_is_and_is_not_a_test_is_said_plainly() {
             ("checks.pyfun", "let test_one _ =\n    Test.equal 1 1\n"),
             (
                 "test_two_params.pyfun",
-                "let test_add a b =\n    Test.equal 2 (a + b)\n",
+                "let test_add a b =\n    Test.equal 2 (1 + 1)\n",
             ),
         ],
     );
@@ -498,8 +498,13 @@ fn what_is_and_is_not_a_test_is_said_plainly() {
     );
     let (ok, _, stderr) = pyfun_test(&dir, &["test_two_params.pyfun"]);
     assert!(!ok);
+    // Placed at the test's name, as `check` places an error.
     assert!(
-        stderr.contains("a test takes one parameter that it ignores: write `let test_add _ = …`"),
+        stderr.contains(
+            "error: `test_add` reads none of its parameters: write `let test_add _ = …` for a \
+             test run once, or read the parameters for a property run on generated values\n \
+             --> test_two_params.pyfun:1:5\n"
+        ),
         "{stderr}"
     );
     let (ok, _, stderr) = pyfun_test(&dir, &["empty"]);
@@ -508,5 +513,373 @@ fn what_is_and_is_not_a_test_is_said_plainly() {
     assert!(
         stderr.contains("a test file is named `test_*.pyfun`"),
         "{stderr}"
+    );
+}
+
+// ---------- Property tests ----------
+
+/// What `pyfun test` compiles a project to, its test module being `test_props.pyfun`
+/// and `files` the other modules, by name.
+fn compile_tests(
+    test: &str,
+    files: &[(&str, &str)],
+) -> Result<Vec<(String, String)>, pyfun::lowering::LowerError> {
+    let mut owned: Vec<(String, String)> = files
+        .iter()
+        .map(|(n, s)| (n.to_string(), s.to_string()))
+        .collect();
+    owned.push(("TestProps".to_string(), test.to_string()));
+    let project = pyfun::project::build("TestProps", move |name| {
+        owned
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, s)| s.clone())
+    })
+    .unwrap_or_else(|e| panic!("builds: {e}"));
+    let errors = pyfun::project::check(&project);
+    assert!(errors.is_empty(), "type-checks: {errors:?}");
+    pyfun::project::compile_tests(&project).map(|compiled| compiled.files)
+}
+
+/// The test module's Python.
+fn test_python(test: &str, files: &[(&str, &str)]) -> String {
+    let files = compile_tests(test, files).unwrap_or_else(|e| panic!("compiles: {e}"));
+    files
+        .into_iter()
+        .find(|(name, _)| name == "test_props.py")
+        .map(|(_, python)| python)
+        .expect("the test module")
+}
+
+#[test]
+fn a_test_that_reads_its_parameters_is_a_property_given_their_strategies() {
+    let python = test_python(
+        "measure m\n\n\
+         let test_reverse xs =\n    Test.equal xs (List.rev (List.rev xs))\n\n\
+         let test_add a b =\n    Test.equal (a + b) (b + a)\n\n\
+         let test_words (s, n) =\n    Test.is_true (String.len s >= 0 and n * 0.0 == 0.0)\n\n\
+         let test_flags flags =\n    Test.equal flags (Set.union flags flags)\n\n\
+         let test_ages ages =\n    Test.is_true (Map.len ages >= 0 or Option.with_default False (Map.find \"x\" ages))\n\n\
+         let test_metres d =\n    Test.equal d (d + 0.0<m>)\n\n\
+         let test_example _ =\n    Test.equal 2 (1 + 1)\n",
+        &[],
+    );
+    assert!(
+        python.starts_with("from hypothesis import given, strategies as st\n"),
+        "{python}"
+    );
+    // A list of what it holds; an element left open is an `int`.
+    assert!(
+        python.contains("@given(xs=st.lists(st.integers()))\ndef test_reverse(xs):\n"),
+        "{python}"
+    );
+    // Every parameter is generated, by its own name.
+    assert!(
+        python.contains("@given(a=st.integers(), b=st.integers())\ndef test_add(a, b):\n"),
+        "{python}"
+    );
+    // A float is finite: a NaN is not equal to itself.
+    assert!(
+        python.contains("st.tuples(st.text(), st.floats(allow_nan=False, allow_infinity=False))"),
+        "{python}"
+    );
+    assert!(
+        python.contains("@given(flags=st.sets(st.integers()))"),
+        "{python}"
+    );
+    // A unit of measure is gone, as it is when the program runs.
+    assert!(
+        python.contains("@given(d=st.floats(allow_nan=False, allow_infinity=False))"),
+        "{python}"
+    );
+    assert!(
+        python.contains("st.dictionaries(st.text(), st.booleans())"),
+        "{python}"
+    );
+    // A test that reads nothing is an example, run once, as before.
+    assert!(python.contains("\ndef test_example():\n"), "{python}");
+    assert!(!python.contains("@given()"), "{python}");
+}
+
+#[test]
+fn a_test_is_a_property_when_it_reads_a_parameter() {
+    use pyfun::lowering::{TestKind, test_kinds};
+    let kinds = |source: &str| test_kinds(&pyfun::parse(source).expect("parses"));
+    assert_eq!(
+        kinds(
+            "let test_a _ = Test.equal 1 1\n\
+             let test_b unused = Test.equal 1 1\n\
+             let test_d xs = Test.equal xs xs\n\
+             let test_e (a, _) b = Test.equal a a\n\
+             let helper x = x\n"
+        )
+        .expect("every test has a shape"),
+        vec![
+            ("test_a".to_string(), TestKind::Example),
+            ("test_b".to_string(), TestKind::Example),
+            ("test_d".to_string(), TestKind::Property),
+            ("test_e".to_string(), TestKind::Property),
+        ]
+    );
+    // A name read only by a nested binding that shadows it is not read.
+    assert_eq!(
+        kinds("let test_f x =\n  let x = 1\n  Test.equal x 1\n").unwrap(),
+        vec![("test_f".to_string(), TestKind::Example)]
+    );
+    let (_, message) = kinds("let test_value = 3\n").expect_err("not a function");
+    assert!(message.contains("a test is a function"), "{message}");
+}
+
+#[test]
+fn an_option_and_a_result_are_built_from_the_runtime_classes() {
+    let python = test_python(
+        "let test_default o =\n    Test.equal (Option.with_default 0 o) (Option.with_default 0 (Option.map (fun x -> x) o))\n\n\
+         let test_ok r =\n    match r:\n        case Ok(n): Test.equal n (n + 0)\n        case Error(e): Test.is_true (String.len e >= 0)\n",
+        &[],
+    );
+    assert!(
+        python.contains("@given(o=st.one_of(st.just(None_()), st.builds(Some, st.integers())))"),
+        "{python}"
+    );
+    assert!(
+        python.contains(
+            "@given(r=st.one_of(st.builds(Ok, st.integers()), st.builds(Error, st.text())))"
+        ),
+        "{python}"
+    );
+    // Imported from the shared runtime, which is emitted.
+    let import = python
+        .lines()
+        .find(|line| line.starts_with("from _pyfun_rt import"))
+        .unwrap_or_else(|| panic!("{python}"));
+    for class in ["Some", "None_", "Ok", "Error"] {
+        assert!(import.contains(class), "{import}");
+    }
+}
+
+const MODEL: &str = "\
+type Shape = Circle(float) | Rect { width: float, height: float } | Dot
+type Point = { x: float, y: float }
+type Tree a = Leaf | Node (Tree a) a (Tree a)
+opaque type UserId = str
+
+let area shape =
+  match shape:
+    case Circle(r): 3.0 * r * r
+    case Rect { width, height }: width * height
+    case Dot: 0.0
+
+let size tree =
+  match tree:
+    case Leaf: 0
+    case Node l _ r: size l + 1 + size r
+
+let raw (UserId s) = s
+let norm p = p.x
+";
+
+#[test]
+fn a_declared_type_is_built_by_its_constructors() {
+    let python = test_python(
+        "import Model\n\n\
+         let test_area shape =\n    Test.is_true (Model.area shape >= 0.0)\n\n\
+         let test_point p =\n    Test.equal p.x (Model.norm p)\n\n\
+         let test_user u =\n    Test.equal (Model.raw u) (Model.raw u)\n",
+        &[("Model", MODEL)],
+    );
+    // Each constructor, the field-less ones as the one value they have, the
+    // named ones by name, through the module that declares them.
+    assert!(
+        python.contains(
+            "@given(shape=st.one_of(st.builds(model.Circle, st.floats(allow_nan=False, \
+             allow_infinity=False)), st.builds(model.Rect, width=st.floats(allow_nan=False, \
+             allow_infinity=False), height=st.floats(allow_nan=False, allow_infinity=False)), \
+             st.just(model.Dot())))"
+        ),
+        "{python}"
+    );
+    // A record by its fields' names.
+    assert!(
+        python.contains(
+            "@given(p=st.builds(model.Point, x=st.floats(allow_nan=False, allow_infinity=False), \
+             y=st.floats(allow_nan=False, allow_infinity=False)))"
+        ),
+        "{python}"
+    );
+    // A newtype is its underlying value.
+    assert!(python.contains("@given(u=st.text())"), "{python}");
+}
+
+#[test]
+fn a_type_that_holds_itself_is_generated_recursively() {
+    let python = test_python(
+        "import Model\n\n\
+         let test_size tree =\n    Test.is_true (Model.size tree >= 0)\n",
+        &[("Model", MODEL)],
+    );
+    // The base is the values that hold no tree, and each step builds on the
+    // trees so far.
+    assert!(
+        python.contains(
+            "@given(tree=st.recursive(st.just(model.Leaf()), lambda tree: \
+             st.one_of(st.just(model.Leaf()), st.builds(model.Node, tree, st.integers(), tree))))"
+        ),
+        "{python}"
+    );
+}
+
+#[test]
+fn a_parameter_that_cannot_be_generated_is_an_error_at_it() {
+    for (source, name, says) in [
+        // The whole type, as the checker shows it.
+        (
+            "let test_apply f =\n    Test.equal (f \"a\") (f \"a\" + 0)\n",
+            "f",
+            "a property cannot generate `f`: `str -> int` is a function. Take what the function \
+             is applied to as the parameter instead",
+        ),
+        // A part of it, inside the whole.
+        (
+            "let test_pair (f, n) =\n    Test.equal (f n) (f n + 0)\n",
+            "(f, n)",
+            "a property cannot generate the parameter that binds `f` and `n`: it is \
+             `(a -> int, a)`, and `a -> int` is a function",
+        ),
+        (
+            "extern type Conn\nextern connect : str -> Conn = sqlite3.connect\n\n\
+             let test_conn c =\n    Test.equal (connect \"x\") c\n",
+            "c",
+            "a property cannot generate `c`: `Conn` is an extern type, whose values come from \
+             Python",
+        ),
+        (
+            "type Stream = Cons int Stream\n\nlet test_stream s =\n    match s:\n        case Cons n _: Test.is_true (n == n)\n",
+            "s",
+            "a property cannot generate `s`: every `Stream` holds another `Stream`, so there is \
+             no value to start from. Give `Stream` a constructor that holds no `Stream`",
+        ),
+    ] {
+        let e = compile_tests(source, &[]).expect_err("cannot be generated");
+        assert!(e.message.contains(says), "{}", e.message);
+        let (module, span) = e.at.expect("placed");
+        assert_eq!(module, "TestProps");
+        assert_eq!(&source[span.start..span.end], name);
+    }
+}
+
+/// The interpreter `pyfun test` will use, if it has pytest and Hypothesis.
+fn python_with_hypothesis() -> Option<String> {
+    let python = python_with_pytest()?;
+    Command::new(&python)
+        .args(["-c", "import hypothesis"])
+        .output()
+        .is_ok_and(|out| out.status.success())
+        .then_some(python)
+}
+
+#[test]
+fn a_property_runs_on_generated_values_and_a_failure_names_them() {
+    if python_with_hypothesis().is_none() {
+        eprintln!("skipping: no python with pytest and hypothesis");
+        return;
+    }
+    let dir = workdir(
+        "property",
+        &[
+            ("model.pyfun", MODEL),
+            (
+                "test_props.pyfun",
+                "import Model\n\n\
+                 let test_reverse xs =\n  Test.equal xs (List.rev (List.rev xs))\n\n\
+                 let test_size tree =\n  Test.is_true (Model.size tree >= 0)\n\n\
+                 let test_area shape =\n  Test.is_true (Model.area shape >= 0.0)\n\n\
+                 let test_once _ =\n  Test.equal 2 (1 + 1)\n",
+            ),
+        ],
+    );
+    let (ok, stdout, stderr) = pyfun_test(&dir, &[]);
+    let left: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    let _ = fs::remove_dir_all(&dir);
+    assert!(!ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("1 failed, 3 passed"), "{stdout}\n{stderr}");
+    // A rectangle with a negative side has a negative area: Hypothesis finds
+    // one, and the failure names it and is placed at the source line.
+    assert!(
+        stdout.contains(">   Test.is_true (Model.area shape >= 0.0)\nE   assert"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("shape=Rect(width="), "{stdout}");
+    assert!(
+        stdout.contains("test_props.pyfun:10: AssertionError"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("FAILED test_props.pyfun::test_area"),
+        "{stdout}"
+    );
+    // Nothing is left in the project: no example database, no cache.
+    assert!(left.iter().all(|name| name.ends_with(".pyfun")), "{left:?}");
+    assert!(!stdout.contains("Warning"), "{stdout}");
+}
+
+#[test]
+fn a_python_without_hypothesis_is_told_how_to_get_it() {
+    if python_with_hypothesis().is_none() {
+        eprintln!("skipping: no python with pytest and hypothesis");
+        return;
+    }
+    let dir = workdir(
+        "nohypothesis",
+        &[
+            (
+                "test_one.pyfun",
+                "let test_one n =\n  Test.equal n (n + 0)\n",
+            ),
+            (
+                "test_two.pyfun",
+                "let test_two _ =\n  Test.equal 2 (1 + 1)\n",
+            ),
+        ],
+    );
+    // A `hypothesis` that cannot be imported stands ahead of the real one.
+    fs::create_dir_all(dir.join("shadow/hypothesis")).unwrap();
+    fs::write(
+        dir.join("shadow/hypothesis/__init__.py"),
+        "raise ImportError('no hypothesis here')\n",
+    )
+    .unwrap();
+    // A Python without Hypothesis has no Hypothesis plugin for pytest either.
+    let run = |file: &str| {
+        Command::new(env!("CARGO_BIN_EXE_pyfun"))
+            .args(["test", file, "--", "-p", "no:hypothesispytest"])
+            .current_dir(&dir)
+            .env("PYTHONPATH", dir.join("shadow"))
+            .env("NO_COLOR", "1")
+            .env_remove("PYTEST_ADDOPTS")
+            .output()
+            .expect("spawn pyfun test")
+    };
+    let property = run("test_one.pyfun");
+    let example = run("test_two.pyfun");
+    let _ = fs::remove_dir_all(&dir);
+    let stderr = String::from_utf8_lossy(&property.stderr);
+    assert!(!property.status.success());
+    assert!(stderr.contains("is run by Hypothesis"), "{stderr}");
+    assert!(stderr.contains("-m pip install hypothesis`"), "{stderr}");
+    assert!(
+        stderr.contains("-m pip install \"pyfun-lang[test]\"`"),
+        "{stderr}"
+    );
+    // A test file with no property does not need it.
+    assert!(
+        example.status.success(),
+        "{}
+{}",
+        String::from_utf8_lossy(&example.stdout),
+        String::from_utf8_lossy(&example.stderr)
     );
 }

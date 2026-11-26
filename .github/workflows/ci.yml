@@ -46,8 +46,9 @@ jobs:
         with:
           toolchain: '1.97.0'
       - uses: Swatinem/rust-cache@v2
-      # `pyfun test` runs pytest; without it those tests skip.
-      - run: pip install pytest
+      # `pyfun test` runs pytest, and a property test Hypothesis; without them
+      # those tests skip.
+      - run: pip install pytest hypothesis
       - run: cargo test
 
   lint:

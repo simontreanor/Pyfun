@@ -194,12 +194,17 @@ class _Plugin:
         self.tests = tests
         self.modules = modules
         self.lookup = _lookup(here)
+        self.here = here
 
+    # Ahead of Hypothesis's own plugin, which loads a profile named with
+    # `--hypothesis-profile` over the one set here.
+    @pytest.hookimpl(tryfirst=True)
     def pytest_configure(self):
         # An `assert` in a module the tests import is explained like one in a
         # test. pytest's import hook is in place by now, and no staged module
         # has been imported yet.
         pytest.register_assert_rewrite(*self.modules)
+        _hypothesis_profile(self.here)
 
     def pytest_collect_file(self, file_path, parent):
         staged = self.tests.get(_key(str(file_path)))
@@ -245,6 +250,27 @@ def _root(sources):
         return os.path.commonpath([here, *sources])
     except ValueError:
         return here
+
+
+def _hypothesis_profile(here):
+    """How Hypothesis runs a property test, where it is there to run one.
+    What it keeps on disk (its caches, a `.hypothesis` folder in the working
+    directory unless told otherwise) is kept with the staged files, so that
+    nothing is left in the project; there is no example database, since a
+    failure's example would not outlive the run; and there is no deadline, so
+    that a slow machine does not fail a test that is right.
+    `--hypothesis-profile` after `--` chooses another profile. Hypothesis is
+    imported only once pytest has started, so that pytest's import hook is
+    the one that loads it."""
+    try:
+        from hypothesis import settings
+    except ImportError:
+        return
+    from hypothesis.configuration import set_hypothesis_home_dir
+
+    set_hypothesis_home_dir(os.path.join(here, ".hypothesis"))
+    settings.register_profile("pyfun", database=None, deadline=None)
+    settings.load_profile("pyfun")
 
 
 def main(argv):

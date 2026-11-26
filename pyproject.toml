@@ -22,9 +22,10 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 jupyter = ["ipykernel>=6.29"]
-# `pyfun test` runs a project's tests with pytest. 8.4 is the oldest pytest
-# `pyfun test` has been run against.
-test = ["pytest>=8.4"]
+# `pyfun test` runs a project's tests with pytest, and a property test with
+# Hypothesis. 8.4 and 6.100 are the oldest of each `pyfun test` has been run
+# against.
+test = ["pytest>=8.4", "hypothesis>=6.100"]
 
 [project.urls]
 Repository = "https://github.com/simontreanor/Pyfun"

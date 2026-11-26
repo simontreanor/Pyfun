@@ -454,6 +454,9 @@ pub struct CompiledProject {
     /// [`compile_traced`] and [`compile_tests`], and only for a module whose
     /// map could be built.
     pub line_maps: Vec<(String, crate::LineMap)>,
+    /// Whether a test module has a property test, which Hypothesis runs
+    /// (`pyfun test`, `DESIGN.md` §9).
+    pub has_properties: bool,
 }
 
 /// Lower and emit every module of `project` to Python (`DESIGN.md` §6.1).
@@ -612,6 +615,9 @@ fn compile_project(
     // Typed output spells a searched variable as what `in` takes (§5.7).
     let mut searched_by_module: HashMap<String, HashMap<u32, Vec<crate::types::Ty>>> =
         HashMap::new();
+    // A property test's parameters are generated from their types, and a
+    // message about one shows the type as the checker does (`DESIGN.md` §9).
+    let mut shown_by_module: HashMap<String, HashMap<crate::lexer::Span, String>> = HashMap::new();
     let float_spans: HashMap<String, std::collections::HashSet<crate::lexer::Span>> = {
         let mut spans = HashMap::new();
         for module in &project.modules {
@@ -623,10 +629,17 @@ fn compile_project(
             let (_errors, types, module_exports, codecs) =
                 crate::types::check_module_collecting(&module.ast, &imports);
             spans.insert(module.name.clone(), crate::float_literal_spans(&types));
-            if typed {
+            let properties = tests && is_test_module(&module.name);
+            if typed || properties {
                 searched_by_module.insert(module.name.clone(), crate::types::searched_vars(&types));
             }
-            if native || typed {
+            if properties {
+                shown_by_module.insert(
+                    module.name.clone(),
+                    types.iter().map(|t| (t.span, t.ty.clone())).collect(),
+                );
+            }
+            if native || typed || properties {
                 types_by_module.insert(
                     module.name.clone(),
                     types.iter().map(|t| (t.span, t.raw.clone())).collect(),
@@ -642,6 +655,7 @@ fn compile_project(
 
     let mut files = Vec::new();
     let mut needs_runtime = false;
+    let mut has_properties = false;
     let mut notes: Vec<String> = Vec::new();
     let mut line_maps = Vec::new();
     for module in &project.modules {
@@ -715,6 +729,37 @@ fn compile_project(
         } else {
             HashMap::new()
         };
+        let test_module = tests && is_test_module(&module.name);
+        // Every module this one imports, directly or through another: a type
+        // of any of them can turn up in a signature here, or be generated
+        // for a property's parameter.
+        let mut reach: Vec<&LoadedModule> = Vec::new();
+        let mut pending: Vec<&String> = if typed || test_module {
+            module.imports.iter().collect()
+        } else {
+            Vec::new()
+        };
+        while let Some(name) = pending.pop() {
+            if reach.iter().any(|m| &m.name == name) {
+                continue;
+            }
+            if let Some(found) = project.modules.iter().find(|m| &m.name == name) {
+                reach.push(found);
+                pending.extend(found.imports.iter());
+            }
+        }
+        let imported: Vec<(String, &crate::syntax::Module)> = reach
+            .iter()
+            .map(|m| (module_stem(&m.name), &m.ast))
+            .collect();
+        let searched = searched_by_module.remove(&module.name).unwrap_or_default();
+        let shown = shown_by_module.remove(&module.name).unwrap_or_default();
+        let property_types = lowering::PropertyTypes {
+            binding_types: &recorded_types,
+            shown: &shown,
+            searched: &searched,
+            imported: &imported,
+        };
         let traced = trace
             .then(|| {
                 lowering::lower_in_project_tracing(
@@ -729,13 +774,16 @@ fn compile_project(
                 .ok()
             })
             .flatten()
-            .map(|mut traced| {
+            .and_then(|mut traced| {
                 // The traced module takes every step the real one does, or
                 // the two would not compare.
-                if tests && is_test_module(&module.name) {
-                    traced.py = lowering::as_pytest(&module.ast, traced.py);
+                if test_module {
+                    traced.py =
+                        lowering::as_pytest(&module.ast, &module.name, traced.py, &property_types)
+                            .ok()?
+                            .py;
                 }
-                traced
+                Some(traced)
             });
         let lowered =
             lowering::lower_in_project(&module.ast, &ctx, floats, codecs, native, binding_types)?;
@@ -747,24 +795,6 @@ fn compile_project(
                 .map(|n| format!("in `{}`: {n}", module.name)),
         );
         let lowered_py = if typed {
-            // Every module this one imports, directly or through another: a
-            // type of any of them can turn up in a signature here.
-            let mut reach: Vec<&LoadedModule> = Vec::new();
-            let mut pending: Vec<&String> = module.imports.iter().collect();
-            while let Some(name) = pending.pop() {
-                if reach.iter().any(|m| &m.name == name) {
-                    continue;
-                }
-                if let Some(found) = project.modules.iter().find(|m| &m.name == name) {
-                    reach.push(found);
-                    pending.extend(found.imports.iter());
-                }
-            }
-            let imported: Vec<(String, &crate::syntax::Module)> = reach
-                .iter()
-                .map(|m| (module_stem(&m.name), &m.ast))
-                .collect();
-            let searched = searched_by_module.remove(&module.name).unwrap_or_default();
             lowering::annotate_typed(
                 &module.ast,
                 lowered.py,
@@ -775,8 +805,12 @@ fn compile_project(
         } else {
             lowered.py
         };
-        let lowered_py = if tests && is_test_module(&module.name) {
-            lowering::as_pytest(&module.ast, lowered_py)
+        let lowered_py = if test_module {
+            let pytest =
+                lowering::as_pytest(&module.ast, &module.name, lowered_py, &property_types)?;
+            needs_runtime |= pytest.uses_runtime;
+            has_properties |= pytest.properties;
+            pytest.py
         } else {
             lowered_py
         };
@@ -808,6 +842,7 @@ fn compile_project(
         files,
         notes,
         line_maps,
+        has_properties,
     })
 }
 

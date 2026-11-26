@@ -60,6 +60,10 @@ fn rewrite_stmt(stmt: &mut PyStmt) {
         PyStmt::Return(e) | PyStmt::Expr(e) | PyStmt::Yield(e) | PyStmt::YieldFrom(e) => {
             rewrite_expr(e)
         }
+        PyStmt::Decorated { decorator, def } => {
+            rewrite_expr(decorator);
+            rewrite_stmt(def);
+        }
         PyStmt::FuncDef { body, .. }
         | PyStmt::TypedFuncDef { body, .. }
         | PyStmt::Class { body, .. } => {
