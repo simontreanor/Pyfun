@@ -163,7 +163,11 @@ collected like type variables (`collect_effect_vars`), generalized in the extern
 `map`/`fold` mechanics. A pure and a printing callback now both flow; the callback's effect rides the
 variable into the innermost `{io, e}`, so `let pure` still rejects an impure pipeline. A `->{e}` on
 the innermost arrow counts as annotated (skips the io-by-default rule, asserting "exactly the
-callback's effect"). In a `type` declaration effect variables remain an error — ADT/record fields
+callback's effect"). That assertion needs a callback to decide it, so a variable must appear on an
+arrow inside some *argument* of the signature: one seen only on the signature's own arrows or in its
+result (`extern changes : Conn ->{db} int`) would be fresh at every use and read as pure, and is an
+error that names the labels and guesses the one meant when the name is a slip of it (`->{oi}`: "did
+you mean `io`?", #266). In a `type` declaration effect variables remain an error — ADT/record fields
 would need effect-*parameterized* types, which stays out of scope. A callback arrow written without a
 variable is closed, and an `async { }` handler (which performs `async`) never fits one, so an argument
 whose arrow meets a closed declared arrow is reported at the argument with both effects and the
