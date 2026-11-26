@@ -127,6 +127,240 @@ pub fn module_stem(name: &str) -> String {
         .join(".")
 }
 
+/// The top-level modules of Python's standard library, as
+/// `sys.stdlib_module_names` lists them for 3.14 (less the private `_` ones),
+/// with the modules 3.13 removed, since Pyfun targets 3.12 and up. A project
+/// module emitted under one of these names would take the library's place for
+/// the whole program, the entry's folder being first on `sys.path` (#268).
+const PYTHON_STDLIB_MODULES: &[&str] = &[
+    "abc",
+    "aifc",
+    "annotationlib",
+    "antigravity",
+    "argparse",
+    "array",
+    "ast",
+    "asyncio",
+    "atexit",
+    "audioop",
+    "base64",
+    "bdb",
+    "binascii",
+    "bisect",
+    "builtins",
+    "bz2",
+    "calendar",
+    "cgi",
+    "cgitb",
+    "chunk",
+    "cmath",
+    "cmd",
+    "code",
+    "codecs",
+    "codeop",
+    "collections",
+    "colorsys",
+    "compileall",
+    "compression",
+    "concurrent",
+    "configparser",
+    "contextlib",
+    "contextvars",
+    "copy",
+    "copyreg",
+    "crypt",
+    "csv",
+    "ctypes",
+    "curses",
+    "dataclasses",
+    "datetime",
+    "dbm",
+    "decimal",
+    "difflib",
+    "dis",
+    "doctest",
+    "email",
+    "encodings",
+    "ensurepip",
+    "enum",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "filecmp",
+    "fileinput",
+    "fnmatch",
+    "fractions",
+    "ftplib",
+    "functools",
+    "gc",
+    "genericpath",
+    "getopt",
+    "getpass",
+    "gettext",
+    "glob",
+    "graphlib",
+    "grp",
+    "gzip",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "html",
+    "http",
+    "idlelib",
+    "imaplib",
+    "imghdr",
+    "importlib",
+    "inspect",
+    "io",
+    "ipaddress",
+    "itertools",
+    "json",
+    "keyword",
+    "lib2to3",
+    "linecache",
+    "locale",
+    "logging",
+    "lzma",
+    "mailbox",
+    "mailcap",
+    "marshal",
+    "math",
+    "mimetypes",
+    "mmap",
+    "modulefinder",
+    "msilib",
+    "msvcrt",
+    "multiprocessing",
+    "netrc",
+    "nis",
+    "nntplib",
+    "nt",
+    "ntpath",
+    "nturl2path",
+    "numbers",
+    "opcode",
+    "operator",
+    "optparse",
+    "os",
+    "ossaudiodev",
+    "pathlib",
+    "pdb",
+    "pickle",
+    "pickletools",
+    "pipes",
+    "pkgutil",
+    "platform",
+    "plistlib",
+    "poplib",
+    "posix",
+    "posixpath",
+    "pprint",
+    "profile",
+    "pstats",
+    "pty",
+    "pwd",
+    "py_compile",
+    "pyclbr",
+    "pydoc",
+    "pydoc_data",
+    "pyexpat",
+    "queue",
+    "quopri",
+    "random",
+    "re",
+    "readline",
+    "reprlib",
+    "resource",
+    "rlcompleter",
+    "runpy",
+    "sched",
+    "secrets",
+    "select",
+    "selectors",
+    "shelve",
+    "shlex",
+    "shutil",
+    "signal",
+    "site",
+    "smtplib",
+    "sndhdr",
+    "socket",
+    "socketserver",
+    "spwd",
+    "sqlite3",
+    "sre_compile",
+    "sre_constants",
+    "sre_parse",
+    "ssl",
+    "stat",
+    "statistics",
+    "string",
+    "stringprep",
+    "struct",
+    "subprocess",
+    "sunau",
+    "symtable",
+    "sys",
+    "sysconfig",
+    "syslog",
+    "tabnanny",
+    "tarfile",
+    "telnetlib",
+    "tempfile",
+    "termios",
+    "textwrap",
+    "this",
+    "threading",
+    "time",
+    "timeit",
+    "tkinter",
+    "token",
+    "tokenize",
+    "tomllib",
+    "trace",
+    "traceback",
+    "tracemalloc",
+    "tty",
+    "turtle",
+    "turtledemo",
+    "types",
+    "typing",
+    "unicodedata",
+    "unittest",
+    "urllib",
+    "uu",
+    "uuid",
+    "venv",
+    "warnings",
+    "wave",
+    "weakref",
+    "webbrowser",
+    "winreg",
+    "winsound",
+    "wsgiref",
+    "xdrlib",
+    "xml",
+    "xmlrpc",
+    "zipapp",
+    "zipfile",
+    "zipimport",
+    "zlib",
+    "zoneinfo",
+];
+
+/// The standard-library module a project module would replace, if any: the
+/// first part of its Python name, since a package folder named `email/`
+/// replaces `email` as surely as a file `email.py` does (`Html` → `html`,
+/// `Email.Parser` → `email`, `Markup.Html` → none).
+pub fn stdlib_module_shadowed(name: &str) -> Option<String> {
+    let stem = module_stem(name);
+    let top = stem.split('.').next().unwrap_or(&stem);
+    PYTHON_STDLIB_MODULES
+        .binary_search(&top)
+        .ok()
+        .map(|_| top.to_string())
+}
+
 /// The name code uses a module by: the last part of its path (`Shapes.Geometry`
 /// → `Geometry`), which is all of it for a module at the top.
 pub fn module_short_name(name: &str) -> &str {
@@ -1301,6 +1535,63 @@ mod tests {
         let errors = check(&project);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].name, "Main");
+    }
+
+    #[test]
+    fn a_module_named_like_a_standard_library_module_is_an_error() {
+        // #268: `html.py` beside the entry replaced Python's `html` for the
+        // whole program, so `html.escape` failed when it ran.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Html", "let td s = f\"<td>{s}</td>\""),
+                ("Main", "import Html\nprint (Html.td \"x\")"),
+            ]),
+        )
+        .unwrap();
+        let errors = check(&project);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(
+            errors[0].errors[0].message,
+            "`Html` would be emitted as `html.py`, which takes the name of Python's own `html` \
+             module and would replace it for the whole program: move it into a folder \
+             (`app/html.pyfun`, imported as `App.Html`) or rename it"
+        );
+        // A package folder replaces the library as surely, through `from` too.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Email.Parser", "let p x = x"),
+                ("Main", "from Email.Parser import p\nprint (p 1)"),
+            ]),
+        )
+        .unwrap();
+        assert!(
+            check(&project)[0].errors[0]
+                .message
+                .ends_with("Python's own `email` module and would replace it for the whole program: rename the folder `email/`")
+        );
+        // Inside a folder of its own it shadows nothing.
+        let project = build(
+            "Main",
+            loader(&[
+                ("Markup.Html", "let td s = f\"<td>{s}</td>\""),
+                ("Main", "import Markup.Html\nprint (Html.td \"x\")"),
+            ]),
+        )
+        .unwrap();
+        assert!(check(&project).is_empty());
+    }
+
+    #[test]
+    fn the_standard_library_list_is_sorted_for_its_search() {
+        assert!(PYTHON_STDLIB_MODULES.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(stdlib_module_shadowed("Json").as_deref(), Some("json"));
+        assert_eq!(
+            stdlib_module_shadowed("Functools").as_deref(),
+            Some("functools")
+        );
+        assert_eq!(stdlib_module_shadowed("Geometry"), None);
     }
 
     #[test]
