@@ -1580,6 +1580,16 @@ no enforced visibility. All four shaping decisions were taken deliberately:
   drop here), and a cross-module reference `Geometry.area` lowers to Python `geometry.area`. This matches
   Python expectations and the "readable Python / direct ecosystem interop" ethos, and enables
   Python↔Pyfun interop (a Python program can `import` a compiled Pyfun module and vice-versa).
+  **A module may not take a standard-library module's name.** The entry's folder is first on
+  `sys.path`, so an emitted `html.py` (or a package folder `email/`) would replace Python's own module
+  for the whole program, the emitter's `import json` and every library's included. `import Html` is
+  therefore an error at the import line (#268). It leads with the fix, as a name to type (`rename
+  `Html` (to `HtmlUtils`, say): Python already has a module called `html` …`), and then the folder
+  that keeps the name (`app/html.pyfun`, imported as `App.Html`), since a newcomer meets it just after
+  creating the file, when a rename costs least. The file keeps its module's name rather than dodging
+  with an underscore, so the emitted Python a learner reads stays plain, and the name a Python program
+  imports is always the one the module was given. The list is
+  `sys.stdlib_module_names` for 3.14 plus the modules 3.13 removed (`project::PYTHON_STDLIB_MODULES`).
 - **All public.** Every top-level binding is exported; no `pub` keyword — Python has no enforced private
   (`_underscore` is convention only). Visibility control is **deferred**.
 - **Implicit recursion** (independent of the rest): a *function* binding (`let f x =

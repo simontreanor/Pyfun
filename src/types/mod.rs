@@ -4154,13 +4154,39 @@ fn from_import_problems(
         .collect();
     let mut missing: HashSet<Span> = HashSet::new();
     for item in &module.items {
-        let Item::Import { name, names, .. } = item else {
+        let Item::Import { name, names, span } = item else {
             continue;
         };
         // An import that did not resolve has its own error.
         let Some(exports) = imports.get(name) else {
             continue;
         };
+        // A module emitted under a standard-library module's name replaces it
+        // for the whole program, and the checker sees that before Python does
+        // (#268).
+        if let Some(py) = crate::project::stdlib_module_shadowed(name) {
+            let file = crate::project::module_py_name(name);
+            let short = crate::project::module_short_name(name);
+            // The fix comes first, as a name to type: a newcomer meets this
+            // just after creating the file, when a rename costs least.
+            let message = if name.contains('.') {
+                format!(
+                    "rename the folder `{py}/`: Python already has a module called `{py}`, and \
+                     `{file}` would replace it for the whole program"
+                )
+            } else {
+                format!(
+                    "rename `{short}` (to `{short}Utils`, say): Python already has a module \
+                     called `{py}`, and `{file}` would replace it for the whole program \
+                     (or keep the name inside a folder: `app/{py}.pyfun`, imported as \
+                     `App.{short}`)"
+                )
+            };
+            errors.push(TypeError {
+                message,
+                span: span.span(),
+            });
+        }
         for imported in names {
             let n = &imported.name;
             let has = exports.schemes.contains_key(n)

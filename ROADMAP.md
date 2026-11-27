@@ -547,6 +547,28 @@ after the release.
     (`DESIGN.md` §7). A newtype's pattern there costs nothing: it is erased ahead of lowering, so
     `let raw (UserId s) = s` is `def raw(s)` (#205).
 
+## Dogfooding findings (2026-11-26, Tessera's HTML and CSS, and the SQLite façade)
+
+Four issues from 0.11.0, each fixed in its own PR:
+
+1. **An extern effect no argument binds** (#266, PR #271): `->{db}` or a misspelt `->{oi}` on the
+   result arrow alone was a fresh variable, so the extern passed `let pure`. Now an error naming the
+   labels, with a guess for a slip.
+2. **A module named like a standard-library module** (#268, PR #276): `html.pyfun` replaced Python's
+   `html` for the whole program. Now an error at the import.
+3. **A unit mismatch read as `int` against `float`** (#269, PR #275): now `unit mismatch`, at the
+   argument, with `write 8<px>` for a bare literal.
+4. **One argument too many** (#270, PR #272): now counted, at the extra argument.
+
+Open, from item 2:
+
+- **An entry file named like a library module.** `pyfun run json.pyfun` on a project is emitted as
+  `json.py`, so the program's own `import json` finds the script. The single-file path already
+  emits `_pyfun_main.py`; the project path could do the same, or refuse the name.
+- **A project module named like a third-party package an extern uses.** `requests.pyfun` beside
+  `extern get = requests.get` shares one `import requests` (`needed_imports` is a set), and the
+  module wins. Needs a project-wide comparison of module names with extern roots.
+
 ## Deferred (real features, no current demand — say the word and I'll scope it)
 
 - **Fold-pass residual shapes** (S per slice, demand-driven) — Tier B shipped 2026-07-13 (local named
