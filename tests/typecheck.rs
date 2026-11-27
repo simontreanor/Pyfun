@@ -785,7 +785,7 @@ fn a_non_square_unit_equation_errors_instead_of_hanging() {
     // (the no-progress reduce step recursed forever). It is a dimension error.
     assert_error_contains(
         "measure m\nlet sq x = x * x\nlet f x = sq x == 5.0<m^3>",
-        "type mismatch",
+        "unit mismatch: expected `float<m^4 'u^2>`, found `float<m^3>`",
     );
 }
 
@@ -6458,5 +6458,45 @@ fn one_argument_too_many_counts_the_arguments() {
     assert_eq!(
         errors("let f a = a + 1\nlet y = f \"x\""),
         ["type mismatch: expected `int`, found `str`"]
+    );
+}
+
+// ---------- a unit mismatch says "unit" (#269) ----------
+
+#[test]
+fn a_number_missing_its_unit_is_a_unit_mismatch_at_the_argument() {
+    // The literal `8` adapts to a float, so `int` against `float` was never
+    // the trouble; the message used to say so, and the fix it suggested failed.
+    let pre = "measure px\nmeasure em\nlet px n = f\"{String.from_float (n / 1.0<px>)}px\"\n";
+    let src = format!("{pre}let a = px 8");
+    let errs = pyfun::check(&src).unwrap_err();
+    assert_eq!(
+        errs[0].message,
+        "unit mismatch: expected `float<px>`, found a number with no unit: write `8<px>`"
+    );
+    let at = src.rfind('8').unwrap();
+    assert_eq!((errs[0].span.start, errs[0].span.end), (at, at + 1));
+    assert_eq!(
+        errors(&format!("{pre}let b = px 8.0")),
+        ["unit mismatch: expected `float<px>`, found a number with no unit: write `8.0<px>`"]
+    );
+    // The right units on both sides, with the base no longer in the way.
+    assert_eq!(
+        errors(&format!("{pre}let c = px 2<em>")),
+        ["unit mismatch: expected `float<px>`, found `float<em>`"]
+    );
+    assert_eq!(
+        errors(&format!("{pre}let cell = 3.0<em>\nlet g = px cell")),
+        ["unit mismatch: expected `float<px>`, found `float<em>`"]
+    );
+    assert!(pyfun::check(&format!("{pre}let d = px 8<px>")).is_ok());
+    // Arithmetic says the same, and a real base clash keeps its own words.
+    assert_eq!(
+        errors("measure px\nlet e = 1.0<px> + 2.0"),
+        ["unit mismatch: expected `float<px>`, found a number with no unit"]
+    );
+    assert_error_contains(
+        "extern pure half: float -> float = mymod.half\nlet n = String.len \"ab\"\nlet y = half n",
+        "type mismatch: expected `float`, found `int`",
     );
 }

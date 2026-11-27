@@ -2727,6 +2727,12 @@ Design intent:
   designed as its own sub-module from the start.
 - **Erasure at lowering:** units vanish; numeric literals/operations emit as ordinary Python
   numbers. No runtime unit objects.
+- **A unit mismatch says "unit".** Two numerics unify base first, unit second, and a failure of the
+  unit alone is its own message, with both types shown once the base is solved: `px 8` against
+  `float<px>` is `unit mismatch: expected float<px>, found a number with no unit: write 8<px>`, at
+  the argument, and `px 2<em>` is `expected float<px>, found float<em>`. Reported as a base mismatch,
+  a literal showed its `int` default (§7.1) after it had already become a `float`, and the fix that
+  suggested (`8.0`) failed next (#269).
 - **MVP standard units:** a small SI base set + dimensionless, with **user-definable measures**
   (`type m`-style measure declarations). Keep the built-in set small (§11).
 - **Derived-measure aliases:** `measure N = kg m / s^2` names a compound of base
@@ -2741,7 +2747,7 @@ Design intent:
  :** √area = length and ∛volume = length — `sqrt 16.0<m^2> :
   float<m>`, `sqrt x<m^4/s^2> : float<m^2/s>`, `cbrt 27.0<m^3> : float<m>`, and a **non-square** (for
   `sqrt`) or **non-cube** (for `cbrt`) unit is a
-  compile-time dimensional error (`type mismatch: expected float<'u^2>, found float<m^3>`). These are
+  compile-time dimensional error (`unit mismatch: expected float<'u^2>, found float<m^3>`). These are
   the *two* tractable unit-carrying power operations — F# special-cases the `sqrt` signature —
   because each exponent is a static rational constant (½, ⅓); general `x<'u> ** y` is impossible (a runtime
   exponent makes the result unit depend on a value → dependent types), which is why `**` stays
