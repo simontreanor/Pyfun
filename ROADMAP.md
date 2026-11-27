@@ -559,7 +559,7 @@ Issues from 0.11.0, each fixed in its own PR:
 3. **A unit mismatch read as `int` against `float`** (#269, PR #275): now `unit mismatch`, at the
    argument, with `write 8<px>` for a bare literal.
 4. **One argument too many** (#270, PR #272): now counted, at the extra argument.
-5. **A constructor applied to a record update** (#274, PR #PRNUM): `Ok { r with body = b }` was read
+5. **A constructor applied to a record update** (#274, PR #277): `Ok { r with body = b }` was read
    as a computation expression. A `with` directly inside the brace now makes it an update argument.
 
 Open, from item 2:
