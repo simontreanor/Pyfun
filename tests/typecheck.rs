@@ -3446,6 +3446,54 @@ fn uppercase_name_in_an_extern_arrow_is_not_an_effect_var() {
 }
 
 #[test]
+fn an_effect_var_no_argument_binds_is_an_error() {
+    // #266: `->{db}` on the result arrow alone was a fresh variable at each use,
+    // which met the empty row, so the extern passed `let pure`.
+    let src = "extern type Conn\n\
+               extern changes: Conn ->{db} int = .total_changes\n\
+               let pure count conn = changes conn";
+    assert_eq!(
+        errors(src),
+        [
+            "effect `db` is not a known label, and no argument arrow binds it as a variable, \
+          so `changes` would be typed as performing nothing (known labels: `io`, `async`, \
+          `exn`, `spawn`)"
+        ]
+    );
+    // A misspelt label is the same mistake, and gets a guess.
+    assert_error_contains(
+        "extern now: unit ->{oi} float = time.time",
+        "(known labels: `io`, `async`, `exn`, `spawn`); did you mean `io`?",
+    );
+    // A variable in a returned value has nothing to decide it either.
+    assert_error_contains(
+        "extern hooks: unit -> List (int ->{e} unit) = mymod.hooks",
+        "effect `e` is not a known label",
+    );
+    // Bound in an argument at any depth, it is fine.
+    assert!(pyfun::check("extern pure app: (a ->{e} b) -> a ->{e} b = mymod.app").is_ok());
+    assert!(
+        pyfun::check(
+            "extern each: List (a ->{e} unit) -> unit ->{io, e} unit = mymod.each\n\
+             extern wrap: ((int ->{e} unit) -> unit) -> unit ->{e} unit = mymod.wrap"
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn an_unknown_label_in_a_type_lists_every_label_and_guesses() {
+    // `spawn` is a label and was missing from the list; `asnyc` is a slip.
+    assert_eq!(
+        errors("type U = U (int ->{asnyc} unit)"),
+        [
+            "unknown effect label `asnyc` (known labels: `io`, `async`, `exn`, `spawn`; an \
+          effect variable is only allowed in an `extern` signature); did you mean `async`?"
+        ]
+    );
+}
+
+#[test]
 fn rejects_an_effect_var_in_a_record_field() {
     // The privilege is extern-scoped: a `->{e}` in a record field (like an ADT
     // variant field) has no extern scheme to generalize into, so it errors.
@@ -6371,6 +6419,45 @@ fn a_stand_in_for_a_missing_name_brings_no_ambiguity_with_it() {
     assert!(
         errors[1].contains("field `name` is ambiguous here"),
         "{errors:?}"
+    );
+}
+
+// ---------- one argument too many (#270) ----------
+
+#[test]
+fn one_argument_too_many_counts_the_arguments() {
+    // The generic message read "expected `int`, found `int -> a`", with the
+    // value's type as the expectation and nothing about the count.
+    let src = "let br attrs = \"<br>\"\nlet z = br [] [\"x\"]";
+    let errs = pyfun::check(src).unwrap_err();
+    assert_eq!(
+        errs[0].message,
+        "`br` takes 1 argument, and this gives it 2: `br []` is already a `str`, so this \
+         one has nothing to apply to"
+    );
+    // At the extra argument, not the whole call.
+    let at = src.rfind("[\"x\"]").unwrap();
+    assert_eq!((errs[0].span.start, errs[0].span.end), (at, at + 5));
+    assert_eq!(
+        errors("let add a b = a + b\nlet y = add 1 2 3"),
+        [
+            "`add` takes 2 arguments, and this gives it 3: `add 1 2` is already an `int`, so \
+          this one has nothing to apply to"
+        ]
+    );
+    assert_error_contains(
+        "let y = List.len [1] 2",
+        "`List.len` takes 1 argument, and this gives it 2",
+    );
+    // A value that is no function at all.
+    assert_eq!(
+        errors("let n = 5\nlet w = n 3"),
+        ["`n` is an `int`, not a function, so it cannot be applied to an argument"]
+    );
+    // An argument of the wrong type keeps its own message.
+    assert_eq!(
+        errors("let f a = a + 1\nlet y = f \"x\""),
+        ["type mismatch: expected `int`, found `str`"]
     );
 }
 

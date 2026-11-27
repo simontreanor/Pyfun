@@ -3932,6 +3932,29 @@ fn build_decls(
         // and generalized in the scheme below (`DESIGN.md` §4).
         let mut eff_map = HashMap::new();
         collect_effect_vars(&decl.ty, &mut eff_map);
+        // A variable only an argument arrow can bind: one that appears nowhere
+        // in an argument is instantiated fresh at every use and meets the empty
+        // row, so `->{db}` or a misspelt `->{oi}` would quietly read as pure
+        // (issue #266). Report it, in the order the signature names them.
+        let mut bound = HashSet::new();
+        collect_arg_effect_names(&decl.ty, false, &mut bound);
+        let mut unbound: Vec<(&String, &u32)> = eff_map
+            .iter()
+            .filter(|(n, _)| !bound.contains(*n))
+            .collect();
+        unbound.sort_by_key(|(_, id)| **id);
+        for (name, _) in unbound {
+            errors.push(TypeError {
+                message: format!(
+                    "effect `{name}` is not a known label, and no argument arrow binds it as \
+                     a variable, so `{}` would be typed as performing nothing (known labels: \
+                     {KNOWN_EFFECT_LABELS}){}",
+                    decl.name,
+                    effect_label_guess(name)
+                ),
+                span,
+            });
+        }
         match resolve(&decl.ty, &var_map, &decls.type_arity, span, &eff_map) {
             Ok(mut ty) => {
                 // Effectful-by-default boundary: the innermost arrow gets `io`
@@ -4240,6 +4263,53 @@ fn collect_effect_vars(ty: &TypeExpr, map: &mut HashMap<String, u32>) {
             }
         }
     }
+}
+
+/// The effect names that appear on an arrow inside an *argument* of a declared
+/// type, at any depth: `e` in `(a ->{e} unit) -> List a ->{io, e} unit`. Only
+/// these can bind an effect variable, since a caller's argument is what decides
+/// it; a variable seen only on the signature's own arrows or in its result has
+/// nothing to decide it and would read as pure (issue #266).
+fn collect_arg_effect_names(ty: &TypeExpr, in_arg: bool, out: &mut HashSet<String>) {
+    match ty {
+        TypeExpr::Fun(a, b, effects) => {
+            if in_arg {
+                out.extend(effects.iter().cloned());
+            }
+            collect_arg_effect_names(a, true, out);
+            collect_arg_effect_names(b, in_arg, out);
+        }
+        TypeExpr::Tuple(elems) => {
+            for e in elems {
+                collect_arg_effect_names(e, in_arg, out);
+            }
+        }
+        TypeExpr::Con(_, _, args) => {
+            for a in args {
+                collect_arg_effect_names(a, in_arg, out);
+            }
+        }
+    }
+}
+
+/// The known effect labels, as a message lists them.
+const KNOWN_EFFECT_LABELS: &str = "`io`, `async`, `exn`, `spawn`";
+
+/// The end of a message about an effect name that is not a label: the label it
+/// was likely meant to be (`; did you mean `io`?`), or nothing. A label counts
+/// as meant when one edit away or written with the same letters (`oi`,
+/// `asnyc`), which leaves an unrelated name such as `db` without a guess.
+fn effect_label_guess(name: &str) -> String {
+    let sorted = |s: &str| {
+        let mut c: Vec<char> = s.chars().collect();
+        c.sort_unstable();
+        c
+    };
+    ["io", "async", "exn", "spawn"]
+        .into_iter()
+        .find(|l| levenshtein(name, l) <= 1 || sorted(name) == sorted(l))
+        .map(|l| format!("; did you mean `{l}`?"))
+        .unwrap_or_default()
 }
 
 /// Whether the innermost (rightmost) arrow of a declared type carries an explicit
@@ -7385,9 +7455,10 @@ fn resolve(
                         None => {
                             return Err(TypeError {
                                 message: format!(
-                                    "unknown effect label `{name}` (known labels: `io`, \
-                                     `async`, `exn`; an effect variable is only allowed in \
-                                     an `extern` signature)"
+                                    "unknown effect label `{name}` (known labels: \
+                                     {KNOWN_EFFECT_LABELS}; an effect variable is only allowed \
+                                     in an `extern` signature){}",
+                                    effect_label_guess(name)
                                 ),
                                 span,
                             });
@@ -10704,6 +10775,9 @@ impl Infer {
             if let Some(hint) = self.call_syntax_hint(func, arg, &func_ty) {
                 return Err(hint);
             }
+            if let Some(hint) = self.over_application_hint(func, arg, &func_ty) {
+                return Err(hint);
+            }
             if e.message.starts_with(UNIT_MISMATCH) {
                 return Err(self.unit_argument_hint(arg, &func_ty, e));
             }
@@ -10816,6 +10890,63 @@ impl Infer {
                 }
             ),
             span: Span::new(func.span().start, arg.span().end),
+        })
+    }
+
+    /// One argument too many: `f 1 2` with `f` taking one, or `n 3` with `n` an
+    /// `int`. The generic message puts the value's type as "expected" and the
+    /// arrow the program asked of it as "found", and says nothing of the count,
+    /// which is the whole of the fix (issue #270). When the value applied is
+    /// known not to be a function, count the arguments its head was given and
+    /// report at the extra one.
+    fn over_application_hint(
+        &mut self,
+        func: &Expr,
+        arg: &Expr,
+        func_ty: &Ty,
+    ) -> Option<TypeError> {
+        let ty = self.apply(func_ty);
+        if matches!(ty, Ty::Fun(..) | Ty::Var(_)) {
+            return None;
+        }
+        let shown = show(&ty);
+        let mut head = func;
+        let mut args = Vec::new();
+        while let ExprKind::App { func: inner, arg } = &head.kind {
+            head = inner;
+            args.push(crate::ast::print_expr(arg));
+        }
+        let given = args.len();
+        let name = match &head.kind {
+            ExprKind::Var(name) => name.clone(),
+            _ => qualified_name(head)?,
+        };
+        let message = if given == 0 {
+            format!(
+                "`{name}` is {} `{shown}`, not a function, so it cannot be applied to an argument",
+                article(&shown)
+            )
+        } else {
+            // Written out as the head and its arguments, since the printer
+            // would parenthesize each partial application (`(add 1) 2`).
+            args.reverse();
+            let applied = format!("{} {}", crate::ast::print_expr(head), args.join(" "));
+            let already = if applied.len() <= 40 {
+                format!("`{applied}`")
+            } else {
+                "the call before it".to_string()
+            };
+            format!(
+                "`{name}` takes {given} argument{}, and this gives it {}: {already} is already \
+                 {} `{shown}`, so this one has nothing to apply to",
+                if given == 1 { "" } else { "s" },
+                given + 1,
+                article(&shown)
+            )
+        };
+        Some(TypeError {
+            message,
+            span: arg.span(),
         })
     }
 

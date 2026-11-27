@@ -163,7 +163,11 @@ collected like type variables (`collect_effect_vars`), generalized in the extern
 `map`/`fold` mechanics. A pure and a printing callback now both flow; the callback's effect rides the
 variable into the innermost `{io, e}`, so `let pure` still rejects an impure pipeline. A `->{e}` on
 the innermost arrow counts as annotated (skips the io-by-default rule, asserting "exactly the
-callback's effect"). In a `type` declaration effect variables remain an error — ADT/record fields
+callback's effect"). That assertion needs a callback to decide it, so a variable must appear on an
+arrow inside some *argument* of the signature: one seen only on the signature's own arrows or in its
+result (`extern changes : Conn ->{db} int`) would be fresh at every use and read as pure, and is an
+error that names the labels and guesses the one meant when the name is a slip of it (`->{oi}`: "did
+you mean `io`?", #266). In a `type` declaration effect variables remain an error — ADT/record fields
 would need effect-*parameterized* types, which stays out of scope. A callback arrow written without a
 variable is closed, and an `async { }` handler (which performs `async`) never fits one, so an argument
 whose arrow meets a closed declared arrow is reported at the argument with both effects and the
@@ -1953,6 +1957,13 @@ called by another language's word (`Map.get` is answered with `Map.find`, `List.
 merely names something `lambda` or `for` is untouched; and a type-directed hint fires only on a
 program that was already wrong, so `xs[0]` is answered only when `xs` is a collection and the
 application has failed, with the literal hard against it (`f [0]` is an ordinary argument).
+
+**One argument too many is counted.** A curried application that runs past a function's arity
+fails where the applied value has stopped being a function, and the plain mismatch reads backwards
+there (`expected int, found int -> a`). When the value applied is known not to be a function, the
+message counts instead, at the extra argument: `` `br` takes 1 argument, and this gives it 2: `br []`
+is already a `str` `` (#270). A value that is no function at all is named as one (`` `n` is an `int`,
+not a function ``).
 
 **The string type is `str`.** Python's name, and the name the emitted annotations already use, so
 `type User = { name: str }` reads the same on both sides of the boundary. The decoder follows the
