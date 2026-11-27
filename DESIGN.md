@@ -2934,7 +2934,11 @@ Decisions:
 6. **Syntax disambiguation.** `{` participates in three constructs; the rule is now cleaner because bare
    expression-position literals are gone:
    - A `{` immediately after `=` in a `type` declaration is a **record-type body**.
-   - `Name { … }` in expression position: peek the brace body. A computation-expression item
+   - `Name { … }` in expression position: peek the brace body. A `with` directly inside the brace (not in
+     a nested bracket) makes it a **record update** the name is applied to, whatever the base is:
+     `Ok { r with body = b }` is `Ok ({ r with body = b })`, as `Some {1, 2}` is `Some ({1, 2})`; `with` has
+     no other place in an expression, so this is decided before the readings below (#274). Otherwise a
+     computation-expression item
      (`let!`/`return`/`yield`/`do!` — the existing `starts_ce_item` lookahead) ⇒ a **CE block** and
      `Name` is a builder (§8.1). Otherwise `field = expr, …` ⇒ a **record construction** node
      `Record { ty: Name, fields }`; the checker verifies `Name` is a declared record type (error
