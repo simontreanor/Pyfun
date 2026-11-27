@@ -4144,19 +4144,23 @@ fn from_import_problems(
         if let Some(py) = crate::project::stdlib_module_shadowed(name) {
             let file = crate::project::module_py_name(name);
             let short = crate::project::module_short_name(name);
-            let fix = if name.contains('.') {
-                format!("rename the folder `{py}/`")
+            // The fix comes first, as a name to type: a newcomer meets this
+            // just after creating the file, when a rename costs least.
+            let message = if name.contains('.') {
+                format!(
+                    "rename the folder `{py}/`: Python already has a module called `{py}`, and \
+                     `{file}` would replace it for the whole program"
+                )
             } else {
                 format!(
-                    "move it into a folder (`app/{py}.pyfun`, imported as `App.{short}`) \
-                     or rename it"
+                    "rename `{short}` (to `{short}Utils`, say): Python already has a module \
+                     called `{py}`, and `{file}` would replace it for the whole program \
+                     (or keep the name inside a folder: `app/{py}.pyfun`, imported as \
+                     `App.{short}`)"
                 )
             };
             errors.push(TypeError {
-                message: format!(
-                    "`{name}` would be emitted as `{file}`, which takes the name of Python's own \
-                     `{py}` module and would replace it for the whole program: {fix}"
-                ),
+                message,
                 span: span.span(),
             });
         }

@@ -1553,9 +1553,9 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].errors[0].message,
-            "`Html` would be emitted as `html.py`, which takes the name of Python's own `html` \
-             module and would replace it for the whole program: move it into a folder \
-             (`app/html.pyfun`, imported as `App.Html`) or rename it"
+            "rename `Html` (to `HtmlUtils`, say): Python already has a module called `html`, \
+             and `html.py` would replace it for the whole program (or keep the name inside a \
+             folder: `app/html.pyfun`, imported as `App.Html`)"
         );
         // A package folder replaces the library as surely, through `from` too.
         let project = build(
@@ -1566,10 +1566,10 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(
-            check(&project)[0].errors[0]
-                .message
-                .ends_with("Python's own `email` module and would replace it for the whole program: rename the folder `email/`")
+        assert_eq!(
+            check(&project)[0].errors[0].message,
+            "rename the folder `email/`: Python already has a module called `email`, and \
+             `email/parser.py` would replace it for the whole program"
         );
         // Inside a folder of its own it shadows nothing.
         let project = build(
