@@ -1958,6 +1958,13 @@ merely names something `lambda` or `for` is untouched; and a type-directed hint 
 program that was already wrong, so `xs[0]` is answered only when `xs` is a collection and the
 application has failed, with the literal hard against it (`f [0]` is an ordinary argument).
 
+**One argument too many is counted.** A curried application that runs past a function's arity
+fails where the applied value has stopped being a function, and the plain mismatch reads backwards
+there (`expected int, found int -> a`). When the value applied is known not to be a function, the
+message counts instead, at the extra argument: `` `br` takes 1 argument, and this gives it 2: `br []`
+is already a `str` `` (#270). A value that is no function at all is named as one (`` `n` is an `int`,
+not a function ``).
+
 **The string type is `str`.** Python's name, and the name the emitted annotations already use, so
 `type User = { name: str }` reads the same on both sides of the boundary. The decoder follows the
 type (`Decode.str`); the module of text operations stays `String`, a module name like `List`. The

@@ -6421,3 +6421,42 @@ fn a_stand_in_for_a_missing_name_brings_no_ambiguity_with_it() {
         "{errors:?}"
     );
 }
+
+// ---------- one argument too many (#270) ----------
+
+#[test]
+fn one_argument_too_many_counts_the_arguments() {
+    // The generic message read "expected `int`, found `int -> a`", with the
+    // value's type as the expectation and nothing about the count.
+    let src = "let br attrs = \"<br>\"\nlet z = br [] [\"x\"]";
+    let errs = pyfun::check(src).unwrap_err();
+    assert_eq!(
+        errs[0].message,
+        "`br` takes 1 argument, and this gives it 2: `br []` is already a `str`, so this \
+         one has nothing to apply to"
+    );
+    // At the extra argument, not the whole call.
+    let at = src.rfind("[\"x\"]").unwrap();
+    assert_eq!((errs[0].span.start, errs[0].span.end), (at, at + 5));
+    assert_eq!(
+        errors("let add a b = a + b\nlet y = add 1 2 3"),
+        [
+            "`add` takes 2 arguments, and this gives it 3: `add 1 2` is already an `int`, so \
+          this one has nothing to apply to"
+        ]
+    );
+    assert_error_contains(
+        "let y = List.len [1] 2",
+        "`List.len` takes 1 argument, and this gives it 2",
+    );
+    // A value that is no function at all.
+    assert_eq!(
+        errors("let n = 5\nlet w = n 3"),
+        ["`n` is an `int`, not a function, so it cannot be applied to an argument"]
+    );
+    // An argument of the wrong type keeps its own message.
+    assert_eq!(
+        errors("let f a = a + 1\nlet y = f \"x\""),
+        ["type mismatch: expected `int`, found `str`"]
+    );
+}
