@@ -589,14 +589,10 @@ after the release.
 - **User-declared effect labels: a `db` label** (proposal 2026-11-26, from the sqlite façade; M). A
   façade would like its type to say "touches the database" apart from printing:
   `query : Conn -> str -> … ->{io, db, exn} …`. The label set is closed today (`io`, `async`, `spawn`,
-  `exn`), so the façade uses `io`. *The trap found on the way (S, worth doing first):* in a `type`
-  arrow `->{db}` is an error, but in an `extern` arrow an unknown lowercase name is an effect
-  *variable*, and on the innermost arrow it counts as an annotation, so `extern changes: Conn ->{db}
-  int = .total_changes` type-checks as **pure** at every use: `let pure count c = changes c` is
-  accepted, and the `io` default is skipped. A variable that no argument arrow binds is almost
-  certainly a label someone meant; it should be an error saying so ("`db` is not an effect label …
-  as a variable it makes this extern pure"). The unknown-label message also lists `io`, `async`,
-  `exn` and leaves out `spawn`, which is accepted. *The proposal:* a module-level `effect db`
+  `exn`), so the façade uses `io`. *The trap found on the way* (#266, fixed in #271): an `extern`
+  arrow's `->{db}` was read as an effect variable that no argument bound, so the extern type-checked
+  as pure and passed `let pure`. It is now an error naming the known labels, `spawn` included.
+  *The proposal:* a module-level `effect db`
   declaration introduces a label, exported and qualified like a type (`Sqlite.db` in another module's
   hover); it is a concrete label like `io` (unions, propagates through inference, refused by `let
   pure`, erased at lowering) with no handler, so nothing discharges it. No subsumption: it does not

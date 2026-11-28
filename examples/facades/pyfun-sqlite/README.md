@@ -125,10 +125,9 @@ scope for a façade.
 ## Effects, and why there is no `db` label
 
 A `db` label would let a type say "touches the database" apart from other I/O. Pyfun's labels are
-a fixed set (`io`, `async`, `spawn`, `exn`), and an `extern` cannot declare a new one: a lowercase
-name in an `extern` arrow that is not a known label is an *effect variable*, so `Conn ->{db} int`
-would not mean what it says. The façade uses `io`; the proposal for user-declared labels is in
-`ROADMAP.md`.
+a fixed set (`io`, `async`, `spawn`, `exn`), and an `extern` cannot declare a new one: `Conn ->{db}
+int` is an error that names the known labels. The façade uses `io`; the proposal for user-declared
+labels is in `ROADMAP.md`.
 
 ## Versions
 
