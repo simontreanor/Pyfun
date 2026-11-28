@@ -547,9 +547,9 @@ after the release.
     (`DESIGN.md` §7). A newtype's pattern there costs nothing: it is erased ahead of lowering, so
     `let raw (UserId s) = s` is `def raw(s)` (#205).
 
-## Dogfooding findings (2026-11-26, Tessera's HTML and CSS, and the SQLite façade)
+## Dogfooding findings (2026-11-26, Wrax's HTML and CSS, its browser mode, and the SQLite façade)
 
-Four issues from 0.11.0, each fixed in its own PR:
+Issues from 0.11.0, each fixed in its own PR:
 
 1. **An extern effect no argument binds** (#266, PR #271): `->{db}` or a misspelt `->{oi}` on the
    result arrow alone was a fresh variable, so the extern passed `let pure`. Now an error naming the
@@ -559,6 +559,8 @@ Four issues from 0.11.0, each fixed in its own PR:
 3. **A unit mismatch read as `int` against `float`** (#269, PR #275): now `unit mismatch`, at the
    argument, with `write 8<px>` for a bare literal.
 4. **One argument too many** (#270, PR #272): now counted, at the extra argument.
+5. **A constructor applied to a record update** (#274, PR #277): `Ok { r with body = b }` was read
+   as a computation expression. A `with` directly inside the brace now makes it an update argument.
 
 Open, from item 2:
 

@@ -134,6 +134,35 @@ impl Parser {
         &self.tokens[(self.pos + 3).min(self.tokens.len() - 1)].tok
     }
 
+    /// Whether the `{` at `offset` tokens ahead opens a record update: a
+    /// `with` sits directly inside it, not in a nested bracket. `with` has no
+    /// other place in an expression, so this settles `Ok { r with x = 1 }` (a
+    /// constructor applied to an update) before the CE and record-literal
+    /// readings of `Name {` are tried.
+    fn brace_holds_update(&self, offset: usize) -> bool {
+        let mut i = self.pos + offset;
+        if !matches!(self.tokens.get(i).map(|t| &t.tok), Some(Tok::LBrace)) {
+            return false;
+        }
+        let mut depth = 0usize;
+        while let Some(t) = self.tokens.get(i) {
+            match t.tok {
+                Tok::LBrace | Tok::LParen | Tok::LBracket => depth += 1,
+                Tok::RBrace | Tok::RParen | Tok::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Tok::With if depth == 1 => return true,
+                Tok::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn span(&self) -> Span {
         self.tokens[self.pos].span
     }
@@ -2135,6 +2164,7 @@ impl Parser {
                     && *self.peek2() == Tok::Dot
                     && matches!(self.peek3(), Tok::Ident(n) if is_upper(n))
                     && *self.peek4() == Tok::LBrace
+                    && !self.brace_holds_update(3)
                 {
                     self.bump(); // module name
                     self.bump(); // `.`
@@ -2145,11 +2175,19 @@ impl Parser {
                     let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
                     return self.parse_record_literal(ty, ty_span, start);
                 }
+                // `Ok { r with body = b }`: a name applied to a record update. The
+                // brace is an ordinary argument, as in `Some {1, 2}`, so none of the
+                // brace readings below applies (#274).
+                let update_arg = is_upper(&name) && self.brace_holds_update(1);
                 // A user builder: an uppercase (module) name immediately before a
                 // `{` whose first token starts a CE item. The CE-keyword lookahead
                 // distinguishes `Maybe { let! … }` (a CE) from `Some { x = 1 }`
                 // (a constructor applied to a record literal).
-                if is_upper(&name) && *self.peek2() == Tok::LBrace && starts_ce_item(self.peek3()) {
+                if !update_arg
+                    && is_upper(&name)
+                    && *self.peek2() == Tok::LBrace
+                    && starts_ce_item(self.peek3())
+                {
                     // A built-in spelled with its type's capital is the one likely
                     // near-miss: `Option { let! … }` would otherwise resolve against
                     // the *prelude module* `Option`, whose members are ordered for
@@ -2175,7 +2213,8 @@ impl Parser {
                 // line was meant as a CE item (a builder custom operation,
                 // `Html { class_ "board"`, which the item protocol does not have).
                 // Name what the position takes.
-                if is_upper(&name)
+                if !update_arg
+                    && is_upper(&name)
                     && *self.peek2() == Tok::LBrace
                     && matches!(self.peek3(), Tok::Ident(_))
                     && !matches!(self.peek4(), Tok::Eq | Tok::RBrace | Tok::Comma)
@@ -2201,7 +2240,7 @@ impl Parser {
                 // anything else is a `Map` or `Set` literal the name is applied
                 // to (`JObject {"id": JInt 1}`, `Some {1, 2}`, `JObject {}`).
                 let record_body = matches!(self.peek3(), Tok::Ident(field) if !is_upper(field));
-                if is_upper(&name) && *self.peek2() == Tok::LBrace && record_body {
+                if !update_arg && is_upper(&name) && *self.peek2() == Tok::LBrace && record_body {
                     self.bump(); // type tag
                     let ty_span = NodeSpan::new(Span::new(start, self.prev_end()));
                     return self.parse_record_literal(name, ty_span, start);
@@ -3431,6 +3470,39 @@ mod tests {
             let (_, errors) = parse_recover(lex(src).unwrap());
             assert!(errors.is_empty(), "{src:?} reported: {errors:?}");
         }
+    }
+
+    #[test]
+    fn a_name_before_a_record_update_is_applied_to_it() {
+        // #274: `Ok { r with body = b }` was taken for a CE whose first item is
+        // not one. A `with` directly inside the brace makes it an update, whatever
+        // the base is, so it reads as `Ok ({ … })`, as `Some {1, 2}` does.
+        for (bare, grouped) in [
+            (
+                "let f r = Ok { r with body = 1 }",
+                "let f r = Ok ({ r with body = 1 })",
+            ),
+            (
+                "let f r = Some { r.inner with n = 2 }",
+                "let f r = Some ({ r.inner with n = 2 })",
+            ),
+            (
+                "let f r = Some { id r with n = 2 }",
+                "let f r = Some ({ id r with n = 2 })",
+            ),
+            (
+                "let f r = M.Box { r with n = 2 }",
+                "let f r = M.Box ({ r with n = 2 })",
+            ),
+        ] {
+            let got = parse(lex(bare).unwrap()).unwrap_or_else(|e| panic!("{bare:?}: {e:?}"));
+            let want = parse(lex(grouped).unwrap()).unwrap();
+            assert_eq!(got, want, "{bare:?}");
+        }
+        // An update nested deeper leaves a CE a CE.
+        let src = "let f m = Maybe { let! q = m\n                  return { q with n = 1 } }";
+        let (_, errors) = parse_recover(lex(src).unwrap());
+        assert!(errors.is_empty(), "{src:?} reported: {errors:?}");
     }
 
     #[test]
