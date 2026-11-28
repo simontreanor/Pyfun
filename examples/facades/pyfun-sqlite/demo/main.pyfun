@@ -1,0 +1,48 @@
+# The high-score table, run against a private in-memory database.
+#
+#   cd examples/facades/pyfun-sqlite/demo
+#   pyfun run main.pyfun
+#   pyfun test
+import Scores
+import Sqlite
+
+let show_top db =
+  match Scores.top db 3:
+    case Ok scores: scores |> Scores.leaderboard |> List.iter print
+    case Error e: print (Sqlite.explain e)
+
+let tell outcome =
+  match outcome:
+    case Ok ids: print f"stored {List.len ids} scores"
+    case Error (Sqlite.Abandoned reason): print f"nothing stored: {reason}"
+    case Error (Sqlite.Raised e): print f"nothing stored: SQLite said {e.error_message}"
+
+let play db =
+  Sqlite.script db Scores.schema
+  [
+    Scores.Score { player = "ada", points = 420, note = Some "first try" },
+    Scores.Score { player = "grace", points = 380, note = None },
+    Scores.Score { player = "alan", points = 450, note = None },
+  ]
+  |> Scores.record_all db
+  |> tell
+  show_top db
+  # A rule the program checks: the transaction is abandoned, nothing is kept.
+  [Scores.Score { player = "edsger", points = 500, note = None }, Scores.Score { player = "", points = 10, note = None }]
+  |> Scores.record_all db
+  |> tell
+  # A rule the schema checks: SQLite raises, and the transaction rolls back.
+  [Scores.Score { player = "barbara", points = 300, note = None }, Scores.Score { player = "tony", points = -5, note = None }]
+  |> Scores.record_all db
+  |> tell
+  # A name is a parameter, never SQL, so this is just an odd name.
+  Scores.record db (Scores.Score { player = "x'); drop table scores; --", points = 1, note = None }) |> ignore
+  print f"{Scores.count db |> Result.with_default 0} scores kept"
+  # A row that does not read as the decoder says is a value naming the column.
+  match Sqlite.query db "select player, 'many' as points, note from scores" [] Scores.score:
+    case Ok _: print "read every row"
+    case Error e: print (Sqlite.explain e)
+
+match Sqlite.with_open ":memory:" play:
+  case Ok _: ()
+  case Error e: print f"database error: {e.error_message}"

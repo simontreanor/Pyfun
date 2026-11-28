@@ -593,13 +593,40 @@ Open, from item 2:
 - **Larger prelude / package manager** — **the package half's first slice SHIPPED 2026-09-28**
   (`pyfun.toml` + `pyfun add` + `pyfun install`, façades as ordinary pip distributions vendored
   into `.pyfun/facades/`, `DESIGN.md` §6.2, plus `pyfun remove`; still to come: a hashed lock
-  file and publishing a first real façade). The *prelude* half is superseded by Dogfooding findings #5
+  file). **A first real façade is ready to publish, 2026-11-26**: `examples/facades/pyfun-sqlite`
+  (0.1.0, not yet on PyPI) types `sqlite3` with `extern type` handles, `->{io, exn}` calls, parameters
+  as a closed `Value` sum (never spliced into SQL), `Decode`-style row decoders whose failures name the
+  row and column, and savepoint transactions; one `.pyfun` file, no Python helper code. Its `demo/`
+  project consumes it through `pyfun add` and carries the tests (`pyfun test`, run by `cargo test`).
+  What writing it found: the `db` label below; a multi-statement lambda body inside parentheses is
+  read as one expression (the offside rule is off there, `DESIGN.md` §7), so a combinator library
+  names its lambdas, and the error is a type mismatch far from the cause rather than "a block cannot
+  sit inside parentheses"; `f <| fun x -> …` does not parse; and a façade under development is
+  re-vendored by `pyfun add ..` after every edit (a path dependency that reads the source in place
+  would remove the step). The *prelude* half is superseded by Dogfooding findings #5
   (complete the surface in one sweep; "on demand" is what accumulated that backlog). The package/façade story (publish typed extern façades once, `import` many) is a whole axis that
   waits for actual users. A future Python-side runtime package could default to `uv`. (Macros are a
   non-goal, below — not part of this bucket.) (Decode specialization shipped 2026-07-13 — `DESIGN.md`
   §5.3: statically-known decoders deforest to direct dict/list access, byte-identical `Result`s, 2.8x
   measured on a decode-dominated workload; dynamic shapes (`andThen`, decoder-as-value) keep the
   interpreter.)
+- **User-declared effect labels: a `db` label** (proposal 2026-11-26, from the sqlite façade; M). A
+  façade would like its type to say "touches the database" apart from printing:
+  `query : Conn -> str -> … ->{io, db, exn} …`. The label set is closed today (`io`, `async`, `spawn`,
+  `exn`), so the façade uses `io`. *The trap found on the way* (#266, fixed in #271): an `extern`
+  arrow's `->{db}` was read as an effect variable that no argument bound, so the extern type-checked
+  as pure and passed `let pure`. It is now an error naming the known labels, `spawn` included.
+  *The proposal:* a module-level `effect db`
+  declaration introduces a label, exported and qualified like a type (`Sqlite.db` in another module's
+  hover); it is a concrete label like `io` (unions, propagates through inference, refused by `let
+  pure`, erased at lowering) with no handler, so nothing discharges it. No subsumption: it does not
+  imply `io`, and a façade writes `->{io, db}`, which keeps every existing `io` guarantee and adds
+  information rather than replacing it (subsumption stays a non-goal, `DESIGN.md` §4). The cost:
+  an `EffLabel::User` variant carrying the qualified name, the `effect` item in parser, printer,
+  LSP and the three grammars, and label ordering in display (built-ins first, then user labels by
+  name). Open: whether a user label may be discharged by a user handler (a `Db.run` that owns the
+  connection), which is where this would start to become an algebraic-effects system and should
+  stop.
 - ~~Module-alias shadowing~~ **CLOSED 2026-07-27** — `import Ids` + any same-named binder (top-level
   `let`, parameter, block `let` anywhere in the function, lambda parameter, match-pattern capture at
   any level, native-CE binder) now emits `import ids as _pf_ids` at the affected sites
@@ -733,6 +760,11 @@ registry (PR to zed-industries/extensions), and ~~ship Helix indent/textobject q
   passed the same checks before the tag. A fresh venv on Python 3.12+ has no
   `setuptools`, which mypyc needs beside `mypy`; the index lags the tag build by a few minutes, so a
   first `No matching distribution` is a retry, not a failure, and the JSON API lags the index). Rides the tag; no manual step.
+- **PyPI, the first façade** — `pyfun-sqlite` 0.1.0 (`examples/facades/pyfun-sqlite`, 2026-11-26):
+  metadata, README and version ready, **not published**; waits for Simon's go-ahead. A manual
+  upload for now (`python -m build` then `twine upload` in that folder), since the wheel workflow
+  builds only the compiler. Check the name is still free first; `pyfun add pyfun-sqlite` and
+  `pyfun install` in a project that lists it work only once it is up.
 - **Open VSX** — DONE, **accepted**: `pyfun.pyfun` covers VSCodium/code-server/Gitpod/Theia.
   At **0.11.0** (2026-11-25, verified against the registry API; the first check after publishing can
   read "published but not active" for a couple of minutes before the API reflects the new version,

@@ -2234,3 +2234,53 @@ fn an_attribute_extern_with_arguments_is_called_with_all_of_them_from_another_mo
         "{main}"
     );
 }
+
+#[test]
+fn the_sqlite_demo_vendors_the_facade_as_published() {
+    // The demo's `.pyfun/facades/` copy is what `pyfun add` put there; it must
+    // not drift from the façade it was copied from.
+    let facade =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/facades/pyfun-sqlite");
+    let read = |p: &str| {
+        fs::read_to_string(facade.join(p))
+            .unwrap()
+            .replace("\r\n", "\n")
+    };
+    assert!(
+        read("pyfun_sqlite/sqlite.pyfun") == read("demo/.pyfun/facades/pyfun-sqlite/sqlite.pyfun"),
+        "the demo's vendored sqlite.pyfun is stale: run `pyfun add ..` in the demo"
+    );
+}
+
+#[test]
+fn the_sqlite_demo_runs() {
+    let has_python = ["python", "python3"]
+        .iter()
+        .any(|p| Command::new(p).arg("--version").output().is_ok());
+    if !has_python {
+        return;
+    }
+    let demo =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/facades/pyfun-sqlite/demo");
+    let out = Command::new(env!("CARGO_BIN_EXE_pyfun"))
+        .args(["run", "main.pyfun"])
+        .current_dir(&demo)
+        .output()
+        .expect("pyfun runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n"),
+        "stored 3 scores\n\
+         1. alan       450\n\
+         2. ada        420\n\
+         3. grace      380\n\
+         nothing stored: a score needs a player\n\
+         nothing stored: SQLite said CHECK constraint failed: points >= 0\n\
+         4 scores kept\n\
+         row 0, column \"points\": expected int, found TEXT \"many\"\n"
+    );
+}

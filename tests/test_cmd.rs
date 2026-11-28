@@ -510,3 +510,18 @@ fn what_is_and_is_not_a_test_is_said_plainly() {
         "{stderr}"
     );
 }
+
+#[test]
+fn the_sqlite_facade_demo_passes_its_tests() {
+    // `examples/facades/pyfun-sqlite/demo/` is a project that uses the façade
+    // the way a user would, through its vendored copy; its tests are the
+    // façade's.
+    if python_with_pytest().is_none() {
+        eprintln!("skipping: no python with pytest");
+        return;
+    }
+    let demo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/facades/pyfun-sqlite/demo");
+    let (ok, stdout, stderr) = pyfun_test(&demo, &[]);
+    assert!(ok, "{stdout}\n{stderr}");
+    assert!(stdout.contains("25 passed"), "{stdout}");
+}

@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyfun-sqlite"
+version = "0.1.0"
+description = "Typed SQLite for Pyfun: a façade over Python's sqlite3 with bound parameters and row decoders"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = ["pyfun", "sqlite", "sqlite3", "database", "facade"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+]
+# The façade needs only the standard library: `sqlite3` (3.12's `autocommit`
+# keyword is why the floor is 3.12, which is also Pyfun's).
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/simontreanor/Pyfun"
+Source = "https://github.com/simontreanor/Pyfun/tree/main/examples/facades/pyfun-sqlite"
+
+# The façade's .pyfun file travels as package data; `pyfun add` finds it in the
+# installed distribution's file list and vendors it into the project.
+[tool.setuptools]
+packages = ["pyfun_sqlite"]
+
+[tool.setuptools.package-data]
+pyfun_sqlite = ["sqlite.pyfun"]

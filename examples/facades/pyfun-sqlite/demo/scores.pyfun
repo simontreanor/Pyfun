@@ -1,0 +1,62 @@
+# A high-score table kept in SQLite, through the `Sqlite` façade.
+#
+# Every function that touches the database says so in its type: it performs
+# `io` and `exn` (`sqlite3` can raise), and the `Error` of a query is a row
+# that did not read as a `Score`. Everything else here is pure.
+import Sqlite
+from Sqlite import Integer, Text, Null
+
+type Score = { player: str, points: int, note: Option str }
+
+let schema =
+  """
+  create table if not exists scores (
+    id integer primary key,
+    player text not null,
+    points integer not null check (points >= 0),
+    note text
+  );
+  """
+
+## How a row of `scores` reads as a `Score`. A NULL `note` is `None`.
+let score =
+  Sqlite.map3 (fun player points note -> Score { player = player, points = points, note = note })
+    (Sqlite.field "player" Sqlite.str)
+    (Sqlite.field "points" Sqlite.int)
+    (Sqlite.field "note" (Sqlite.nullable Sqlite.str))
+
+let note_value note =
+  match note:
+    case Some text: Text text
+    case None: Null
+
+## Store one score and answer its row id. The values travel as parameters,
+## never as SQL text, so a player's name is only ever a name.
+let record db s =
+  Sqlite.insert db "insert into scores (player, points, note) values (?, ?, ?)" [Text s.player, Integer s.points, note_value s.note]
+
+## Store several scores as one transaction: all of them, or (when one breaks
+## a rule, or SQLite refuses one) none.
+let record_all db scores =
+  Sqlite.transaction db (fun tx ->
+    match List.find (fun s -> String.len s.player == 0) scores:
+      case Some _: Error "a score needs a player"
+      case None: Ok (List.map (record tx) scores))
+
+## The `n` best scores, best first.
+let top db n =
+  Sqlite.query db "select player, points, note from scores order by points desc, id limit ?" [Integer n] score
+
+## A player's best score, if they have one.
+let best_of db player =
+  Sqlite.query_one db "select player, points, note from scores where player = ? order by points desc limit 1" [Text player] score
+
+let count db =
+  Sqlite.query_one db "select count(*) as n from scores" [] (Sqlite.field "n" Sqlite.int)
+  |> Result.map (Option.with_default 0)
+
+## A leaderboard as lines of text: pure, so it is tested without a database.
+let pure leaderboard scores =
+  scores
+  |> List.indexed
+  |> List.map (fun (i, s) -> f"{i + 1}. {Format.pad_right 8 " " s.player} {Format.pad_left 5 " " (String.from_int s.points)}")

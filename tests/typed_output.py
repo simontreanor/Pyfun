@@ -256,6 +256,8 @@ def corpus():
         for i, block in enumerate(BLOCK_RE.findall(text)):
             yield f"lesson_{md.stem[:2]}_{i}", block
     for path in sorted((REPO / "examples").rglob("*.pyfun")):
+        if not path.is_file():  # a project's `.pyfun/` folder of vendored façades
+            continue
         text = path.read_text(encoding="utf-8")
         if re.search(r"^(?:import|from) [A-Z]", text, re.MULTILINE):
             continue

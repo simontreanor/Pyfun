@@ -1,0 +1,369 @@
+# Typed access to SQLite through Python's `sqlite3`, imported in Pyfun as
+# `Sqlite`. The README beside this package explains the design: what the
+# types check, and what they cannot.
+#
+#   let db = Sqlite.open "scores.db"
+#   Sqlite.execute db "insert into scores (name, points) values (?, ?)" [Sqlite.Text "ada", Sqlite.Integer 42]
+#   Sqlite.query db "select name, points from scores" [] score
+#
+# A value never goes into the SQL text. It travels beside it as a `Value`,
+# which `sqlite3` binds to a `?` placeholder, so the safe way to pass one is
+# the only way there is.
+
+# ---- What SQLite stores ----
+
+# Python's `bytes`, the payload of a BLOB.
+extern type Bytes
+
+## One SQLite value, named for the storage class SQLite keeps it in. A query
+## takes its parameters as a list of these, and `Sqlite.value` reads a cell as
+## one.
+type Value =
+  | Integer int
+  | Real float
+  | Text str
+  | Blob Bytes
+  | Null
+
+# `bytes(xs)`: raises when an element is outside 0..255.
+extern pure bytes_of_list: List int ->{exn} Bytes = bytes
+extern pure bytes_to_list: Bytes -> List int = list
+extern pure bytes_len: Bytes -> int = len
+
+## The value as SQLite would describe it: `INTEGER 3`, `TEXT "ada"`, `NULL`.
+let show_value value =
+  match value:
+    case Integer n: f"INTEGER {n}"
+    case Real x: f"REAL {x}"
+    case Text s: f"TEXT \"{s}\""
+    case Blob b: f"BLOB of {bytes_len b} bytes"
+    case Null: "NULL"
+
+# ---- The Python side ----
+#
+# `Raw` is whatever `sqlite3` hands over: a cell, a row tuple, a cursor's
+# description. It is read only by the externs below, which turn it into a
+# `Value` once, at the edge.
+
+extern type Conn
+extern type Cursor
+extern type Raw
+extern type Class
+
+extern connect: str ->{io, exn} Conn = sqlite3.connect(autocommit = True)
+extern close_conn: Conn ->{io, exn} unit = .close()
+extern run: Conn -> str -> List Raw ->{io, exn} Cursor = .execute()
+extern run_script: Conn -> str ->{io, exn} Cursor = .executescript()
+extern fetch_all: Cursor ->{io, exn} List Raw = .fetchall()
+extern description: Cursor -> Raw = .description
+extern rowcount: Cursor -> int = .rowcount
+extern lastrowid: Cursor -> int = .lastrowid
+extern in_transaction: Conn -> bool = .in_transaction
+
+extern pure items: Raw -> List Raw = list
+extern pure is_a: Raw -> Class -> bool = isinstance
+extern int_class: Class = int
+extern float_class: Class = float
+extern str_class: Class = str
+extern bytes_class: Class = bytes
+extern none_class: Class = types.NoneType
+
+# Each of these is the identity on the value it is given, typed for the
+# direction it is used in.
+extern pure raw_to_int: Raw -> int = int
+extern pure raw_to_float: Raw -> float = float
+extern pure raw_to_str: Raw -> str = str
+extern pure raw_to_bytes: Raw -> Bytes = bytes
+extern pure int_to_raw: int -> Raw = int
+extern pure float_to_raw: float -> Raw = float
+extern pure str_to_raw: str -> Raw = str
+extern pure bytes_to_raw: Bytes -> Raw = bytes
+extern null_raw: Raw = None
+extern pure int_to_float: int -> float = float
+
+let to_raw value =
+  match value:
+    case Integer n: int_to_raw n
+    case Real x: float_to_raw x
+    case Text s: str_to_raw s
+    case Blob b: bytes_to_raw b
+    case Null: null_raw
+
+let of_raw raw =
+  if is_a raw int_class then Integer (raw_to_int raw)
+  elif is_a raw float_class then Real (raw_to_float raw)
+  elif is_a raw str_class then Text (raw_to_str raw)
+  elif is_a raw bytes_class then Blob (raw_to_bytes raw)
+  else Null
+
+# ---- Connections ----
+
+## Open (or create) the database file at `path`; `":memory:"` is a private,
+## temporary one. Each statement commits as it runs unless it is inside
+## `Sqlite.transaction`.
+let open path = connect path
+
+let close conn = close_conn conn
+
+## Open the database, hand it to `body`, and close it again, whatever `body`
+## did. A Python exception anywhere in that (the file cannot be opened, a
+## statement fails) is the `Error`.
+let with_open path body =
+  match try (connect path):
+    case Error e: Error e
+    case Ok conn:
+      let outcome = try (body conn)
+      let closed = try (close_conn conn)
+      match (outcome, closed):
+        case (Ok a, Ok _): Ok a
+        case (Error e, _): Error e
+        case (Ok _, Error e): Error e
+
+# ---- Statements ----
+
+## Run one statement with its parameters, one `Value` for each `?`. The
+## answer is the number of rows it changed (-1 for a statement that changes
+## none, such as `create table`).
+let execute conn sql params =
+  run conn sql (List.map to_raw params) |> rowcount
+
+## Run an `insert` and answer the rowid of the row it made.
+let insert conn sql params =
+  run conn sql (List.map to_raw params) |> lastrowid
+
+## Run a script of several statements, separated by `;`. A script takes no
+## parameters, so it is for schema, not for data.
+let script conn sql =
+  run_script conn sql |> ignore
+
+# ---- Reading cells ----
+
+## Where a row did not read as its decoder expected.
+type Problem =
+  | NoSuchColumn (List str)
+  | WrongType str Value
+  | Invalid str
+
+## The row (counted from 0, in the order the query returned them), the
+## column, and what was wrong there.
+type RowError = { row: int, column: str, problem: Problem }
+
+## A recipe for one column's value: `Sqlite.int`, `Sqlite.str`, ...
+type Cell a = Cell (Value -> Result a Problem)
+
+let read_cell (Cell f) value = f value
+
+## An INTEGER.
+let int =
+  Cell (fun v ->
+    match v:
+      case Integer n: Ok n
+      case _: Error (WrongType "int" v))
+
+## A REAL, or an INTEGER read as one.
+let float =
+  Cell (fun v ->
+    match v:
+      case Real x: Ok x
+      case Integer n: Ok (int_to_float n)
+      case _: Error (WrongType "float" v))
+
+## TEXT.
+let str =
+  Cell (fun v ->
+    match v:
+      case Text s: Ok s
+      case _: Error (WrongType "str" v))
+
+## A BLOB.
+let bytes =
+  Cell (fun v ->
+    match v:
+      case Blob b: Ok b
+      case _: Error (WrongType "bytes" v))
+
+## SQLite has no boolean: it stores one as the INTEGER 0 or 1, and this reads
+## only those two.
+let bool =
+  Cell (fun v ->
+    match v:
+      case Integer 0: Ok False
+      case Integer 1: Ok True
+      case _: Error (WrongType "bool (INTEGER 0 or 1)" v))
+
+## Any value, as it is.
+let value = Cell (fun v -> Ok v)
+
+## NULL as `None`; anything else read by `cell`, as `Some`.
+let nullable cell =
+  Cell (fun v ->
+    match v:
+      case Null: Ok None
+      case _: Result.map Some (read_cell cell v))
+
+## A value `cell` read, checked or converted further by `f`; an `Error`
+## from `f` is reported at the column as `Invalid`.
+let check f cell =
+  Cell (fun v ->
+    match read_cell cell v:
+      case Error p: Error p
+      case Ok a:
+        match f a:
+          case Ok b: Ok b
+          case Error message: Error (Invalid message))
+
+# ---- Reading rows ----
+
+## One row as a decoder sees it: its position, and each column's name and
+## value.
+type Source = { index: int, columns: List (str, Value) }
+
+## A recipe for a whole row: built from `Sqlite.field`, combined with
+## `Sqlite.map2` and the rest.
+type Row a = Row (Source -> Result a RowError)
+
+let read_row (Row f) source = f source
+
+let fail_at source column problem = Error (RowError { row = source.index, column = column, problem = problem })
+
+let read_column source name cell value =
+  match read_cell cell value:
+    case Ok a: Ok a
+    case Error p: fail_at source name p
+
+let missing source name = fail_at source name (NoSuchColumn (List.map fst source.columns))
+
+let read_field name cell source =
+  match List.find (fun (n, _) -> n == name) source.columns:
+    case Some (_, v): read_column source name cell v
+    case None: missing source name
+
+let read_at i cell source =
+  match List.get i source.columns:
+    case Some (n, v): read_column source n cell v
+    case None: missing source f"#{i}"
+
+## The column called `name`, read by `cell`.
+let field name cell = Row (read_field name cell)
+
+## The column at position `i` (from 0), read by `cell`, for a result whose
+## columns have no useful names.
+let at i cell = Row (read_at i cell)
+
+let succeed a = Row (fun _ -> Ok a)
+
+let map f a = Row (fun source -> Result.map f (read_row a source))
+
+let map2 f a b =
+  Row (fun source ->
+    result {
+      let! x = read_row a source
+      let! y = read_row b source
+      return f x y
+    })
+
+let map3 f a b c =
+  Row (fun source ->
+    result {
+      let! x = read_row a source
+      let! y = read_row b source
+      let! z = read_row c source
+      return f x y z
+    })
+
+let map4 f a b c d =
+  Row (fun source ->
+    result {
+      let! w = read_row a source
+      let! x = read_row b source
+      let! y = read_row c source
+      let! z = read_row d source
+      return f w x y z
+    })
+
+## Read one row given as column names and values, with no database: how a
+## decoder is tried out, and tested, on its own. It is pure.
+let decode row columns = read_row row (Source { index = 0, columns = columns })
+
+## A row read by `a`, then by the recipe `f` chooses from what `a` found.
+let and_then f a =
+  Row (fun source ->
+    match read_row a source:
+      case Ok x: read_row (f x) source
+      case Error e: Error e)
+
+## The error as one line: `row 2, column "points": expected int, found TEXT "many"`.
+let explain error =
+  let place = f"row {error.row}, column \"{error.column}\""
+  match error.problem:
+    case NoSuchColumn names:
+      let have = names |> List.map (fun n -> f"\"{n}\"") |> String.join ", "
+      f"{place}: no such column; the result has {have}"
+    case WrongType expected found: f"{place}: expected {expected}, found {show_value found}"
+    case Invalid message: f"{place}: {message}"
+
+# ---- Queries ----
+
+# A cursor's description is a tuple with one tuple per column, the name first;
+# it is `None` for a statement that returns no rows.
+let column_names cursor =
+  let raw = description cursor
+  if is_a raw none_class then []
+  else items raw |> List.choose (fun column -> items column |> List.head) |> List.map raw_to_str
+
+## Every row `sql` returns, each read by `row`. A row that does not read is
+## the `Error`, naming the row, the column and the problem; SQLite raising
+## (a mistake in the SQL, a constraint) is `exn`, for `try` to catch.
+let query conn sql params row =
+  let cursor = run conn sql (List.map to_raw params)
+  let names = column_names cursor
+  let read index raw =
+    let values = items raw |> List.map of_raw
+    read_row row (Source { index = index, columns = List.zip names values })
+  let results = fetch_all cursor |> List.indexed |> List.map (fun (i, raw) -> read i raw)
+  let failure r =
+    match r:
+      case Error e: Some e
+      case Ok _: None
+  match results |> List.choose failure |> List.head:
+    case Some e: Error e
+    case None: Ok (List.choose Result.to_option results)
+
+## The first row `sql` returns, if there is one.
+let query_one conn sql params row = query conn sql params row |> Result.map List.head
+
+# ---- Transactions ----
+
+## Why a transaction was rolled back: its body answered `Error`, or something
+## raised.
+type Rollback e =
+  | Abandoned e
+  | Raised Exception
+
+let savepoint = "pyfun_sqlite"
+
+let roll_back conn =
+  if in_transaction conn:
+    execute conn f"rollback to {savepoint}" [] |> ignore
+    execute conn f"release {savepoint}" [] |> ignore
+  else:
+    ()
+
+## Run `body` as one transaction: commit what it did when it answers `Ok`,
+## and undo all of it when it answers `Error` or raises. Transactions nest;
+## an inner one is a savepoint inside the outer.
+let transaction conn body =
+  execute conn f"savepoint {savepoint}" [] |> ignore
+  match try (body conn):
+    case Ok (Ok a):
+      match try (execute conn f"release {savepoint}" []):
+        case Ok _: Ok a
+        case Error e:
+          roll_back conn
+          Error (Raised e)
+    case Ok (Error reason):
+      roll_back conn
+      Error (Abandoned reason)
+    case Error e:
+      roll_back conn
+      Error (Raised e)
