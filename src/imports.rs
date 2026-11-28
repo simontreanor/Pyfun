@@ -109,6 +109,8 @@ struct Rewriter {
     /// names (innermost first is not needed, only membership), then each
     /// enclosing binder's.
     scopes: Vec<HashSet<String>>,
+    /// The file's own type names, which a bare type name always means.
+    local_types: HashSet<String>,
     used: HashSet<String>,
     errors: Vec<Problem>,
 }
@@ -120,6 +122,14 @@ impl Rewriter {
             plain: HashMap::new(),
             from_only: HashMap::new(),
             scopes: Vec::new(),
+            local_types: module
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Type(decl) => Some(decl.name.clone()),
+                    _ => None,
+                })
+                .collect(),
             used: HashSet::new(),
             errors: Vec::new(),
         };
@@ -241,7 +251,9 @@ impl Rewriter {
         }
     }
 
-    /// A type written `Geometry.Shape` names its module by the last part too.
+    /// A type written `Geometry.Shape` names its module by the last part too,
+    /// and a bare type a `from` import lists is that module's (`Reader` after
+    /// `from Net import Reader` is `Net.Reader`, whatever else declares one).
     fn type_expr(&mut self, ty: &mut TypeExpr) {
         match ty {
             TypeExpr::Con(name, span, args) => {
@@ -250,6 +262,12 @@ impl Rewriter {
                     if let Some(whole) = self.whole_name(&module, span.span()) {
                         *name = format!("{whole}.{member}");
                     }
+                } else if !self.local_types.contains(name.as_str())
+                    && let Some((module, _)) = self.aliases.get(name.as_str())
+                {
+                    let module = module.clone();
+                    self.used.insert(name.clone());
+                    *name = format!("{module}.{name}");
                 }
                 for arg in args {
                     self.type_expr(arg);

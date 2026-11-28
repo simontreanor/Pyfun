@@ -133,10 +133,10 @@ fn add_json_alias(py: &mut PyModule) {
 struct Decls<'a> {
     /// The module's own type declarations, by name.
     types: HashMap<&'a str, &'a TypeDecl>,
-    /// The type declarations of the modules this one imports, by name (type
-    /// names are one flat namespace across a project), each with the Python
-    /// module that defines its classes.
-    imported: HashMap<&'a str, (&'a str, &'a TypeDecl)>,
+    /// The type declarations of the modules this one imports, by the Python
+    /// module that defines its classes and the type's name (`geometry.Point`),
+    /// each with that module.
+    imported: HashMap<String, (&'a str, &'a TypeDecl)>,
     /// Every name the emitted module binds at top level, which a type
     /// parameter must not shadow.
     taken: HashSet<String>,
@@ -160,10 +160,11 @@ impl<'a> Decls<'a> {
         let mut imported = HashMap::new();
         for (py_module, other) in others {
             for item in &other.items {
-                if let Item::Type(decl) = item
-                    && !types.contains_key(decl.name.as_str())
-                {
-                    imported.insert(decl.name.as_str(), (py_module.as_str(), decl));
+                if let Item::Type(decl) = item {
+                    imported.insert(
+                        format!("{py_module}.{}", decl.name),
+                        (py_module.as_str(), decl),
+                    );
                 }
             }
         }
@@ -594,7 +595,23 @@ impl Speller<'_> {
                 // is reached through that module.
                 let (decl, prefix, import) = match self.decls.types.get(name) {
                     Some(decl) => (*decl, String::new(), None),
-                    None => match self.decls.imported.get(name) {
+                    // An imported type is known by its module, `Geometry.Point`.
+                    // Written bare in a declaration, it is the one import's
+                    // type of that name.
+                    None => match name
+                        .rsplit_once('.')
+                        .and_then(|(m, bare)| {
+                            let key = format!("{}.{bare}", crate::project::module_stem(m));
+                            self.decls.imported.get(&key)
+                        })
+                        .or_else(|| {
+                            let mut of_name =
+                                self.decls.imported.values().filter(|(_, d)| d.name == name);
+                            match (of_name.next(), of_name.next()) {
+                                (Some(only), None) => Some(only),
+                                _ => None,
+                            }
+                        }) {
                         Some((module, decl)) => match self.decls.reached.get(module) {
                             Some((by, import)) => (*decl, format!("{by}."), Some(import)),
                             None => return self.any(),
