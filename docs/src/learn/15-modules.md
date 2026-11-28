@@ -177,9 +177,10 @@ circle of radius 2.0
 
 Constructors qualify like values do, in expressions and in `case` patterns alike, so
 `Shapes.Circle 2.0` builds one and `case Shapes.Circle r:` takes it apart. In *type* position the
-bare name works as well, so the record above could equally say `item: Placed`. Because a type can be
-named from a file other than the one declaring it, a record that holds another module's data no
-longer forces the two into a single file.
+bare name works as well, so the record above could equally say `item: Placed`. If two of your
+imports each declare a `Placed`, they are two different types, and Pyfun asks you to write which one
+you mean: `Shapes.Placed`. Because a type can be named from a file other than the one declaring it, a
+record that holds another module's data no longer forces the two into a single file.
 
 ## Exercise
 

@@ -1674,11 +1674,18 @@ values, with **exhaustiveness checked across the boundary** (a missing arm repor
 pattern `case Geometry.Point { x, y }:`, update `{ p with x = 3 }`, and bare-access `p.x` on an imported
 value — the record class is emitted once (in its module) and referenced as `geometry.Point`. **An imported
 type can be *named* in a local `type` declaration** — `type Holder = { item: Shapes.Placed }`, and likewise
-an ADT variant payload or an `extern` signature. Both spellings are accepted, bare `Placed` and qualified
-`Shapes.Placed`, and they denote the same type: an imported type registers under its bare identity name
-(unique across everything visible, as the import clash check enforces) plus a qualified key, and a written
-qualifier is validated and then folded back to that identity, so the two unify freely. Prefer the qualified
-spelling where the reader benefits from knowing which module a type came from. **Opaque handle types
+an ADT variant payload or an `extern` signature. **A type is identified by the module that declares
+it** (#273): inside `Shapes` it is `Placed`, and every importer knows it as `Shapes.Placed`, which is also
+how messages and hover show it. Two imports that each declare a `Reader` therefore hand over two types,
+`Net.Reader` and `Http.Reader`, and a file can import both, as it can two modules that each export an
+`open_reader`. A local type keeps its bare name beside an imported one of the same name. A bare `Placed`
+written in an importing file stands for the imported type when no local type takes the name and exactly
+one import declares it (`from Shapes import Placed` names it outright); when two or more do, the bare use
+is an error at that use, naming each (`` `Reader` could be `Http.Reader` or `Net.Reader` ``). Prefer the
+qualified spelling where the reader benefits from knowing which module a type came from. The checker
+renames at the import boundary: each import's interface arrives with the types its module declares
+qualified, in its schemes, constructors and record fields alike, and a type it carries from a third
+module arrives already qualified, because the exporting module saw it through its own import. **Opaque handle types
 (`extern type Rng`, §6) cross like any other type name:** the interface carries the name + arity, so a
 consumer can write `Gen.Rng` (or bare `Rng`) in a record field, an ADT payload, or an `extern` signature;
 values of the type always crossed through the exported schemes. **Interfaces close transitively over what
@@ -1686,13 +1693,12 @@ they reference:** a record or opaque type that an exported scheme, constructor, 
 carried in the exporter's interface, tagged with the module that declares it, and the pull repeats through
 each hop (a worklist walk with a seen set, so mutually referencing records terminate). A third module
 importing `Holder` without importing `Shapes` can therefore hold its `item`, read that value's fields, and
-name its type bare (`Placed`). A carried type crosses as an *identity*, not as a member: constructing it,
-pattern-matching it, or writing the qualified spelling still requires importing the declaring module
-directly. A carried name already taken here (by a local type or a direct import) is skipped silently rather
-than reported, since the consumer never wrote that name: local and direct declarations win the bare name,
-the same record arriving along two import paths is recognized by its declaring module and admitted once,
-and a genuinely different type shadows the carried record, whose fields then feed the "unknown record
-field" diagnostic (the message names the hidden record and the module that declares it). Field lookup
+name its type, bare (`Placed`) or qualified (`Shapes.Placed`). A carried type crosses as an *identity*,
+not as a member: constructing it or pattern-matching it still requires importing the declaring module
+directly. The same record arriving along two import paths has one identity and is admitted once, and a
+local or directly imported type of the same bare name is a different type, which takes the bare name
+while the carried record stays readable. A bare name the module's own imports declare outranks one an
+import only carries. Field lookup
 mirrors the same precedence: in a by-name field access (a base whose type is not yet known), records
 declared here or imported directly form the deciding tier, and a carried record owns a field only when no
 record in that tier declares it, so editing a dependency two hops away can never make a working access
@@ -2881,7 +2887,7 @@ Decisions:
    imported record via a qualified tag (`Geometry.Point { x = 1 }`, `case Geometry.Point { x, y }:`), lowered
    to a single emitted `geometry.Point` class that both sides share (`isinstance`/`match`-compatible); see
    §6.1 for that mechanism. The only *record-specific* wrinkle is the field registry: an imported record is
-   merged under its bare identity name (with a `Geometry.Point → Point` surface alias) and its fields append
+   merged under its identity, `Geometry.Point`, which is also its qualified tag, and its fields append
    to the **use-site multimap** (decision 2), so bare `p.x` field-access on an imported value resolves exactly
    as for a local record — by the value's type where that is known, and by field name otherwise.
 3. **Construction is constructor-tagged: `T { f = v, … }`.** A record literal in **expression position**

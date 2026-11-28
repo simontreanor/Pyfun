@@ -2288,24 +2288,24 @@ struct Decls {
     /// imported record must be tagged qualified (`Geometry.Point { … }`), exactly as
     /// an imported sum-type constructor must be (`Geometry.Circle`).
     local_records: HashSet<String>,
-    /// Qualified surface tag (`Geometry.Point`) → the imported record's bare identity
-    /// name (`Point`), so a qualified construction/pattern resolves to the same
-    /// `RecordInfo` (and `Ty::Con`) the exporting module uses.
+    /// Qualified surface tag (`Geometry.Point`) → the directly imported record's
+    /// identity, which is the same name (issue #273): what a qualified
+    /// construction or pattern may name.
     record_aliases: HashMap<String, String>,
-    /// Bare identity name → declaring module for each record an import's
+    /// A bare type name written here → the one imported type of that name
+    /// (`Reader` → `ClashNet.Reader`), for a name no local type takes and only
+    /// one import declares (issue #273).
+    type_alias: HashMap<String, String>,
+    /// A bare type name two or more imports declare → their identities, sorted,
+    /// so a bare use is an error naming them, at the use.
+    type_ambiguous: HashMap<String, Vec<String>>,
+    /// Identity (`Inner.Config`) → declaring module for each record an import's
     /// interface carries **transitively** and that registered here. Such a
     /// record deliberately has no construction alias (constructing or matching
     /// it requires importing its declaring module directly), so the tag
     /// resolver uses this to say exactly that instead of the false
     /// "not a record type".
     carried_record_home: HashMap<String, String>,
-    /// Field name → `(record, declaring module)` for each record an import's
-    /// interface carries **transitively** whose bare name is already taken here
-    /// (by a local type or another import), so the record itself stays out of
-    /// scope. Consulted only to improve the "unknown record field" /
-    /// "has no field" diagnostics: the field's owner is knowable even though the
-    /// record is not visible.
-    field_hints: HashMap<String, Vec<(String, String)>>,
     /// The names of declarations that failed: a constructor, a record type and
     /// its fields, here or in an imported module (`Net.Hello`). Their errors are
     /// reported where they are written, so a use of one is left out of the
@@ -2400,8 +2400,9 @@ struct ExportedType {
     ctors: Vec<(String, CtorInfo)>,
 }
 
-/// One record a module's interface carries (`DESIGN.md` §8.3): its bare identity
-/// name and its [`RecordInfo`] (params + fields).
+/// One record a module's interface carries (`DESIGN.md` §8.3): its name (bare
+/// for the module's own record, the identity `Inner.Config` for a carried one)
+/// and its [`RecordInfo`] (params + fields).
 #[derive(Clone)]
 struct ExportedRecord {
     name: String,
@@ -2476,9 +2477,15 @@ impl ModuleExports {
             .iter()
             .filter_map(|rec| {
                 let origin = rec.origin.clone()?;
+                // A carried record arrives under its identity, `origin.Name`.
+                let name = rec
+                    .name
+                    .strip_prefix(&format!("{origin}."))
+                    .unwrap_or(&rec.name)
+                    .to_string();
                 Some((
                     origin,
-                    rec.name.clone(),
+                    name,
                     rec.info.fields.iter().map(|(f, _)| f.clone()).collect(),
                 ))
             })
@@ -2589,13 +2596,15 @@ fn unused_imports(
         let Some(exports) = imports.get(name) else {
             continue;
         };
+        // A type written bare is one of the import's by its own name.
+        let written = |identity: &str| bare_types.contains(bare_type_name(identity));
         let crosses_bare = !exports.measures.is_empty()
-            || exports.types.iter().any(|t| bare_types.contains(&t.name))
-            || exports.opaques.iter().any(|o| bare_types.contains(&o.name))
+            || exports.types.iter().any(|t| written(&t.name))
+            || exports.opaques.iter().any(|o| written(&o.name))
             || exports
                 .records
                 .iter()
-                .any(|r| bare_types.contains(&r.name) || touched_records.contains(&r.name))
+                .any(|r| written(&r.name) || touched_records.contains(&r.name))
             || exports
                 .types
                 .iter()
@@ -2696,6 +2705,12 @@ fn run_inner(
     let module: &Module = &respelled;
     let (from_errors, from_unused) = from_import_problems(written, imports);
     errors.extend(from_errors);
+    // From here on each import's types carry their declaring module's name.
+    let qualified: HashMap<String, ModuleExports> = imports
+        .iter()
+        .map(|(name, exports)| (name.clone(), qualify_exports(name, exports)))
+        .collect();
+    let imports = &qualified;
     // `build_decls` registers imported type *names* mid-way through, so a local
     // `type` declaration can be written in terms of an imported type; it hands back
     // the names it accepted for the body merge below.
@@ -3101,6 +3116,143 @@ fn close_over_references(
     (records, opaques)
 }
 
+/// `ty` with each type constructor `rename` maps renamed, at any depth.
+fn rename_cons(ty: &Ty, rename: &dyn Fn(&str) -> Option<String>) -> Ty {
+    match ty {
+        Ty::Con(name, args) => Ty::Con(
+            rename(name).unwrap_or_else(|| name.clone()),
+            args.iter().map(|a| rename_cons(a, rename)).collect(),
+        ),
+        Ty::Fun(a, b, eff) => Ty::Fun(
+            Box::new(rename_cons(a, rename)),
+            Box::new(rename_cons(b, rename)),
+            eff.clone(),
+        ),
+        Ty::Tuple(elems) => Ty::Tuple(elems.iter().map(|e| rename_cons(e, rename)).collect()),
+        other => other.clone(),
+    }
+}
+
+fn rename_scheme(scheme: &Scheme, rename: &dyn Fn(&str) -> Option<String>) -> Scheme {
+    let mut out = scheme.clone();
+    out.ty = rename_cons(&scheme.ty, rename);
+    out.members = scheme
+        .members
+        .iter()
+        .map(|(e, c)| (rename_cons(e, rename), rename_cons(c, rename)))
+        .collect();
+    out
+}
+
+/// An import's interface as the importing module sees it (`DESIGN.md` §6.1,
+/// issue #273): every type `module_name` declares itself is renamed to
+/// `module_name.Type`, in its schemes, constructors, record fields and type
+/// lists alike. A type is identified by the module that declares it, so two
+/// imports that each declare a `Reader` hand over two types. Inside its own
+/// module a type keeps its bare name, and each importer qualifies it on the way
+/// in; a type an interface carries from a third module already arrives
+/// qualified, because the exporting module saw it through its own import.
+fn qualify_exports(module_name: &str, exports: &ModuleExports) -> ModuleExports {
+    let own: HashSet<&str> = exports
+        .types
+        .iter()
+        .map(|t| t.name.as_str())
+        .chain(
+            exports
+                .records
+                .iter()
+                .filter(|r| r.origin.is_none())
+                .map(|r| r.name.as_str()),
+        )
+        .chain(
+            exports
+                .opaques
+                .iter()
+                .filter(|o| o.origin.is_none())
+                .map(|o| o.name.as_str()),
+        )
+        .collect();
+    let rename = |name: &str| own.contains(name).then(|| format!("{module_name}.{name}"));
+    let renamed = |name: &str| rename(name).unwrap_or_else(|| name.to_string());
+    ModuleExports {
+        broken: exports.broken.clone(),
+        schemes: exports
+            .schemes
+            .iter()
+            .map(|(k, s)| (k.clone(), rename_scheme(s, &rename)))
+            .collect(),
+        types: exports
+            .types
+            .iter()
+            .map(|t| ExportedType {
+                name: renamed(&t.name),
+                arity: t.arity,
+                ctors: t
+                    .ctors
+                    .iter()
+                    .map(|(c, info)| {
+                        let mut info = info.clone();
+                        info.scheme = rename_scheme(&info.scheme, &rename);
+                        (c.clone(), info)
+                    })
+                    .collect(),
+            })
+            .collect(),
+        records: exports
+            .records
+            .iter()
+            .map(|r| ExportedRecord {
+                name: if r.origin.is_none() {
+                    renamed(&r.name)
+                } else {
+                    r.name.clone()
+                },
+                info: RecordInfo {
+                    params_count: r.info.params_count,
+                    fields: r
+                        .info
+                        .fields
+                        .iter()
+                        .map(|(f, t)| (f.clone(), rename_cons(t, &rename)))
+                        .collect(),
+                },
+                origin: r.origin.clone(),
+            })
+            .collect(),
+        opaques: exports
+            .opaques
+            .iter()
+            .map(|o| ExportedOpaque {
+                name: if o.origin.is_none() {
+                    renamed(&o.name)
+                } else {
+                    o.name.clone()
+                },
+                arity: o.arity,
+                origin: o.origin.clone(),
+            })
+            .collect(),
+        newtypes: exports.newtypes.iter().map(|n| renamed(n)).collect(),
+        measures: exports.measures.clone(),
+        measure_aliases: exports.measure_aliases.clone(),
+    }
+}
+
+/// The name a type has inside the module that declares it: `Reader` for
+/// `ClashNet.Reader`.
+fn bare_type_name(identity: &str) -> &str {
+    identity.rsplit('.').next().unwrap_or(identity)
+}
+
+/// `a`, `a or b`, `a, b or c`.
+fn or_list(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} or {last}", init.join(", ")),
+    }
+}
+
 /// Collect the name of every applied type constructor in `ty`, at any depth
 /// (through arrows, tuples, and constructor arguments).
 fn collect_con_names(ty: &Ty, out: &mut Vec<String>) {
@@ -3203,148 +3355,91 @@ fn collect_exported_opaques(module: &Module, decls: &Decls) -> Vec<ExportedOpaqu
 }
 
 /// Register imported modules' sum-type, record, and opaque-handle-type **names**
-/// in `decls` (`DESIGN.md` §6.1 + §8.3): each under its **bare identity name**
-/// (`Point`, so an imported type is the same `Ty::Con` everywhere) *and* under a
-/// qualified key (`Geometry.Point`) at the same arity, which [`resolve`] accepts
-/// in a type position and folds back to the identity name. A directly imported
-/// name clashing with one already present is reported (the bare-name uniqueness
-/// sum types already rely on) and then skipped, so the returned set of accepted
-/// `(module, name)` pairs is what [`merge_imported_types`] may go on to fill in.
-/// Records and opaque types an import carries **transitively** register last,
-/// under the bare identity name only, and a taken name skips them silently — see
-/// the pass comments below.
+/// in `decls` (`DESIGN.md` §6.1 + §8.3). Each arrives under its identity,
+/// `Geometry.Point`, the name [`qualify_exports`] gave it, so two imports that
+/// each declare a `Reader` register two types and nothing clashes (issue #273).
+/// A bare name then resolves through `type_alias` when no local type takes it
+/// and exactly one import declares it, and is an error at the use, through
+/// `type_ambiguous`, when two or more do. A name the module's own imports
+/// declare outranks one an import only carries from a third module. The
+/// returned `(module, identity)` pairs are what [`merge_imported_types`] goes on
+/// to fill in, one per identity.
 ///
 /// This runs from [`build_decls`] **between** its two passes: after local type
-/// names are registered (so a local declaration still wins a clash) and before
+/// names are registered (so a local declaration keeps its bare name) and before
 /// local type *bodies* resolve, which is what lets a record field or an ADT
-/// variant be typed with an imported type. Registering these names only after
-/// `build_decls` had finished was the reason `type Holder = { item: Placed }` read
-/// as an unknown type: the name was not there yet when the field resolved.
+/// variant be typed with an imported type.
 fn merge_imported_type_names(
     decls: &mut Decls,
     imports: &HashMap<String, ModuleExports>,
-    errors: &mut Vec<TypeError>,
 ) -> HashSet<(String, String)> {
     let mut accepted = HashSet::new();
-    // Deterministic order so a clash is reported the same way every run.
+    // Deterministic order, so the same record reached along two paths is
+    // registered from the same import every run.
     let mut module_names: Vec<&String> = imports.keys().collect();
     module_names.sort();
+    // Bare name → (tier, identity): tier 0 for what an import declares itself,
+    // tier 1 for what it carries from a module this one does not import.
+    let mut bare: HashMap<String, std::collections::BTreeSet<(u8, String)>> = HashMap::new();
+    let mut register = |decls: &mut Decls, module: &str, identity: &str, arity, tier| {
+        bare.entry(bare_type_name(identity).to_string())
+            .or_default()
+            .insert((tier, identity.to_string()));
+        if decls.type_arity.contains_key(identity) {
+            return false; // the same type, already in along another path
+        }
+        decls.type_arity.insert(identity.to_string(), arity);
+        accepted.insert((module.to_string(), identity.to_string()));
+        true
+    };
     for module_name in &module_names {
-        for ty in &imports[*module_name].types {
-            if decls.type_arity.contains_key(&ty.name) {
-                errors.push(TypeError {
-                    message: format!(
-                        "imported type `{}` (from `{module_name}`) clashes with an existing type",
-                        ty.name
-                    ),
-                    span: Span::new(0, 0),
-                });
-                continue;
-            }
-            decls.type_arity.insert(ty.name.clone(), ty.arity);
-            decls
-                .type_arity
-                .insert(format!("{module_name}.{}", ty.name), ty.arity);
-            accepted.insert(((*module_name).clone(), ty.name.clone()));
+        let exports = &imports[*module_name];
+        for ty in &exports.types {
+            register(decls, module_name, &ty.name, ty.arity, 0);
+        }
+        for rec in exports.records.iter().filter(|r| r.origin.is_none()) {
+            register(decls, module_name, &rec.name, rec.info.params_count, 0);
+        }
+        for op in exports.opaques.iter().filter(|o| o.origin.is_none()) {
+            register(decls, module_name, &op.name, op.arity, 0);
         }
     }
-    // Records after types (both share the `type_arity` namespace and clash check).
-    // Only an import's **own** records here (`origin: None`); the transitively
-    // carried ones follow below, after every directly named declaration, so a
-    // direct import always wins the bare name. `record_home` tracks each accepted
-    // record's declaring module so the same record arriving along two paths is
-    // recognized as one.
-    let mut record_home: HashMap<String, String> = HashMap::new();
+    // Carried records and opaque types (`origin: Some`): declared in a module
+    // this one does not import directly, referenced by an import's interface.
+    // They can be named, unified and field-accessed; constructing or matching a
+    // carried record still asks for a direct import of its declaring module (it
+    // gets no construction alias, see `merge_imported_types`).
     for module_name in &module_names {
-        for rec in &imports[*module_name].records {
-            if rec.origin.is_some() {
-                continue;
-            }
-            let name = &rec.name;
-            if decls.type_arity.contains_key(name) {
-                errors.push(TypeError {
-                    message: format!(
-                        "imported record `{name}` (from `{module_name}`) clashes with an existing type"
-                    ),
-                    span: Span::new(0, 0),
-                });
-                continue;
-            }
-            decls.type_arity.insert(name.clone(), rec.info.params_count);
-            decls
-                .type_arity
-                .insert(format!("{module_name}.{name}"), rec.info.params_count);
-            accepted.insert(((*module_name).clone(), name.clone()));
-            record_home.insert(name.clone(), (*module_name).clone());
-        }
-    }
-    // An import's own opaque handle types (`extern type Rng`): name + arity under
-    // the bare identity and a qualified key, exactly like a sum type — there is
-    // nothing more to a handle type, so this is the whole export (issue #72).
-    for module_name in &module_names {
-        for op in &imports[*module_name].opaques {
-            if op.origin.is_some() {
-                continue;
-            }
-            if decls.type_arity.contains_key(&op.name) {
-                errors.push(TypeError {
-                    message: format!(
-                        "imported type `{}` (from `{module_name}`) clashes with an existing type",
-                        op.name
-                    ),
-                    span: Span::new(0, 0),
-                });
-                continue;
-            }
-            decls.type_arity.insert(op.name.clone(), op.arity);
-            decls
-                .type_arity
-                .insert(format!("{module_name}.{}", op.name), op.arity);
-        }
-    }
-    // Transitively carried records (`origin: Some`, `DESIGN.md` §6.1): declared in
-    // a module this one does not import directly, referenced by an import's
-    // interface. They register under the **bare identity name only** — no
-    // qualified key, no construction alias — so the type can be named, unified,
-    // and field-accessed, while constructing or pattern-matching it still asks
-    // for a direct import of the declaring module. A bare name already taken is
-    // **not** an error (the consumer never asked for this name): the same record
-    // arriving along another path is already in, and a genuinely different type
-    // keeps the name — local and direct declarations win — while the hidden
-    // record's fields feed the unknown-field hints.
-    for module_name in &module_names {
-        for rec in &imports[*module_name].records {
+        let exports = &imports[*module_name];
+        for rec in &exports.records {
             let Some(origin) = &rec.origin else { continue };
-            let name = &rec.name;
-            if decls.type_arity.contains_key(name) {
-                if record_home.get(name) == Some(origin) {
-                    continue; // the same record, already visible along another path
-                }
-                for (field, _) in &rec.info.fields {
-                    let hint = (name.clone(), origin.clone());
-                    let hints = decls.field_hints.entry(field.clone()).or_default();
-                    if !hints.contains(&hint) {
-                        hints.push(hint);
-                    }
-                }
-                continue;
+            if register(decls, module_name, &rec.name, rec.info.params_count, 1) {
+                decls
+                    .carried_record_home
+                    .insert(rec.name.clone(), origin.clone());
             }
-            decls.type_arity.insert(name.clone(), rec.info.params_count);
-            accepted.insert(((*module_name).clone(), name.clone()));
-            record_home.insert(name.clone(), origin.clone());
-            decls
-                .carried_record_home
-                .insert(name.clone(), origin.clone());
+        }
+        for op in exports.opaques.iter().filter(|o| o.origin.is_some()) {
+            register(decls, module_name, &op.name, op.arity, 1);
         }
     }
-    // Transitively carried opaque handle types: bare identity name only, and a
-    // taken name is skipped silently (there are no fields to hint about).
-    for module_name in &module_names {
-        for op in &imports[*module_name].opaques {
-            if op.origin.is_none() || decls.type_arity.contains_key(&op.name) {
-                continue;
-            }
-            decls.type_arity.insert(op.name.clone(), op.arity);
+    for (name, candidates) in bare {
+        // A local type, or a built-in one, keeps its bare name.
+        if decls.type_arity.contains_key(&name) {
+            continue;
+        }
+        let Some(&(best, _)) = candidates.iter().next() else {
+            continue;
+        };
+        let ids: Vec<String> = candidates
+            .into_iter()
+            .filter(|(tier, _)| *tier == best)
+            .map(|(_, id)| id)
+            .collect();
+        if let [only] = ids.as_slice() {
+            decls.type_alias.insert(name, only.clone());
+        } else {
+            decls.type_ambiguous.insert(name, ids);
         }
     }
     accepted
@@ -3410,12 +3505,11 @@ fn merge_imported_types(
                 }
                 let name = &rec.name;
                 decls.records.insert(name.clone(), rec.info.clone());
+                // A directly imported record's identity is its qualified tag.
                 if rec.origin.is_none() {
-                    decls
-                        .record_aliases
-                        .insert(format!("{module_name}.{name}"), name.clone());
+                    decls.record_aliases.insert(name.clone(), name.clone());
                 }
-                // Fields join the multimap under the record's bare identity name.
+                // Fields join the multimap under the record's identity.
                 for (field, _) in &rec.info.fields {
                     decls
                         .field_owner
@@ -3587,7 +3681,7 @@ fn build_decls(
     // registered (so they win a clash), and pass 2 below can now type a field or a
     // variant with an imported type. Their bodies (constructor sets, record field
     // registries) merge after `build_decls` returns.
-    let imported = merge_imported_type_names(&mut decls, imports, errors);
+    let imported = merge_imported_type_names(&mut decls, imports);
 
     // Pass 2: constructor schemes (sum types) and field registries (records).
     for item in &module.items {
@@ -3643,7 +3737,7 @@ fn build_decls(
                     }
                     for field in &variant.fields {
                         // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
-                        match resolve(field, &param_map, &decls.type_arity, span, &HashMap::new()) {
+                        match resolve(field, &param_map, &decls, span, &HashMap::new()) {
                             Ok(t) => field_tys.push(t),
                             Err(e) => {
                                 errors.push(e);
@@ -3714,13 +3808,7 @@ fn build_decls(
                     (0..decl.params.len() as u32).map(Ty::Var).collect(),
                 );
                 // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
-                match resolve(
-                    underlying,
-                    &param_map,
-                    &decls.type_arity,
-                    span,
-                    &HashMap::new(),
-                ) {
+                match resolve(underlying, &param_map, &decls, span, &HashMap::new()) {
                     Ok(field_ty) => {
                         let ctor_ty =
                             Ty::Fun(Box::new(field_ty), Box::new(result_ty), Effect::pure());
@@ -3775,13 +3863,7 @@ fn build_decls(
                     // only reported at an *ambiguous access* site, never here. (A field
                     // repeated within *one* record is still an error — the `local` set.)
                     // Empty effect-var map: `->{e}` is extern-only (see `resolve`).
-                    match resolve(
-                        &field.ty,
-                        &param_map,
-                        &decls.type_arity,
-                        span,
-                        &HashMap::new(),
-                    ) {
+                    match resolve(&field.ty, &param_map, &decls, span, &HashMap::new()) {
                         Ok(t) => resolved.push((field.name.clone(), t)),
                         Err(e) => {
                             errors.push(e);
@@ -3955,7 +4037,7 @@ fn build_decls(
                 span,
             });
         }
-        match resolve(&decl.ty, &var_map, &decls.type_arity, span, &eff_map) {
+        match resolve(&decl.ty, &var_map, &decls, span, &eff_map) {
             Ok(mut ty) => {
                 // Effectful-by-default boundary: the innermost arrow gets `io`
                 // unless the binding asserts `pure` — or the innermost arrow
@@ -7458,7 +7540,7 @@ fn seed_builtin_types(decls: &mut Decls, env: &mut Env) {
 fn resolve(
     ty: &TypeExpr,
     params: &HashMap<String, u32>,
-    type_arity: &HashMap<String, usize>,
+    decls: &Decls,
     span: Span,
     eff_params: &HashMap<String, u32>,
 ) -> Result<Ty, TypeError> {
@@ -7493,15 +7575,15 @@ fn resolve(
                 }
             }
             Ok(Ty::Fun(
-                Box::new(resolve(a, params, type_arity, span, eff_params)?),
-                Box::new(resolve(b, params, type_arity, span, eff_params)?),
+                Box::new(resolve(a, params, decls, span, eff_params)?),
+                Box::new(resolve(b, params, decls, span, eff_params)?),
                 eff,
             ))
         }
         TypeExpr::Tuple(elems) => {
             let resolved: Result<Vec<Ty>, TypeError> = elems
                 .iter()
-                .map(|e| resolve(e, params, type_arity, span, eff_params))
+                .map(|e| resolve(e, params, decls, span, eff_params))
                 .collect();
             Ok(Ty::Tuple(resolved?))
         }
@@ -7537,23 +7619,40 @@ fn resolve(
                 "unit" => return no_args(Ty::Unit),
                 _ => {}
             }
-            // A module-qualified name (`Shapes.Placed`) is validated against the
-            // qualified key but resolves to the **bare identity name**, which is how
-            // imported types register (see `merge_imported_type_names`, which inserts
-            // both keys at the same arity). So `Shapes.Placed`, a bare `Placed` here,
-            // and `Placed` inside its home module are all the same `Ty::Con` and
-            // unify — the qualifier is a readability aid, not a distinct type. Bare
-            // identity names are unique across everything visible (the import clash
-            // check enforces it), so dropping the qualifier cannot collide.
-            let identity = match name.rsplit_once('.') {
-                Some((_, bare)) if type_arity.contains_key(name) => bare,
-                _ => name.as_str(),
+            // An imported type is identified by its module (`Shapes.Placed`, see
+            // `merge_imported_type_names`), which is also how it is written
+            // qualified. A bare `Placed` stands for it when no local type takes the
+            // name and only one import declares it; when two do, a bare use is
+            // ambiguous and names them (issue #273).
+            let type_arity = &decls.type_arity;
+            let identity: &str = if type_arity.contains_key(name) {
+                name
+            } else if let Some(id) = decls.type_alias.get(name) {
+                id
+            } else if let Some(ids) = decls.type_ambiguous.get(name) {
+                let at = name_span.span();
+                let listed: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
+                return Err(TypeError {
+                    message: format!(
+                        "`{name}` could be {}: {} a type called `{name}`, so write the one \
+                         you mean",
+                        or_list(&listed),
+                        if ids.len() == 2 {
+                            "both imported modules declare"
+                        } else {
+                            "each of those imported modules declares"
+                        }
+                    ),
+                    span: if at.start == at.end { span } else { at },
+                });
+            } else {
+                name
             };
-            match type_arity.get(name) {
+            match type_arity.get(identity) {
                 Some(&arity) if arity == args.len() => {
                     let resolved: Result<Vec<Ty>, TypeError> = args
                         .iter()
-                        .map(|a| resolve(a, params, type_arity, span, eff_params))
+                        .map(|a| resolve(a, params, decls, span, eff_params))
                         .collect();
                     Ok(Ty::Con(identity.to_string(), resolved?))
                 }
@@ -9575,17 +9674,16 @@ impl Infer {
                 .filter(|&(d, n)| d <= (field.chars().count().max(n.chars().count()) / 3).max(2))
                 .map(|(_, n)| format!(" (did you mean `{n}`?)"))
                 .unwrap_or_default();
-            let hidden = self.hidden_field_hint(field);
             self.missing_field.set(Some(span));
             return Err(TypeError {
-                message: format!("record `{rec}` has no field `{field}`{near}{hidden}"),
+                message: format!("record `{rec}` has no field `{field}`{near}"),
                 span,
             });
         }
         self.record_of_field(field, span)
     }
 
-    /// The bare identity name of the record type owning `field`, **by name alone**
+    /// The identity of the record type owning `field`, **by name alone**
     /// (`DESIGN.md` §8.3) — the fallback for a base whose type is not yet known.
     /// Owners are consulted in tiers ([`Infer::field_owner_tier`]): within the
     /// deciding tier, **0** owners is an unknown field, **1** owner resolves,
@@ -9598,16 +9696,6 @@ impl Infer {
             _ => {
                 // No record in scope can be read for it.
                 self.missing_field.set(Some(span));
-                // A record carried transitively but shadowed by a same-named type
-                // is out of scope, yet its interface data still says where the
-                // field lives — say so instead of a dead-end "unknown".
-                let hidden = self.hidden_field_hint(field);
-                if !hidden.is_empty() {
-                    return Err(TypeError {
-                        message: format!("unknown record field `{field}`{hidden}"),
-                        span,
-                    });
-                }
                 // A constructor declares it, but its sum type does not share it,
                 // so nothing by that name is readable on a whole value.
                 let mut in_ctors: Vec<&String> = self
@@ -9722,23 +9810,8 @@ impl Infer {
         error
     }
 
-    /// A rendered note when `field` is declared by a record the consumer's
-    /// interface data knows of but that is **not in scope here** (a transitively
-    /// carried record whose bare name a local or directly imported type already
-    /// holds — `Decls::field_hints`). Empty when there is nothing to say, so the
-    /// plain messages stay as they are.
-    fn hidden_field_hint(&self, field: &str) -> String {
-        match self.decls.field_hints.get(field).and_then(|h| h.first()) {
-            Some((rec, module)) => format!(
-                "; the record `{rec}` in module `{module}` declares this field, but another \
-                 type named `{rec}` is already in scope here, so that record is hidden"
-            ),
-            None => String::new(),
-        }
-    }
-
     /// Resolve a surface record tag (`Point` or `Geometry.Point`) at a construction
-    /// or pattern site to its **bare identity name** (`DESIGN.md` §8.3). A qualified
+    /// or pattern site to its **identity** (`DESIGN.md` §8.3). A qualified
     /// tag resolves via the imported-record alias table; a bare tag resolves only to
     /// a **local** record (an imported record must be tagged qualified, exactly as an
     /// imported sum-type constructor must be). A bare tag naming a **transitively
@@ -9761,7 +9834,12 @@ impl Infer {
         }
         if self.decls.local_records.contains(tag) {
             Ok(tag.to_string())
-        } else if let Some(home) = self.decls.carried_record_home.get(tag) {
+        } else if let Some(home) = self
+            .decls
+            .type_alias
+            .get(tag)
+            .and_then(|id| self.decls.carried_record_home.get(id))
+        {
             Err(TypeError {
                 message: format!(
                     "the record `{tag}` is declared in module `{home}`; import `{home}` \
@@ -9780,9 +9858,9 @@ impl Infer {
         }
     }
 
-    /// The bare identity name for a record tag as stored on a pattern/literal AST
-    /// node — mapping a qualified `Geometry.Point` to `Point` (and a bare name to
-    /// itself), so exhaustiveness `Tag::Record`s and `decls.records` keys agree.
+    /// The identity of a record tag as stored on a pattern/literal AST node (a
+    /// local record's bare name, an imported one's `Geometry.Point`), so
+    /// exhaustiveness `Tag::Record`s and `decls.records` keys agree.
     fn canonical_record(&self, tag: &str) -> String {
         self.decls
             .record_aliases
@@ -9982,16 +10060,16 @@ impl Infer {
     }
 
     /// The tag lowering resolves to a record's class wherever the record is
-    /// visible: the bare name for a local record, the `Module.Name` alias for a
-    /// directly imported one, and the declaring module's tag for one carried
-    /// transitively (which has no construction tag, but an update on its value
-    /// still rebuilds it).
+    /// visible: the bare name for a local record, and the identity, `Module.Name`,
+    /// for an imported one, whether imported directly or carried transitively
+    /// (which has no construction tag, but an update on its value still rebuilds
+    /// it through its declaring module).
     fn record_lowering_tag(&self, name: &str) -> Option<String> {
         self.record_surface_tag(name).ok().or_else(|| {
             self.decls
                 .carried_record_home
-                .get(name)
-                .map(|home| format!("{home}.{name}"))
+                .contains_key(name)
+                .then(|| name.to_string())
         })
     }
 

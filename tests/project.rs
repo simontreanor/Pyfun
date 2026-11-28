@@ -1120,7 +1120,7 @@ fn a_cross_module_newtype_stays_distinct_from_its_underlying() {
     assert!(
         errors[0].errors[0]
             .message
-            .contains("expected `UserId`, found `str`"),
+            .contains("expected `Ids.UserId`, found `str`"),
         "got: {}",
         errors[0].errors[0].message
     );
@@ -1219,10 +1219,10 @@ fn an_opaque_type_carried_transitively_can_be_named_bare() {
 }
 
 #[test]
-fn a_local_type_clashing_with_an_imported_opaque_type_is_reported() {
-    // A handle type now registers like any imported type, so a same-named local
-    // declaration is the ordinary import clash (it would otherwise silently
-    // conflate two distinct nominal types).
+fn a_local_type_named_like_an_imported_one_is_another_type() {
+    // #273: a type is known by the module that declares it, so a local `Rng`
+    // beside `Gen.Rng` is no clash. The two stay distinct, and the bare name is
+    // the local one.
     let project = build_mem(
         "Main",
         &[
@@ -1230,17 +1230,22 @@ fn a_local_type_clashing_with_an_imported_opaque_type_is_reported() {
                 "Gen",
                 "extern type Rng\nextern new_rng : int -> Rng = random.Random",
             ),
-            ("Main", "import Gen\ntype Rng = A | B\nlet x = A"),
+            (
+                "Main",
+                "import Gen\n\
+                 type Rng = A | B\n\
+                 type Holder = { r: Rng }\n\
+                 let ok = Holder { r = A }\n\
+                 let bad = Holder { r = Gen.new_rng 1 }",
+            ),
         ],
     );
     let errors = project::check(&project);
-    assert_eq!(errors.len(), 1);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let message = &errors[0].errors[0].message;
     assert!(
-        errors[0].errors[0]
-            .message
-            .contains("imported type `Rng` (from `Gen`) clashes"),
-        "got: {}",
-        errors[0].errors[0].message
+        message.contains("expected `Rng`, found `Gen.Rng`"),
+        "got: {message}"
     );
 }
 
@@ -1490,19 +1495,20 @@ fn two_carried_records_sharing_a_field_are_still_ambiguous() {
     assert_eq!(errors.len(), 1);
     let message = &errors[0].errors[0].message;
     assert!(
-        message.contains("ambiguous") && message.contains("`A`") && message.contains("`B`"),
+        message.contains("ambiguous")
+            && message.contains("`Twin.A`")
+            && message.contains("`Twin.B`"),
         "got: {message}"
     );
 }
 
 #[test]
-fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
-    // A local type already holds the name `Config`, so the carried record stays
-    // out of scope (local and direct declarations win the bare name, and the
-    // consumer never asked for the carried one — no clash error). Its fields
-    // still feed the diagnostics: both the known-base and the untyped-base
-    // failure name the record and the module that declares it.
-    let with_known_base = build_mem(
+fn a_carried_record_beside_a_local_type_of_its_name_stays_readable() {
+    // #273: the carried record is `Inner.Config` and the local one is `Config`,
+    // so a local declaration of the name no longer hides the carried record.
+    // Its field reads through a known base and through an untyped one, and the
+    // local record keeps the bare name.
+    let files = compile(
         "Main",
         &[
             ("Inner", INNER),
@@ -1512,40 +1518,16 @@ fn a_transitive_record_shadowed_by_a_local_name_hints_at_its_home() {
                 "import Middle\n\
                  type Config = { other: int }\n\
                  let x = Middle.mk 5\n\
-                 let bad = x.w_conf.c_size",
+                 let get w = w.c_size\n\
+                 let mine = Config { other = 1 }\n\
+                 print (x.w_conf.c_size + get x.w_conf + mine.other)",
             ),
         ],
     );
-    let errors = project::check(&with_known_base);
-    assert_eq!(errors.len(), 1);
-    let message = &errors[0].errors[0].message;
-    assert!(
-        message.contains("has no field `c_size`")
-            && message.contains("module `Inner`")
-            && message.contains("hidden"),
-        "got: {message}"
-    );
-
-    let with_untyped_base = build_mem(
-        "Main",
-        &[
-            ("Inner", INNER),
-            ("Middle", MIDDLE),
-            (
-                "Main",
-                "import Middle\n\
-                 type Config = { other: int }\n\
-                 let get w = w.c_size",
-            ),
-        ],
-    );
-    let errors = project::check(&with_untyped_base);
-    assert_eq!(errors.len(), 1);
-    let message = &errors[0].errors[0].message;
-    assert!(
-        message.contains("unknown record field `c_size`") && message.contains("module `Inner`"),
-        "got: {message}"
-    );
+    let dir = Scratch::new("e2e_carried_beside_local");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.trim(), "11");
+    }
 }
 
 #[test]
@@ -2112,7 +2094,7 @@ fn e2e_record_bodied_constructors_cross_a_module_boundary() {
         ),
         (
             "let bad = Shapes.unit.radius",
-            "is not available on a `Shape`",
+            "is not available on a `Shapes.Shape`",
         ),
         (
             "let f s =\n  match s:\n    case Shapes.Circle { radius }: radius",
@@ -2120,7 +2102,7 @@ fn e2e_record_bodied_constructors_cross_a_module_boundary() {
         ),
         (
             "let f (Shapes.Circle { radius }) = radius",
-            "a `Shapes.Circle` pattern can fail to match here: `Shape` also has `Shapes.Rect`",
+            "a `Shapes.Circle` pattern can fail to match here: `Shapes.Shape` also has `Shapes.Rect`",
         ),
     ] {
         let project = build_mem(
@@ -2232,5 +2214,130 @@ fn an_attribute_extern_with_arguments_is_called_with_all_of_them_from_another_mo
     assert!(
         main.contains("paths.with_name(paths.to_path(\"report.csv\"), \"summary.csv\")"),
         "{main}"
+    );
+}
+
+const CLASH_NET: &str = "extern type Reader\n\
+     extern open_reader: str -> Reader = io.StringIO\n\
+     extern read_all: Reader -> str = .read()\n\
+     type Box = Box int";
+const CLASH_HTTP: &str = "extern type Reader\n\
+     extern open_reader: str -> Reader = io.StringIO\n\
+     extern read_line: Reader -> str = .readline()\n\
+     type Box = Box str";
+
+#[test]
+fn e2e_two_imports_that_each_declare_a_type_of_one_name_can_both_be_imported() {
+    // #273: a type is known by the module that declares it, so `ClashNet.Reader`
+    // and `ClashHttp.Reader` are two types (and so are the two `Box` sum types),
+    // and a file that uses both only qualified checks and runs.
+    let files = compile(
+        "Main",
+        &[
+            ("ClashNet", CLASH_NET),
+            ("ClashHttp", CLASH_HTTP),
+            (
+                "Main",
+                "import ClashNet\n\
+                 import ClashHttp\n\
+                 type Conn = { net: ClashNet.Reader, http: ClashHttp.Reader }\n\
+                 let c = Conn { net = ClashNet.open_reader \"a\\n\", http = ClashHttp.open_reader \"b\\nc\" }\n\
+                 let show b =\n  match b:\n    case ClashNet.Box n: n\n\
+                 print (String.strip (ClashNet.read_all c.net))\n\
+                 print (String.strip (ClashHttp.read_line c.http))\n\
+                 print (show (ClashNet.Box 3))\n\
+                 print (ClashHttp.Box \"x\")",
+            ),
+        ],
+    );
+    let dir = Scratch::new("e2e_type_clash");
+    if let Some(out) = run_project(&dir, &files, "main.py") {
+        assert_eq!(out.replace("\r\n", "\n").trim(), "a\nb\n3\nBox('x')");
+    }
+}
+
+#[test]
+fn a_bare_type_name_two_imports_declare_is_ambiguous_at_the_use() {
+    // Written bare, `Reader` could be either import's, so the error is at the
+    // name and lists both; one import alone makes the bare name its type.
+    let src = "import ClashNet\nimport ClashHttp\ntype Conn = { r: Reader }";
+    let project = build_mem(
+        "Main",
+        &[
+            ("ClashNet", CLASH_NET),
+            ("ClashHttp", CLASH_HTTP),
+            ("Main", src),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let err = &errors[0].errors[0];
+    assert!(
+        err.message.contains(
+            "`Reader` could be `ClashHttp.Reader` or `ClashNet.Reader`: both imported \
+             modules declare a type called `Reader`"
+        ),
+        "got: {}",
+        err.message
+    );
+    assert_eq!(err.span.start, src.rfind("Reader").unwrap(), "{err:?}");
+
+    let one = build_mem(
+        "Main",
+        &[
+            ("ClashNet", CLASH_NET),
+            (
+                "Main",
+                "import ClashNet\n\
+                 type Conn = { r: Reader }\n\
+                 let c = Conn { r = ClashNet.open_reader \"x\" }",
+            ),
+        ],
+    );
+    let errors = project::check(&one);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    // `from` names the one meant, beside a plain import that declares another.
+    let from = build_mem(
+        "Main",
+        &[
+            ("ClashNet", CLASH_NET),
+            ("ClashHttp", CLASH_HTTP),
+            (
+                "Main",
+                "from ClashNet import Reader, open_reader\n\
+                 import ClashHttp\n\
+                 type Conn = { r: Reader }\n\
+                 let c = Conn { r = open_reader \"x\" }\n\
+                 let h = ClashHttp.open_reader \"y\"",
+            ),
+        ],
+    );
+    let errors = project::check(&from);
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn two_imported_types_of_one_name_do_not_unify() {
+    let project = build_mem(
+        "Main",
+        &[
+            ("ClashNet", CLASH_NET),
+            ("ClashHttp", CLASH_HTTP),
+            (
+                "Main",
+                "import ClashNet\n\
+                 import ClashHttp\n\
+                 type Conn = { r: ClashNet.Reader }\n\
+                 let c = Conn { r = ClashHttp.open_reader \"x\" }",
+            ),
+        ],
+    );
+    let errors = project::check(&project);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let message = &errors[0].errors[0].message;
+    assert!(
+        message.contains("expected `ClashNet.Reader`, found `ClashHttp.Reader`"),
+        "got: {message}"
     );
 }

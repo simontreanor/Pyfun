@@ -561,6 +561,10 @@ Issues from 0.11.0, each fixed in its own PR:
 4. **One argument too many** (#270, PR #272): now counted, at the extra argument.
 5. **A constructor applied to a record update** (#274, PR #277): `Ok { r with body = b }` was read
    as a computation expression. A `with` directly inside the brace now makes it an update argument.
+6. **Two imports that each declare a `Reader`** (#273, PR #278): refused at line 1 of the importing
+   file. A type is now identified by its declaring module (`Net.Reader`), so both imports work, a
+   local type no longer clashes with an imported one, and only a bare `Reader` that both declare is
+   an error, at the use.
 
 Open, from item 2:
 
